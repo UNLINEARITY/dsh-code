@@ -22,6 +22,9 @@ export interface UserEntry {
   kind: 'user'
   /** Joined text blocks of the user message. */
   text: string
+  /** True for collapsed injected context (plugin/continuation notices), which
+   * the renderer marks with a dim ↳ instead of the user ❯ prompt. */
+  notice: boolean
 }
 
 /** One assembled assistant reply. */
@@ -172,12 +175,12 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
       // elsewhere in the product; only direct human prompts render in full.
       const message = event.data
       if (message.source.kind === 'user') {
-        return { ...view, entries: [...view.entries, { kind: 'user', text: textOf(message.content) }] }
+        return { ...view, entries: [...view.entries, { kind: 'user', text: textOf(message.content), notice: false }] }
       }
       const notice = message.source.kind === 'plugin' && message.source.form === 'notice'
         ? message.source.summary
         : message.source.kind
-      return { ...view, entries: [...view.entries, { kind: 'user', text: boundContextSummary(notice) }] }
+      return { ...view, entries: [...view.entries, { kind: 'user', text: boundContextSummary(notice), notice: true }] }
     }
     case 'assistant/chunk': {
       const chunk = event.data.chunk

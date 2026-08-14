@@ -15,7 +15,7 @@
  */
 
 import {
-  createElement, useEffect, useRef, useState, useSyncExternalStore, type ReactElement,
+  createElement, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactElement,
 } from 'react'
 import { Box, Text, useInput, useStdout } from 'ink'
 import { assertNever } from '@deepseek-ai/dsh-llm'
@@ -26,8 +26,8 @@ import { TUI_RGB, brand, dim, error as paintError, warn } from './theme.ts'
 import { WHALE_GLYPH, WHALE_GLYPH_COLUMNS } from './whale-glyph.ts'
 import type { TranscriptStore } from './store.ts'
 import type { TranscriptEntry } from './render/projection.ts'
-import { renderMarkdown, type MdSegment } from './render/markdown.ts'
-import { visibleColumns } from './render/markdown.ts'
+import { renderMarkdown, type MdSegment, visibleColumns } from './render/markdown.ts'
+import { caretVisible, pulseFrame } from './render/animations.ts'
 import type { ApprovalStore } from './approval.ts'
 import type { CommandsView } from './commands.ts'
 import type { ModelDirectory, ModelRow } from './models.ts'
@@ -103,6 +103,36 @@ function padColumns(text: string, width: number): string {
   return text + ' '.repeat(Math.max(0, width - visibleColumns(text)))
 }
 
+/** Interval-driven frame counter for one self-contained animated leaf. */
+function useFrames(intervalMs: number): number {
+  const [tick, setTick] = useState(0)
+  useEffect(() => {
+    const id = setInterval(() => setTick(current => current + 1), intervalMs)
+    return () => {
+      clearInterval(id)
+    }
+  }, [intervalMs])
+  return tick
+}
+
+/** Single-cell stepped pulse: the web's 125ms flat-hold brightness steps over 1s. */
+function Pulse(): ReactElement {
+  const tick = useFrames(125)
+  return createElement(Text, { color: inkColor(TUI_RGB.brandBright) }, pulseFrame(tick))
+}
+
+/** Blinking block caret appended to streaming text. */
+function Caret(): ReactElement {
+  const tick = useFrames(530)
+  return createElement(Text, null, caretVisible(tick) ? '▍' : ' ')
+}
+
+/** Blinking input cursor: inverse block while the caret phase is on. */
+function CursorBlock({ char }: { char: string }): ReactElement {
+  const tick = useFrames(530)
+  return createElement(Text, { inverse: caretVisible(tick) || undefined }, char)
+}
+
 /** Ink props for one markdown style class. */
 function segmentProps(style: MdSegment['style']): {
   color: string | undefined
@@ -133,7 +163,11 @@ function segmentProps(style: MdSegment['style']): {
 /** One settled markdown document rendered as styled lines at the terminal width. */
 function MarkdownBody({ text }: { text: string }): ReactElement {
   const columns = useStdout().stdout?.columns ?? 80
-  const lines = renderMarkdown(displayText(text), Math.max(20, columns - 2))
+  // Cached by (text, width): settled replies re-layout only when either moves.
+  const lines = useMemo(
+    () => renderMarkdown(displayText(text), Math.max(20, columns - 2)),
+    [text, columns],
+  )
   return createElement(
     Box,
     { flexDirection: 'column' },
@@ -149,10 +183,16 @@ function MarkdownBody({ text }: { text: string }): ReactElement {
 function EntryLine({ entry, showReasoning }: { entry: TranscriptEntry; showReasoning: boolean }): ReactElement {
   switch (entry.kind) {
     case 'user':
-      return createElement(Text, null, brand('❯ '), displayText(entry.text))
+      // Collapsed injected context reads as a dim ↳ row; only direct human
+      // prompts get the brand ❯ (they are different surfaces, not the same).
+      return entry.notice
+        ? createElement(Text, { dimColor: true }, `⤷ ${displayText(entry.text)}`)
+        : createElement(Text, null, brand('❯ '), displayText(entry.text))
     case 'assistant':
       // Claude-Code-style thinking: a dim ✻ marker collapsed, the reasoning
-      // text dim-italic expanded (Ctrl+R toggles globally).
+      // text dim-italic expanded (Ctrl+R toggles globally). The collapsed
+      // row is static — an animated counter inside the text would jitter the
+      // line width every frame.
       return createElement(
         Box,
         { flexDirection: 'column' },
@@ -160,14 +200,14 @@ function EntryLine({ entry, showReasoning }: { entry: TranscriptEntry; showReaso
           ? undefined
           : showReasoning
             ? createElement(Text, { dimColor: true, italic: true }, `  ✻ ${displayText(entry.reasoning)}`)
-            : createElement(Text, { dimColor: true }, `  ✻ thinking… (${entry.reasoning.length} chars, Ctrl+R to expand)`),
+            : createElement(Text, { dimColor: true }, `  ✻ Thinking (${entry.reasoning.length} chars, Ctrl+R to expand)`),
         createElement(MarkdownBody, { text: entry.text }),
       )
     case 'tool': {
       // Claude-Code-style tool card: the invocation row plus a nested ⎿
       // result line, so the summary reads under its call instead of inline.
       const mark = entry.state === 'running'
-        ? createElement(Text, { color: inkColor(TUI_RGB.brandBright) }, '◐')
+        ? createElement(Pulse)
         : entry.state === 'error'
           ? createElement(Text, { color: inkColor(TUI_RGB.error) }, '⨯')
           : createElement(Text, { color: inkColor(TUI_RGB.success) }, '⏺')
@@ -193,7 +233,7 @@ function EntryLine({ entry, showReasoning }: { entry: TranscriptEntry; showReaso
     }
     case 'command': {
       const mark = entry.state === 'running'
-        ? createElement(Text, { color: inkColor(TUI_RGB.brandBright) }, '◐')
+        ? createElement(Pulse)
         : entry.state === 'error'
           ? createElement(Text, { color: inkColor(TUI_RGB.error) }, '⨯')
           : createElement(Text, { color: inkColor(TUI_RGB.success) }, '⏺')
@@ -307,8 +347,9 @@ function StatusLine({ facts, stats, busy }: {
   const groups = buildStatusGroups(facts, stats)
   const children: ReactElement[] = [
     busy
-      ? createElement(Text, { color: inkColor(TUI_RGB.brandBright) }, '● ')
-      : createElement(Text, { color: inkColor(TUI_RGB.brand) }, '○ '),
+      ? createElement(Pulse)
+      : createElement(Text, { color: inkColor(TUI_RGB.brand) }, '○'),
+    createElement(Text, null, ' '),
   ]
   groups.forEach((group, index) => {
     if (index > 0) children.push(createElement(Text, { dimColor: true }, dim(' | ')))
@@ -928,7 +969,8 @@ function Input({ active, busy, descriptors, skills, dispatch, steer, interrupt, 
       : undefined,
     // The framed input box: a visible boundary so the prompt never blends
     // into the transcript above it; the cursor block sits immediately after
-    // the prompt marker (leftmost), with the dim placeholder trailing it.
+    // the prompt marker (leftmost), with the dim placeholder trailing it —
+    // no extra space, so the empty state reads `❯ ▮type a message…`.
     createElement(
       Box,
       { borderStyle: 'round', borderColor: inkColor(TUI_RGB.dim), paddingX: 1 },
@@ -936,9 +978,9 @@ function Input({ active, busy, descriptors, skills, dispatch, steer, interrupt, 
       value === ''
         ? undefined
         : createElement(Text, null, value.slice(0, cursor)),
-      createElement(Text, { inverse: true }, value.slice(cursor, cursor + 1) === '' ? ' ' : value.slice(cursor, cursor + 1)),
+      createElement(CursorBlock, { char: value.slice(cursor, cursor + 1) === '' ? ' ' : value.slice(cursor, cursor + 1) }),
       value === '' && !busy
-        ? createElement(Text, { dimColor: true }, ' type a message · / commands · @ mentions')
+        ? createElement(Text, { dimColor: true }, 'type a message · / commands · @ mentions')
         : createElement(Text, null, value.slice(cursor + 1)),
     ),
   )
@@ -1006,11 +1048,13 @@ export function App(props: AppProps): ReactElement {
         ? createElement(
           Text,
           { dimColor: true, italic: true },
-          showReasoning ? `  ✻ ${displayText(view.streamingReasoning)}` : '  ✻ thinking…',
+          showReasoning ? `  ✻ ${displayText(view.streamingReasoning)}` : '  ✻ Thinking…',
         )
         : undefined,
-      view.streaming !== '' ? createElement(Text, null, displayText(view.streaming)) : undefined,
-      busy && view.streaming === '' && view.streamingReasoning === '' ? createElement(Text, { dimColor: true }, 'thinking…') : undefined,
+      view.streaming !== ''
+        ? createElement(Text, null, displayText(view.streaming), busy ? createElement(Caret) : undefined)
+        : undefined,
+      busy && view.streaming === '' && view.streamingReasoning === '' ? createElement(Text, { dimColor: true }, 'Deep diving...') : undefined,
     ),
     createElement(TodoPanel, { todos: view.todos }),
     createElement(QuestionBar, { store: props.questions, locked: modelOpen }),

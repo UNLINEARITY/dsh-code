@@ -92,7 +92,8 @@ export function buildStatusGroups(facts: StatusFacts, stats: TranscriptStats): s
   }
   if (facts.sessionId !== '') groups.push(facts.sessionId)
   // The permission preset trails the line: switching it changes only the
-  // tail, so the left-aligned bar never shifts its other groups.
-  if (facts.permission !== undefined && facts.permission !== '') groups.push(`⛨ ${facts.permission}`)
+  // tail, so the left-aligned bar never shifts its other groups. Plain text,
+  // the Claude-Code permission-mode display (no glyphs).
+  if (facts.permission !== undefined && facts.permission !== '') groups.push(facts.permission)
   return groups
 }

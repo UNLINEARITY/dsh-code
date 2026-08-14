@@ -75,7 +75,7 @@ function toolResultEvent(id: CallId, text: string, isError: boolean, seq: number
 describe('transcript projection', () => {
   it('renders direct human prompts as full user entries', () => {
     const view = projectEvent(createTranscriptView(), userEvent('hello', 1))
-    expect(view.entries).toEqual([{ kind: 'user', text: 'hello' }])
+    expect(view.entries).toEqual([{ kind: 'user', text: 'hello', notice: false }])
   })
 
   it('collapses injected plugin context to a bounded notice row', () => {
@@ -89,7 +89,7 @@ describe('transcript projection', () => {
       }),
     } as SessionEvent
     const view = projectEvent(createTranscriptView(), event)
-    expect(view.entries).toEqual([{ kind: 'user', text: 'files changed' }])
+    expect(view.entries).toEqual([{ kind: 'user', text: 'files changed', notice: true }])
   })
 
   it('accumulates text deltas into the streaming buffer and flushes on assembly', () => {
@@ -98,7 +98,7 @@ describe('transcript projection', () => {
     view = projectEvent(view, assistantEvent('DeepSeek harness', 4))
     expect(view.streaming).toBe('')
     expect(view.entries).toEqual([
-      { kind: 'user', text: 'hi' },
+      { kind: 'user', text: 'hi', notice: false },
       { kind: 'assistant', text: 'DeepSeek harness', reasoning: '' },
     ])
   })
