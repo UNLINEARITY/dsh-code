@@ -30,6 +30,8 @@ export const TUI_RGB = {
   warn: [245, 158, 11],
   /** Default foreground text — `--dsw-static-neutral-50`. */
   text: [236, 240, 246],
+  /** Inline/fenced code — soft sky blue, distinct from brand accents. */
+  code: [125, 211, 252],
 } as const satisfies Record<string, readonly [number, number, number]>
 
 /** Paint with the primary brand blue: whale, wordmark, tool names, accents. */

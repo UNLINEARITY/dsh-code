@@ -17,7 +17,7 @@
 import {
   createElement, useEffect, useRef, useState, useSyncExternalStore, type ReactElement,
 } from 'react'
-import { Box, Text, useInput } from 'ink'
+import { Box, Text, useInput, useStdout } from 'ink'
 import { assertNever } from '@deepseek-ai/dsh-llm'
 import type { CommandDescriptor } from '@deepseek-ai/dsh-commands'
 import type { TodoItem } from '@deepseek-ai/dsh-session'
@@ -26,6 +26,7 @@ import { TUI_RGB, brand, dim, error as paintError, warn } from './theme.ts'
 import { WHALE_GLYPH, WHALE_GLYPH_COLUMNS } from './whale-glyph.ts'
 import type { TranscriptStore } from './store.ts'
 import type { TranscriptEntry } from './render/projection.ts'
+import { renderMarkdown, type MdSegment } from './render/markdown.ts'
 import type { ApprovalStore } from './approval.ts'
 import type { CommandsView } from './commands.ts'
 import type { ModelDirectory, ModelRow } from './models.ts'
@@ -77,6 +78,48 @@ function inkColor(triple: readonly [number, number, number]): string {
   return `rgb(${triple[0]}, ${triple[1]}, ${triple[2]})`
 }
 
+/** Ink props for one markdown style class. */
+function segmentProps(style: MdSegment['style']): {
+  color: string | undefined
+  bold: boolean | undefined
+  italic: boolean | undefined
+  strikethrough: boolean | undefined
+} {
+  switch (style) {
+    case 'accent':
+      return { color: inkColor(TUI_RGB.brandBright), bold: undefined, italic: undefined, strikethrough: undefined }
+    case 'code':
+      return { color: inkColor(TUI_RGB.code), bold: undefined, italic: undefined, strikethrough: undefined }
+    case 'dim':
+      return { color: inkColor(TUI_RGB.dim), bold: undefined, italic: undefined, strikethrough: undefined }
+    case 'bold':
+      return { color: undefined, bold: true, italic: undefined, strikethrough: undefined }
+    case 'italic':
+      return { color: undefined, bold: undefined, italic: true, strikethrough: undefined }
+    case 'boldItalic':
+      return { color: undefined, bold: true, italic: true, strikethrough: undefined }
+    case 'strike':
+      return { color: inkColor(TUI_RGB.dim), bold: undefined, italic: undefined, strikethrough: true }
+    default:
+      return { color: undefined, bold: undefined, italic: undefined, strikethrough: undefined }
+  }
+}
+
+/** One settled markdown document rendered as styled lines at the terminal width. */
+function MarkdownBody({ text }: { text: string }): ReactElement {
+  const columns = useStdout().stdout?.columns ?? 80
+  const lines = renderMarkdown(displayText(text), Math.max(20, columns - 2))
+  return createElement(
+    Box,
+    { flexDirection: 'column' },
+    ...lines.map((line, index) => createElement(
+      Text,
+      { key: index },
+      ...line.segments.map((segment, at) => createElement(Text, { key: at, ...segmentProps(segment.style) }, segment.text)),
+    )),
+  )
+}
+
 /** One settled transcript row. */
 function EntryLine({ entry, showReasoning }: { entry: TranscriptEntry; showReasoning: boolean }): ReactElement {
   switch (entry.kind) {
@@ -93,7 +136,7 @@ function EntryLine({ entry, showReasoning }: { entry: TranscriptEntry; showReaso
           : showReasoning
             ? createElement(Text, { dimColor: true, italic: true }, `  ✻ ${displayText(entry.reasoning)}`)
             : createElement(Text, { dimColor: true }, `  ✻ thinking… (${entry.reasoning.length} chars, Ctrl+R to expand)`),
-        createElement(Text, null, displayText(entry.text)),
+        createElement(MarkdownBody, { text: entry.text }),
       )
     case 'tool': {
       const mark = entry.state === 'running'
@@ -376,7 +419,11 @@ function QuestionBar({ store, locked }: { store: QuestionStore; locked: boolean 
     ),
     question.header === undefined ? undefined : createElement(Text, { bold: true }, displayText(question.header)),
     createElement(Text, null, displayText(question.question)),
-    question.detail === undefined ? undefined : createElement(Text, { dimColor: true }, displayText(question.detail)),
+    question.detail === undefined
+      ? undefined
+      : isPlan
+        ? createElement(MarkdownBody, { text: question.detail })
+        : createElement(Text, { dimColor: true }, displayText(question.detail)),
     submitted
       ? createElement(Text, { dimColor: true }, '  submitted…')
       : createElement(
