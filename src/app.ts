@@ -320,7 +320,7 @@ function Input({ busy, descriptors, dispatch, interrupt, quit, openModel, notify
   const draft = useRef('')
   const [completionIndex, setCompletionIndex] = useState(0)
   const candidates = completionCandidates(value, descriptors)
-  const completionActive = candidates.length > 0 && value.startsWith('/') && !value.includes(' ')
+  const completionActive = candidates.length > 0 && value.startsWith('/') && !value.includes(' ') && !value.includes('\n')
 
   useInput((input, key) => {
     if (key.ctrl && (input === 'c' || input === 'd')) {
@@ -332,6 +332,14 @@ function Input({ busy, descriptors, dispatch, interrupt, quit, openModel, notify
       return
     }
     if (key.return) {
+      // Multi-line editing: most terminals send the same byte for
+      // shift+enter as enter, so newline insertion rides alt/meta+enter
+      // and ctrl+j (the two distinguishable bindings); a bare return submits.
+      if (key.meta || (key.ctrl && input === 'j')) {
+        setValue(value.slice(0, cursor) + '\n' + value.slice(cursor))
+        setCursor(cursor + 1)
+        return
+      }
       const text = value.trim()
       setValue('')
       setCursor(0)
