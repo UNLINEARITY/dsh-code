@@ -13,8 +13,13 @@ A Claude-Code-style interactive terminal (TUI) bundle for [DeepSeek Harness](htt
 - **Session resume**: `--resume <id|prefix>` continues a persisted session, `--continue` picks the newest one for the working directory; the full transcript replays from the log and appends to the same durable session
 - **Slash-command passthrough**: every command registered in the shared `ctx.commands` registry (the same surface the web composer dispatches) is executable from the terminal, with a completion menu on `/`; user-invocable skills join the same menu (marked `skill`), and an unknown `/name` falls through to the prompt so the host's skill injection picks it up
 - **Todo panel**: the live todo list renders inline with done/active/pending counts and three-state markers, cleared at each fresh turn (mirroring the web TodoPanel)
-- Input with history (↑/↓), cursor editing (←/→, Ctrl+A/E/U), Tab completion for slash commands and skills; submitting while the agent runs steers the live turn (consumed at the next step boundary), `Esc` or Ctrl+C interrupts it, Ctrl+C on an empty idle input exits, Ctrl+D refuses to exit mid-turn
-- A blended status line: Claude-Code-style identity facts (model, working directory, git branch, session) beside the web composer's figures (turns/steps, llm and tool wall time, cache hit, token totals)
+- **Thinking lines**: model reasoning renders as a Claude-Code-style `✻` fold — collapsed to a dim marker with a character count, expanded to dim-italic text, live-streamed while the model thinks; Ctrl+R toggles globally
+- **Terminal markdown**: assistant replies render through a pure GFM-subset renderer (headings, fenced/inline code, emphasis, lists, quotes, links) wrapped to the terminal width; streaming stays plain until the message settles
+- **ask_user_question bar**: the model's questions appear as an option menu (↑/↓, space multi-select, `c` custom answer, Esc interrupts); plan reviews (`exit_plan_mode`) arrive through the same bar with the approve option highlighted
+- **@ mentions**: `@` completion over workspace files and persisted sessions; session mentions expand into bounded read-only snapshots injected as sourced context before the prompt
+- **Plan mode and permissions**: `⧉ plan` and `⛨ <preset>` badges in the status line; `/permission <name>` switches the session preset (the registry's own `/plan` command enables plan mode)
+- Input with history (↑/↓), cursor editing (←/→, Ctrl+A/E/U), Tab completion for slash commands, skills, and @ mentions; submitting while the agent runs steers the live turn (consumed at the next step boundary), `Esc` or Ctrl+C interrupts it, Ctrl+C on an empty idle input exits, Ctrl+D refuses to exit mid-turn
+- A blended status line: Claude-Code-style identity facts (model, working directory, git branch, session, plan, permission preset) beside the web composer's figures (turns/steps, llm and tool wall time, cache hit, token totals)
 
 ## Install
 

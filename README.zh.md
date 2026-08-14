@@ -13,8 +13,13 @@
 - **会话恢复**:`--resume <id|前缀>` 续接持久会话,`--continue` 取当前目录最新一个;完整转录从日志重放,续写同一持久会话
 - **斜杠命令透传**:共享 `ctx.commands` 注册表(Web 作曲栏同一分发面)里的命令都可在终端执行,`/` 弹出补全菜单;用户可调用技能也进同一菜单(标注 `skill`),未知 `/name` 回退为普通提示词、由 host 的技能注入接管
 - **todo 面板**:实时 todo 列表内联渲染,含 done/active/pending 计数与三态标记,每个新 turn 清空(对齐 Web TodoPanel)
-- 输入组件:历史(↑/↓)、光标编辑(←/→、Ctrl+A/E/U)、斜杠命令与技能 Tab 补全;运行中提交即 steering(下一个 step 边界消费),`Esc` 或 Ctrl+C 中断本轮,Ctrl+C 在空闲空输入时退出,Ctrl+D 运行中拒绝退出
-- 融合型状态栏:Claude Code 式身份信息(模型、工作目录、git 分支、会话)+ Web 作曲栏指标(轮数/步数、llm 与 tool 累计时长、缓存命中、token 总量)
+- **思考行**:模型推理以 Claude Code 式 `✻` 折叠呈现——默认收起为 dim 标记 + 字符数,展开为 dim 斜体,模型思考时流式显示;Ctrl+R 全局切换
+- **终端 markdown**:助手回复经纯 GFM 子集渲染器(标题/围栏与行内代码/强调/列表/引用/链接)按终端宽度排版;流式阶段保持纯文本直到消息落定
+- **ask_user_question 问答条**:模型提问呈现为选项菜单(↑/↓ 移动、space 多选、`c` 自定义答案、Esc 中断);计划评审(exit_plan_mode)走同一条并高亮 approve 选项
+- **@ 补全**:`@` 触发工作区文件与持久会话补全;会话引用展开为有界只读快照,以带来源的上下文注入到提示词之前
+- **plan 与权限**:状态栏 `⧉ plan` 与 `⛨ <preset>` 徽章;`/permission <name>` 切换会话预设(registry 自带的 `/plan` 命令启用 plan 模式)
+- 输入组件:历史(↑/↓)、光标编辑(←/→、Ctrl+A/E/U)、斜杠命令/技能/@ 补全 Tab 补全;运行中提交即 steering(下一个 step 边界消费),`Esc` 或 Ctrl+C 中断本轮,Ctrl+C 在空闲空输入时退出,Ctrl+D 运行中拒绝退出
+- 融合型状态栏:Claude Code 式身份信息(模型、工作目录、git 分支、会话、plan、权限预设)+ Web 作曲栏指标(轮数/步数、llm 与 tool 累计时长、缓存命中、token 总量)
 
 ## 安装
 
