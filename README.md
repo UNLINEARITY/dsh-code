@@ -17,11 +17,15 @@ A Claude-Code-style interactive terminal (TUI) bundle for [DeepSeek Harness](htt
 - **Todo panel**: the live todo list renders inline with done/active/pending counts and three-state markers, cleared at each fresh turn (mirroring the web TodoPanel)
 - **Thinking lines**: model reasoning renders as a Claude-Code-style `✻` fold — collapsed to a dim marker with a character count, expanded to dim-italic text, live-streamed while the model thinks; Ctrl+R toggles globally
 - **Terminal markdown**: assistant replies render through a pure GFM-subset renderer (headings, fenced/inline code, emphasis, lists, quotes, links) wrapped to the terminal width; streaming stays plain until the message settles
+- **Ctrl+O history inspector**: browse one retained transcript entry at a time without replacing the composer or status footer; ←/→ switches entries, ↑/↓ and PageUp/PageDown scroll the complete content, and `g`/`G` jump to either end
+- **Structured tool details**: persisted edit/write diffs, numbered read windows, web-search sources, fetch summaries, and bounded raw output remain compact in the transcript and expand into their full presentation inside Ctrl+O
 - **ask_user_question bar**: the model's questions appear as an option menu (↑/↓, space multi-select, `c` custom answer, Esc interrupts); plan reviews (`exit_plan_mode`) arrive through the same bar with the approve option highlighted
 - **@ mentions**: `@` completion over workspace files and persisted sessions; session mentions expand into bounded read-only snapshots injected as sourced context before the prompt
 - **Plan mode and permissions**: `⧉ plan` and `⛨ <preset>` badges in the status line; `/permission <name>` switches the session preset, Shift+Tab cycles through them (the registry's own `/plan` command enables plan mode)
+- **Local terminal workflows**: `/help` opens the complete key/command/skill surface, `/export` writes the folded transcript to Markdown, `/title` pins a session title, Ctrl+K deletes to end of line, Ctrl+L redraws the terminal, and bare workspace paths participate in Tab completion
 - Input with history (↑/↓), cursor editing (←/→, Ctrl+A/E/U), Tab completion for slash commands, skills, and @ mentions; submitting while the agent runs steers the live turn (consumed at the next step boundary), `Esc` or Ctrl+C interrupts it, Ctrl+C on an empty idle input exits, Ctrl+D refuses to exit mid-turn
-- A blended status line: Claude-Code-style identity facts (model, working directory, git branch, session, plan, permission preset) beside the web composer's figures (turns/steps, llm and tool wall time, cache hit, token totals)
+- A blended status line: Claude-Code-style identity facts (model, working directory, git branch, title/session, plan, permission preset, goal and sandbox overrides) beside the web composer's figures (turns/steps, llm and tool wall time, TTFT, decode tok/s, context occupancy, cache hit, token totals)
+- Bounded live rendering: streaming output, Ctrl+O, `/help`, `/model`, approvals, and question/plan-review panels stay within terminal-aware viewports; the composer remains directly above its status footer, and a debounced resize reflows the screen once at the settled width
 
 ## Install
 

@@ -15,11 +15,15 @@
 - **todo 面板**:实时 todo 列表内联渲染,含 done/active/pending 计数与三态标记,每个新 turn 清空(对齐 Web TodoPanel)
 - **思考行**:模型推理以 Claude Code 式 `✻` 折叠呈现——默认收起为 dim 标记 + 字符数,展开为 dim 斜体,模型思考时流式显示;Ctrl+R 全局切换
 - **终端 markdown**:助手回复经纯 GFM 子集渲染器(标题/围栏与行内代码/强调/列表/引用/链接)按终端宽度排版;流式阶段保持纯文本直到消息落定
+- **Ctrl+O 历史检查器**:逐条浏览保留的完整转录,同时保留输入框与状态栏;←/→ 切换条目,↑/↓ 与 PageUp/PageDown 滚动全部内容,`g`/`G` 跳到两端
+- **结构化工具详情**:持久化的 edit/write diff、带行号 read 窗口、web 搜索来源、fetch 摘要与有界原始输出在普通转录中保持紧凑,并可在 Ctrl+O 中展开查看完整展示
 - **ask_user_question 问答条**:模型提问呈现为选项菜单(↑/↓ 移动、space 多选、`c` 自定义答案、Esc 中断);计划评审(exit_plan_mode)走同一条并高亮 approve 选项
 - **@ 补全**:`@` 触发工作区文件与持久会话补全;会话引用展开为有界只读快照,以带来源的上下文注入到提示词之前
 - **plan 与权限**:状态栏 `⧉ plan` 与 `⛨ <preset>` 徽章;`/permission <name>` 切换会话预设,Shift+Tab 循环切换(registry 自带的 `/plan` 命令启用 plan 模式)
+- **终端本地工作流**:`/help` 打开完整按键/命令/技能说明,`/export` 将折叠转录写为 Markdown,`/title` 固定会话标题,Ctrl+K 删除到行尾,Ctrl+L 重绘终端,裸工作区路径参与 Tab 补全
 - 输入组件:历史(↑/↓)、光标编辑(←/→、Ctrl+A/E/U)、斜杠命令/技能/@ 补全 Tab 补全;运行中提交即 steering(下一个 step 边界消费),`Esc` 或 Ctrl+C 中断本轮,Ctrl+C 在空闲空输入时退出,Ctrl+D 运行中拒绝退出
-- 融合型状态栏:Claude Code 式身份信息(模型、工作目录、git 分支、会话、plan、权限预设)+ Web 作曲栏指标(轮数/步数、llm 与 tool 累计时长、缓存命中、token 总量)
+- 融合型状态栏:Claude Code 式身份信息(模型、工作目录、git 分支、标题/会话、plan、权限预设、goal 与 sandbox 覆盖)+ Web 作曲栏指标(轮数/步数、llm 与 tool 累计时长、TTFT、解码 tok/s、上下文占用、缓存命中、token 总量)
+- 有界动态渲染:流式输出、Ctrl+O、`/help`、`/model`、审批与问题/计划评审面板均受终端视口约束;输入框始终位于状态栏正上方,连续缩放只在最终宽度执行一次防抖重排
 
 ## 安装
 
