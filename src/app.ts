@@ -74,6 +74,8 @@ export interface AppProps {
   selectModel(row: ModelRow): string
   /** Apply one permission preset (`/permission <name>`); returns the new label. */
   setPermission(name: string): string
+  /** Cycle to the next permission preset (Shift+Tab); returns the new label. */
+  cyclePermission(): string
   /** Registers the app's notice channel with the runner (called once on mount). */
   onBridgeReady(bridge: { notify(text: string): void }): void
 }
@@ -569,7 +571,7 @@ function completionCandidates(
  * While a modal (approval / question / model panel) owns the keys, the
  * box passes every key through untouched.
  */
-function Input({ active, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, notify, toggleReasoning, loadMentions, setPermission }: {
+function Input({ active, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, notify, toggleReasoning, loadMentions, setPermission, cyclePermission }: {
   active: boolean
   busy: boolean
   descriptors: readonly CommandDescriptor[]
@@ -583,6 +585,7 @@ function Input({ active, busy, descriptors, skills, dispatch, steer, interrupt, 
   toggleReasoning(): void
   loadMentions(query: string, signal?: AbortSignal): Promise<readonly MentionCandidate[]>
   setPermission(name: string): string
+  cyclePermission(): string
 }): ReactElement {
   const [value, setValue] = useState('')
   const [cursor, setCursor] = useState(0)
@@ -633,6 +636,12 @@ function Input({ active, busy, descriptors, skills, dispatch, steer, interrupt, 
   useInput((input, key) => {
     // Modal ownership: approval/question/model dialogs consume all keys.
     if (!active) return
+    // Shift+Tab cycles the permission preset (Claude-Code convention).
+    if (key.tab && key.shift) {
+      const next = cyclePermission()
+      if (next !== '') notify(`permission → ${next}`)
+      return
+    }
     // Ctrl+R toggles the thinking display (Claude-Code reasoning fold).
     if (key.ctrl && input === 'r') {
       toggleReasoning()
@@ -683,7 +692,7 @@ function Input({ active, busy, descriptors, skills, dispatch, steer, interrupt, 
         return
       }
       if (text === '/help') {
-        notify('/model switch · /clear clear the screen · /quit exit · Ctrl+R toggle thinking · other /commands reach the registry · Esc or Ctrl+C interrupts the running turn')
+        notify('/model switch · /clear clear the screen · /quit exit · Ctrl+R toggle thinking · Shift+Tab cycle permission · other /commands reach the registry · Esc or Ctrl+C interrupts the running turn')
         return
       }
       if (text === '/clear') {
@@ -934,6 +943,7 @@ export function App(props: AppProps): ReactElement {
       },
       loadMentions: props.loadMentions,
       setPermission: props.setPermission,
+      cyclePermission: props.cyclePermission,
     }),
     createElement(StatusLine, {
       facts: {

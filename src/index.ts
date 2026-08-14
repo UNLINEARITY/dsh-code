@@ -294,14 +294,38 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       .then(() => { io.exit(0) })
   }
 
+  /** Run one slash line through the command registry (closed namespace). */
+  const runSlash = (line: string): void => {
+    const registry = ctx.get('commands')
+    if (registry === undefined) {
+      bridge.notify('no command registry is mounted in this composition')
+      return
+    }
+    const controller = new AbortController()
+    void registry.execute(agent, line, controller.signal).then((execution) => {
+      if (execution === undefined) {
+        // No command owns this line: send it verbatim so a user-invocable
+        // skill gesture (`/skill-name`) reaches the host's tool-skill
+        // pre-step injection — the web composer's same fall-through.
+        agent.followup(createUserMessage({
+          content: [{ type: 'text', text: line }],
+          source: { kind: 'user' },
+        }))
+      }
+    }, (error: unknown) => {
+      bridge.notify(`command failed: ${error instanceof Error ? error.message : String(error)}`)
+    })
+  }
+
   /** Deliver one readable line to the agent, expanding session mentions first. */
   const send = (text: string, mode: 'followup' | 'steer'): void => {
     const line = text.trim()
     if (line === '') return
     // The command registry is a closed namespace: slash lines run out of
-    // band and never reach the model through this path.
+    // band and never reach the model through this path (steering keeps the
+    // registry out of the inbox, so slash lines steer as literal text).
     if (isSlashLine(line) && mode === 'followup') {
-      dispatch(line)
+      runSlash(line)
       return
     }
     let parsed: ReturnType<typeof mentions.parse>
@@ -384,6 +408,30 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     return preset
   }
 
+  /**
+   * Cycle to the next permission preset (Shift+Tab, the Claude-Code
+   * permission-mode convention mapped onto dsh presets). A session in a
+   * custom knob state wraps to the first declared preset.
+   */
+  const cyclePermission = (): string => {
+    const service = ctx.get('permissionPresets') as
+      | {
+        names: readonly string[]
+        current(events: readonly SessionEvent[]): string
+        set(target: Session, preset: string): void
+      }
+      | undefined
+    if (service === undefined || service.names.length === 0) {
+      bridge.notify('permission presets are not mounted in this composition')
+      return ''
+    }
+    const at = service.names.indexOf(service.current(session.events))
+    const next = service.names[(at + 1) % service.names.length] ?? ''
+    if (next === '') return ''
+    service.set(session, next)
+    return next
+  }
+
   /** Apply one /model selection: takes effect from the next assembled step. */
   const selectModel = (row: ModelRow): string => {
     picked = { provider: row.provider, model: row.model }
@@ -412,6 +460,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     loadModels: () => loadModelDirectory(ctx),
     loadMentions: mentions.candidates,
     setPermission,
+    cyclePermission,
     selectModel,
     onBridgeReady: (instance: AppBridge) => {
       bridge.notify = instance.notify

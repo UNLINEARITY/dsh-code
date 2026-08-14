@@ -17,7 +17,7 @@
 - **终端 markdown**:助手回复经纯 GFM 子集渲染器(标题/围栏与行内代码/强调/列表/引用/链接)按终端宽度排版;流式阶段保持纯文本直到消息落定
 - **ask_user_question 问答条**:模型提问呈现为选项菜单(↑/↓ 移动、space 多选、`c` 自定义答案、Esc 中断);计划评审(exit_plan_mode)走同一条并高亮 approve 选项
 - **@ 补全**:`@` 触发工作区文件与持久会话补全;会话引用展开为有界只读快照,以带来源的上下文注入到提示词之前
-- **plan 与权限**:状态栏 `⧉ plan` 与 `⛨ <preset>` 徽章;`/permission <name>` 切换会话预设(registry 自带的 `/plan` 命令启用 plan 模式)
+- **plan 与权限**:状态栏 `⧉ plan` 与 `⛨ <preset>` 徽章;`/permission <name>` 切换会话预设,Shift+Tab 循环切换(registry 自带的 `/plan` 命令启用 plan 模式)
 - 输入组件:历史(↑/↓)、光标编辑(←/→、Ctrl+A/E/U)、斜杠命令/技能/@ 补全 Tab 补全;运行中提交即 steering(下一个 step 边界消费),`Esc` 或 Ctrl+C 中断本轮,Ctrl+C 在空闲空输入时退出,Ctrl+D 运行中拒绝退出
 - 融合型状态栏:Claude Code 式身份信息(模型、工作目录、git 分支、会话、plan、权限预设)+ Web 作曲栏指标(轮数/步数、llm 与 tool 累计时长、缓存命中、token 总量)
 
