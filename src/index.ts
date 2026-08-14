@@ -32,6 +32,7 @@ import { isSlashLine, watchCommands, type CommandsView } from './commands.ts'
 import { internals, type TuiMount } from './internals.ts'
 import { loadModelDirectory, type ModelRow } from './models.ts'
 import { createTranscriptStore } from './store.ts'
+import { watchSkills, type SkillsView } from './skills.ts'
 import type { TuiStartup } from './startup.ts'
 
 /** Stable Cordis plugin name. */
@@ -249,6 +250,9 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   const commands: CommandsView = watchCommands(ctx)
   commands.setAgent(agent)
 
+  const skills: SkillsView = watchSkills(ctx)
+  skills.setAgent(agent)
+
   // Approval answerer: renders the ask as a y/n bar; only this TUI's agent is
   // claimed, every other ask falls through to the fail-closed waterfall.
   const approval: ApprovalStore = mountApprovalAnswerer(
@@ -292,7 +296,13 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       const controller = new AbortController()
       void registry.execute(agent, line, controller.signal).then((execution) => {
         if (execution === undefined) {
-          bridge.notify(`unknown command ${line.split(' ')[0]} — type /help`)
+          // No command owns this line: send it verbatim so a user-invocable
+          // skill gesture (`/skill-name`) reaches the host's tool-skill
+          // pre-step injection — the web composer's same fall-through.
+          agent.followup(createUserMessage({
+            content: [{ type: 'text', text: line }],
+            source: { kind: 'user' },
+          }))
         }
       }, (error: unknown) => {
         bridge.notify(`command failed: ${error instanceof Error ? error.message : String(error)}`)
@@ -327,6 +337,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     store,
     approval,
     commands,
+    skills,
     model: initialModel,
     cwd: basename(cwd),
     branch: gitBranch(cwd),

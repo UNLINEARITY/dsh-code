@@ -28,6 +28,7 @@ import type { TranscriptEntry } from './render/projection.ts'
 import type { ApprovalStore } from './approval.ts'
 import type { CommandsView } from './commands.ts'
 import type { ModelDirectory, ModelRow } from './models.ts'
+import type { SkillsView, SkillRow } from './skills.ts'
 import { buildStatusGroups, type StatusFacts } from './render/status.ts'
 
 /** Props the runner hands the app; callbacks stay owned by the runner. */
@@ -38,6 +39,8 @@ export interface AppProps {
   approval: ApprovalStore
   /** Live slash-command descriptor list (completion candidates). */
   commands: CommandsView
+  /** Live user-invocable skill catalog (completion candidates). */
+  skills: SkillsView
   /** `provider/model` selection serving this session (updated on /model). */
   model: string
   /** Working-directory basename the session serves. */
@@ -276,26 +279,43 @@ interface CompletionCandidate {
   label: string
   /** Human-readable description shown beside the label. */
   description: string
+  /** Candidate origin; skills land the same literal text but route through the prompt. */
+  origin: 'command' | 'skill'
 }
 
 /**
- * Resolve completion candidates for the current input: TUI-local commands
- * plus the live registry descriptors whose names start with the typed prefix.
+ * Resolve completion candidates for the current input: TUI-local commands,
+ * the live registry descriptors, and user-invocable skills, filtered by the
+ * typed prefix. Command names win collisions (the dispatch tries the
+ * registry first and only then falls through to the skill gesture).
  */
-function completionCandidates(value: string, descriptors: readonly CommandDescriptor[]): readonly CompletionCandidate[] {
+function completionCandidates(
+  value: string,
+  descriptors: readonly CommandDescriptor[],
+  skills: readonly SkillRow[],
+): readonly CompletionCandidate[] {
   if (!value.startsWith('/')) return []
   const prefix = value.slice(1).split(' ')[0] ?? ''
   const local: CompletionCandidate[] = [
-    { label: '/help', description: 'show commands' },
-    { label: '/model', description: 'switch the model' },
-    { label: '/clear', description: 'clear the screen' },
-    { label: '/quit', description: 'exit' },
+    { label: '/help', description: 'show commands', origin: 'command' },
+    { label: '/model', description: 'switch the model', origin: 'command' },
+    { label: '/clear', description: 'clear the screen', origin: 'command' },
+    { label: '/quit', description: 'exit', origin: 'command' },
   ]
   const registry = descriptors.map((descriptor): CompletionCandidate => ({
     label: `/${descriptor.name}`,
     description: descriptor.description,
+    origin: 'command',
   }))
-  const all = [...local, ...registry]
+  const taken = new Set([...local, ...registry].map(candidate => candidate.label.slice(1)))
+  const skillRows = skills
+    .filter(skill => !taken.has(skill.name))
+    .map((skill): CompletionCandidate => ({
+      label: `/${skill.name}`,
+      description: skill.modelInvocable ? `skill · ${skill.description}` : `skill (user only) · ${skill.description}`,
+      origin: 'skill',
+    }))
+  const all = [...local, ...registry, ...skillRows]
   if (prefix === '') return all.slice(0, 10)
   return all.filter(candidate => candidate.label.slice(1).startsWith(prefix)).slice(0, 10)
 }
@@ -304,9 +324,10 @@ function completionCandidates(value: string, descriptors: readonly CommandDescri
  * The prompt box: TUI-local slash commands handled locally, other lines
  * dispatched; input editing keeps a cursor with history and completion.
  */
-function Input({ busy, descriptors, dispatch, interrupt, quit, openModel, notify }: {
+function Input({ busy, descriptors, skills, dispatch, interrupt, quit, openModel, notify }: {
   busy: boolean
   descriptors: readonly CommandDescriptor[]
+  skills: readonly SkillRow[]
   dispatch(text: string): void
   interrupt(): boolean
   quit(): void
@@ -319,7 +340,7 @@ function Input({ busy, descriptors, dispatch, interrupt, quit, openModel, notify
   const historyIndex = useRef<number | null>(null)
   const draft = useRef('')
   const [completionIndex, setCompletionIndex] = useState(0)
-  const candidates = completionCandidates(value, descriptors)
+  const candidates = completionCandidates(value, descriptors, skills)
   const completionActive = candidates.length > 0 && value.startsWith('/') && !value.includes(' ') && !value.includes('\n')
 
   useInput((input, key) => {
@@ -482,6 +503,7 @@ function Input({ busy, descriptors, dispatch, interrupt, quit, openModel, notify
 export function App(props: AppProps): ReactElement {
   const view = useSyncExternalStore(props.store.subscribe, props.store.getView)
   const descriptors = useSyncExternalStore(props.commands.subscribe, () => props.commands.descriptors)
+  const skills = useSyncExternalStore(props.skills.subscribe, () => props.skills.rows)
   const [modelLabel, setModelLabel] = useState(props.model)
   const [modelOpen, setModelOpen] = useState(false)
   const [directory, setDirectory] = useState<ModelDirectory | undefined>(undefined)
@@ -544,6 +566,7 @@ export function App(props: AppProps): ReactElement {
     createElement(Input, {
       busy,
       descriptors,
+      skills,
       dispatch: props.dispatch,
       interrupt: props.interrupt,
       quit: props.quit,

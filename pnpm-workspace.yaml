@@ -25,3 +25,4 @@ minimumReleaseAgeExclude:
   - '@deepseek-ai/dsh-commands@0.1.0-rc.6'
   - '@deepseek-ai/dsh-session-persistence@0.1.0-rc.6'
   - '@deepseek-ai/dsh-user-approval@0.1.0-rc.6'
+  - '@deepseek-ai/dsh-skill@0.1.0-rc.6'
