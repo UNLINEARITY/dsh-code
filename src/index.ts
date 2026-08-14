@@ -12,6 +12,7 @@
 
 import { randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
+import { writeFile as writeFileAsync } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import { createElement } from 'react'
 import type { Context } from '@deepseek-ai/cordis'
@@ -22,6 +23,8 @@ import type {} from '@deepseek-ai/dsh-agent-default-model'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId, type Session, type SessionEvent, type SessionHeader, type UserMessage } from '@deepseek-ai/dsh-session'
 import type { SessionPersistence } from '@deepseek-ai/dsh-session-persistence'
+// Type-only: carries the ctx.sessionTitle service merge for /title.
+import type {} from '@deepseek-ai/dsh-session-title'
 // Empty type imports carry the loader Context merge for the settlement await
 // and the cmdline Context merge for the appExit host value.
 import type {} from '@deepseek-ai/cordis-plugin-loader'
@@ -36,6 +39,7 @@ import { mountQuestionProvider, type QuestionStore } from './questions.ts'
 import { createTranscriptStore } from './store.ts'
 import { watchSkills, type SkillsView } from './skills.ts'
 import { toolArgumentsPreview } from './render/tool-preview.ts'
+import { buildExportMarkdown } from './render/export.ts'
 import type { TuiStartup } from './startup.ts'
 
 /** Stable Cordis plugin name. */
@@ -405,6 +409,46 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     return `${row.provider}/${row.model}`
   }
 
+  /**
+   * Export the folded transcript to a markdown file (/export). The default
+   * target sits beside the session's cwd so the file lands in the user's
+   * workspace; an absolute or cwd-relative argument overrides it.
+   */
+  const exportTranscript = async (argument: string): Promise<void> => {
+    const wanted = argument.trim()
+    const defaultName = `dsh-session-${session.id.slice(-8)}.md`
+    const target = wanted === ''
+      ? join(cwd, defaultName)
+      : /^[a-zA-Z]:[\\/]/u.test(wanted) || wanted.startsWith('/')
+        ? wanted
+        : join(cwd, wanted)
+    const markdown = buildExportMarkdown(store.getView(), session.id)
+    try {
+      await writeFileAsync(target, `${markdown}\n`, 'utf8')
+      bridge.notify(`exported to ${target}`)
+    } catch (error: unknown) {
+      bridge.notify(`export failed: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  /**
+   * Rename the session (/title): a user title pins the session and stops
+   * automatic generation (the service's own contract). The appended
+   * `session/title` event flows back through the store into the status line.
+   */
+  const renameTitle = (argument: string): string => {
+    const title = argument.trim()
+    if (title === '') return 'usage: /title <text>'
+    const service = ctx.get('sessionTitle')
+    if (service === undefined) return 'session titles are unavailable in this profile'
+    try {
+      service.rename(session, title)
+      return `title → ${title}`
+    } catch (error: unknown) {
+      return `rename failed: ${error instanceof Error ? error.message : String(error)}`
+    }
+  }
+
   const initialModel = store.getView().model !== ''
     ? store.getView().model
     : `${defaults.provider}/${defaults.model}`
@@ -428,6 +472,8 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     loadMentions: mentions.candidates,
     cyclePermission,
     selectModel,
+    exportTranscript,
+    renameTitle,
     onBridgeReady: (instance: AppBridge) => {
       bridge.notify = instance.notify
     },

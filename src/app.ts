@@ -27,6 +27,7 @@ import { WHALE_GLYPH, WHALE_GLYPH_COLUMNS } from './whale-glyph.ts'
 import type { TranscriptStore } from './store.ts'
 import type { TranscriptEntry } from './render/projection.ts'
 import { renderMarkdown, type MdSegment, visibleColumns } from './render/markdown.ts'
+import type { ToolDetail } from './render/tool-detail.ts'
 import { caretVisible, pulseFrame } from './render/animations.ts'
 import type { ApprovalStore } from './approval.ts'
 import type { CommandsView } from './commands.ts'
@@ -34,7 +35,7 @@ import type { ModelDirectory, ModelRow } from './models.ts'
 import type { QuestionStore } from './questions.ts'
 import type { SkillsView, SkillRow } from './skills.ts'
 import type { MentionCandidate } from './mentions.ts'
-import { buildStatusGroups, type StatusFacts } from './render/status.ts'
+import { buildStatusGroups, formatTokens, type StatusFacts } from './render/status.ts'
 import { displayText } from './render/text.ts'
 
 /** Props the runner hands the app; callbacks stay owned by the runner. */
@@ -75,6 +76,10 @@ export interface AppProps {
   selectModel(row: ModelRow): string
   /** Cycle to the next permission preset (Shift+Tab); returns the new label. */
   cyclePermission(): string
+  /** Export the transcript to a markdown file (/export [path]); reports via notices. */
+  exportTranscript(argument: string): Promise<void>
+  /** Rename the session (/title <text>); returns the outcome line for the notice. */
+  renameTitle(argument: string): string
   /** Registers the app's notice channel with the runner (called once on mount). */
   onBridgeReady(bridge: { notify(text: string): void }): void
 }
@@ -179,8 +184,70 @@ function MarkdownBody({ text }: { text: string }): ReactElement {
   )
 }
 
+/**
+ * One expanded tool-card body for the verbose transcript (Ctrl+O): the
+ * presentation contract's structured cards — inline diffs, read windows,
+ * web sources — rendered as plain terminal rows, degradation-safe against
+ * replayed metadata.
+ */
+function ToolDetailBody({ detail }: { detail: ToolDetail }): ReactElement {
+  switch (detail.kind) {
+    case 'diff':
+      return createElement(
+        Box,
+        { flexDirection: 'column' },
+        ...detail.diffs.map((diff, index) => createElement(
+          Box,
+          { key: index, flexDirection: 'column' },
+          createElement(Text, { dimColor: true }, `  ── ${displayText(diff.path)}${diff.truncated ? ' (diff truncated)' : ''}`),
+          ...diff.lines.map((line, at) => createElement(
+            Text,
+            {
+              key: at,
+              color: line.mark === '+' ? inkColor(TUI_RGB.success) : line.mark === '-' ? inkColor(TUI_RGB.error) : inkColor(TUI_RGB.dim),
+            },
+            `  ${line.mark}${displayText(line.text)}`,
+          )),
+        )),
+      )
+    case 'read':
+      return createElement(
+        Box,
+        { flexDirection: 'column' },
+        createElement(Text, { dimColor: true }, `  ── ${displayText(detail.path)} · lines ${detail.offset}-${detail.lines.length > 0 ? detail.lines[detail.lines.length - 1]!.number : detail.offset - 1} of ${detail.totalLines}${detail.truncated ? ' (window truncated)' : ''}`),
+        ...detail.lines.map((line, at) => createElement(
+          Text,
+          { key: at, dimColor: true },
+          `  ${String(line.number).padStart(5, ' ')} | ${displayText(line.text)}`,
+        )),
+      )
+    case 'web-search':
+      return createElement(
+        Box,
+        { flexDirection: 'column' },
+        ...detail.sources.map((source, at) => createElement(
+          Text,
+          { key: at },
+          brand(`  ? ${displayText(source.title === undefined ? source.url : source.title)}`),
+          createElement(Text, { dimColor: true }, dim(` - ${displayText(source.url)}`)),
+        )),
+        createElement(Text, { dimColor: true }, dim(`  ${detail.sources.length} sources${detail.truncated ? ' (capped)' : ''}`)),
+      )
+    case 'web-fetch':
+      return createElement(Text, { dimColor: true }, dim(`  ${displayText(detail.url)} · HTTP ${detail.statusCode}`))
+    case 'raw':
+      return createElement(
+        Box,
+        { flexDirection: 'column' },
+        ...displayText(detail.text).split('\n').slice(0, 40).map((line, at) => createElement(Text, { key: at, dimColor: true }, `  ${line}`)),
+        createElement(Text, { dimColor: true }, detail.truncated ? '  … (output truncated)' : '  (end of output)'),
+      )
+    default:
+      return assertNever(detail, 'tool detail kind')
+  }
+}
 /** One settled transcript row. */
-function EntryLine({ entry, showReasoning }: { entry: TranscriptEntry; showReasoning: boolean }): ReactElement {
+function EntryLine({ entry, showReasoning, verbose }: { entry: TranscriptEntry; showReasoning: boolean; verbose: boolean }): ReactElement {
   switch (entry.kind) {
     case 'user':
       // Collapsed injected context reads as a dim ↳ row; only direct human
@@ -229,6 +296,9 @@ function EntryLine({ entry, showReasoning }: { entry: TranscriptEntry; showReaso
             { color: entry.state === 'error' ? inkColor(TUI_RGB.error) : inkColor(TUI_RGB.dim) },
             `  ⎿ ${displayText(entry.summary)}`,
           ),
+        verbose && entry.detail !== undefined
+          ? createElement(ToolDetailBody, { detail: entry.detail })
+          : undefined,
       )
     }
     case 'command': {
@@ -252,6 +322,32 @@ function EntryLine({ entry, showReasoning }: { entry: TranscriptEntry; showReaso
           ? undefined
           : createElement(Text, { color: inkColor(TUI_RGB.dim) }, `  ⎿ ${displayText(entry.summary)}`),
       )
+    }
+    case 'turn-marker':
+      // Non-error turn outcomes (cancel, ceiling, interruption) as dim rows.
+      return createElement(Text, { dimColor: true }, `  ⏹ ${displayText(entry.text)}`)
+    case 'compaction':
+      // Completed compaction lifecycle: what it reclaimed, or why it failed.
+      return createElement(
+        Text,
+        { dimColor: true },
+        entry.ok
+          ? `  ⧉ compacted ~${formatTokens(entry.tokens)} tokens`
+          : `  ⧉ compaction failed: ${displayText(entry.error)}`,
+      )
+    case 'retry':
+      // Provider-routed retry: amber while the backoff waits, dim once the
+      // next attempt is underway.
+      return createElement(
+        Text,
+        { color: entry.state === 'running' ? inkColor(TUI_RGB.warn) : inkColor(TUI_RGB.dim) },
+        `  ↻ retry ${entry.attempt}/${entry.max} · ${displayText(entry.code)} · ${Math.round(entry.delayMs / 100) / 10}s`,
+      )
+    case 'files': {
+      // Turn-tail deliverables: the turn's mutated files (web turnTail chips).
+      const shown = entry.paths.slice(0, 3).map(path => displayText(path)).join(' · ')
+      const more = entry.paths.length > 3 ? ` (+${entry.paths.length - 3} more)` : ''
+      return createElement(Text, { dimColor: true }, `  ⎄ ${shown}${more}`)
     }
     case 'error':
       return createElement(Text, null, paintError(displayText(entry.text)))
@@ -612,6 +708,67 @@ function ModelPanel({ directory, error, onSelect, onClose }: {
   )
 }
 
+/**
+ * The /help overlay: one scrolling card with the keyboard map, the TUI-local
+ * commands, the live registry commands, and the user-invocable skills — the
+ * real command surface, replacing the one-line notice.
+ */
+function HelpPanel({ descriptors, skills, onClose }: {
+  descriptors: readonly CommandDescriptor[]
+  skills: readonly SkillRow[]
+  onClose(): void
+}): ReactElement {
+  useInput((input, key) => {
+    if (key.escape || input === 'q') onClose()
+  })
+  const columns = useStdout().stdout?.columns ?? 80
+  const nameWidth = 18
+  const descBudget = Math.max(24, columns - nameWidth - 8)
+  const row = (label: string, description: string): ReactElement => createElement(
+    Text,
+    { dimColor: true },
+    `  ${padColumns(label, nameWidth)}${dim(truncateColumns(displayText(description), descBudget))}`,
+  )
+  const registryWindow = descriptors.slice(0, 8)
+  const skillWindow = skills.slice(0, 6)
+  return createElement(
+    Box,
+    { flexDirection: 'column', paddingX: 1, borderStyle: 'round', borderColor: inkColor(TUI_RGB.brand), alignSelf: 'flex-start', marginLeft: 1, marginTop: 1 },
+    createElement(Text, { color: inkColor(TUI_RGB.brand), bold: true }, '/help — keys and commands'),
+    createElement(Text, { bold: true }, ' keys'),
+    createElement(Text, { dimColor: true }, '  enter submit · alt+enter / ctrl+j newline · up/down history · tab complete'),
+    createElement(Text, { dimColor: true }, '  tab also completes bare workspace paths · @ mentions files and sessions'),
+    createElement(Text, { dimColor: true }, '  ctrl+o verbose transcript · ctrl+r thinking · shift+tab permission preset'),
+    createElement(Text, { dimColor: true }, '  esc interrupt the running turn · ctrl+c cancel / clear / quit · ctrl+d exit'),
+    createElement(Text, { dimColor: true }, '  ctrl+k cut to end of line · ctrl+u clear line · ctrl+a / ctrl+e line ends'),
+    createElement(Text, { bold: true }, ' commands'),
+    row('/help', 'show this overlay'),
+    row('/model', 'switch the model'),
+    row('/clear', 'clear the screen'),
+    row('/export', 'export the transcript to markdown (/export [path])'),
+    row('/title', 'rename this session (/title <text>)'),
+    row('/quit', 'exit'),
+    ...registryWindow.map(descriptor => createElement(
+      Text,
+      { key: descriptor.name, dimColor: true },
+      `  ${padColumns(`/${descriptor.name}`, nameWidth)}${dim(truncateColumns(displayText(descriptor.description), descBudget))}`,
+    )),
+    descriptors.length > registryWindow.length
+      ? createElement(Text, { dimColor: true }, `  … ${descriptors.length - registryWindow.length} more — type / in the input for the live menu`)
+      : undefined,
+    skillWindow.length > 0 ? createElement(Text, { bold: true }, ' skills') : undefined,
+    ...skillWindow.map(skill => createElement(
+      Text,
+      { key: skill.name, dimColor: true },
+      `  ${padColumns(`/${skill.name}`, nameWidth)}${dim(truncateColumns(displayText(skill.description), descBudget))}`,
+    )),
+    skills.length > skillWindow.length
+      ? createElement(Text, { dimColor: true }, `  … ${skills.length - skillWindow.length} more`)
+      : undefined,
+    createElement(Text, { dimColor: true }, dim('  esc or q close')),
+  )
+}
+
 /** One completion candidate row. */
 interface CompletionCandidate {
   /** Insertion text for the command name (with leading slash). */
@@ -619,7 +776,7 @@ interface CompletionCandidate {
   /** Human-readable description shown beside the label. */
   description: string
   /** Candidate origin; skills land the same literal text but route through the prompt. */
-  origin: 'command' | 'skill' | 'mention'
+  origin: 'command' | 'skill' | 'mention' | 'path'
 }
 
 /**
@@ -639,6 +796,8 @@ function completionCandidates(
     { label: '/help', description: 'show commands', origin: 'command' },
     { label: '/model', description: 'switch the model', origin: 'command' },
     { label: '/clear', description: 'clear the screen', origin: 'command' },
+    { label: '/export', description: 'export the transcript to markdown', origin: 'command' },
+    { label: '/title', description: 'rename this session', origin: 'command' },
     { label: '/quit', description: 'exit', origin: 'command' },
   ]
   // Local commands shadow registry names (e.g. the plugin-registered
@@ -712,7 +871,7 @@ function CompletionMenu({ state }: { state: MenuState }): ReactElement | undefin
  * While a modal (approval / question / model panel) owns the keys, the
  * box passes every key through untouched.
  */
-function Input({ active, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, notify, toggleReasoning, loadMentions, cyclePermission, onMenuState }: {
+function Input({ active, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openHelp, notify, toggleReasoning, toggleVerbose, loadMentions, cyclePermission, exportTranscript, renameTitle, onMenuState }: {
   active: boolean
   busy: boolean
   descriptors: readonly CommandDescriptor[]
@@ -722,10 +881,14 @@ function Input({ active, busy, descriptors, skills, dispatch, steer, interrupt, 
   interrupt(): boolean
   quit(): void
   openModel(): void
+  openHelp(): void
   notify(text: string): void
   toggleReasoning(): void
+  toggleVerbose(): void
   loadMentions(query: string, signal?: AbortSignal): Promise<readonly MentionCandidate[]>
   cyclePermission(): string
+  exportTranscript(argument: string): Promise<void>
+  renameTitle(argument: string): string
   onMenuState(state: MenuState): void
 }): ReactElement {
   const [value, setValue] = useState('')
@@ -747,6 +910,31 @@ function Input({ active, busy, descriptors, skills, dispatch, steer, interrupt, 
   const mentionActive = mentionToken !== undefined
   const [mentionRows, setMentionRows] = useState<readonly MentionCandidate[]>([])
 
+  // Bare path token: the last whitespace-delimited run on the cursor's line
+  // when it already looks like a path (Claude-Code bare Tab completion).
+  const bareTokenMatch = /([^\s]+)$/u.exec(lastLine)
+  const bareToken = bareTokenMatch === null ? '' : bareTokenMatch[1] ?? ''
+  const pathActive = !mentionActive
+    && (bareToken.includes('/') || bareToken === '.' || bareToken === '..')
+  const pathTokenStart = beforeCursor.length - bareToken.length
+  const [pathRows, setPathRows] = useState<readonly MentionCandidate[]>([])
+
+  useEffect(() => {
+    if (!pathActive) {
+      setPathRows([])
+      return
+    }
+    const controller = new AbortController()
+    setPathRows([])
+    loadMentions(bareToken, controller.signal).then(
+      rows => setPathRows(rows.filter(row => row.kind !== 'session')),
+      () => {},
+    )
+    return () => {
+      controller.abort()
+    }
+  }, [pathActive, bareToken])
+
   useEffect(() => {
     if (!mentionActive) {
       setMentionRows([])
@@ -763,7 +951,7 @@ function Input({ active, busy, descriptors, skills, dispatch, steer, interrupt, 
     }
   }, [mentionActive, mentionToken?.query])
 
-  const menuActive = (slashActive || mentionActive) && !busy
+  const menuActive = (slashActive || mentionActive || pathActive) && !busy
   const menuRows: readonly CompletionCandidate[] = mentionActive
     ? mentionRows.map(row => ({
       label: row.label.startsWith('@')
@@ -772,7 +960,13 @@ function Input({ active, busy, descriptors, skills, dispatch, steer, interrupt, 
       description: row.description,
       origin: 'mention',
     }))
-    : candidates
+    : pathActive
+      ? pathRows.map(row => ({
+        label: row.label,
+        description: row.description,
+        origin: 'path',
+      }))
+      : candidates
 
   // The menu renders at the very bottom of the app (after the status line),
   // where opening it moves nothing above it — the App needs this snapshot.
@@ -802,6 +996,12 @@ function Input({ active, busy, descriptors, skills, dispatch, steer, interrupt, 
     // Ctrl+R toggles the thinking display (Claude-Code reasoning fold).
     if (key.ctrl && input === 'r') {
       toggleReasoning()
+      return
+    }
+    // Ctrl+O toggles the verbose transcript (Claude-Code convention): tool
+    // cards expand to their structured presentation bodies.
+    if (key.ctrl && input === 'o') {
+      toggleVerbose()
       return
     }
     // Ctrl+C is three-state (community-TUI convention): a running turn is
@@ -849,11 +1049,19 @@ function Input({ active, busy, descriptors, skills, dispatch, steer, interrupt, 
         return
       }
       if (text === '/help') {
-        notify('/model switch · /clear clear the screen · /quit exit · Ctrl+R toggle thinking · Shift+Tab cycle permission · other /commands reach the registry · Esc or Ctrl+C interrupts the running turn')
+        openHelp()
         return
       }
       if (text === '/clear') {
         console.clear()
+        return
+      }
+      if (text === '/export' || text.startsWith('/export ')) {
+        void exportTranscript(text.slice(8))
+        return
+      }
+      if (text === '/title' || text.startsWith('/title ')) {
+        notify(renameTitle(text.slice(7)))
         return
       }
       if (text === '/model' || text.startsWith('/model ')) {
@@ -915,6 +1123,15 @@ function Input({ active, busy, descriptors, skills, dispatch, steer, interrupt, 
           setValue(value.slice(0, mentionToken.start) + insertion + value.slice(cursor))
           setCursor(mentionToken.start + insertion.length)
         }
+      } else if (pathActive) {
+        const row = pathRows[completionIndex % Math.max(1, pathRows.length)]
+        if (row !== undefined) {
+          // Bare path completion replaces the typed token with the chosen
+          // workspace path (directories keep their trailing slash).
+          const insertion = row.kind === 'directory' ? `${row.label}/` : row.label
+          setValue(value.slice(0, pathTokenStart) + insertion + value.slice(cursor))
+          setCursor(pathTokenStart + insertion.length)
+        }
       } else {
         const candidate = candidates[completionIndex % candidates.length]
         if (candidate !== undefined) {
@@ -944,6 +1161,16 @@ function Input({ active, busy, descriptors, skills, dispatch, steer, interrupt, 
     if (key.ctrl && input === 'u') {
       setValue('')
       setCursor(0)
+      return
+    }
+    // Readline parity: Ctrl+K cuts from the cursor to the end of the line.
+    if (key.ctrl && input === 'k') {
+      setValue(value.slice(0, cursor))
+      return
+    }
+    // Ctrl+L refreshes the screen (readline convention; same as /clear).
+    if (key.ctrl && input === 'l') {
+      console.clear()
       return
     }
     if (key.ctrl && input === 'a') {
@@ -1019,11 +1246,13 @@ export function App(props: AppProps): ReactElement {
 
   const busy = view.busy
   const [showReasoning, setShowReasoning] = useState(false)
+  const [verbose, setVerbose] = useState(false)
+  const [helpOpen, setHelpOpen] = useState(false)
   const [menuState, setMenuState] = useState<MenuState>({ active: false, mention: false, index: 0, rows: [] })
   const approvalSnapshot = useSyncExternalStore(props.approval.subscribe, props.approval.getSnapshot)
   const questionSnapshot = useSyncExternalStore(props.questions.subscribe, props.questions.getSnapshot)
   // While any modal owns the keys, the prompt box passes everything through.
-  const inputActive = !modelOpen && approvalSnapshot.pending === undefined && questionSnapshot.pending === undefined
+  const inputActive = !modelOpen && !helpOpen && approvalSnapshot.pending === undefined && questionSnapshot.pending === undefined
   // Layered ownership: question > approval > model panel; each bar answers
   // only while no higher-priority modal is on screen.
   const questionPending = questionSnapshot.pending !== undefined
@@ -1034,7 +1263,7 @@ export function App(props: AppProps): ReactElement {
     if (entry.kind === 'user' && index > 0) {
       transcriptRows.push(createElement(Text, { key: `gap-${index}` }, ' '))
     }
-    transcriptRows.push(createElement(EntryLine, { key: index, entry, showReasoning }))
+    transcriptRows.push(createElement(EntryLine, { key: index, entry, showReasoning, verbose }))
   })
   return createElement(
     Box,
@@ -1057,8 +1286,8 @@ export function App(props: AppProps): ReactElement {
       busy && view.streaming === '' && view.streamingReasoning === '' ? createElement(Text, { dimColor: true }, 'Deep diving...') : undefined,
     ),
     createElement(TodoPanel, { todos: view.todos }),
-    createElement(QuestionBar, { store: props.questions, locked: modelOpen }),
-    createElement(ApprovalBar, { approval: props.approval, locked: modelOpen || questionPending }),
+    createElement(QuestionBar, { store: props.questions, locked: modelOpen || helpOpen }),
+    createElement(ApprovalBar, { approval: props.approval, locked: modelOpen || helpOpen || questionPending }),
     modelOpen
       ? createElement(ModelPanel, {
         directory,
@@ -1070,6 +1299,15 @@ export function App(props: AppProps): ReactElement {
         },
         onClose: () => {
           setModelOpen(false)
+        },
+      })
+      : undefined,
+    helpOpen
+      ? createElement(HelpPanel, {
+        descriptors,
+        skills,
+        onClose: () => {
+          setHelpOpen(false)
         },
       })
       : undefined,
@@ -1090,12 +1328,21 @@ export function App(props: AppProps): ReactElement {
       openModel: () => {
         setModelOpen(true)
       },
+      openHelp: () => {
+        setHelpOpen(true)
+      },
       notify,
+      toggleVerbose: () => {
+        notify(verbose ? 'verbose off' : 'verbose on · tool cards expand (ctrl+o)')
+        setVerbose(current => !current)
+      },
       toggleReasoning: () => {
         setShowReasoning(current => !current)
       },
       loadMentions: props.loadMentions,
       cyclePermission: props.cyclePermission,
+      exportTranscript: props.exportTranscript,
+      renameTitle: props.renameTitle,
       onMenuState: setMenuState,
     }),
     createElement(StatusLine, {
@@ -1104,8 +1351,11 @@ export function App(props: AppProps): ReactElement {
         cwd: props.cwd,
         branch: props.branch,
         sessionId: props.sessionId,
+        title: view.title,
         plan: view.plan,
         permission: view.permission,
+        sandbox: view.sandbox,
+        goal: view.goal === undefined ? undefined : { phase: view.goal.phase, rounds: view.goal.rounds, max: view.goal.max },
       },
       stats: view.stats,
       busy,

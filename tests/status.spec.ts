@@ -10,6 +10,12 @@ const emptyStats: TranscriptStats = {
   llmMs: 0,
   toolMs: 0,
   usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 },
+  lastPromptTokens: 0,
+  contextWindow: 0,
+  ttftMs: 0,
+  ttftSteps: 0,
+  decodeMs: 0,
+  decodeTokens: 0,
 }
 
 describe('status formatting', () => {
@@ -65,6 +71,43 @@ describe('status groups', () => {
       '↑12.2K ↓2.4K',
       's',
     ])
+  })
+
+  it('adds the context-occupancy meter once capacity and a report exist', () => {
+    const groups = buildStatusGroups(
+      { model: 'm', cwd: 'r', branch: '', sessionId: '' },
+      {
+        ...emptyStats,
+        usage: { inputTokens: 32_000, outputTokens: 800, cacheReadTokens: 0 },
+        lastPromptTokens: 32_000,
+        contextWindow: 128_000,
+      },
+    )
+    expect(groups).toEqual(['m · r', 'cache 0%', 'ctx 25%', '↑32K ↓800'])
+  })
+
+  it('shows the session title in place of the short id once one lands', () => {
+    expect(buildStatusGroups(
+      { model: 'm', cwd: 'r', branch: '', sessionId: 'ab12cd34', title: 'fix the login bug' },
+      emptyStats,
+    )).toEqual(['m · r', 'fix the login bug'])
+    expect(buildStatusGroups(
+      { model: 'm', cwd: 'r', branch: '', sessionId: 'ab12cd34', title: '' },
+      emptyStats,
+    )).toEqual(['m · r', 'ab12cd34'])
+  })
+
+  it('badges the goal and surfaces only divergent sandbox overrides', () => {
+    const facts = (sandbox: string, goal?: { phase: string; rounds: number; max: number }) => ({
+      model: 'm', cwd: 'r', branch: '', sessionId: 's', title: '', sandbox, goal,
+      permission: 'workspace-write', plan: false,
+    })
+    // Echoing preset: no sandbox badge.
+    expect(buildStatusGroups(facts('workspace-write', { phase: 'active', rounds: 2, max: 8 }), emptyStats))
+      .toEqual(['m · r', 's', 'workspace-write', '◎ r2/8'])
+    // Divergent override and a non-active phase.
+    expect(buildStatusGroups(facts('danger-full-access', { phase: 'blocked', rounds: 3, max: 8 }), emptyStats))
+      .toEqual(['m · r', 's', 'workspace-write', 'sandbox danger-full-access', '◎ blocked'])
   })
 
   it('omits the cache group when nothing was billed', () => {

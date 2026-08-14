@@ -37,6 +37,18 @@ export function formatDuration(ms: number): string {
 }
 
 /**
+ * Compact decode rate: one decimal under a hundred, whole below a thousand,
+ * then thousands (15.3 / 124 / 1.2K).
+ * @param n - tokens per second.
+ * @returns display string.
+ */
+export function formatRate(n: number): string {
+  if (n < 100) return String(Math.round(n * 10) / 10)
+  if (n < 1_000) return String(Math.round(n))
+  return `${Math.round(n / 100) / 10}K`
+}
+
+/**
  * Cache-hit share of billed prompt-side input.
  * @param usage - cumulative token totals.
  * @returns rounded integer percent, or null when no input was billed.
@@ -57,6 +69,12 @@ export interface StatusFacts {
   branch: string
   /** Short session identifier (last dash-separated segment or tail). */
   sessionId: string
+  /** Latest session title (folded from `session/title`); shown in place of the id. */
+  title: string
+  /** Sandbox-mode override (folded from `sandbox/mode`), empty when never switched. */
+  sandbox: string
+  /** Live goal summary (folded from `goal/change`), undefined when none. */
+  goal: { phase: string; rounds: number; max: number } | undefined
   /** Whether plan mode is active (folded from `plan/mode`). */
   plan: boolean
   /** Active permission preset (folded from `permission/preset`), empty when unknown. */
@@ -82,18 +100,47 @@ export function buildStatusGroups(facts: StatusFacts, stats: TranscriptStats): s
     groups.push(`T${stats.turns} · S${stats.steps}`)
     const durations: string[] = []
     if (stats.llmMs > 0) durations.push(`llm ${formatDuration(stats.llmMs)}`)
+    // Decode latency figures (the web StatsLine's TTFT and throughput):
+    // average first-token wait and tokens per second over timed steps.
+    if (stats.ttftSteps > 0) durations.push(`ttft ${formatDuration(stats.ttftMs / stats.ttftSteps)}`)
+    if (stats.decodeMs > 0 && stats.decodeTokens > 0) {
+      durations.push(`${formatRate(stats.decodeTokens / (stats.decodeMs / 1_000))} tok/s`)
+    }
     if (stats.toolMs > 0) durations.push(`tool ${formatDuration(stats.toolMs)}`)
     if (durations.length > 0) groups.push(durations.join(' · '))
   }
   const cacheHit = cacheHitPercent(stats.usage)
   if (stats.usage.inputTokens > 0 || stats.usage.outputTokens > 0) {
     if (cacheHit !== null) groups.push(`cache ${cacheHit}%`)
+    // Context occupancy (the web StatsLine's meter): the most recent
+    // reported prompt size against the advertised route capacity.
+    if (stats.contextWindow > 0 && stats.lastPromptTokens > 0) {
+      groups.push(`ctx ${Math.min(999, Math.round(stats.lastPromptTokens / stats.contextWindow * 100))}%`)
+    }
     groups.push(`↑${formatTokens(stats.usage.inputTokens)} ↓${formatTokens(stats.usage.outputTokens)}`)
   }
-  if (facts.sessionId !== '') groups.push(facts.sessionId)
+  // The session title replaces the bare short id whenever one has landed
+  // (user rename or provider generation), bounded so a long title cannot
+  // crowd out the rest of the line.
+  const label = facts.title !== undefined && facts.title !== ''
+    ? (facts.title.length > 48 ? `${facts.title.slice(0, 47)}…` : facts.title)
+    : facts.sessionId
+  if (label !== '') groups.push(label)
   // The permission preset trails the line: switching it changes only the
   // tail, so the left-aligned bar never shifts its other groups. Plain text,
   // the Claude-Code permission-mode display (no glyphs).
   if (facts.permission !== undefined && facts.permission !== '') groups.push(facts.permission)
+  // The sandbox override stays implicit when it merely echoes the preset —
+  // the badge exists to surface a divergence, not to duplicate the label.
+  const sandbox = facts.sandbox ?? ''
+  if (sandbox !== '' && sandbox.toLowerCase() !== facts.permission.toLowerCase()) {
+    groups.push(`sandbox ${sandbox}`)
+  }
+  // Goal badge: round progress while active, the phase otherwise.
+  if (facts.goal !== undefined) {
+    groups.push(facts.goal.phase === 'active'
+      ? `◎ r${facts.goal.rounds}/${facts.goal.max}`
+      : `◎ ${facts.goal.phase}`)
+  }
   return groups
 }
