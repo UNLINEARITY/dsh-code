@@ -24,6 +24,15 @@ import type {} from '@deepseek-ai/dsh-session-title'
 import { toolArgumentsPreview } from './tool-preview.ts'
 import { toolResultDetail, type ToolDetail } from './tool-detail.ts'
 
+/** In-flight UI buffers are tails; the assembled assistant message is authoritative. */
+const MAX_STREAMING_CHARS = 65_536
+
+/** Append one delta without retaining an unbounded duplicate of the live reply. */
+function appendStreamingTail(current: string, delta: string): string {
+  const next = current + delta
+  return next.length <= MAX_STREAMING_CHARS ? next : next.slice(-MAX_STREAMING_CHARS)
+}
+
 /** One user prompt line. */
 export interface UserEntry {
   kind: 'user'
@@ -185,9 +194,9 @@ export interface TranscriptStats {
 export interface TranscriptView {
   /** Settled entries in log order. */
   entries: readonly TranscriptEntry[]
-  /** Text accumulated from `assistant/chunk` deltas since the last flush. */
+  /** Bounded text tail accumulated from `assistant/chunk` deltas since the last flush. */
   streaming: string
-  /** Thinking accumulated from `assistant/chunk` reasoning deltas since the last flush. */
+  /** Bounded thinking tail accumulated from reasoning deltas since the last flush. */
   streamingReasoning: string
   /** Latest whole-list todo snapshot from `todo/write`, empty when none. */
   todos: readonly TodoItem[]
@@ -292,10 +301,10 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
         }
       }
       if (chunk.type === 'text-delta') {
-        return { ...view, streaming: view.streaming + chunk.text, stats }
+        return { ...view, streaming: appendStreamingTail(view.streaming, chunk.text), stats }
       }
       if (chunk.type === 'reasoning-delta') {
-        return { ...view, streamingReasoning: view.streamingReasoning + chunk.text, stats }
+        return { ...view, streamingReasoning: appendStreamingTail(view.streamingReasoning, chunk.text), stats }
       }
       return view
     }

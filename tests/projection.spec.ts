@@ -132,6 +132,23 @@ describe('transcript projection', () => {
     expect(last).toEqual({ kind: 'assistant', text: 'here is the answer', reasoning: 'let me think' })
   })
 
+  it('bounds the in-flight reasoning duplicate while keeping the newest tail', () => {
+    const prefix = 'old-'.repeat(20_000)
+    const suffix = 'newest reasoning'
+    const view = projectEvents([
+      {
+        type: 'assistant/chunk', seq: 1, time: 1,
+        data: { turn: 1, step: 1, chunk: { type: 'reasoning-delta', index: 0, text: prefix } },
+      },
+      {
+        type: 'assistant/chunk', seq: 2, time: 2,
+        data: { turn: 1, step: 1, chunk: { type: 'reasoning-delta', index: 0, text: suffix } },
+      },
+    ] as unknown as readonly SessionEvent[])
+    expect(view.streamingReasoning.length).toBeLessThanOrEqual(65_536)
+    expect(view.streamingReasoning.endsWith(suffix)).toBe(true)
+  })
+
   it('pairs tool calls with their results by call id', () => {
     const other = 'c2' as CallId
     const view = projectEvents([

@@ -15,7 +15,7 @@
  */
 
 import {
-  createElement, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactElement,
+  createElement, memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactElement,
 } from 'react'
 import { Box, Static, Text, useInput, useStdout } from 'ink'
 import { assertNever } from '@deepseek-ai/dsh-llm'
@@ -36,7 +36,8 @@ import type { QuestionStore } from './questions.ts'
 import type { SkillsView, SkillRow } from './skills.ts'
 import type { MentionCandidate } from './mentions.ts'
 import { buildStatusGroups, formatTokens, type StatusFacts } from './render/status.ts'
-import { displayText } from './render/text.ts'
+import { displayTail, displayText } from './render/text.ts'
+import { followInspectorCursor, inspectorViewport } from './render/inspector.ts'
 
 /** Props the runner hands the app; callbacks stay owned by the runner. */
 export interface AppProps {
@@ -165,30 +166,34 @@ function DeepDivingLine({ since }: { since: number }): ReactElement {
  * The streaming buffer rendered with a hard size cap: the live region must
  * ALWAYS fit the terminal, or Ink's erase/rewrite of a dynamic tree taller
  * than the screen freezes (cursor-up past the top, garbage, no scroll). The
- * cap keeps roughly `rows - reserve` screen rows, sliced from the END so the
- * freshest tokens stay visible while a long reply streams; the complete text
- * lands in the flushed scrollback once the turn assembles it.
+ * cap counts explicit newlines and terminal wrapping, slicing from the END so
+ * the freshest tokens stay visible while a long reply streams; the complete
+ * text lands in the flushed scrollback once the turn assembles it.
  */
-function StreamTail({ text, dim, children }: {
+function StreamTail({ text, dim, maxRows, prefix, children }: {
   text: string
   dim: boolean
+  maxRows: number
+  prefix?: string
   children?: ReactElement
 }): ReactElement {
-  const stdout = useStdout().stdout
-  const columns = stdout?.columns ?? 80
-  const rows = stdout?.rows ?? 30
-  // Half the row budget in characters: CJK full-width chars occupy two
-  // columns, so a pure-CJK stream needs twice the columns per row.
-  const budget = Math.max(16, Math.floor(((rows - 8) * columns) / 2))
-  const truncated = text.length > budget
-  const tail = truncated ? text.slice(-budget) : text
+  const columns = useStdout().stdout?.columns ?? 80
+  const safeRows = Math.max(1, maxRows)
+  // App padding consumes two columns; the final extra column keeps a caret
+  // from wrapping onto an unbudgeted row.
+  const contentColumns = Math.max(10, columns - 3 - visibleColumns(prefix ?? ''))
+  const initial = displayTail(text, contentColumns, safeRows)
+  // Reserve one row for the omission marker only when a marker is needed.
+  const tail = initial.truncated && safeRows > 1
+    ? displayTail(text, contentColumns, safeRows - 1)
+    : initial
   return createElement(
     Box,
     { flexDirection: 'column' },
-    truncated
-      ? createElement(Text, { dimColor: true }, '  … (streaming — scrollback holds the full text once it lands)')
+    tail.truncated && safeRows > 1
+      ? createElement(Text, { dimColor: true }, '  …')
       : undefined,
-    createElement(Text, { dimColor: dim || undefined }, displayText(tail), children),
+    createElement(Text, { dimColor: dim || undefined }, prefix, tail.text, children),
   )
 }
 
@@ -253,13 +258,14 @@ function ToolDetailBody({ detail }: { detail: ToolDetail }): ReactElement {
         ...detail.diffs.map((diff, index) => createElement(
           Box,
           { key: index, flexDirection: 'column' },
-          createElement(Text, { dimColor: true }, `  ── ${displayText(diff.path)}${diff.truncated ? ' (diff truncated)' : ''}`),
+          createElement(Text, { dimColor: true, wrap: 'truncate-end' }, `  ── ${displayText(diff.path)}${diff.truncated ? ' (diff truncated)' : ''}`),
           ...diff.lines.map((line, at) => createElement(
             Text,
-            {
-              key: at,
-              color: line.mark === '+' ? inkColor(TUI_RGB.success) : line.mark === '-' ? inkColor(TUI_RGB.error) : inkColor(TUI_RGB.dim),
-            },
+              {
+                key: at,
+                color: line.mark === '+' ? inkColor(TUI_RGB.success) : line.mark === '-' ? inkColor(TUI_RGB.error) : inkColor(TUI_RGB.dim),
+                wrap: 'truncate-end',
+              },
             `  ${line.mark}${displayText(line.text)}`,
           )),
         )),
@@ -268,10 +274,10 @@ function ToolDetailBody({ detail }: { detail: ToolDetail }): ReactElement {
       return createElement(
         Box,
         { flexDirection: 'column' },
-        createElement(Text, { dimColor: true }, `  ── ${displayText(detail.path)} · lines ${detail.offset}-${detail.lines.length > 0 ? detail.lines[detail.lines.length - 1]!.number : detail.offset - 1} of ${detail.totalLines}${detail.truncated ? ' (window truncated)' : ''}`),
+        createElement(Text, { dimColor: true, wrap: 'truncate-end' }, `  ── ${displayText(detail.path)} · lines ${detail.offset}-${detail.lines.length > 0 ? detail.lines[detail.lines.length - 1]!.number : detail.offset - 1} of ${detail.totalLines}${detail.truncated ? ' (window truncated)' : ''}`),
         ...detail.lines.map((line, at) => createElement(
           Text,
-          { key: at, dimColor: true },
+          { key: at, dimColor: true, wrap: 'truncate-end' },
           `  ${String(line.number).padStart(5, ' ')} | ${displayText(line.text)}`,
         )),
       )
@@ -281,19 +287,19 @@ function ToolDetailBody({ detail }: { detail: ToolDetail }): ReactElement {
         { flexDirection: 'column' },
         ...detail.sources.map((source, at) => createElement(
           Text,
-          { key: at },
+            { key: at, wrap: 'truncate-end' },
           brand(`  ? ${displayText(source.title === undefined ? source.url : source.title)}`),
           createElement(Text, { dimColor: true }, dim(` - ${displayText(source.url)}`)),
         )),
         createElement(Text, { dimColor: true }, dim(`  ${detail.sources.length} sources${detail.truncated ? ' (capped)' : ''}`)),
       )
     case 'web-fetch':
-      return createElement(Text, { dimColor: true }, dim(`  ${displayText(detail.url)} · HTTP ${detail.statusCode}`))
+      return createElement(Text, { dimColor: true, wrap: 'truncate-end' }, dim(`  ${displayText(detail.url)} · HTTP ${detail.statusCode}`))
     case 'raw':
       return createElement(
         Box,
         { flexDirection: 'column' },
-        ...displayText(detail.text).split('\n').slice(0, 40).map((line, at) => createElement(Text, { key: at, dimColor: true }, `  ${line}`)),
+        ...displayText(detail.text).split('\n').slice(0, 40).map((line, at) => createElement(Text, { key: at, dimColor: true, wrap: 'truncate-end' }, `  ${line}`)),
         createElement(Text, { dimColor: true }, detail.truncated ? '  … (output truncated)' : '  (end of output)'),
       )
     default:
@@ -337,7 +343,7 @@ function EntryLine({ entry, showReasoning, verbose }: { entry: TranscriptEntry; 
         { flexDirection: 'column' },
         createElement(
           Text,
-          null,
+          { wrap: verbose ? 'truncate-end' : undefined },
           mark,
           ' ',
           brand(entry.name),
@@ -347,7 +353,7 @@ function EntryLine({ entry, showReasoning, verbose }: { entry: TranscriptEntry; 
           ? undefined
           : createElement(
             Text,
-            { color: entry.state === 'error' ? inkColor(TUI_RGB.error) : inkColor(TUI_RGB.dim) },
+            { color: entry.state === 'error' ? inkColor(TUI_RGB.error) : inkColor(TUI_RGB.dim), wrap: verbose ? 'truncate-end' : undefined },
             `  ⎿ ${displayText(entry.summary)}`,
           ),
         verbose && entry.detail !== undefined
@@ -366,7 +372,7 @@ function EntryLine({ entry, showReasoning, verbose }: { entry: TranscriptEntry; 
         { flexDirection: 'column' },
         createElement(
           Text,
-          null,
+          { wrap: verbose ? 'truncate-end' : undefined },
           mark,
           ' ',
           brand(`/${entry.name}`),
@@ -374,17 +380,17 @@ function EntryLine({ entry, showReasoning, verbose }: { entry: TranscriptEntry; 
         ),
         entry.summary === ''
           ? undefined
-          : createElement(Text, { color: inkColor(TUI_RGB.dim) }, `  ⎿ ${displayText(entry.summary)}`),
+          : createElement(Text, { color: inkColor(TUI_RGB.dim), wrap: verbose ? 'truncate-end' : undefined }, `  ⎿ ${displayText(entry.summary)}`),
       )
     }
     case 'turn-marker':
       // Non-error turn outcomes (cancel, ceiling, interruption) as dim rows.
-      return createElement(Text, { dimColor: true }, `  ⏹ ${displayText(entry.text)}`)
+      return createElement(Text, { dimColor: true, wrap: verbose ? 'truncate-end' : undefined }, `  ⏹ ${displayText(entry.text)}`)
     case 'compaction':
       // Completed compaction lifecycle: what it reclaimed, or why it failed.
       return createElement(
         Text,
-        { dimColor: true },
+        { dimColor: true, wrap: verbose ? 'truncate-end' : undefined },
         entry.ok
           ? `  ⧉ compacted ~${formatTokens(entry.tokens)} tokens`
           : `  ⧉ compaction failed: ${displayText(entry.error)}`,
@@ -394,17 +400,17 @@ function EntryLine({ entry, showReasoning, verbose }: { entry: TranscriptEntry; 
       // next attempt is underway.
       return createElement(
         Text,
-        { color: entry.state === 'running' ? inkColor(TUI_RGB.warn) : inkColor(TUI_RGB.dim) },
+        { color: entry.state === 'running' ? inkColor(TUI_RGB.warn) : inkColor(TUI_RGB.dim), wrap: verbose ? 'truncate-end' : undefined },
         `  ↻ retry ${entry.attempt}/${entry.max} · ${displayText(entry.code)} · ${Math.round(entry.delayMs / 100) / 10}s`,
       )
     case 'files': {
       // Turn-tail deliverables: the turn's mutated files (web turnTail chips).
       const shown = entry.paths.slice(0, 3).map(path => displayText(path)).join(' · ')
       const more = entry.paths.length > 3 ? ` (+${entry.paths.length - 3} more)` : ''
-      return createElement(Text, { dimColor: true }, `  ⎄ ${shown}${more}`)
+      return createElement(Text, { dimColor: true, wrap: verbose ? 'truncate-end' : undefined }, `  ⎄ ${shown}${more}`)
     }
     case 'error':
-      return createElement(Text, null, paintError(displayText(entry.text)))
+      return createElement(Text, { wrap: verbose ? 'truncate-end' : undefined }, paintError(displayText(entry.text)))
     default:
       return assertNever(entry, 'transcript entry kind')
   }
@@ -489,12 +495,25 @@ function TodoPanel({ todos }: { todos: readonly TodoItem[] }): ReactElement | un
  * (turns/steps, model and tool wall time, cache hit, token totals), joined
  * by brand-colored pipes.
  */
-function StatusLine({ facts, stats, busy }: {
+function StatusLine({ facts, stats, busy, compact }: {
   facts: StatusFacts
   stats: Parameters<typeof buildStatusGroups>[1]
   busy: boolean
+  compact: boolean
 }): ReactElement {
   const groups = buildStatusGroups(facts, stats)
+  if (compact) {
+    return createElement(
+      Box,
+      { paddingX: 1 },
+      createElement(
+        Text,
+        { dimColor: true, wrap: 'truncate-end' },
+        busy ? '● ' : '○ ',
+        groups.join(' | '),
+      ),
+    )
+  }
   const children: ReactElement[] = [
     busy
       ? createElement(Pulse)
@@ -516,8 +535,9 @@ function StatusLine({ facts, stats, busy }: {
 /** The y/n approval bar rendered while an approval ask is pending. */
 function ApprovalBar({ approval, locked }: { approval: ApprovalStore; locked: boolean }): ReactElement | undefined {
   const snapshot = useSyncExternalStore(approval.subscribe, approval.getSnapshot)
+  const active = !locked && snapshot.pending !== undefined && !snapshot.answered
   useInput((input) => {
-    if (locked || snapshot.pending === undefined || snapshot.answered) return
+    if (snapshot.pending === undefined || snapshot.answered) return
     if (input === 'y' || input === 'Y') {
       snapshot.pending.answer('allowed-once')
       return
@@ -525,7 +545,7 @@ function ApprovalBar({ approval, locked }: { approval: ApprovalStore; locked: bo
     if (input === 'n' || input === 'N') {
       snapshot.pending.answer('rejected')
     }
-  })
+  }, { isActive: active })
   if (snapshot.pending === undefined) return undefined
   const { pending, answered } = snapshot
   return createElement(
@@ -576,6 +596,7 @@ function QuestionBar({ store, locked }: { store: QuestionStore; locked: boolean 
   const options = question?.options ?? []
   const isPlan = question?.intent?.kind === 'plan-review'
   const isMulti = question?.multiSelect === true
+  const active = !locked && pending !== undefined && question !== undefined && !submitted
 
   const commit = (answer: AskUserQuestionAnswerItem): void => {
     if (pending === undefined) return
@@ -610,7 +631,7 @@ function QuestionBar({ store, locked }: { store: QuestionStore; locked: boolean 
   }
 
   useInput((input, key) => {
-    if (locked || pending === undefined || question === undefined || submitted) return
+    if (pending === undefined || question === undefined || submitted) return
     if (key.escape) {
       store.cancel(pending)
       return
@@ -658,7 +679,7 @@ function QuestionBar({ store, locked }: { store: QuestionStore; locked: boolean 
     if (input === ' ' && isMulti) {
       setSelected(current => current.includes(cursor) ? current.filter(at => at !== cursor) : [...current, cursor])
     }
-  })
+  }, { isActive: active })
 
   if (pending === undefined || question === undefined) return undefined
   return createElement(
@@ -792,7 +813,7 @@ function HelpPanel({ descriptors, skills, onClose }: {
     createElement(Text, { bold: true }, ' keys'),
     createElement(Text, { dimColor: true }, '  enter submit · alt+enter / ctrl+j newline · up/down history · tab complete'),
     createElement(Text, { dimColor: true }, '  tab also completes bare workspace paths · @ mentions files and sessions'),
-    createElement(Text, { dimColor: true }, '  ctrl+o verbose transcript · ctrl+r thinking · shift+tab permission preset'),
+    createElement(Text, { dimColor: true }, '  ctrl+o history details · ctrl+r thinking · shift+tab permission preset'),
     createElement(Text, { dimColor: true }, '  esc interrupt the running turn · ctrl+c cancel / clear / quit · ctrl+d exit'),
     createElement(Text, { dimColor: true }, '  ctrl+k cut to end of line · ctrl+u clear line · ctrl+a / ctrl+e line ends'),
     createElement(Text, { bold: true }, ' commands'),
@@ -823,37 +844,200 @@ function HelpPanel({ descriptors, skills, onClose }: {
   )
 }
 
+/** Return a display-safe tail and whether its source was cut. */
+function verboseTailResult(text: string, columns: number, rows: number): { text: string; truncated: boolean } {
+  const safeRows = Math.max(1, rows)
+  const initial = displayTail(text, columns, safeRows)
+  if (!initial.truncated || safeRows === 1) return initial
+  const tail = displayTail(text, columns, safeRows - 1)
+  return { text: `…\n${tail.text}`, truncated: true }
+}
+
+/** Add a visible omission row to a display-safe terminal tail. */
+function verboseTail(text: string, columns: number, rows: number): string {
+  return verboseTailResult(text, columns, rows).text
+}
+
+/** Collapse arbitrary metadata to one terminal row before verbose rendering. */
+function verboseLine(text: string, columns: number): string {
+  return truncateColumns(displayText(text).replace(/\n/gu, ' ↵ ').replace(/\t/gu, '  '), Math.max(1, columns))
+}
+
+/** Bound one structured tool detail to an exact natural-height row budget. */
+function boundedToolDetail(detail: ToolDetail | undefined, columns: number, rows: number): ToolDetail | undefined {
+  if (detail === undefined || rows <= 0) return undefined
+  switch (detail.kind) {
+    case 'diff': {
+      let remaining = rows
+      const diffs: Array<(typeof detail.diffs)[number]> = []
+      for (const diff of detail.diffs) {
+        if (remaining <= 0) break
+        const lineBudget = Math.max(0, remaining - 1)
+        const lines = diff.lines.slice(0, lineBudget)
+        diffs.push({ ...diff, lines, truncated: diff.truncated || lines.length < diff.lines.length })
+        remaining -= 1 + lines.length
+        if (lines.length < diff.lines.length) break
+      }
+      return diffs.length === 0 ? undefined : { kind: 'diff', diffs }
+    }
+    case 'read': {
+      const lines = detail.lines.slice(0, Math.max(0, rows - 1))
+      return { ...detail, lines, truncated: detail.truncated || lines.length < detail.lines.length }
+    }
+    case 'web-search': {
+      const sources = detail.sources.slice(0, Math.max(0, rows - 1))
+      return { ...detail, sources, truncated: detail.truncated || sources.length < detail.sources.length }
+    }
+    case 'web-fetch':
+      return detail
+    case 'raw':
+      if (rows < 2) return undefined
+      const raw = verboseTailResult(detail.text, Math.max(1, columns - 2), rows - 1)
+      return {
+        kind: 'raw',
+        text: raw.text,
+        truncated: detail.truncated || raw.truncated,
+      }
+    default:
+      return assertNever(detail, 'verbose tool detail kind')
+  }
+}
+
+/** Bound every entry before the history inspector parses or lays it out. */
+function boundedVerboseEntry(entry: TranscriptEntry, columns: number, rows: number): TranscriptEntry {
+  switch (entry.kind) {
+    case 'user':
+      return { ...entry, text: verboseTail(entry.text, Math.max(1, columns - 2), rows) }
+    case 'assistant': {
+      if (entry.reasoning === '') {
+        return { ...entry, text: verboseTail(entry.text, Math.max(1, columns - 4), rows) }
+      }
+      if (rows <= 1) {
+        return entry.text === ''
+          ? { ...entry, reasoning: verboseTail(entry.reasoning, Math.max(1, columns - 4), 1) }
+          : { ...entry, reasoning: '', text: verboseTail(entry.text, Math.max(1, columns - 4), 1) }
+      }
+      const reasoningRows = Math.max(1, Math.floor(rows / 2))
+      return {
+        ...entry,
+        reasoning: verboseTail(entry.reasoning, Math.max(1, columns - 4), reasoningRows),
+        text: verboseTail(entry.text, Math.max(1, columns - 4), Math.max(1, rows - reasoningRows)),
+      }
+    }
+    case 'tool': {
+      const summary = rows >= 2 ? verboseLine(entry.summary, Math.max(1, columns - 4)) : ''
+      const summaryRows = summary === '' ? 0 : 1
+      return {
+        ...entry,
+        name: verboseLine(entry.name, Math.max(1, Math.floor(columns / 3))),
+        preview: verboseLine(entry.preview, Math.max(1, columns - 8)),
+        summary,
+        detail: boundedToolDetail(entry.detail, columns, Math.max(0, rows - 1 - summaryRows)),
+      }
+    }
+    case 'command':
+      return {
+        ...entry,
+        name: verboseLine(entry.name, Math.max(1, Math.floor(columns / 3))),
+        args: verboseLine(entry.args, Math.max(1, columns - 8)),
+        summary: rows >= 2 ? verboseLine(entry.summary, Math.max(1, columns - 4)) : '',
+      }
+    case 'turn-marker':
+      return { ...entry, text: verboseTail(entry.text, Math.max(1, columns - 4), rows) }
+    case 'compaction':
+      return { ...entry, error: verboseLine(entry.error, Math.max(1, columns - 24)) }
+    case 'retry':
+      return { ...entry, code: verboseLine(entry.code, Math.max(1, columns - 24)) }
+    case 'files':
+      return { ...entry, paths: entry.paths.map(path => verboseLine(path, Math.max(1, columns - 8))) }
+    case 'error':
+      return { ...entry, text: verboseTail(entry.text, columns, rows) }
+    default:
+      return assertNever(entry, 'verbose transcript entry kind')
+  }
+}
+
 /**
- * The Ctrl+O verbose transcript overlay: the full durable history with
- * reasoning expanded and tool cards detailed — the read surface the flushed
- * static rows (collapsed forever, by the append-only contract) cannot offer.
- * Bounded to a recent window so one giant diff cannot blow the screen;
- * /export writes the complete transcript to a file.
+ * The Ctrl+O transcript inspector: one selected durable entry at a time,
+ * clipped to the current terminal. Up/down browse history; /export remains
+ * the complete-history surface. Content is pre-bounded but naturally sized:
+ * short entries add no filler rows, while long reasoning/diffs stay below Ink's
+ * full-screen clear threshold.
  */
 function VerbosePanel({ entries, onClose }: { entries: readonly TranscriptEntry[]; onClose(): void }): ReactElement {
-  // True toggle: Ctrl+O closes what Ctrl+O opened, alongside Esc/q. The
-  // prompt box's own handler is gated off while the overlay is open
-  // (inputActive), so the same keypress can never both close and reopen.
+  const stdout = useStdout().stdout
+  const columns = stdout?.columns ?? 80
+  const rows = stdout?.rows ?? 30
+  const viewport = inspectorViewport(columns, rows)
+  const [cursor, setCursor] = useState(() => Math.max(0, entries.length - 1))
+  const previousLength = useRef(entries.length)
+
+  useEffect(() => {
+    setCursor(current => followInspectorCursor(current, previousLength.current, entries.length))
+    previousLength.current = entries.length
+  }, [entries.length])
+
   useInput((input, key) => {
-    if (key.escape || input === 'q' || (key.ctrl && input === 'o')) onClose()
+    if (key.escape || input === 'q' || (key.ctrl && input === 'o')) {
+      onClose()
+      return
+    }
+    if (entries.length === 0) return
+    if (key.upArrow) {
+      setCursor(current => Math.max(0, current - 1))
+      return
+    }
+    if (key.downArrow) {
+      setCursor(current => Math.min(entries.length - 1, current + 1))
+    }
   })
-  const budget = 6
-  const windowEntries = entries.length > budget ? entries.slice(entries.length - budget) : entries
+
+  if (viewport.maxHeight === 0) return createElement(Box, { display: 'none' })
+  if (viewport.compact) {
+    return createElement(
+      Text,
+      { wrap: 'truncate-end' },
+      truncateColumns('history details · ctrl+o / esc / q close', viewport.contentColumns),
+    )
+  }
+
+  const entry = entries[cursor]
+  const bounded = entry === undefined
+    ? undefined
+    : boundedVerboseEntry(entry, viewport.contentColumns, viewport.bodyRows)
+  const title = entries.length === 0
+    ? 'history details · empty'
+    : `history details · entry ${cursor + 1}/${entries.length}`
   return createElement(
     Box,
-    { flexDirection: 'column', paddingX: 1, borderStyle: 'round', borderColor: inkColor(TUI_RGB.brand), alignSelf: 'flex-start', marginLeft: 1, marginTop: 1 },
-    createElement(Text, { color: inkColor(TUI_RGB.brand), bold: true }, `verbose transcript — ${entries.length} ${entries.length === 1 ? 'entry' : 'entries'}`),
-    ...windowEntries.map((entry, index) => createElement(
+    {
+      flexDirection: 'column',
+      paddingX: 1,
+      borderStyle: 'round',
+      borderColor: inkColor(TUI_RGB.brand),
+    },
+    createElement(
+      Text,
+      { color: inkColor(TUI_RGB.brand), bold: true, wrap: 'truncate-end' },
+      truncateColumns(title, viewport.contentColumns),
+    ),
+    createElement(
       Box,
-      { key: index, flexDirection: 'column' },
-      createElement(EntryLine, { entry, showReasoning: true, verbose: true }),
-    )),
-    entries.length > windowEntries.length
-      ? createElement(Text, { dimColor: true }, `  … ${entries.length - windowEntries.length} earlier entries — /export writes the full transcript`)
-      : undefined,
-    createElement(Text, { dimColor: true }, dim('  esc or q close')),
+      { flexDirection: 'column' },
+      bounded === undefined
+        ? createElement(Text, { dimColor: true }, '  no durable entries yet')
+        : createElement(EntryLine, { entry: bounded, showReasoning: true, verbose: true }),
+    ),
+    createElement(
+      Text,
+      { dimColor: true, wrap: 'truncate-end' },
+      dim(truncateColumns('↑↓ browse · ctrl+o / esc / q close · /export full history', viewport.contentColumns)),
+    ),
   )
 }
+
+/** Streaming chunks preserve `entries` identity, so the open inspector stays inert. */
+const MemoVerbosePanel = memo(VerbosePanel)
 
 /** One completion candidate row. */
 interface CompletionCandidate {
@@ -954,8 +1138,9 @@ function CompletionMenu({ active, mention, index, rows }: {
  * While a modal (approval / question / model panel) owns the keys, the
  * box passes every key through untouched.
  */
-function Input({ active, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openHelp, notify, toggleReasoning, openVerbose, clearView, refresh, loadMentions, cyclePermission, exportTranscript, renameTitle }: {
+function Input({ active, inspector, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openHelp, notify, toggleReasoning, openVerbose, clearView, refresh, loadMentions, cyclePermission, exportTranscript, renameTitle }: {
   active: boolean
+  inspector: boolean
   busy: boolean
   descriptors: readonly CommandDescriptor[]
   skills: readonly SkillRow[]
@@ -975,6 +1160,7 @@ function Input({ active, busy, descriptors, skills, dispatch, steer, interrupt, 
   exportTranscript(argument: string): Promise<void>
   renameTitle(argument: string): string
 }): ReactElement {
+  const columns = useStdout().stdout?.columns ?? 80
   const [value, setValue] = useState('')
   const [cursor, setCursor] = useState(0)
   const history = useRef<readonly string[]>([])
@@ -1008,7 +1194,7 @@ function Input({ active, busy, descriptors, skills, dispatch, steer, interrupt, 
   const [pathRows, setPathRows] = useState<readonly MentionCandidate[]>([])
 
   useEffect(() => {
-    if (!pathActive) {
+    if (!active || !pathActive) {
       setPathRows([])
       return
     }
@@ -1021,10 +1207,10 @@ function Input({ active, busy, descriptors, skills, dispatch, steer, interrupt, 
     return () => {
       controller.abort()
     }
-  }, [pathActive, bareToken])
+  }, [active, pathActive, bareToken])
 
   useEffect(() => {
-    if (!mentionActive) {
+    if (!active || !mentionActive) {
       setMentionRows([])
       return
     }
@@ -1037,7 +1223,7 @@ function Input({ active, busy, descriptors, skills, dispatch, steer, interrupt, 
     return () => {
       controller.abort()
     }
-  }, [mentionActive, mentionToken?.query])
+  }, [active, mentionActive, mentionToken?.query])
 
   const menuActive = (slashActive || mentionActive || pathActive) && !busy
   const menuRows: readonly CompletionCandidate[] = mentionActive
@@ -1070,9 +1256,9 @@ function Input({ active, busy, descriptors, skills, dispatch, steer, interrupt, 
       toggleReasoning()
       return
     }
-    // Ctrl+O opens the verbose transcript overlay (Claude-Code convention,
-    // adapted to the append-only static rows): the full history with tool
-    // cards and reasoning expanded, Esc returns.
+    // Ctrl+O opens the bounded transcript inspector (Claude-Code convention,
+    // adapted to append-only static rows): one history entry at a time with
+    // tool cards and reasoning expanded, Esc returns.
     if (key.ctrl && input === 'o') {
       openVerbose()
       return
@@ -1267,6 +1453,24 @@ function Input({ active, busy, descriptors, skills, dispatch, steer, interrupt, 
     }
   })
 
+  // Ctrl+O keeps the composer as a stable visual anchor, but freezes it to one
+  // line: no completion menu, busy hint, multiline wrap, or cursor animation.
+  if (inspector) {
+    const frozen = value === ''
+      ? 'type a message'
+      : verboseLine(value, Math.max(1, columns - 6))
+    return createElement(
+      Box,
+      { borderStyle: 'round', borderColor: inkColor(TUI_RGB.dim), paddingX: 1 },
+      createElement(
+        Text,
+        { wrap: 'truncate-end' },
+        createElement(Text, { color: inkColor(TUI_RGB.brand) }, busy ? '…' : '❯'),
+        frozen,
+      ),
+    )
+  }
+
   return createElement(
     Box,
     { flexDirection: 'column', marginTop: 1 },
@@ -1338,11 +1542,19 @@ export function App(props: AppProps): ReactElement {
   const [refreshEpoch, setRefreshEpoch] = useState(0)
   const approvalSnapshot = useSyncExternalStore(props.approval.subscribe, props.approval.getSnapshot)
   const questionSnapshot = useSyncExternalStore(props.questions.subscribe, props.questions.getSnapshot)
-  // While any modal owns the keys, the prompt box passes everything through.
-  const inputActive = !modelOpen && !helpOpen && !verboseOpen && approvalSnapshot.pending === undefined && questionSnapshot.pending === undefined
-  // Layered ownership: question > approval > model panel; each bar answers
-  // only while no higher-priority modal is on screen.
+  const approvalPending = approvalSnapshot.pending !== undefined
   const questionPending = questionSnapshot.pending !== undefined
+  // While any modal owns the keys, the prompt box passes everything through.
+  const inputActive = !modelOpen && !helpOpen && !verboseOpen && !approvalPending && !questionPending
+
+  // Human questions outrank local inspectors. Close the lower modal instead
+  // of leaving an approval/question visible but keyboard-locked behind it.
+  useEffect(() => {
+    if (!approvalPending && !questionPending) return
+    setModelOpen(false)
+    setHelpOpen(false)
+    setVerboseOpen(false)
+  }, [approvalPending, questionPending])
 
   // Append-only transcript: everything up to the first still-mutable entry
   // (a running tool/retry) flushes through Ink's `<Static>` into native
@@ -1352,27 +1564,35 @@ export function App(props: AppProps): ReactElement {
   // small: the streaming tail, modals, status line, and the composer pinned
   // as the LAST element (the physical cursor — and the IME candidate window
   // anchored to it — stays on the bottom row).
-  const settled = settledEntryCount(view.entries)
+  // `assistant/chunk` preserves `entries` identity. Memoizing on that identity
+  // keeps long settled histories out of the per-token render path.
+  const settled = useMemo(() => settledEntryCount(view.entries), [view.entries])
   // Claude-Code spacing: one blank row before each user prompt (except the
   // first) separates replies from the next turn. Settled rows flush once with
   // the reasoning toggle as it is NOW (Ctrl+R affects subsequent flushes);
-  // Ctrl+O shows the expanded full history in its overlay.
-  const settledRows: ReactElement[] = [createElement(Header, { key: 'header', resumed: props.resumed })]
-  view.entries.slice(0, settled).forEach((entry, index) => {
-    const row = createElement(EntryLine, { entry, showReasoning, verbose: false })
-    if (entry.kind === 'user' && index > 0) {
-      settledRows.push(createElement(Box, { key: `gap-${index}`, paddingX: 1 }, createElement(Text, null, ' ')))
-    }
-    settledRows.push(createElement(Box, { key: index, paddingX: 1 }, row))
-  })
-  const liveRows: ReactElement[] = []
-  view.entries.slice(settled).forEach((entry, offset) => {
-    const index = settled + offset
-    if (entry.kind === 'user' && index > 0) {
-      liveRows.push(createElement(Text, { key: `gap-${index}` }, ' '))
-    }
-    liveRows.push(createElement(EntryLine, { key: index, entry, showReasoning, verbose: false }))
-  })
+  // Ctrl+O browses the frozen history through a bounded selected-entry view.
+  const settledRows = useMemo(() => {
+    const rows: ReactElement[] = [createElement(Header, { key: 'header', resumed: props.resumed })]
+    view.entries.slice(0, settled).forEach((entry, index) => {
+      const row = createElement(EntryLine, { entry, showReasoning, verbose: false })
+      if (entry.kind === 'user' && index > 0) {
+        rows.push(createElement(Box, { key: `gap-${index}`, paddingX: 1 }, createElement(Text, null, ' ')))
+      }
+      rows.push(createElement(Box, { key: index, paddingX: 1 }, row))
+    })
+    return rows
+  }, [view.entries, settled, showReasoning, props.resumed])
+  const liveRows = useMemo(() => {
+    const rows: ReactElement[] = []
+    view.entries.slice(settled).forEach((entry, offset) => {
+      const index = settled + offset
+      if (entry.kind === 'user' && index > 0) {
+        rows.push(createElement(Text, { key: `gap-${index}` }, ' '))
+      }
+      rows.push(createElement(EntryLine, { key: index, entry, showReasoning, verbose: false }))
+    })
+    return rows
+  }, [view.entries, settled, showReasoning])
 
   // The screen refresh used by /clear and Ctrl+L: a raw ANSI clear (wipe
   // screen AND scrollback, home the cursor) then a Static remount via the
@@ -1382,6 +1602,21 @@ export function App(props: AppProps): ReactElement {
   // Hook order: useStdout must be called at the component top, not inside
   // the callback below.
   const appStdout = useStdout().stdout
+  const terminalRows = appStdout?.rows ?? 30
+  const streamRows = Math.max(2, terminalRows - 12)
+  const reasoningRows = view.streamingReasoning === ''
+    ? 0
+    : view.streaming === ''
+      ? streamRows
+      : showReasoning
+        ? Math.max(1, Math.floor(streamRows / 3))
+        : 1
+  const answerRows = Math.max(1, streamRows - reasoningRows)
+  const transcriptVisible = !modelOpen && !helpOpen && !verboseOpen && !approvalPending && !questionPending
+  const inspectorVisible = verboseOpen && !approvalPending && !questionPending
+  const closeInspector = useCallback((): void => {
+    setVerboseOpen(false)
+  }, [])
   const refreshScreen = (): void => {
     if (appStdout !== undefined) appStdout.write('\x1b[2J\x1b[3J\x1b[H')
     setRefreshEpoch(epoch => epoch + 1)
@@ -1396,29 +1631,33 @@ export function App(props: AppProps): ReactElement {
       // createElement cannot carry the generic: items are prebuilt elements.
       children: (item: unknown) => item as ReactElement,
     }),
-    createElement(
-      Box,
-      { flexDirection: 'column', paddingX: 1 },
-      ...liveRows,
-      view.streamingReasoning !== ''
-        ? createElement(
-          StreamTail,
-          { text: showReasoning ? `  ✻ ${view.streamingReasoning}` : '  ✻ Thinking…', dim: true },
-        )
-        : undefined,
-      view.streaming !== ''
-        ? createElement(
-          StreamTail,
-          { text: view.streaming, dim: false },
-          busy ? createElement(Caret) : undefined,
-        )
-        : undefined,
-      busy && view.streaming === '' && view.streamingReasoning === '' ? createElement(DeepDivingLine, { since: view.busySince }) : undefined,
-    ),
-    createElement(TodoPanel, { todos: view.todos }),
-    createElement(QuestionBar, { store: props.questions, locked: modelOpen || helpOpen || verboseOpen }),
-    createElement(ApprovalBar, { approval: props.approval, locked: modelOpen || helpOpen || verboseOpen || questionPending }),
-    modelOpen
+    transcriptVisible
+      ? createElement(
+        Box,
+        { flexDirection: 'column', paddingX: 1 },
+        ...liveRows,
+        view.streamingReasoning !== ''
+          ? createElement(StreamTail, {
+            text: showReasoning ? view.streamingReasoning : 'Thinking…',
+            prefix: '  ✻ ',
+            dim: true,
+            maxRows: reasoningRows,
+          })
+          : undefined,
+        view.streaming !== ''
+          ? createElement(
+            StreamTail,
+            { text: view.streaming, dim: false, maxRows: answerRows },
+            busy ? createElement(Caret) : undefined,
+          )
+          : undefined,
+        busy && view.streaming === '' && view.streamingReasoning === '' ? createElement(DeepDivingLine, { since: view.busySince }) : undefined,
+      )
+      : undefined,
+    transcriptVisible ? createElement(TodoPanel, { todos: view.todos }) : undefined,
+    createElement(QuestionBar, { store: props.questions, locked: false }),
+    createElement(ApprovalBar, { approval: props.approval, locked: questionPending }),
+    modelOpen && !approvalPending && !questionPending
       ? createElement(ModelPanel, {
         directory,
         error: modelError,
@@ -1432,7 +1671,7 @@ export function App(props: AppProps): ReactElement {
         },
       })
       : undefined,
-    helpOpen
+    helpOpen && !approvalPending && !questionPending
       ? createElement(HelpPanel, {
         descriptors,
         skills,
@@ -1441,19 +1680,19 @@ export function App(props: AppProps): ReactElement {
         },
       })
       : undefined,
-    verboseOpen
-      ? createElement(VerbosePanel, {
+    verboseOpen && !approvalPending && !questionPending
+      ? createElement(MemoVerbosePanel, {
         entries: view.entries,
-        onClose: () => {
-          setVerboseOpen(false)
-        },
+        onClose: closeInspector,
       })
       : undefined,
-    createElement(
-      Box,
-      { flexDirection: 'column' },
-      ...notices.slice(-3).map((notice, index) => createElement(Text, { key: index, dimColor: true }, notice)),
-    ),
+    transcriptVisible
+      ? createElement(
+        Box,
+        { flexDirection: 'column' },
+        ...notices.slice(-3).map((notice, index) => createElement(Text, { key: index, dimColor: true }, notice)),
+      )
+      : undefined,
     createElement(StatusLine, {
       facts: {
         model: modelLabel,
@@ -1468,12 +1707,14 @@ export function App(props: AppProps): ReactElement {
       },
       stats: view.stats,
       busy,
+      compact: inspectorVisible,
     }),
     // The composer is the tree's LAST element: the physical cursor (and the
     // IME candidate window anchored to it) stays on the terminal's bottom
     // row while typing instead of floating above trailing chrome.
     createElement(Input, {
       active: inputActive,
+      inspector: inspectorVisible,
       busy,
       descriptors,
       skills,
