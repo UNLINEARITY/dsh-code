@@ -315,6 +315,21 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     }))
   }
 
+  /**
+   * Submit steering: a running driver consumes the text at its next step
+   * boundary (the inbox delivers between steps); an idle driver just starts
+   * a turn, so this doubles as the busy-state submit path.
+   */
+  const steer = (text: string): void => {
+    const line = text.trim()
+    if (line === '') return
+    agent.steer(createUserMessage({
+      content: [{ type: 'text', text: line }],
+      source: { kind: 'user' },
+    }))
+    bridge.notify('steering queued — the next step sees it')
+  }
+
   /** Interrupt the running turn (Esc); true when a turn was actually cancelled. */
   const interrupt = (): boolean => {
     if (agent.status !== 'running') return false
@@ -344,6 +359,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     sessionId: session.id.slice(-8),
     resumed: target.resume,
     dispatch,
+    steer,
     interrupt,
     quit,
     loadModels: () => loadModelDirectory(ctx),

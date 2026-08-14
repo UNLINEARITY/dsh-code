@@ -53,6 +53,8 @@ export interface AppProps {
   resumed: boolean
   /** Submit one line: slash commands to the registry, other text to the agent. */
   dispatch(text: string): void
+  /** Submit steering: consumed at the running turn's next step boundary. */
+  steer(text: string): void
   /** Interrupt the running turn (Esc); true when a turn was cancelled. */
   interrupt(): boolean
   /** Quit: unmount, flush, and request process exit. */
@@ -324,11 +326,12 @@ function completionCandidates(
  * The prompt box: TUI-local slash commands handled locally, other lines
  * dispatched; input editing keeps a cursor with history and completion.
  */
-function Input({ busy, descriptors, skills, dispatch, interrupt, quit, openModel, notify }: {
+function Input({ busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, notify }: {
   busy: boolean
   descriptors: readonly CommandDescriptor[]
   skills: readonly SkillRow[]
   dispatch(text: string): void
+  steer(text: string): void
   interrupt(): boolean
   quit(): void
   openModel(): void
@@ -400,8 +403,11 @@ function Input({ busy, descriptors, skills, dispatch, interrupt, quit, openModel
         openModel()
         return
       }
-      if (busy) {
-        notify('the agent is working — Esc or Ctrl+C interrupts the turn')
+      if (busy && !text.startsWith('/')) {
+        // A running turn is steered, not blocked: the inbox delivers this
+        // text at the next step boundary (Esc/Ctrl+C still cancels outright).
+        // Slash lines keep the registry path — commands run out of band.
+        steer(text)
         return
       }
       dispatch(text)
@@ -504,6 +510,9 @@ function Input({ busy, descriptors, skills, dispatch, interrupt, quit, openModel
         createElement(Text, { dimColor: true }, dim('  ↑↓ choose · tab complete')),
       )
       : undefined,
+    busy && value === ''
+      ? createElement(Text, { dimColor: true }, dim('  enter steers the running turn · esc or ctrl+c cancels'))
+      : undefined,
     createElement(
       Box,
       null,
@@ -584,6 +593,7 @@ export function App(props: AppProps): ReactElement {
       descriptors,
       skills,
       dispatch: props.dispatch,
+      steer: props.steer,
       interrupt: props.interrupt,
       quit: props.quit,
       openModel: () => {
