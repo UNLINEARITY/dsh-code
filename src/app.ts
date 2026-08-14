@@ -72,6 +72,8 @@ export interface AppProps {
   loadMentions(query: string, signal?: AbortSignal): Promise<readonly MentionCandidate[]>
   /** Apply one /model selection; returns the display label. */
   selectModel(row: ModelRow): string
+  /** Apply one permission preset (`/permission <name>`); returns the new label. */
+  setPermission(name: string): string
   /** Registers the app's notice channel with the runner (called once on mount). */
   onBridgeReady(bridge: { notify(text: string): void }): void
 }
@@ -539,6 +541,7 @@ function completionCandidates(
   const local: CompletionCandidate[] = [
     { label: '/help', description: 'show commands', origin: 'command' },
     { label: '/model', description: 'switch the model', origin: 'command' },
+    { label: '/permission', description: 'switch the permission preset', origin: 'command' },
     { label: '/clear', description: 'clear the screen', origin: 'command' },
     { label: '/quit', description: 'exit', origin: 'command' },
   ]
@@ -566,7 +569,7 @@ function completionCandidates(
  * While a modal (approval / question / model panel) owns the keys, the
  * box passes every key through untouched.
  */
-function Input({ active, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, notify, toggleReasoning, loadMentions }: {
+function Input({ active, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, notify, toggleReasoning, loadMentions, setPermission }: {
   active: boolean
   busy: boolean
   descriptors: readonly CommandDescriptor[]
@@ -579,6 +582,7 @@ function Input({ active, busy, descriptors, skills, dispatch, steer, interrupt, 
   notify(text: string): void
   toggleReasoning(): void
   loadMentions(query: string, signal?: AbortSignal): Promise<readonly MentionCandidate[]>
+  setPermission(name: string): string
 }): ReactElement {
   const [value, setValue] = useState('')
   const [cursor, setCursor] = useState(0)
@@ -688,6 +692,12 @@ function Input({ active, busy, descriptors, skills, dispatch, steer, interrupt, 
       }
       if (text === '/model' || text.startsWith('/model ')) {
         openModel()
+        return
+      }
+      if (text === '/permission' || text.startsWith('/permission ')) {
+        const name = text.slice('/permission'.length).trim()
+        const applied = setPermission(name)
+        if (applied !== '') notify(`permission → ${applied}`)
         return
       }
       if (busy && !text.startsWith('/')) {
@@ -923,9 +933,17 @@ export function App(props: AppProps): ReactElement {
         setShowReasoning(current => !current)
       },
       loadMentions: props.loadMentions,
+      setPermission: props.setPermission,
     }),
     createElement(StatusLine, {
-      facts: { model: modelLabel, cwd: props.cwd, branch: props.branch, sessionId: props.sessionId },
+      facts: {
+        model: modelLabel,
+        cwd: props.cwd,
+        branch: props.branch,
+        sessionId: props.sessionId,
+        plan: view.plan,
+        permission: view.permission,
+      },
       stats: view.stats,
       busy,
     }),

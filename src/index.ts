@@ -362,6 +362,28 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     return true
   }
 
+  /** Apply one permission preset (`/permission <name>`); notifies on errors. */
+  const setPermission = (name: string): string => {
+    const service = ctx.get('permissionPresets') as
+      | { names: readonly string[]; set(target: Session, preset: string): void }
+      | undefined
+    if (service === undefined) {
+      bridge.notify('permission presets are not mounted in this composition')
+      return ''
+    }
+    const preset = name.trim()
+    if (preset === '') {
+      bridge.notify(`permission presets: ${service.names.join(' · ')}`)
+      return ''
+    }
+    if (!service.names.includes(preset)) {
+      bridge.notify(`unknown preset ${preset} — choose ${service.names.join(' · ')}`)
+      return ''
+    }
+    service.set(session, preset)
+    return preset
+  }
+
   /** Apply one /model selection: takes effect from the next assembled step. */
   const selectModel = (row: ModelRow): string => {
     picked = { provider: row.provider, model: row.model }
@@ -389,6 +411,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     quit,
     loadModels: () => loadModelDirectory(ctx),
     loadMentions: mentions.candidates,
+    setPermission,
     selectModel,
     onBridgeReady: (instance: AppBridge) => {
       bridge.notify = instance.notify

@@ -57,6 +57,10 @@ export interface StatusFacts {
   branch: string
   /** Short session identifier (last dash-separated segment or tail). */
   sessionId: string
+  /** Whether plan mode is active (folded from `plan/mode`). */
+  plan: boolean
+  /** Active permission preset (folded from `permission/preset`), empty when unknown. */
+  permission: string
 }
 
 /**
@@ -67,8 +71,13 @@ export interface StatusFacts {
  */
 export function buildStatusGroups(facts: StatusFacts, stats: TranscriptStats): string[] {
   const groups: string[] = []
-  const identity = [facts.model, facts.cwd, facts.branch === '' ? undefined : `⑂ ${facts.branch}`]
-    .filter(part => part !== undefined && part !== '')
+  const identity = [
+    facts.model,
+    facts.cwd,
+    facts.branch === '' ? undefined : `⑂ ${facts.branch}`,
+    facts.plan ? '⧉ plan' : undefined,
+    facts.permission === undefined || facts.permission === '' ? undefined : `⛨ ${facts.permission}`,
+  ].filter(part => part !== undefined && part !== '')
   if (identity.length > 0) groups.push(identity.join(' · '))
   if (stats.turns > 0 || stats.steps > 0) {
     groups.push(`T${stats.turns} · S${stats.steps}`)

@@ -10,8 +10,11 @@
 import { boundContextSummary, type ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent, TodoItem } from '@deepseek-ai/dsh-session'
 // Type-only imports merge the plugin-owned SessionEventMap variants (command/*
-// from dsh-commands) into the union this reducer switches on.
+// from dsh-commands, plan/mode, permission/preset) into the union this reducer
+// switches on.
 import type {} from '@deepseek-ai/dsh-commands'
+import type {} from '@deepseek-ai/dsh-plan-mode'
+import type {} from '@deepseek-ai/dsh-permission-presets'
 
 /** One user prompt line. */
 export interface UserEntry {
@@ -114,6 +117,10 @@ export interface TranscriptView {
    * Empty before the session's first request.
    */
   model: string
+  /** Plan mode state folded from the last `plan/mode` event. */
+  plan: boolean
+  /** Active permission preset folded from the last `permission/preset` event, empty before one. */
+  permission: string
   /**
    * Fold-internal timing anchors, never rendered: open step and tool-call
    * start timestamps the next `assistant/message` / `tool/result` resolves
@@ -141,6 +148,8 @@ export function createTranscriptView(): TranscriptView {
     todos: [],
     busy: false,
     model: '',
+    plan: false,
+    permission: '',
     stats: { turns: 0, steps: 0, llmMs: 0, toolMs: 0, usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 } },
     anchors: { stepStart: new Map(), toolStart: new Map() },
   }
@@ -267,6 +276,11 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
       const config = event.data.header.config
       return { ...view, model: `${config.provider}/${config.model}` }
     }
+    case 'plan/mode':
+      // Whole-value replace; the last one wins (upstream fold semantics).
+      return { ...view, plan: event.data.active }
+    case 'permission/preset':
+      return { ...view, permission: event.data.preset }
     case 'command/run': {
       const data = event.data
       return {

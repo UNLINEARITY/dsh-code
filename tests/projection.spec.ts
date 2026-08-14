@@ -195,6 +195,22 @@ describe('transcript projection', () => {
     expect(view.model).toBe('deepseek-official/deepseek-v4')
   })
 
+  it('folds plan mode from the last plan/mode event', () => {
+    const flip = (active: boolean, seq: number) => ({
+      type: 'plan/mode', seq, time: seq, data: { active },
+    }) as unknown as SessionEvent
+    const view = projectEvents([flip(true, 1), flip(false, 2), flip(true, 3)])
+    expect(view.plan).toBe(true)
+  })
+
+  it('folds the permission preset from the last permission/preset event', () => {
+    const preset = (name: string, seq: number) => ({
+      type: 'permission/preset', seq, time: seq, data: { preset: name },
+    }) as unknown as SessionEvent
+    const view = projectEvents([preset('read-only', 1), preset('workspace-write', 2)])
+    expect(view.permission).toBe('workspace-write')
+  })
+
   it('surfaces turn errors as error entries', () => {
     const event = {
       type: 'turn/end',
