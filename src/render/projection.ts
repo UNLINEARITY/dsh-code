@@ -8,7 +8,10 @@
  */
 
 import { boundContextSummary, type ContentBlock } from '@deepseek-ai/dsh-llm'
-import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import type { SessionEvent, TodoItem } from '@deepseek-ai/dsh-session'
+// Type-only imports merge the plugin-owned SessionEventMap variants (command/*
+// from dsh-commands) into the union this reducer switches on.
+import type {} from '@deepseek-ai/dsh-commands'
 
 /** One user prompt line. */
 export interface UserEntry {
@@ -39,6 +42,21 @@ export interface ToolEntry {
   summary: string
 }
 
+/** One slash-command execution dispatched through `ctx.commands`. */
+export interface CommandEntry {
+  kind: 'command'
+  /** Pairing id shared with the matching `command/done`. */
+  commandId: string
+  /** Lowercase command name without the leading slash. */
+  name: string
+  /** Verbatim text following the command name. */
+  args: string
+  /** Execution state; `running` until the paired lifecycle event lands. */
+  state: 'running' | 'done' | 'error'
+  /** Handler outcome text, empty until it lands. */
+  summary: string
+}
+
 /** One turn-level failure surfaced from `turn/end`. */
 export interface ErrorEntry {
   kind: 'error'
@@ -47,7 +65,7 @@ export interface ErrorEntry {
 }
 
 /** Ordered transcript items the renderer draws. */
-export type TranscriptEntry = UserEntry | AssistantEntry | ToolEntry | ErrorEntry
+export type TranscriptEntry = UserEntry | AssistantEntry | ToolEntry | CommandEntry | ErrorEntry
 
 /** Cumulative token accounting folded from `assistant/message` usage reports. */
 export interface UsageTotals {
@@ -80,11 +98,18 @@ export interface TranscriptView {
   /** Text accumulated from `assistant/chunk` deltas since the last flush. */
   streaming: string
   /** Latest whole-list todo snapshot from `todo/write`, empty when none. */
-  todos: SessionEvent<'todo/write'>['data']['todos']
+  todos: readonly TodoItem[]
   /** True while a durable turn is open (`turn/start` … `turn/end`). */
   busy: boolean
   /** Figures the status line renders. */
   stats: TranscriptStats
+  /**
+   * The `provider/model` pair of the last `request/header` snapshot — the
+   * session's own model record, which a resumed TUI prefers over the
+   * deployment default (mirrors the web host's resume selection order).
+   * Empty before the session's first request.
+   */
+  model: string
   /**
    * Fold-internal timing anchors, never rendered: open step and tool-call
    * start timestamps the next `assistant/message` / `tool/result` resolves
@@ -105,6 +130,7 @@ export function createTranscriptView(): TranscriptView {
     streaming: '',
     todos: [],
     busy: false,
+    model: '',
     stats: { turns: 0, steps: 0, llmMs: 0, toolMs: 0, usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 } },
     anchors: { stepStart: new Map(), toolStart: new Map() },
   }
@@ -194,7 +220,15 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
     case 'todo/write':
       return { ...view, todos: event.data.todos }
     case 'turn/start':
-      return { ...view, busy: true, stats: { ...view.stats, turns: view.stats.turns + 1 } }
+      // The web todo projection clears on turn/start: a fresh turn's first
+      // write is the authoritative list, and a stale snapshot must not linger
+      // through a turn that has not written one yet.
+      return {
+        ...view,
+        busy: true,
+        todos: [],
+        stats: { ...view.stats, turns: view.stats.turns + 1 },
+      }
     case 'step/start':
       view.anchors.stepStart.set(`${event.data.turn}:${event.data.step}`, event.time)
       return { ...view, stats: { ...view.stats, steps: view.stats.steps + 1 } }
@@ -206,6 +240,38 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
         busy: false,
         entries: [...view.entries, { kind: 'error', text: `${reason.error.code}: ${reason.error.message}` }],
       }
+    }
+    case 'request/header': {
+      // The session's own model record: the latest snapshot's provider/model
+      // pair, exactly what a resumed TUI restores as the selection.
+      const config = event.data.header.config
+      return { ...view, model: `${config.provider}/${config.model}` }
+    }
+    case 'command/run': {
+      const data = event.data
+      return {
+        ...view,
+        entries: [...view.entries, {
+          kind: 'command',
+          commandId: data.commandId,
+          name: data.name,
+          args: data.args ?? '',
+          state: 'running',
+          summary: '',
+        }],
+      }
+    }
+    case 'command/done': {
+      const data = event.data
+      const entries = view.entries.map((entry) => {
+        if (entry.kind !== 'command' || entry.commandId !== data.commandId) return entry
+        return {
+          ...entry,
+          state: data.kind === 'success' ? 'done' as const : 'error' as const,
+          summary: boundContextSummary(data.text ?? ''),
+        }
+      })
+      return { ...view, entries }
     }
     default:
       return view

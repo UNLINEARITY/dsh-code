@@ -7,9 +7,14 @@
 ## 功能
 
 - DeepSeek 蓝横幅:鲸鱼字标由官方 FishLogo 精确路径半块栅格化,头部贴内容宽度、紧凑不占满
-- 实时会话流:直接从持久会话日志投影——用户输入、流式助手文本、紧凑工具调用行(运行/完成/出错标记)、todo 快照
+- 实时会话流:直接从持久会话日志投影——用户输入、流式助手文本、紧凑工具调用/斜杠命令行(运行/完成/出错标记)、todo 快照
+- **工具审批 y/n 条**:agent 请求许可时(sandbox 升级、hook 的 ask 决策),琥珀色审批条显示原因与配对命令行;`y` 允许一次、`n` 拒绝
+- **`/model` 面板**:列出 `llm` 注册表的全部 provider 路由,为下一步切换会话模型;恢复的会话自动还原其上次的模型
+- **会话恢复**:`--resume <id|前缀>` 续接持久会话,`--continue` 取当前目录最新一个;完整转录从日志重放,续写同一持久会话
+- **斜杠命令透传**:共享 `ctx.commands` 注册表(Web 作曲栏同一分发面)里的命令都可在终端执行,`/` 弹出补全菜单
+- **todo 面板**:实时 todo 列表内联渲染,含 done/active/pending 计数与三态标记,每个新 turn 清空(对齐 Web TodoPanel)
+- 输入组件:历史(↑/↓)、光标编辑(←/→、Ctrl+A/E/U)、斜杠命令 Tab 补全;`Esc` 中断运行中的 turn,Ctrl+C/Ctrl+D 退出前先 flush 会话
 - 融合型状态栏:Claude Code 式身份信息(模型、工作目录、git 分支、会话)+ Web 作曲栏指标(轮数/步数、llm 与 tool 累计时长、缓存命中、token 总量)
-- 本地命令 `/help`、`/clear`、`/quit`;Ctrl+C/Ctrl+D 退出前先 flush 会话
 
 ## 安装
 
@@ -24,7 +29,10 @@ dsh plugin --profile cli add file:C:/path/to/dsh-code     # 本地目录
 然后:
 
 ```sh
-dsh --profile cli
+dsh --profile cli                    # 全新会话
+dsh --profile cli --continue         # 恢复本目录最新的会话
+dsh --profile cli --resume abc123    # 按会话 id 或唯一前缀恢复
+dsh --profile cli --session my-id    # 以显式 id 建新会话
 ```
 
 在环境变量(或启动目录 / `$DSH_HOME` 的 `.env`)里设置 `DEEPSEEK_API_KEY`。

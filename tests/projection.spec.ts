@@ -124,6 +124,48 @@ describe('transcript projection', () => {
     expect(view.todos).toEqual(todos)
   })
 
+  it('clears the todo snapshot when a fresh turn opens', () => {
+    const todos = [{ content: 'ship', status: 'completed' }]
+    let view = projectEvent(createTranscriptView(), {
+      type: 'todo/write', seq: 1, time: 0, data: { todos },
+    } as unknown as SessionEvent)
+    view = projectEvent(view, { type: 'turn/start', seq: 2, time: 0, data: { turn: 2 } } as SessionEvent)
+    expect(view.todos).toEqual([])
+    expect(view.busy).toBe(true)
+  })
+
+  it('pairs command lifecycle events by command id', () => {
+    const view = projectEvents([
+      {
+        type: 'command/run', seq: 1, time: 0,
+        data: { commandId: 'cmd-1', name: 'compact', args: ' now', source: { kind: 'user' } },
+      },
+      {
+        type: 'command/done', seq: 2, time: 0,
+        data: { commandId: 'cmd-1', kind: 'success', text: 'compacted 2 turns' },
+      },
+    ] as unknown as readonly SessionEvent[])
+    expect(view.entries).toEqual([{
+      kind: 'command',
+      commandId: 'cmd-1',
+      name: 'compact',
+      args: ' now',
+      state: 'done',
+      summary: 'compacted 2 turns',
+    }])
+  })
+
+  it('folds the session model from the latest request header', () => {
+    const header = (provider: string, model: string) => ({
+      type: 'request/header', seq: 1, time: 0,
+      data: { header: { config: { provider, model } }, reason: 'change' },
+    }) as unknown as SessionEvent
+    let view = projectEvent(createTranscriptView(), header('deepseek-official', 'deepseek-v4-flash'))
+    expect(view.model).toBe('deepseek-official/deepseek-v4-flash')
+    view = projectEvent(view, header('deepseek-official', 'deepseek-v4'))
+    expect(view.model).toBe('deepseek-official/deepseek-v4')
+  })
+
   it('surfaces turn errors as error entries', () => {
     const event = {
       type: 'turn/end',

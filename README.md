@@ -7,9 +7,14 @@ A Claude-Code-style interactive terminal (TUI) bundle for [DeepSeek Harness](htt
 ## What you get
 
 - DeepSeek-blue banner: the whale wordmark rasterized half-block from the exact FishLogo path, in a compact content-hugging header
-- Live transcript streamed from the durable session log: user prompts, streaming assistant text, compact tool-call rows with running/done/error marks, todo snapshots
+- Live transcript streamed from the durable session log: user prompts, streaming assistant text, compact tool-call and slash-command rows with running/done/error marks, todo snapshots
+- **Tool approval y/n bar**: when the agent asks for permission (a sandbox escalation, a hook's `ask` decision), an amber bar shows the reason plus the paired command line; `y` allows once, `n` rejects
+- **`/model` panel**: list every provider route the live `llm` registry advertises, switch the session's model for the next step; a resumed session restores its own last model
+- **Session resume**: `--resume <id|prefix>` continues a persisted session, `--continue` picks the newest one for the working directory; the full transcript replays from the log and appends to the same durable session
+- **Slash-command passthrough**: every command registered in the shared `ctx.commands` registry (the same surface the web composer dispatches) is executable from the terminal, with a completion menu on `/`
+- **Todo panel**: the live todo list renders inline with done/active/pending counts and three-state markers, cleared at each fresh turn (mirroring the web TodoPanel)
+- Input with history (↑/↓), cursor editing (←/→, Ctrl+A/E/U), Tab completion for slash commands; `Esc` interrupts the running turn, Ctrl+C/Ctrl+D quits after flushing the session
 - A blended status line: Claude-Code-style identity facts (model, working directory, git branch, session) beside the web composer's figures (turns/steps, llm and tool wall time, cache hit, token totals)
-- `/help`, `/clear`, `/quit` local commands; Ctrl+C/Ctrl+D quits after flushing the session
 
 ## Install
 
@@ -24,7 +29,10 @@ dsh plugin --profile cli add file:C:/path/to/dsh-code     # local checkout
 Then:
 
 ```sh
-dsh --profile cli
+dsh --profile cli                    # fresh session
+dsh --profile cli --continue         # resume the newest session in this directory
+dsh --profile cli --resume abc123    # resume by session id or unique prefix
+dsh --profile cli --session my-id    # fresh session under an explicit id
 ```
 
 Set `DEEPSEEK_API_KEY` in your environment (or a `.env` in the launch directory or `$DSH_HOME`).

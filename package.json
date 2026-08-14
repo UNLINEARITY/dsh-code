@@ -1,7 +1,7 @@
 {
   "name": "dsh-code",
   "description": "Claude-Code-style interactive TUI bundle for DeepSeek Harness (dsh): DeepSeek-blue whale banner, live session transcript, and a blended status line",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "main": "lib/index.mjs",
   "types": "lib/types/index.d.ts",
@@ -9,6 +9,10 @@
     ".": {
       "types": "./lib/types/index.d.ts",
       "default": "./lib/index.mjs"
+    },
+    "./startup": {
+      "types": "./lib/types/startup.d.ts",
+      "default": "./lib/startup.mjs"
     },
     "./invariant": {
       "types": "./lib/types/invariant.d.ts",
@@ -43,7 +47,9 @@
     "node": "^22.19 || >=24"
   },
   "dependencies": {
+    "@deepseek-ai/schemastery": "^3.18.1",
     "chalk": "^5.6.2",
+    "commander": "^14.0.2",
     "ink": "^5.2.1",
     "react": "^18.3.1"
   },
@@ -54,11 +60,17 @@
     "@deepseek-ai/dsh-agent-default-model": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-cmdline": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-code-runtime-worker-thread": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-commands": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-invariants": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-llm": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-session": "^0.1.0-rc.6"
+    "@deepseek-ai/dsh-session": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-session-persistence": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-user-approval": "^0.1.0-rc.6"
   },
   "devDependencies": {
+    "@deepseek-ai/dsh-commands": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-session-persistence": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-user-approval": "^0.1.0-rc.6",
     "@types/node": "^24.0.0",
     "@types/react": "~18.3.1",
     "tsdown": "^0.22.2",

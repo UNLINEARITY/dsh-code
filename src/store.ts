@@ -8,7 +8,7 @@
  */
 
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
-import { createTranscriptView, projectEvent, type TranscriptView } from './render/projection.ts'
+import { createTranscriptView, projectEvent, projectEvents, type TranscriptView } from './render/projection.ts'
 
 /** The externally readable, event-fed transcript store for one session. */
 export interface TranscriptStore {
@@ -21,11 +21,17 @@ export interface TranscriptStore {
 }
 
 /**
- * Create one transcript store.
+ * Create one transcript store, optionally seeded with replayed history. The
+ * seed folds synchronously BEFORE the first render, so a resumed session
+ * paints its full transcript on mount (no live `session/event` fires for
+ * constructor seeds — the store's `session/event` feed only carries new
+ * appends).
+ * @param replay - persisted events in `seq` order (e.g. a resumed session's
+ * constructor seed); folded once and never re-notified.
  * @returns the store the runner feeds and the renderer subscribes to.
  */
-export function createTranscriptStore(): TranscriptStore {
-  let view = createTranscriptView()
+export function createTranscriptStore(replay?: readonly SessionEvent[]): TranscriptStore {
+  let view = replay === undefined ? createTranscriptView() : projectEvents(replay)
   const listeners = new Set<() => void>()
   return {
     getView: () => view,
