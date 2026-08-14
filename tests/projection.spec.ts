@@ -8,7 +8,7 @@ import {
   type CallId,
 } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
-import { createTranscriptView, projectEvent, projectEvents } from '../src/render/projection.ts'
+import { createTranscriptView, projectEvent, projectEvents, settledEntryCount } from '../src/render/projection.ts'
 
 const callId = { current: 'c1' as CallId }
 
@@ -440,6 +440,45 @@ describe('transcript projection', () => {
       kind: 'files',
       paths: ['src/a.ts', 'src/b.ts', 'src/c.ts'],
     })
+  })
+
+  it('anchors the busy clock at turn start and clears it at turn end', () => {
+    let view = projectEvent(createTranscriptView(), {
+      type: 'turn/start', seq: 1, time: 1_000, data: { turn: 1 },
+    } as unknown as SessionEvent)
+    expect(view.busy).toBe(true)
+    expect(view.busySince).toBe(1_000)
+    view = projectEvent(view, {
+      type: 'turn/end', seq: 2, time: 9_000,
+      data: { turn: 1, reason: { kind: 'completed' } },
+    } as unknown as SessionEvent)
+    expect(view.busy).toBe(false)
+    expect(view.busySince).toBe(0)
+  })
+
+  it('settles only the prefix no later event can mutate', () => {
+    const toolCall = (id: string, seq: number) => ({
+      type: 'tool/call', seq, time: 0,
+      data: { turn: 1, step: 1, callId: id, name: 'edit', arguments: {} },
+    }) as unknown as SessionEvent
+    const toolResult = (id: string, seq: number) => toolResultEvent(id as CallId, 'done', false, seq)
+    // Empty transcript flushes nothing; a transcript with no running work
+    // flushes EVERYTHING (the completed tail included — later events only
+    // append new rows, so resizes never re-print the conversation).
+    expect(settledEntryCount([])).toBe(0)
+    let view = projectEvents([
+      { type: 'turn/start', seq: 1, time: 0, data: { turn: 1 } },
+      toolCall('a', 2),
+      toolCall('b', 3),
+    ] as unknown as readonly SessionEvent[])
+    // The first running tool freezes everything from itself onward.
+    expect(settledEntryCount(view.entries)).toBe(0)
+    view = projectEvent(view, toolResult('a', 4))
+    // Tool a is final and flushes; tool b (the running tail) stays live.
+    expect(settledEntryCount(view.entries)).toBe(1)
+    view = projectEvent(view, toolResult('b', 5))
+    // All work done: the whole transcript (tail included) settles.
+    expect(settledEntryCount(view.entries)).toBe(view.entries.length)
   })
 
   it('surfaces turn errors as error entries', () => {

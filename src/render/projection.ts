@@ -193,6 +193,8 @@ export interface TranscriptView {
   todos: readonly TodoItem[]
   /** True while a durable turn is open (`turn/start` … `turn/end`). */
   busy: boolean
+  /** `turn/start` time of the open turn (0 while idle) — the web TurnStatus clock anchor. */
+  busySince: number
   /** Figures the status line renders. */
   stats: TranscriptStats
   /**
@@ -238,6 +240,7 @@ export function createTranscriptView(): TranscriptView {
     streamingReasoning: '',
     todos: [],
     busy: false,
+    busySince: 0,
     model: '',
     plan: false,
     permission: '',
@@ -386,6 +389,7 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
       return {
         ...view,
         busy: true,
+        busySince: view.busy ? view.busySince : event.time,
         todos: [],
         stats: { ...view.stats, turns: view.stats.turns + 1 },
       }
@@ -417,8 +421,8 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
       const files = view.anchors.turnFiles.get(event.data.turn)
       view.anchors.turnFiles.delete(event.data.turn)
       if (files !== undefined && files.size > 0) appended.push({ kind: 'files', paths: [...files].slice(0, 12) })
-      if (appended.length === 0) return { ...view, busy: false }
-      return { ...view, busy: false, entries: [...view.entries, ...appended] }
+      if (appended.length === 0) return { ...view, busy: false, busySince: 0 }
+      return { ...view, busy: false, busySince: 0, entries: [...view.entries, ...appended] }
     }
     case 'llm/retry': {
       const data = event.data
@@ -556,4 +560,24 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
  */
 export function projectEvents(events: readonly SessionEvent[]): TranscriptView {
   return events.reduce(projectEvent, createTranscriptView())
+}
+
+/**
+ * How many leading transcript entries can never change again: only a
+ * `running` tool or retry can still mutate in place — everything before the
+ * first one (including a completed tail: later events only APPEND new rows)
+ * is final. The renderer currently draws the whole transcript dynamically
+ * (a `<Static>` flush proved unstable with CJK wrapping on real terminals);
+ * this boundary stays as the append-only contract for when flushing is
+ * reintroduced.
+ * @param entries - the view's transcript entries in order.
+ * @returns the count of entries safe to flush (0 for an empty transcript).
+ */
+export function settledEntryCount(entries: readonly TranscriptEntry[]): number {
+  for (let index = 0; index < entries.length; index++) {
+    const entry = entries[index]
+    if (entry.kind === 'tool' && entry.state === 'running') return index
+    if (entry.kind === 'retry' && entry.state === 'running') return index
+  }
+  return entries.length
 }

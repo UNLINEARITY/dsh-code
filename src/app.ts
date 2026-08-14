@@ -17,7 +17,7 @@
 import {
   createElement, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactElement,
 } from 'react'
-import { Box, Text, useInput, useStdout } from 'ink'
+import { Box, Static, Text, useInput, useStdout } from 'ink'
 import { assertNever } from '@deepseek-ai/dsh-llm'
 import type { CommandDescriptor } from '@deepseek-ai/dsh-commands'
 import type { TodoItem } from '@deepseek-ai/dsh-session'
@@ -25,7 +25,7 @@ import type { AskUserQuestionAnswerItem } from '@deepseek-ai/dsh-user-questions'
 import { TUI_RGB, brand, dim, error as paintError, warn } from './theme.ts'
 import { WHALE_GLYPH, WHALE_GLYPH_COLUMNS } from './whale-glyph.ts'
 import type { TranscriptStore } from './store.ts'
-import type { TranscriptEntry } from './render/projection.ts'
+import { settledEntryCount, type TranscriptEntry } from './render/projection.ts'
 import { renderMarkdown, type MdSegment, visibleColumns } from './render/markdown.ts'
 import type { ToolDetail } from './render/tool-detail.ts'
 import { caretVisible, pulseFrame } from './render/animations.ts'
@@ -136,6 +136,60 @@ function Caret(): ReactElement {
 function CursorBlock({ char }: { char: string }): ReactElement {
   const tick = useFrames(530)
   return createElement(Text, { inverse: caretVisible(tick) || undefined }, char)
+}
+
+/** Web TurnStatus elapsed format: `45s` under a minute, `2m03s` beyond. */
+function runClock(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000))
+  const minutes = Math.floor(total / 60)
+  const seconds = total % 60
+  return minutes > 0 ? `${minutes}m${String(seconds).padStart(2, '0')}s` : `${seconds}s`
+}
+
+/**
+ * The busy line, web TurnStatus contract: the plain `Deep diving...` label,
+ * with the elapsed clock appended only once the turn has clearly been running
+ * (15s) — anchored to `turn/start` so a resumed mid-turn keeps the real time.
+ */
+function DeepDivingLine({ since }: { since: number }): ReactElement {
+  useFrames(1000)
+  const elapsed = since === 0 ? 0 : Date.now() - since
+  return createElement(
+    Text,
+    { dimColor: true },
+    elapsed >= 15_000 ? `Deep diving... ${runClock(elapsed)}` : 'Deep diving...',
+  )
+}
+
+/**
+ * The streaming buffer rendered with a hard size cap: the live region must
+ * ALWAYS fit the terminal, or Ink's erase/rewrite of a dynamic tree taller
+ * than the screen freezes (cursor-up past the top, garbage, no scroll). The
+ * cap keeps roughly `rows - reserve` screen rows, sliced from the END so the
+ * freshest tokens stay visible while a long reply streams; the complete text
+ * lands in the flushed scrollback once the turn assembles it.
+ */
+function StreamTail({ text, dim, children }: {
+  text: string
+  dim: boolean
+  children?: ReactElement
+}): ReactElement {
+  const stdout = useStdout().stdout
+  const columns = stdout?.columns ?? 80
+  const rows = stdout?.rows ?? 30
+  // Half the row budget in characters: CJK full-width chars occupy two
+  // columns, so a pure-CJK stream needs twice the columns per row.
+  const budget = Math.max(16, Math.floor(((rows - 8) * columns) / 2))
+  const truncated = text.length > budget
+  const tail = truncated ? text.slice(-budget) : text
+  return createElement(
+    Box,
+    { flexDirection: 'column' },
+    truncated
+      ? createElement(Text, { dimColor: true }, '  … (streaming — scrollback holds the full text once it lands)')
+      : undefined,
+    createElement(Text, { dimColor: dim || undefined }, displayText(tail), children),
+  )
 }
 
 /** Ink props for one markdown style class. */
@@ -769,6 +823,38 @@ function HelpPanel({ descriptors, skills, onClose }: {
   )
 }
 
+/**
+ * The Ctrl+O verbose transcript overlay: the full durable history with
+ * reasoning expanded and tool cards detailed — the read surface the flushed
+ * static rows (collapsed forever, by the append-only contract) cannot offer.
+ * Bounded to a recent window so one giant diff cannot blow the screen;
+ * /export writes the complete transcript to a file.
+ */
+function VerbosePanel({ entries, onClose }: { entries: readonly TranscriptEntry[]; onClose(): void }): ReactElement {
+  // True toggle: Ctrl+O closes what Ctrl+O opened, alongside Esc/q. The
+  // prompt box's own handler is gated off while the overlay is open
+  // (inputActive), so the same keypress can never both close and reopen.
+  useInput((input, key) => {
+    if (key.escape || input === 'q' || (key.ctrl && input === 'o')) onClose()
+  })
+  const budget = 6
+  const windowEntries = entries.length > budget ? entries.slice(entries.length - budget) : entries
+  return createElement(
+    Box,
+    { flexDirection: 'column', paddingX: 1, borderStyle: 'round', borderColor: inkColor(TUI_RGB.brand), alignSelf: 'flex-start', marginLeft: 1, marginTop: 1 },
+    createElement(Text, { color: inkColor(TUI_RGB.brand), bold: true }, `verbose transcript — ${entries.length} ${entries.length === 1 ? 'entry' : 'entries'}`),
+    ...windowEntries.map((entry, index) => createElement(
+      Box,
+      { key: index, flexDirection: 'column' },
+      createElement(EntryLine, { entry, showReasoning: true, verbose: true }),
+    )),
+    entries.length > windowEntries.length
+      ? createElement(Text, { dimColor: true }, `  … ${entries.length - windowEntries.length} earlier entries — /export writes the full transcript`)
+      : undefined,
+    createElement(Text, { dimColor: true }, dim('  esc or q close')),
+  )
+}
+
 /** One completion candidate row. */
 interface CompletionCandidate {
   /** Insertion text for the command name (with leading slash). */
@@ -824,44 +910,41 @@ function completionCandidates(
   return all.filter(candidate => candidate.label.slice(1).startsWith(prefix)).slice(0, 10)
 }
 
-/** The completion menu snapshot the input editor publishes to the app. */
-export interface MenuState {
-  /** Whether the menu is on screen (slash or @mention). */
-  active: boolean
-  /** Whether the menu is driven by an @mention token. */
-  mention: boolean
-  /** Highlighted candidate index (wraps by row count). */
-  index: number
-  /** Rendered rows in display order. */
-  rows: readonly CompletionCandidate[]
-}
-
 /**
- * The completion menu, rendered after the status line — the very last
- * element in the tree. Being last in the layout flow, opening or closing it
- * moves nothing above it: the transcript, input box, and status line all
- * stay put (the Claude-Code dropdown treatment adapted to Ink, whose
- * absolute positioning cannot place children above their parent).
+ * The completion menu, rendered inside the composer's subtree directly above
+ * the framed box — attached the way Claude-Code anchors its dropdown. Opening
+ * it grows the stack downward: the composer stays the last element on screen
+ * and everything above (the flushed static transcript, the status line) never
+ * moves. Props-only (no lifted state): the menu is a pure view of the input
+ * editor's live completion state, so no cross-component effect ever resyncs
+ * it (a state lift here previously deadlocked the menu after a resize).
  */
-function CompletionMenu({ state }: { state: MenuState }): ReactElement | undefined {
-  if (!state.active) return undefined
+function CompletionMenu({ active, mention, index, rows }: {
+  active: boolean
+  mention: boolean
+  index: number
+  rows: readonly CompletionCandidate[]
+}): ReactElement | undefined {
+  // Hook order is unconditional: `active` toggling must not change the hook
+  // count (the early return used to sit above useStdout).
   const columns = useStdout().stdout?.columns ?? 80
-  const nameWidth = Math.min(18, Math.max(0, ...state.rows.map(row => visibleColumns(row.label))) + 2)
+  if (!active) return undefined
+  const nameWidth = Math.min(18, Math.max(0, ...rows.map(row => visibleColumns(row.label))) + 2)
   const descBudget = Math.max(24, columns - nameWidth - 8)
   return createElement(
     Box,
-    { flexDirection: 'column', marginTop: 1, marginLeft: 2 },
-    ...(state.rows.length === 0
+    { flexDirection: 'column', marginLeft: 2 },
+    ...(rows.length === 0
       ? [createElement(Text, { key: 'loading', dimColor: true }, 'searching…')]
-      : state.rows.map((candidate, index) => createElement(
+      : rows.map((candidate, at) => createElement(
         Text,
         {
           key: candidate.label,
-          color: index === state.index % state.rows.length ? inkColor(TUI_RGB.brandBright) : inkColor(TUI_RGB.dim),
+          color: at === index % rows.length ? inkColor(TUI_RGB.brandBright) : inkColor(TUI_RGB.dim),
         },
-        `${index === state.index % state.rows.length ? '❯ ' : '  '}${padColumns(candidate.label, nameWidth)}${dim(truncateColumns(displayText(candidate.description), descBudget))}`,
+        `${at === index % rows.length ? '❯ ' : '  '}${padColumns(candidate.label, nameWidth)}${dim(truncateColumns(displayText(candidate.description), descBudget))}`,
       ))),
-    createElement(Text, { dimColor: true }, dim(state.mention ? '↑↓ choose · tab insert' : '↑↓ choose · tab complete')),
+    createElement(Text, { dimColor: true }, dim(mention ? '↑↓ choose · tab insert' : '↑↓ choose · tab complete')),
   )
 }
 
@@ -871,7 +954,7 @@ function CompletionMenu({ state }: { state: MenuState }): ReactElement | undefin
  * While a modal (approval / question / model panel) owns the keys, the
  * box passes every key through untouched.
  */
-function Input({ active, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openHelp, notify, toggleReasoning, toggleVerbose, loadMentions, cyclePermission, exportTranscript, renameTitle, onMenuState }: {
+function Input({ active, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openHelp, notify, toggleReasoning, openVerbose, clearView, refresh, loadMentions, cyclePermission, exportTranscript, renameTitle }: {
   active: boolean
   busy: boolean
   descriptors: readonly CommandDescriptor[]
@@ -884,12 +967,13 @@ function Input({ active, busy, descriptors, skills, dispatch, steer, interrupt, 
   openHelp(): void
   notify(text: string): void
   toggleReasoning(): void
-  toggleVerbose(): void
+  openVerbose(): void
+  clearView(): void
+  refresh(): void
   loadMentions(query: string, signal?: AbortSignal): Promise<readonly MentionCandidate[]>
   cyclePermission(): string
   exportTranscript(argument: string): Promise<void>
   renameTitle(argument: string): string
-  onMenuState(state: MenuState): void
 }): ReactElement {
   const [value, setValue] = useState('')
   const [cursor, setCursor] = useState(0)
@@ -911,10 +995,14 @@ function Input({ active, busy, descriptors, skills, dispatch, steer, interrupt, 
   const [mentionRows, setMentionRows] = useState<readonly MentionCandidate[]>([])
 
   // Bare path token: the last whitespace-delimited run on the cursor's line
-  // when it already looks like a path (Claude-Code bare Tab completion).
+  // when it already looks like a path (Claude-Code bare Tab completion). A
+  // LEADING '/' is the command namespace, never a path — without this guard
+  // typing the bare '/' hijacked the menu into the workspace file scan and
+  // the slash-command candidates never appeared.
   const bareTokenMatch = /([^\s]+)$/u.exec(lastLine)
   const bareToken = bareTokenMatch === null ? '' : bareTokenMatch[1] ?? ''
   const pathActive = !mentionActive
+    && !bareToken.startsWith('/')
     && (bareToken.includes('/') || bareToken === '.' || bareToken === '..')
   const pathTokenStart = beforeCursor.length - bareToken.length
   const [pathRows, setPathRows] = useState<readonly MentionCandidate[]>([])
@@ -968,22 +1056,6 @@ function Input({ active, busy, descriptors, skills, dispatch, steer, interrupt, 
       }))
       : candidates
 
-  // The menu renders at the very bottom of the app (after the status line),
-  // where opening it moves nothing above it — the App needs this snapshot.
-  // Notify only on change; an unconditional set would re-render in a loop.
-  const menuStateKey = useRef('')
-  useEffect(() => {
-    const key = JSON.stringify([menuActive, mentionActive, completionIndex, menuRows.map(row => row.label)])
-    if (key === menuStateKey.current) return
-    menuStateKey.current = key
-    onMenuState({
-      active: menuActive,
-      mention: mentionActive,
-      index: completionIndex,
-      rows: menuRows,
-    })
-  }, [menuActive, mentionActive, completionIndex, menuRows, onMenuState])
-
   useInput((input, key) => {
     // Modal ownership: approval/question/model dialogs consume all keys.
     if (!active) return
@@ -998,10 +1070,11 @@ function Input({ active, busy, descriptors, skills, dispatch, steer, interrupt, 
       toggleReasoning()
       return
     }
-    // Ctrl+O toggles the verbose transcript (Claude-Code convention): tool
-    // cards expand to their structured presentation bodies.
+    // Ctrl+O opens the verbose transcript overlay (Claude-Code convention,
+    // adapted to the append-only static rows): the full history with tool
+    // cards and reasoning expanded, Esc returns.
     if (key.ctrl && input === 'o') {
-      toggleVerbose()
+      openVerbose()
       return
     }
     // Ctrl+C is three-state (community-TUI convention): a running turn is
@@ -1053,7 +1126,11 @@ function Input({ active, busy, descriptors, skills, dispatch, steer, interrupt, 
         return
       }
       if (text === '/clear') {
-        console.clear()
+        // Clear the screen AND drop the folded view: the raw ANSI clear + a
+        // Static remount (refresh) so the ledger stays in sync, then the
+        // store resets so the rebuilt transcript starts empty.
+        refresh()
+        clearView()
         return
       }
       if (text === '/export' || text.startsWith('/export ')) {
@@ -1168,9 +1245,11 @@ function Input({ active, busy, descriptors, skills, dispatch, steer, interrupt, 
       setValue(value.slice(0, cursor))
       return
     }
-    // Ctrl+L refreshes the screen (readline convention; same as /clear).
+    // Ctrl+L refreshes the screen (readline convention): raw ANSI clear
+    // plus a Static remount so the flushed transcript re-emits (a bare
+    // console.clear() would desync Ink's ledger against the static rows).
     if (key.ctrl && input === 'l') {
-      console.clear()
+      refresh()
       return
     }
     if (key.ctrl && input === 'a') {
@@ -1191,6 +1270,14 @@ function Input({ active, busy, descriptors, skills, dispatch, steer, interrupt, 
   return createElement(
     Box,
     { flexDirection: 'column', marginTop: 1 },
+    // The completion dropdown rides directly above the box (Claude-Code
+    // anchor): rendered from the editor's own live state, never lifted.
+    createElement(CompletionMenu, {
+      active: menuActive,
+      mention: mentionActive,
+      index: completionIndex,
+      rows: menuRows,
+    }),
     busy && value === ''
       ? createElement(Text, { dimColor: true }, dim('  enter steers the running turn · esc or ctrl+c cancels'))
       : undefined,
@@ -1246,48 +1333,91 @@ export function App(props: AppProps): ReactElement {
 
   const busy = view.busy
   const [showReasoning, setShowReasoning] = useState(false)
-  const [verbose, setVerbose] = useState(false)
+  const [verboseOpen, setVerboseOpen] = useState(false)
   const [helpOpen, setHelpOpen] = useState(false)
-  const [menuState, setMenuState] = useState<MenuState>({ active: false, mention: false, index: 0, rows: [] })
+  const [refreshEpoch, setRefreshEpoch] = useState(0)
   const approvalSnapshot = useSyncExternalStore(props.approval.subscribe, props.approval.getSnapshot)
   const questionSnapshot = useSyncExternalStore(props.questions.subscribe, props.questions.getSnapshot)
   // While any modal owns the keys, the prompt box passes everything through.
-  const inputActive = !modelOpen && !helpOpen && approvalSnapshot.pending === undefined && questionSnapshot.pending === undefined
+  const inputActive = !modelOpen && !helpOpen && !verboseOpen && approvalSnapshot.pending === undefined && questionSnapshot.pending === undefined
   // Layered ownership: question > approval > model panel; each bar answers
   // only while no higher-priority modal is on screen.
   const questionPending = questionSnapshot.pending !== undefined
+
+  // Append-only transcript: everything up to the first still-mutable entry
+  // (a running tool/retry) flushes through Ink's `<Static>` into native
+  // scrollback and is NEVER rewritten — the Claude-Code stability contract
+  // that lets arbitrarily long conversations scroll instead of freezing when
+  // the live tree exceeds the terminal height. The dynamic region below stays
+  // small: the streaming tail, modals, status line, and the composer pinned
+  // as the LAST element (the physical cursor — and the IME candidate window
+  // anchored to it — stays on the bottom row).
+  const settled = settledEntryCount(view.entries)
   // Claude-Code spacing: one blank row before each user prompt (except the
-  // first) separates replies from the next turn.
-  const transcriptRows: ReactElement[] = []
-  view.entries.forEach((entry, index) => {
+  // first) separates replies from the next turn. Settled rows flush once with
+  // the reasoning toggle as it is NOW (Ctrl+R affects subsequent flushes);
+  // Ctrl+O shows the expanded full history in its overlay.
+  const settledRows: ReactElement[] = [createElement(Header, { key: 'header', resumed: props.resumed })]
+  view.entries.slice(0, settled).forEach((entry, index) => {
+    const row = createElement(EntryLine, { entry, showReasoning, verbose: false })
     if (entry.kind === 'user' && index > 0) {
-      transcriptRows.push(createElement(Text, { key: `gap-${index}` }, ' '))
+      settledRows.push(createElement(Box, { key: `gap-${index}`, paddingX: 1 }, createElement(Text, null, ' ')))
     }
-    transcriptRows.push(createElement(EntryLine, { key: index, entry, showReasoning, verbose }))
+    settledRows.push(createElement(Box, { key: index, paddingX: 1 }, row))
   })
+  const liveRows: ReactElement[] = []
+  view.entries.slice(settled).forEach((entry, offset) => {
+    const index = settled + offset
+    if (entry.kind === 'user' && index > 0) {
+      liveRows.push(createElement(Text, { key: `gap-${index}` }, ' '))
+    }
+    liveRows.push(createElement(EntryLine, { key: index, entry, showReasoning, verbose: false }))
+  })
+
+  // The screen refresh used by /clear and Ctrl+L: a raw ANSI clear (wipe
+  // screen AND scrollback, home the cursor) then a Static remount via the
+  // key change, which re-flushes the current items from index 0. NEVER
+  // console.clear() — it desyncs Ink's internal line ledger against the
+  // flushed static rows and garbles every frame after.
+  // Hook order: useStdout must be called at the component top, not inside
+  // the callback below.
+  const appStdout = useStdout().stdout
+  const refreshScreen = (): void => {
+    if (appStdout !== undefined) appStdout.write('\x1b[2J\x1b[3J\x1b[H')
+    setRefreshEpoch(epoch => epoch + 1)
+  }
+
   return createElement(
     Box,
     { flexDirection: 'column' },
-    createElement(Header, { resumed: props.resumed }),
+    createElement(Static, {
+      key: refreshEpoch,
+      items: settledRows,
+      // createElement cannot carry the generic: items are prebuilt elements.
+      children: (item: unknown) => item as ReactElement,
+    }),
     createElement(
       Box,
       { flexDirection: 'column', paddingX: 1 },
-      ...transcriptRows,
+      ...liveRows,
       view.streamingReasoning !== ''
         ? createElement(
-          Text,
-          { dimColor: true, italic: true },
-          showReasoning ? `  ✻ ${displayText(view.streamingReasoning)}` : '  ✻ Thinking…',
+          StreamTail,
+          { text: showReasoning ? `  ✻ ${view.streamingReasoning}` : '  ✻ Thinking…', dim: true },
         )
         : undefined,
       view.streaming !== ''
-        ? createElement(Text, null, displayText(view.streaming), busy ? createElement(Caret) : undefined)
+        ? createElement(
+          StreamTail,
+          { text: view.streaming, dim: false },
+          busy ? createElement(Caret) : undefined,
+        )
         : undefined,
-      busy && view.streaming === '' && view.streamingReasoning === '' ? createElement(Text, { dimColor: true }, 'Deep diving...') : undefined,
+      busy && view.streaming === '' && view.streamingReasoning === '' ? createElement(DeepDivingLine, { since: view.busySince }) : undefined,
     ),
     createElement(TodoPanel, { todos: view.todos }),
-    createElement(QuestionBar, { store: props.questions, locked: modelOpen || helpOpen }),
-    createElement(ApprovalBar, { approval: props.approval, locked: modelOpen || helpOpen || questionPending }),
+    createElement(QuestionBar, { store: props.questions, locked: modelOpen || helpOpen || verboseOpen }),
+    createElement(ApprovalBar, { approval: props.approval, locked: modelOpen || helpOpen || verboseOpen || questionPending }),
     modelOpen
       ? createElement(ModelPanel, {
         directory,
@@ -1311,11 +1441,37 @@ export function App(props: AppProps): ReactElement {
         },
       })
       : undefined,
+    verboseOpen
+      ? createElement(VerbosePanel, {
+        entries: view.entries,
+        onClose: () => {
+          setVerboseOpen(false)
+        },
+      })
+      : undefined,
     createElement(
       Box,
       { flexDirection: 'column' },
       ...notices.slice(-3).map((notice, index) => createElement(Text, { key: index, dimColor: true }, notice)),
     ),
+    createElement(StatusLine, {
+      facts: {
+        model: modelLabel,
+        cwd: props.cwd,
+        branch: props.branch,
+        sessionId: props.sessionId,
+        title: view.title,
+        plan: view.plan,
+        permission: view.permission,
+        sandbox: view.sandbox,
+        goal: view.goal === undefined ? undefined : { phase: view.goal.phase, rounds: view.goal.rounds, max: view.goal.max },
+      },
+      stats: view.stats,
+      busy,
+    }),
+    // The composer is the tree's LAST element: the physical cursor (and the
+    // IME candidate window anchored to it) stays on the terminal's bottom
+    // row while typing instead of floating above trailing chrome.
     createElement(Input, {
       active: inputActive,
       busy,
@@ -1332,10 +1488,13 @@ export function App(props: AppProps): ReactElement {
         setHelpOpen(true)
       },
       notify,
-      toggleVerbose: () => {
-        notify(verbose ? 'verbose off' : 'verbose on · tool cards expand (ctrl+o)')
-        setVerbose(current => !current)
+      openVerbose: () => {
+        setVerboseOpen(true)
       },
+      clearView: () => {
+        props.store.reset()
+      },
+      refresh: refreshScreen,
       toggleReasoning: () => {
         setShowReasoning(current => !current)
       },
@@ -1343,23 +1502,6 @@ export function App(props: AppProps): ReactElement {
       cyclePermission: props.cyclePermission,
       exportTranscript: props.exportTranscript,
       renameTitle: props.renameTitle,
-      onMenuState: setMenuState,
     }),
-    createElement(StatusLine, {
-      facts: {
-        model: modelLabel,
-        cwd: props.cwd,
-        branch: props.branch,
-        sessionId: props.sessionId,
-        title: view.title,
-        plan: view.plan,
-        permission: view.permission,
-        sandbox: view.sandbox,
-        goal: view.goal === undefined ? undefined : { phase: view.goal.phase, rounds: view.goal.rounds, max: view.goal.max },
-      },
-      stats: view.stats,
-      busy,
-    }),
-    createElement(CompletionMenu, { state: menuState }),
   )
 }

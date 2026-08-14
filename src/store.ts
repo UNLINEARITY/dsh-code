@@ -18,6 +18,8 @@ export interface TranscriptStore {
   subscribe(listener: () => void): () => void
   /** Fold one session event; ignored events change nothing and notify nobody. */
   apply(event: SessionEvent): void
+  /** Drop the folded view entirely (/clear): the next event starts a fresh one. */
+  reset(): void
 }
 
 /**
@@ -45,6 +47,12 @@ export function createTranscriptStore(replay?: readonly SessionEvent[]): Transcr
       const next = projectEvent(view, event)
       if (next === view) return
       view = next
+      for (const listener of listeners) {
+        listener()
+      }
+    },
+    reset(): void {
+      view = createTranscriptView()
       for (const listener of listeners) {
         listener()
       }
