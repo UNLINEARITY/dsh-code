@@ -28,6 +28,16 @@
     "src"
   ],
   "license": "MIT",
+  "keywords": [
+    "deepseek",
+    "dsh",
+    "deepseek-harness",
+    "tui",
+    "terminal",
+    "claude-code",
+    "agent",
+    "ink"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/unlinearity/dsh-code.git"
@@ -41,7 +51,8 @@
     "build": "tsdown && tsc -p tsconfig.json",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "gen:whale": "tsx scripts/gen-whale-glyph.ts"
+    "gen:whale": "tsx scripts/gen-whale-glyph.ts",
+    "prepublishOnly": "pnpm typecheck && pnpm test && pnpm build"
   },
   "engines": {
     "node": "^22.19 || >=24"
@@ -66,13 +77,15 @@
     "@deepseek-ai/dsh-session": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-session-persistence": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-skill": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-user-approval": "^0.1.0-rc.6"
+    "@deepseek-ai/dsh-user-approval": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-user-questions": "^0.1.0-rc.6"
   },
   "devDependencies": {
     "@deepseek-ai/dsh-commands": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-session-persistence": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-skill": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-user-approval": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-user-questions": "^0.1.0-rc.6",
     "@types/node": "^24.0.0",
     "@types/react": "~18.3.1",
     "tsdown": "^0.22.2",

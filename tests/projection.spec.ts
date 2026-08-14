@@ -99,8 +99,37 @@ describe('transcript projection', () => {
     expect(view.streaming).toBe('')
     expect(view.entries).toEqual([
       { kind: 'user', text: 'hi' },
-      { kind: 'assistant', text: 'DeepSeek harness' },
+      { kind: 'assistant', text: 'DeepSeek harness', reasoning: '' },
     ])
+  })
+
+  it('accumulates reasoning deltas into the thinking buffer and folds them into the assembled entry', () => {
+    const reasoningDelta = (text: string, seq: number): SessionEvent => ({
+      type: 'assistant/chunk',
+      seq,
+      time: seq,
+      data: { turn: 1, step: 1, chunk: { type: 'reasoning-delta', index: 0, text } },
+    } as unknown as SessionEvent)
+    let view = projectEvents([reasoningDelta('let me', 1), reasoningDelta(' think', 2)])
+    expect(view.streamingReasoning).toBe('let me think')
+    view = projectEvent(view, {
+      type: 'assistant/message',
+      seq: 3,
+      time: 3,
+      data: {
+        turn: 1,
+        step: 1,
+        message: createAssistantMessage({
+          content: [
+            { type: 'reasoning', text: 'let me think' },
+            { type: 'text', text: 'here is the answer' },
+          ],
+        }),
+      },
+    } as unknown as SessionEvent)
+    expect(view.streamingReasoning).toBe('')
+    const last = view.entries[view.entries.length - 1]
+    expect(last).toEqual({ kind: 'assistant', text: 'here is the answer', reasoning: 'let me think' })
   })
 
   it('pairs tool calls with their results by call id', () => {

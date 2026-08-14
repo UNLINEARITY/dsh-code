@@ -31,6 +31,7 @@ import { mountApprovalAnswerer, type ApprovalStore } from './approval.ts'
 import { isSlashLine, watchCommands, type CommandsView } from './commands.ts'
 import { internals, type TuiMount } from './internals.ts'
 import { loadModelDirectory, type ModelRow } from './models.ts'
+import { mountQuestionProvider, type QuestionStore } from './questions.ts'
 import { createTranscriptStore } from './store.ts'
 import { watchSkills, type SkillsView } from './skills.ts'
 import type { TuiStartup } from './startup.ts'
@@ -261,6 +262,11 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     request => approvalCommandPreview(store.getView().entries, request.callId, request.toolName),
   )
 
+  // ask_user_question provider: the single UI provider on the shared service,
+  // one request on screen at a time. Plan reviews (exit_plan_mode) arrive
+  // through this same pipe.
+  const questions: QuestionStore = mountQuestionProvider(ctx)
+
   // The bridge the React app registers on mount: local notices from the
   // process side (unknown commands, switch confirmations, cancels).
   const bridge: AppBridge = { notify: () => {} }
@@ -351,6 +357,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   mountRef.current = io.mount(createElement(App, {
     store,
     approval,
+    questions,
     commands,
     skills,
     model: initialModel,

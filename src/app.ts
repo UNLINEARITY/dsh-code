@@ -21,6 +21,7 @@ import { Box, Text, useInput } from 'ink'
 import { assertNever } from '@deepseek-ai/dsh-llm'
 import type { CommandDescriptor } from '@deepseek-ai/dsh-commands'
 import type { TodoItem } from '@deepseek-ai/dsh-session'
+import type { AskUserQuestionAnswerItem } from '@deepseek-ai/dsh-user-questions'
 import { TUI_RGB, brand, dim, error as paintError, warn } from './theme.ts'
 import { WHALE_GLYPH, WHALE_GLYPH_COLUMNS } from './whale-glyph.ts'
 import type { TranscriptStore } from './store.ts'
@@ -28,6 +29,7 @@ import type { TranscriptEntry } from './render/projection.ts'
 import type { ApprovalStore } from './approval.ts'
 import type { CommandsView } from './commands.ts'
 import type { ModelDirectory, ModelRow } from './models.ts'
+import type { QuestionStore } from './questions.ts'
 import type { SkillsView, SkillRow } from './skills.ts'
 import { buildStatusGroups, type StatusFacts } from './render/status.ts'
 import { displayText } from './render/text.ts'
@@ -38,6 +40,8 @@ export interface AppProps {
   store: TranscriptStore
   /** Approval-question store fed by the answerer listener. */
   approval: ApprovalStore
+  /** ask_user_question store fed by the single UI provider. */
+  questions: QuestionStore
   /** Live slash-command descriptor list (completion candidates). */
   commands: CommandsView
   /** Live user-invocable skill catalog (completion candidates). */
@@ -74,12 +78,23 @@ function inkColor(triple: readonly [number, number, number]): string {
 }
 
 /** One settled transcript row. */
-function EntryLine({ entry }: { entry: TranscriptEntry }): ReactElement {
+function EntryLine({ entry, showReasoning }: { entry: TranscriptEntry; showReasoning: boolean }): ReactElement {
   switch (entry.kind) {
     case 'user':
       return createElement(Text, null, brand('❯ '), displayText(entry.text))
     case 'assistant':
-      return createElement(Text, null, displayText(entry.text))
+      // Claude-Code-style thinking: a dim ✻ marker collapsed, the reasoning
+      // text dim-italic expanded (Ctrl+R toggles globally).
+      return createElement(
+        Box,
+        { flexDirection: 'column' },
+        entry.reasoning === ''
+          ? undefined
+          : showReasoning
+            ? createElement(Text, { dimColor: true, italic: true }, `  ✻ ${displayText(entry.reasoning)}`)
+            : createElement(Text, { dimColor: true }, `  ✻ thinking… (${entry.reasoning.length} chars, Ctrl+R to expand)`),
+        createElement(Text, null, displayText(entry.text)),
+      )
     case 'tool': {
       const mark = entry.state === 'running'
         ? createElement(Text, { color: inkColor(TUI_RGB.brandBright) }, '◐')
@@ -204,8 +219,18 @@ function StatusLine({ facts, stats, busy }: {
 }
 
 /** The y/n approval bar rendered while an approval ask is pending. */
-function ApprovalBar({ approval }: { approval: ApprovalStore }): ReactElement | undefined {
+function ApprovalBar({ approval, locked }: { approval: ApprovalStore; locked: boolean }): ReactElement | undefined {
   const snapshot = useSyncExternalStore(approval.subscribe, approval.getSnapshot)
+  useInput((input) => {
+    if (locked || snapshot.pending === undefined || snapshot.answered) return
+    if (input === 'y' || input === 'Y') {
+      snapshot.pending.answer('allowed-once')
+      return
+    }
+    if (input === 'n' || input === 'N') {
+      snapshot.pending.answer('rejected')
+    }
+  })
   if (snapshot.pending === undefined) return undefined
   const { pending, answered } = snapshot
   return createElement(
@@ -217,6 +242,168 @@ function ApprovalBar({ approval }: { approval: ApprovalStore }): ReactElement | 
     answered
       ? createElement(Text, { dimColor: true }, '  submitted…')
       : createElement(Text, { dimColor: true }, dim('  y allow once · n reject')),
+  )
+}
+
+/**
+ * The ask_user_question bar: walks one request question by question,
+ * renders the option menu (Claude-Code style: arrows move, space toggles a
+ * multi-select, enter submits, `c` opens the custom-answer box, Esc
+ * interrupts the question as aborted). Plan reviews arrive through the same
+ * service with a `plan-review` intent — the approve option gets a ✓ mark,
+ * the answer encoding stays identical.
+ */
+function QuestionBar({ store, locked }: { store: QuestionStore; locked: boolean }): ReactElement | undefined {
+  const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot)
+  const pending = snapshot.pending
+  const [index, setIndex] = useState(0)
+  const [cursor, setCursor] = useState(0)
+  const [selected, setSelected] = useState<readonly number[]>([])
+  const [mode, setMode] = useState<'options' | 'custom'>('options')
+  const [custom, setCustom] = useState('')
+  const [answers, setAnswers] = useState<readonly AskUserQuestionAnswerItem[]>([])
+  const [submitted, setSubmitted] = useState(false)
+
+  // A new request resets the walk; questions without options start in the
+  // custom-answer box (a free-form question).
+  useEffect(() => {
+    const question = pending?.request.questions[0]
+    setIndex(0)
+    setCursor(0)
+    setSelected([])
+    setMode(question?.options === undefined || question.options.length === 0 ? 'custom' : 'options')
+    setCustom('')
+    setAnswers([])
+    setSubmitted(false)
+  }, [pending])
+
+  const question = pending?.request.questions[index]
+  const options = question?.options ?? []
+  const isPlan = question?.intent?.kind === 'plan-review'
+  const isMulti = question?.multiSelect === true
+
+  const commit = (answer: AskUserQuestionAnswerItem): void => {
+    if (pending === undefined) return
+    const next = [...answers, answer]
+    const total = pending.request.questions.length
+    if (index + 1 >= total) {
+      setSubmitted(true)
+      store.submit(pending, { answers: next })
+      return
+    }
+    setAnswers(next)
+    setIndex(index + 1)
+    setCursor(0)
+    setSelected([])
+    setMode('options')
+    setCustom('')
+  }
+
+  const commitOption = (): void => {
+    if (pending === undefined || question === undefined) return
+    if (isMulti) {
+      const labels = selected
+        .map(at => options[at]?.label)
+        .filter((label): label is string => label !== undefined)
+      const customText = custom.trim()
+      commit({ id: question.id, selected: labels, ...(customText === '' ? {} : { custom: customText }) })
+      return
+    }
+    const option = options[cursor]
+    if (option === undefined) return
+    commit({ id: question.id, selected: [option.label] })
+  }
+
+  useInput((input, key) => {
+    if (locked || pending === undefined || question === undefined || submitted) return
+    if (key.escape) {
+      store.cancel(pending)
+      return
+    }
+    if (mode === 'custom' || options.length === 0) {
+      if (key.return) {
+        if (custom.trim() === '' && options.length > 0) {
+          commitOption()
+          return
+        }
+        commit({
+          id: question.id,
+          selected: isMulti
+            ? selected.map(at => options[at]?.label).filter((label): label is string => label !== undefined)
+            : [],
+          ...(custom.trim() === '' ? {} : { custom: custom.trim() }),
+        })
+        return
+      }
+      if (key.backspace) {
+        setCustom(current => current.slice(0, -1))
+        return
+      }
+      if (input !== '' && !key.ctrl && !key.meta) {
+        setCustom(current => current + input)
+      }
+      return
+    }
+    if (key.upArrow) {
+      setCursor(current => (current + options.length - 1) % options.length)
+      return
+    }
+    if (key.downArrow) {
+      setCursor(current => (current + 1) % options.length)
+      return
+    }
+    if (key.return) {
+      commitOption()
+      return
+    }
+    if (key.tab || input === 'c' || input === 'C') {
+      setMode('custom')
+      return
+    }
+    if (input === ' ' && isMulti) {
+      setSelected(current => current.includes(cursor) ? current.filter(at => at !== cursor) : [...current, cursor])
+    }
+  })
+
+  if (pending === undefined || question === undefined) return undefined
+  return createElement(
+    Box,
+    { flexDirection: 'column', paddingX: 1, borderStyle: 'round', borderColor: inkColor(isPlan ? TUI_RGB.brand : TUI_RGB.brandDeep), alignSelf: 'flex-start', marginLeft: 1 },
+    createElement(
+      Text,
+      { color: inkColor(isPlan ? TUI_RGB.brand : TUI_RGB.brandDeep), bold: true },
+      isPlan ? `📋 plan review (${index + 1}/${pending.request.questions.length})` : `❓ question ${index + 1}/${pending.request.questions.length}`,
+    ),
+    question.header === undefined ? undefined : createElement(Text, { bold: true }, displayText(question.header)),
+    createElement(Text, null, displayText(question.question)),
+    question.detail === undefined ? undefined : createElement(Text, { dimColor: true }, displayText(question.detail)),
+    submitted
+      ? createElement(Text, { dimColor: true }, '  submitted…')
+      : createElement(
+        Box,
+        { flexDirection: 'column', marginLeft: 1 },
+        ...(mode === 'custom' || options.length === 0
+          ? [
+            createElement(Text, { color: inkColor(TUI_RGB.brandBright) }, `  custom: ${custom}${submitted ? '' : '▌'}`),
+            createElement(Text, { dimColor: true }, dim('  type your answer · enter submit · esc interrupt')),
+          ]
+          : options.map((option, at) => {
+            const chosen = isMulti && selected.includes(at)
+            const approve = isPlan && question.intent?.approve === option.label
+            const mark = approve ? '✓ ' : chosen ? '◉ ' : at === cursor ? '❯ ' : '  '
+            return createElement(
+              Text,
+              {
+                key: at,
+                color: at === cursor ? inkColor(TUI_RGB.brandBright) : chosen || approve ? inkColor(TUI_RGB.success) : inkColor(TUI_RGB.text),
+              },
+              `${mark}${displayText(option.label)}${option.description === undefined ? '' : dim(` — ${displayText(option.description)}`)}`,
+            )
+          })),
+        createElement(Text, { dimColor: true }, dim(isMulti
+          ? '  ↑↓ move · space toggle · enter submit · c custom · esc interrupt'
+          : '  ↑↓ move · enter submit · c custom · esc interrupt')),
+      ),
   )
 }
 
@@ -326,8 +513,11 @@ function completionCandidates(
 /**
  * The prompt box: TUI-local slash commands handled locally, other lines
  * dispatched; input editing keeps a cursor with history and completion.
+ * While a modal (approval / question / model panel) owns the keys, the
+ * box passes every key through untouched.
  */
-function Input({ busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, notify }: {
+function Input({ active, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, notify, toggleReasoning }: {
+  active: boolean
   busy: boolean
   descriptors: readonly CommandDescriptor[]
   skills: readonly SkillRow[]
@@ -337,6 +527,7 @@ function Input({ busy, descriptors, skills, dispatch, steer, interrupt, quit, op
   quit(): void
   openModel(): void
   notify(text: string): void
+  toggleReasoning(): void
 }): ReactElement {
   const [value, setValue] = useState('')
   const [cursor, setCursor] = useState(0)
@@ -348,6 +539,13 @@ function Input({ busy, descriptors, skills, dispatch, steer, interrupt, quit, op
   const completionActive = candidates.length > 0 && value.startsWith('/') && !value.includes(' ') && !value.includes('\n')
 
   useInput((input, key) => {
+    // Modal ownership: approval/question/model dialogs consume all keys.
+    if (!active) return
+    // Ctrl+R toggles the thinking display (Claude-Code reasoning fold).
+    if (key.ctrl && input === 'r') {
+      toggleReasoning()
+      return
+    }
     // Ctrl+C is three-state (community-TUI convention): a running turn is
     // cancelled, a non-empty draft is cleared, and only an idle empty input
     // exits. Ctrl+D always means exit but refuses mid-turn.
@@ -393,7 +591,7 @@ function Input({ busy, descriptors, skills, dispatch, steer, interrupt, quit, op
         return
       }
       if (text === '/help') {
-        notify('/model switch · /clear clear the screen · /quit exit · other /commands reach the registry · Esc or Ctrl+C interrupts the running turn')
+        notify('/model switch · /clear clear the screen · /quit exit · Ctrl+R toggle thinking · other /commands reach the registry · Esc or Ctrl+C interrupts the running turn')
         return
       }
       if (text === '/clear') {
@@ -557,6 +755,14 @@ export function App(props: AppProps): ReactElement {
   }, [modelOpen])
 
   const busy = view.busy
+  const [showReasoning, setShowReasoning] = useState(false)
+  const approvalSnapshot = useSyncExternalStore(props.approval.subscribe, props.approval.getSnapshot)
+  const questionSnapshot = useSyncExternalStore(props.questions.subscribe, props.questions.getSnapshot)
+  // While any modal owns the keys, the prompt box passes everything through.
+  const inputActive = !modelOpen && approvalSnapshot.pending === undefined && questionSnapshot.pending === undefined
+  // Layered ownership: question > approval > model panel; each bar answers
+  // only while no higher-priority modal is on screen.
+  const questionPending = questionSnapshot.pending !== undefined
   return createElement(
     Box,
     { flexDirection: 'column' },
@@ -564,12 +770,20 @@ export function App(props: AppProps): ReactElement {
     createElement(
       Box,
       { flexDirection: 'column', paddingX: 1 },
-      ...view.entries.map((entry, index) => createElement(EntryLine, { key: index, entry })),
+      ...view.entries.map((entry, index) => createElement(EntryLine, { key: index, entry, showReasoning })),
+      view.streamingReasoning !== ''
+        ? createElement(
+          Text,
+          { dimColor: true, italic: true },
+          showReasoning ? `  ✻ ${displayText(view.streamingReasoning)}` : '  ✻ thinking…',
+        )
+        : undefined,
       view.streaming !== '' ? createElement(Text, null, displayText(view.streaming)) : undefined,
-      busy && view.streaming === '' ? createElement(Text, { dimColor: true }, 'thinking…') : undefined,
+      busy && view.streaming === '' && view.streamingReasoning === '' ? createElement(Text, { dimColor: true }, 'thinking…') : undefined,
     ),
     createElement(TodoPanel, { todos: view.todos }),
-    createElement(ApprovalBar, { approval: props.approval }),
+    createElement(QuestionBar, { store: props.questions, locked: modelOpen }),
+    createElement(ApprovalBar, { approval: props.approval, locked: modelOpen || questionPending }),
     modelOpen
       ? createElement(ModelPanel, {
         directory,
@@ -590,6 +804,7 @@ export function App(props: AppProps): ReactElement {
       ...notices.slice(-3).map((notice, index) => createElement(Text, { key: index, dimColor: true }, notice)),
     ),
     createElement(Input, {
+      active: inputActive,
       busy,
       descriptors,
       skills,
@@ -601,6 +816,9 @@ export function App(props: AppProps): ReactElement {
         setModelOpen(true)
       },
       notify,
+      toggleReasoning: () => {
+        setShowReasoning(current => !current)
+      },
     }),
     createElement(StatusLine, {
       facts: { model: modelLabel, cwd: props.cwd, branch: props.branch, sessionId: props.sessionId },

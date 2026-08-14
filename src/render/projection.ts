@@ -25,6 +25,8 @@ export interface AssistantEntry {
   kind: 'assistant'
   /** Joined text blocks of the assistant message. */
   text: string
+  /** Joined reasoning blocks of the same message, empty when the model thought out loud. */
+  reasoning: string
 }
 
 /** One model-requested tool invocation and its settled state. */
@@ -97,6 +99,8 @@ export interface TranscriptView {
   entries: readonly TranscriptEntry[]
   /** Text accumulated from `assistant/chunk` deltas since the last flush. */
   streaming: string
+  /** Thinking accumulated from `assistant/chunk` reasoning deltas since the last flush. */
+  streamingReasoning: string
   /** Latest whole-list todo snapshot from `todo/write`, empty when none. */
   todos: readonly TodoItem[]
   /** True while a durable turn is open (`turn/start` … `turn/end`). */
@@ -123,11 +127,17 @@ function textOf(content: readonly ContentBlock[]): string {
   return content.filter(block => block.type === 'text').map(block => block.text).join('')
 }
 
+/** Join the reasoning blocks of a content list; non-reasoning blocks contribute nothing. */
+function reasoningOf(content: readonly ContentBlock[]): string {
+  return content.filter(block => block.type === 'reasoning').map(block => block.text).join('')
+}
+
 /** A fresh, empty transcript view. */
 export function createTranscriptView(): TranscriptView {
   return {
     entries: [],
     streaming: '',
+    streamingReasoning: '',
     todos: [],
     busy: false,
     model: '',
@@ -159,11 +169,16 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
     }
     case 'assistant/chunk': {
       const chunk = event.data.chunk
-      if (chunk.type !== 'text-delta') return view
-      return { ...view, streaming: view.streaming + chunk.text }
+      if (chunk.type === 'text-delta') {
+        return { ...view, streaming: view.streaming + chunk.text }
+      }
+      if (chunk.type === 'reasoning-delta') {
+        return { ...view, streamingReasoning: view.streamingReasoning + chunk.text }
+      }
+      return view
     }
     case 'assistant/message': {
-      // The assembled message is authoritative; drop the streamed buffer.
+      // The assembled message is authoritative; drop the streamed buffers.
       const key = `${event.data.turn}:${event.data.step}`
       const started = view.anchors.stepStart.get(key)
       view.anchors.stepStart.delete(key)
@@ -172,7 +187,12 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
       return {
         ...view,
         streaming: '',
-        entries: [...view.entries, { kind: 'assistant', text: textOf(event.data.message.content) }],
+        streamingReasoning: '',
+        entries: [...view.entries, {
+          kind: 'assistant',
+          text: textOf(event.data.message.content),
+          reasoning: reasoningOf(event.data.message.content),
+        }],
         stats: {
           ...view.stats,
           llmMs: view.stats.llmMs + (started === undefined ? 0 : Math.max(0, event.time - started)),

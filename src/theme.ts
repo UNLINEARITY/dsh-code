@@ -28,6 +28,8 @@ export const TUI_RGB = {
   error: [239, 68, 68],
   /** Warning amber — `--dsw-static-amber-500`. */
   warn: [245, 158, 11],
+  /** Default foreground text — `--dsw-static-neutral-50`. */
+  text: [236, 240, 246],
 } as const satisfies Record<string, readonly [number, number, number]>
 
 /** Paint with the primary brand blue: whale, wordmark, tool names, accents. */
