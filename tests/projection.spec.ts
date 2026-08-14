@@ -141,8 +141,8 @@ describe('transcript projection', () => {
       toolResultEvent(callId.current, 'missing file', true, 4),
     ])
     expect(view.entries).toEqual([
-      { kind: 'tool', callId: 'c1', name: 'read_file', arguments: '{"path":"a.ts"}', state: 'error', summary: 'missing file' },
-      { kind: 'tool', callId: 'c2', name: 'bash', arguments: '{"path":"a.ts"}', state: 'done', summary: 'done' },
+      { kind: 'tool', callId: 'c1', name: 'read_file', arguments: '{"path":"a.ts"}', preview: 'a.ts', state: 'error', summary: 'missing file' },
+      { kind: 'tool', callId: 'c2', name: 'bash', arguments: '{"path":"a.ts"}', preview: 'a.ts', state: 'done', summary: 'done' },
     ])
   })
 

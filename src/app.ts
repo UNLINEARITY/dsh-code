@@ -27,6 +27,7 @@ import { WHALE_GLYPH, WHALE_GLYPH_COLUMNS } from './whale-glyph.ts'
 import type { TranscriptStore } from './store.ts'
 import type { TranscriptEntry } from './render/projection.ts'
 import { renderMarkdown, type MdSegment } from './render/markdown.ts'
+import { visibleColumns } from './render/markdown.ts'
 import type { ApprovalStore } from './approval.ts'
 import type { CommandsView } from './commands.ts'
 import type { ModelDirectory, ModelRow } from './models.ts'
@@ -72,8 +73,6 @@ export interface AppProps {
   loadMentions(query: string, signal?: AbortSignal): Promise<readonly MentionCandidate[]>
   /** Apply one /model selection; returns the display label. */
   selectModel(row: ModelRow): string
-  /** Apply one permission preset (`/permission <name>`); returns the new label. */
-  setPermission(name: string): string
   /** Cycle to the next permission preset (Shift+Tab); returns the new label. */
   cyclePermission(): string
   /** Registers the app's notice channel with the runner (called once on mount). */
@@ -83,6 +82,25 @@ export interface AppProps {
 /** Ink `color` string for one palette triple. */
 function inkColor(triple: readonly [number, number, number]): string {
   return `rgb(${triple[0]}, ${triple[1]}, ${triple[2]})`
+}
+
+/** Truncate text to a visible-column budget, appending … when cut. */
+function truncateColumns(text: string, max: number): string {
+  let columns = 0
+  let out = ''
+  for (const char of text) {
+    const code = char.codePointAt(0) ?? 0
+    const width = code > 0x2e7f ? 2 : 1
+    if (columns + width > max) return `${out}…`
+    out += char
+    columns += width
+  }
+  return out
+}
+
+/** Pad text with spaces to a visible-column target (menu name column). */
+function padColumns(text: string, width: number): string {
+  return text + ' '.repeat(Math.max(0, width - visibleColumns(text)))
 }
 
 /** Ink props for one markdown style class. */
@@ -146,18 +164,31 @@ function EntryLine({ entry, showReasoning }: { entry: TranscriptEntry; showReaso
         createElement(MarkdownBody, { text: entry.text }),
       )
     case 'tool': {
+      // Claude-Code-style tool card: the invocation row plus a nested ⎿
+      // result line, so the summary reads under its call instead of inline.
       const mark = entry.state === 'running'
         ? createElement(Text, { color: inkColor(TUI_RGB.brandBright) }, '◐')
         : entry.state === 'error'
           ? createElement(Text, { color: inkColor(TUI_RGB.error) }, '⨯')
           : createElement(Text, { color: inkColor(TUI_RGB.success) }, '⏺')
       return createElement(
-        Text,
-        null,
-        mark,
-        ' ',
-        brand(entry.name),
-        entry.summary === '' ? '' : ` ${dim(displayText(entry.summary))}`,
+        Box,
+        { flexDirection: 'column' },
+        createElement(
+          Text,
+          null,
+          mark,
+          ' ',
+          brand(entry.name),
+          entry.preview === '' ? '' : ` ${dim(displayText(entry.preview))}`,
+        ),
+        entry.summary === ''
+          ? undefined
+          : createElement(
+            Text,
+            { color: entry.state === 'error' ? inkColor(TUI_RGB.error) : inkColor(TUI_RGB.dim) },
+            `  ⎿ ${displayText(entry.summary)}`,
+          ),
       )
     }
     case 'command': {
@@ -167,13 +198,19 @@ function EntryLine({ entry, showReasoning }: { entry: TranscriptEntry; showReaso
           ? createElement(Text, { color: inkColor(TUI_RGB.error) }, '⨯')
           : createElement(Text, { color: inkColor(TUI_RGB.success) }, '⏺')
       return createElement(
-        Text,
-        null,
-        mark,
-        ' ',
-        brand(`/${entry.name}`),
-        entry.args === '' ? '' : ` ${dim(displayText(entry.args))}`,
-        entry.summary === '' ? '' : ` ${dim(displayText(entry.summary))}`,
+        Box,
+        { flexDirection: 'column' },
+        createElement(
+          Text,
+          null,
+          mark,
+          ' ',
+          brand(`/${entry.name}`),
+          entry.args === '' ? '' : ` ${dim(displayText(entry.args))}`,
+        ),
+        entry.summary === ''
+          ? undefined
+          : createElement(Text, { color: inkColor(TUI_RGB.dim) }, `  ⎿ ${displayText(entry.summary)}`),
       )
     }
     case 'error':
@@ -183,8 +220,24 @@ function EntryLine({ entry, showReasoning }: { entry: TranscriptEntry; showReaso
   }
 }
 
-/** The whale wordmark header in DeepSeek blue, hugging its content width. */
+/**
+ * The whale wordmark header in DeepSeek blue, hugging its content width.
+ * The 8-row half-block glyph pairs adjacent lines, so on a terminal too
+ * short to show it whole (or mid-resize) the clipped pairs garble the
+ * screen — below the height floor the header collapses to a single-line
+ * wordmark that stays correct at any size.
+ */
 function Header({ resumed }: { resumed: boolean }): ReactElement {
+  const rows = useStdout().stdout?.rows ?? 40
+  const hint = resumed ? 'resumed session · /help commands · Esc interrupt' : '/help commands · Esc interrupt · Ctrl+C quit'
+  if (rows < 20) {
+    return createElement(
+      Box,
+      { flexDirection: 'row', gap: 1, borderStyle: 'round', borderColor: inkColor(TUI_RGB.brand), paddingX: 1, alignSelf: 'flex-start' },
+      createElement(Text, { color: inkColor(TUI_RGB.brand), bold: true }, 'DeepSeek Harness'),
+      createElement(Text, { dimColor: true }, hint),
+    )
+  }
   return createElement(
     Box,
     // alignSelf shrinks the border to the whale-plus-wordmark content instead
@@ -200,11 +253,7 @@ function Header({ resumed }: { resumed: boolean }): ReactElement {
       Box,
       { flexDirection: 'column', justifyContent: 'center' },
       createElement(Text, { color: inkColor(TUI_RGB.brand), bold: true }, 'DeepSeek Harness'),
-      createElement(
-        Text,
-        { dimColor: true },
-        resumed ? 'resumed session · /help commands · Esc interrupt' : '/help commands · Esc interrupt · Ctrl+C quit',
-      ),
+      createElement(Text, { dimColor: true }, hint),
     ),
   )
 }
@@ -222,7 +271,7 @@ function TodoPanel({ todos }: { todos: readonly TodoItem[] }): ReactElement | un
   const pending = todos.length - completed - inProgress
   return createElement(
     Box,
-    { flexDirection: 'column', paddingX: 1, borderStyle: 'round', borderColor: inkColor(TUI_RGB.brandDeep), alignSelf: 'flex-start', marginLeft: 1 },
+    { flexDirection: 'column', paddingX: 1, borderStyle: 'round', borderColor: inkColor(TUI_RGB.brandDeep), alignSelf: 'flex-start', marginLeft: 1, marginTop: 1 },
     createElement(
       Text,
       { color: inkColor(TUI_RGB.brand), bold: true },
@@ -265,7 +314,12 @@ function StatusLine({ facts, stats, busy }: {
     if (index > 0) children.push(createElement(Text, { dimColor: true }, dim(' | ')))
     children.push(createElement(Text, { dimColor: true }, group))
   })
-  return createElement(Box, { paddingX: 1 }, ...children)
+  // Left-aligned status bar; the top margin keeps it clear of the input box.
+  return createElement(
+    Box,
+    { paddingX: 1, marginTop: 1 },
+    ...children,
+  )
 }
 
 /** The y/n approval bar rendered while an approval ask is pending. */
@@ -285,7 +339,7 @@ function ApprovalBar({ approval, locked }: { approval: ApprovalStore; locked: bo
   const { pending, answered } = snapshot
   return createElement(
     Box,
-    { flexDirection: 'column', paddingX: 1, borderStyle: 'round', borderColor: inkColor(TUI_RGB.warn), alignSelf: 'flex-start', marginLeft: 1 },
+    { flexDirection: 'column', paddingX: 1, borderStyle: 'round', borderColor: inkColor(TUI_RGB.warn), alignSelf: 'flex-start', marginLeft: 1, marginTop: 1 },
     createElement(Text, { color: inkColor(TUI_RGB.warn), bold: true }, '⏸ waiting for approval'),
     createElement(Text, null, warn(displayText(pending.headline))),
     pending.command === '' ? undefined : createElement(Text, { dimColor: true }, dim(`  ${displayText(pending.command)}`)),
@@ -418,7 +472,7 @@ function QuestionBar({ store, locked }: { store: QuestionStore; locked: boolean 
   if (pending === undefined || question === undefined) return undefined
   return createElement(
     Box,
-    { flexDirection: 'column', paddingX: 1, borderStyle: 'round', borderColor: inkColor(isPlan ? TUI_RGB.brand : TUI_RGB.brandDeep), alignSelf: 'flex-start', marginLeft: 1 },
+    { flexDirection: 'column', paddingX: 1, borderStyle: 'round', borderColor: inkColor(isPlan ? TUI_RGB.brand : TUI_RGB.brandDeep), alignSelf: 'flex-start', marginLeft: 1, marginTop: 1 },
     createElement(
       Text,
       { color: inkColor(isPlan ? TUI_RGB.brand : TUI_RGB.brandDeep), bold: true },
@@ -493,7 +547,7 @@ function ModelPanel({ directory, error, onSelect, onClose }: {
   const visible = rows.slice(Math.max(0, first), Math.max(0, first) + window)
   return createElement(
     Box,
-    { flexDirection: 'column', paddingX: 1, borderStyle: 'round', borderColor: inkColor(TUI_RGB.brand), alignSelf: 'flex-start', marginLeft: 1 },
+    { flexDirection: 'column', paddingX: 1, borderStyle: 'round', borderColor: inkColor(TUI_RGB.brand), alignSelf: 'flex-start', marginLeft: 1, marginTop: 1 },
     createElement(Text, { color: inkColor(TUI_RGB.brand), bold: true }, '/model — select the model for the next step'),
     directory === undefined && error === undefined
       ? createElement(Text, { dimColor: true }, '  loading models…')
@@ -543,15 +597,20 @@ function completionCandidates(
   const local: CompletionCandidate[] = [
     { label: '/help', description: 'show commands', origin: 'command' },
     { label: '/model', description: 'switch the model', origin: 'command' },
-    { label: '/permission', description: 'switch the permission preset', origin: 'command' },
     { label: '/clear', description: 'clear the screen', origin: 'command' },
     { label: '/quit', description: 'exit', origin: 'command' },
   ]
-  const registry = descriptors.map((descriptor): CompletionCandidate => ({
-    label: `/${descriptor.name}`,
-    description: descriptor.description,
-    origin: 'command',
-  }))
+  // Local commands shadow registry names (e.g. the plugin-registered
+  // /permission is served by the registry itself, never duplicated here),
+  // so collisions cannot render two rows with the same key.
+  const localNames = new Set(local.map(candidate => candidate.label.slice(1)))
+  const registry = descriptors
+    .filter(descriptor => !localNames.has(descriptor.name))
+    .map((descriptor): CompletionCandidate => ({
+      label: `/${descriptor.name}`,
+      description: descriptor.description,
+      origin: 'command',
+    }))
   const taken = new Set([...local, ...registry].map(candidate => candidate.label.slice(1)))
   const skillRows = skills
     .filter(skill => !taken.has(skill.name))
@@ -565,13 +624,54 @@ function completionCandidates(
   return all.filter(candidate => candidate.label.slice(1).startsWith(prefix)).slice(0, 10)
 }
 
+/** The completion menu snapshot the input editor publishes to the app. */
+export interface MenuState {
+  /** Whether the menu is on screen (slash or @mention). */
+  active: boolean
+  /** Whether the menu is driven by an @mention token. */
+  mention: boolean
+  /** Highlighted candidate index (wraps by row count). */
+  index: number
+  /** Rendered rows in display order. */
+  rows: readonly CompletionCandidate[]
+}
+
+/**
+ * The completion menu, rendered after the status line — the very last
+ * element in the tree. Being last in the layout flow, opening or closing it
+ * moves nothing above it: the transcript, input box, and status line all
+ * stay put (the Claude-Code dropdown treatment adapted to Ink, whose
+ * absolute positioning cannot place children above their parent).
+ */
+function CompletionMenu({ state }: { state: MenuState }): ReactElement | undefined {
+  if (!state.active) return undefined
+  const columns = useStdout().stdout?.columns ?? 80
+  const nameWidth = Math.min(18, Math.max(0, ...state.rows.map(row => visibleColumns(row.label))) + 2)
+  const descBudget = Math.max(24, columns - nameWidth - 8)
+  return createElement(
+    Box,
+    { flexDirection: 'column', marginTop: 1, marginLeft: 2 },
+    ...(state.rows.length === 0
+      ? [createElement(Text, { key: 'loading', dimColor: true }, 'searching…')]
+      : state.rows.map((candidate, index) => createElement(
+        Text,
+        {
+          key: candidate.label,
+          color: index === state.index % state.rows.length ? inkColor(TUI_RGB.brandBright) : inkColor(TUI_RGB.dim),
+        },
+        `${index === state.index % state.rows.length ? '❯ ' : '  '}${padColumns(candidate.label, nameWidth)}${dim(truncateColumns(displayText(candidate.description), descBudget))}`,
+      ))),
+    createElement(Text, { dimColor: true }, dim(state.mention ? '↑↓ choose · tab insert' : '↑↓ choose · tab complete')),
+  )
+}
+
 /**
  * The prompt box: TUI-local slash commands handled locally, other lines
  * dispatched; input editing keeps a cursor with history and completion.
  * While a modal (approval / question / model panel) owns the keys, the
  * box passes every key through untouched.
  */
-function Input({ active, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, notify, toggleReasoning, loadMentions, setPermission, cyclePermission }: {
+function Input({ active, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, notify, toggleReasoning, loadMentions, cyclePermission, onMenuState }: {
   active: boolean
   busy: boolean
   descriptors: readonly CommandDescriptor[]
@@ -584,8 +684,8 @@ function Input({ active, busy, descriptors, skills, dispatch, steer, interrupt, 
   notify(text: string): void
   toggleReasoning(): void
   loadMentions(query: string, signal?: AbortSignal): Promise<readonly MentionCandidate[]>
-  setPermission(name: string): string
   cyclePermission(): string
+  onMenuState(state: MenuState): void
 }): ReactElement {
   const [value, setValue] = useState('')
   const [cursor, setCursor] = useState(0)
@@ -632,6 +732,22 @@ function Input({ active, busy, descriptors, skills, dispatch, steer, interrupt, 
       origin: 'mention',
     }))
     : candidates
+
+  // The menu renders at the very bottom of the app (after the status line),
+  // where opening it moves nothing above it — the App needs this snapshot.
+  // Notify only on change; an unconditional set would re-render in a loop.
+  const menuStateKey = useRef('')
+  useEffect(() => {
+    const key = JSON.stringify([menuActive, mentionActive, completionIndex, menuRows.map(row => row.label)])
+    if (key === menuStateKey.current) return
+    menuStateKey.current = key
+    onMenuState({
+      active: menuActive,
+      mention: mentionActive,
+      index: completionIndex,
+      rows: menuRows,
+    })
+  }, [menuActive, mentionActive, completionIndex, menuRows, onMenuState])
 
   useInput((input, key) => {
     // Modal ownership: approval/question/model dialogs consume all keys.
@@ -701,12 +817,6 @@ function Input({ active, busy, descriptors, skills, dispatch, steer, interrupt, 
       }
       if (text === '/model' || text.startsWith('/model ')) {
         openModel()
-        return
-      }
-      if (text === '/permission' || text.startsWith('/permission ')) {
-        const name = text.slice('/permission'.length).trim()
-        const applied = setPermission(name)
-        if (applied !== '') notify(`permission → ${applied}`)
         return
       }
       if (busy && !text.startsWith('/')) {
@@ -810,37 +920,26 @@ function Input({ active, busy, descriptors, skills, dispatch, steer, interrupt, 
     }
   })
 
-  const shown = menuActive
   return createElement(
     Box,
-    { flexDirection: 'column' },
-    shown
-      ? createElement(
-        Box,
-        { flexDirection: 'column', marginLeft: 1 },
-        ...(menuRows.length === 0
-          ? [createElement(Text, { key: 'loading', dimColor: true }, '  searching…')]
-          : menuRows.map((candidate, index) => createElement(
-            Text,
-            {
-              key: candidate.label,
-              color: index === completionIndex % menuRows.length ? inkColor(TUI_RGB.brandBright) : inkColor(TUI_RGB.dim),
-            },
-            `${index === completionIndex % menuRows.length ? '❯ ' : '  '}${candidate.label} ${dim(displayText(candidate.description))}`,
-          ))),
-        createElement(Text, { dimColor: true }, dim(mentionActive ? '  ↑↓ choose · tab insert' : '  ↑↓ choose · tab complete')),
-      )
-      : undefined,
+    { flexDirection: 'column', marginTop: 1 },
     busy && value === ''
       ? createElement(Text, { dimColor: true }, dim('  enter steers the running turn · esc or ctrl+c cancels'))
       : undefined,
+    // The framed input box: a visible boundary so the prompt never blends
+    // into the transcript above it; the cursor block sits immediately after
+    // the prompt marker (leftmost), with the dim placeholder trailing it.
     createElement(
       Box,
-      null,
+      { borderStyle: 'round', borderColor: inkColor(TUI_RGB.dim), paddingX: 1 },
       createElement(Text, { color: inkColor(TUI_RGB.brand) }, busy ? '… ' : '❯ '),
-      createElement(Text, null, value.slice(0, cursor)),
+      value === ''
+        ? undefined
+        : createElement(Text, null, value.slice(0, cursor)),
       createElement(Text, { inverse: true }, value.slice(cursor, cursor + 1) === '' ? ' ' : value.slice(cursor, cursor + 1)),
-      createElement(Text, null, value.slice(cursor + 1)),
+      value === '' && !busy
+        ? createElement(Text, { dimColor: true }, ' type a message · / commands · @ mentions')
+        : createElement(Text, null, value.slice(cursor + 1)),
     ),
   )
 }
@@ -878,6 +977,7 @@ export function App(props: AppProps): ReactElement {
 
   const busy = view.busy
   const [showReasoning, setShowReasoning] = useState(false)
+  const [menuState, setMenuState] = useState<MenuState>({ active: false, mention: false, index: 0, rows: [] })
   const approvalSnapshot = useSyncExternalStore(props.approval.subscribe, props.approval.getSnapshot)
   const questionSnapshot = useSyncExternalStore(props.questions.subscribe, props.questions.getSnapshot)
   // While any modal owns the keys, the prompt box passes everything through.
@@ -885,6 +985,15 @@ export function App(props: AppProps): ReactElement {
   // Layered ownership: question > approval > model panel; each bar answers
   // only while no higher-priority modal is on screen.
   const questionPending = questionSnapshot.pending !== undefined
+  // Claude-Code spacing: one blank row before each user prompt (except the
+  // first) separates replies from the next turn.
+  const transcriptRows: ReactElement[] = []
+  view.entries.forEach((entry, index) => {
+    if (entry.kind === 'user' && index > 0) {
+      transcriptRows.push(createElement(Text, { key: `gap-${index}` }, ' '))
+    }
+    transcriptRows.push(createElement(EntryLine, { key: index, entry, showReasoning }))
+  })
   return createElement(
     Box,
     { flexDirection: 'column' },
@@ -892,7 +1001,7 @@ export function App(props: AppProps): ReactElement {
     createElement(
       Box,
       { flexDirection: 'column', paddingX: 1 },
-      ...view.entries.map((entry, index) => createElement(EntryLine, { key: index, entry, showReasoning })),
+      ...transcriptRows,
       view.streamingReasoning !== ''
         ? createElement(
           Text,
@@ -942,8 +1051,8 @@ export function App(props: AppProps): ReactElement {
         setShowReasoning(current => !current)
       },
       loadMentions: props.loadMentions,
-      setPermission: props.setPermission,
       cyclePermission: props.cyclePermission,
+      onMenuState: setMenuState,
     }),
     createElement(StatusLine, {
       facts: {
@@ -957,5 +1066,6 @@ export function App(props: AppProps): ReactElement {
       stats: view.stats,
       busy,
     }),
+    createElement(CompletionMenu, { state: menuState }),
   )
 }

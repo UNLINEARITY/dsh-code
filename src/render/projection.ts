@@ -15,6 +15,7 @@ import type { SessionEvent, TodoItem } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-commands'
 import type {} from '@deepseek-ai/dsh-plan-mode'
 import type {} from '@deepseek-ai/dsh-permission-presets'
+import { toolArgumentsPreview } from './tool-preview.ts'
 
 /** One user prompt line. */
 export interface UserEntry {
@@ -41,6 +42,8 @@ export interface ToolEntry {
   name: string
   /** Raw arguments JSON string exactly as the model produced it. */
   arguments: string
+  /** Bounded human-meaningful arguments preview for the tool card. */
+  preview: string
   /** Execution state; `running` until the paired result lands. */
   state: 'running' | 'done' | 'error'
   /** Bounded first text block of the result, empty until it lands. */
@@ -223,6 +226,7 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
           callId: data.callId,
           name: data.name,
           arguments: data.arguments,
+          preview: toolArgumentsPreview(data.arguments, data.name),
           state: 'running',
           summary: '',
         }],

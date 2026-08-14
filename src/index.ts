@@ -35,6 +35,7 @@ import { createMentions, type MentionsApi } from './mentions.ts'
 import { mountQuestionProvider, type QuestionStore } from './questions.ts'
 import { createTranscriptStore } from './store.ts'
 import { watchSkills, type SkillsView } from './skills.ts'
+import { toolArgumentsPreview } from './render/tool-preview.ts'
 import type { TuiStartup } from './startup.ts'
 
 /** Stable Cordis plugin name. */
@@ -138,19 +139,7 @@ function approvalCommandPreview(events: readonly { kind: string }[], callId: str
     candidate.kind === 'tool' && (candidate as { callId?: string }).callId === callId)
   if (entry === undefined) return ''
   const args = (entry as { arguments?: string }).arguments ?? ''
-  try {
-    const parsed: unknown = JSON.parse(args)
-    if (parsed !== null && typeof parsed === 'object') {
-      const record = parsed as Record<string, unknown>
-      for (const key of ['command', 'cmd', 'description', 'path', 'pattern', 'query']) {
-        const value = record[key]
-        if (typeof value === 'string' && value !== '') return value
-      }
-    }
-  } catch {
-    // Raw JSON parse failed: fall through to the bounded raw arguments.
-  }
-  return args.length > 80 ? `${args.slice(0, 77)}...` : args === '' ? toolName : args
+  return toolArgumentsPreview(args, toolName)
 }
 
 /** The runner's connection between the React app and the process side. */
@@ -386,28 +375,6 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     return true
   }
 
-  /** Apply one permission preset (`/permission <name>`); notifies on errors. */
-  const setPermission = (name: string): string => {
-    const service = ctx.get('permissionPresets') as
-      | { names: readonly string[]; set(target: Session, preset: string): void }
-      | undefined
-    if (service === undefined) {
-      bridge.notify('permission presets are not mounted in this composition')
-      return ''
-    }
-    const preset = name.trim()
-    if (preset === '') {
-      bridge.notify(`permission presets: ${service.names.join(' · ')}`)
-      return ''
-    }
-    if (!service.names.includes(preset)) {
-      bridge.notify(`unknown preset ${preset} — choose ${service.names.join(' · ')}`)
-      return ''
-    }
-    service.set(session, preset)
-    return preset
-  }
-
   /**
    * Cycle to the next permission preset (Shift+Tab, the Claude-Code
    * permission-mode convention mapped onto dsh presets). A session in a
@@ -459,7 +426,6 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     quit,
     loadModels: () => loadModelDirectory(ctx),
     loadMentions: mentions.candidates,
-    setPermission,
     cyclePermission,
     selectModel,
     onBridgeReady: (instance: AppBridge) => {

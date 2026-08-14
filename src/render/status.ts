@@ -76,7 +76,6 @@ export function buildStatusGroups(facts: StatusFacts, stats: TranscriptStats): s
     facts.cwd,
     facts.branch === '' ? undefined : `⑂ ${facts.branch}`,
     facts.plan ? '⧉ plan' : undefined,
-    facts.permission === undefined || facts.permission === '' ? undefined : `⛨ ${facts.permission}`,
   ].filter(part => part !== undefined && part !== '')
   if (identity.length > 0) groups.push(identity.join(' · '))
   if (stats.turns > 0 || stats.steps > 0) {
@@ -92,5 +91,8 @@ export function buildStatusGroups(facts: StatusFacts, stats: TranscriptStats): s
     groups.push(`↑${formatTokens(stats.usage.inputTokens)} ↓${formatTokens(stats.usage.outputTokens)}`)
   }
   if (facts.sessionId !== '') groups.push(facts.sessionId)
+  // The permission preset trails the line: switching it changes only the
+  // tail, so the left-aligned bar never shifts its other groups.
+  if (facts.permission !== undefined && facts.permission !== '') groups.push(`⛨ ${facts.permission}`)
   return groups
 }
