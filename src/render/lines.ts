@@ -1,0 +1,207 @@
+/** Width-safe styled physical rows for bounded terminal panels. */
+
+import type { TranscriptEntry } from './projection.ts'
+import type { ToolDetail } from './tool-detail.ts'
+import { renderMarkdown, visibleColumns, type MdStyle } from './markdown.ts'
+import { formatTokens } from './status.ts'
+import { displayText } from './text.ts'
+
+/** Presentation classes mapped to Ink colors by the app boundary. */
+export type LineStyle = MdStyle | 'brand' | 'success' | 'error' | 'warn' | 'dimItalic'
+
+/** One styled run within a physical terminal row. */
+export interface StyledSegment {
+  text: string
+  style: LineStyle
+}
+
+/** One row guaranteed not to exceed the requested terminal width. */
+export interface StyledLine {
+  segments: readonly StyledSegment[]
+}
+
+/** Construct one segment without leaking mutable objects into cached rows. */
+export function lineSegment(text: string, style: LineStyle = 'plain'): StyledSegment {
+  return { text, style }
+}
+
+/** Append a character while merging adjacent runs with the same style. */
+function appendSegment(target: StyledSegment[], text: string, style: LineStyle): void {
+  const previous = target[target.length - 1]
+  if (previous?.style === style) {
+    target[target.length - 1] = { text: previous.text + text, style }
+    return
+  }
+  target.push({ text, style })
+}
+
+/**
+ * Sanitize and hard-wrap styled content into exact physical rows.
+ * Tabs become two visible spaces because terminal tab stops are contextual
+ * and therefore cannot participate in a deterministic row budget.
+ */
+export function styledLines(segments: readonly StyledSegment[], columns: number): readonly StyledLine[] {
+  const width = Math.max(1, Math.floor(columns))
+  const lines: StyledLine[] = []
+  let current: StyledSegment[] = []
+  let used = 0
+  const flush = (): void => {
+    lines.push({ segments: current })
+    current = []
+    used = 0
+  }
+
+  for (const segment of segments) {
+    const safe = displayText(segment.text).replaceAll('\t', '  ').replaceAll('\r', '')
+    for (const char of safe) {
+      if (char === '\n') {
+        flush()
+        continue
+      }
+      const cells = visibleColumns(char)
+      if (used > 0 && used + cells > width) flush()
+      appendSegment(current, char, segment.style)
+      used += cells
+    }
+  }
+  if (current.length > 0 || lines.length === 0) flush()
+  return lines
+}
+
+/** Plain/dim text convenience over {@link styledLines}. */
+export function textLines(text: string, columns: number, style: LineStyle = 'plain'): readonly StyledLine[] {
+  return styledLines([lineSegment(text, style)], columns)
+}
+
+/** Markdown rows re-hardened so a single long word cannot escape the budget. */
+export function markdownLines(text: string, columns: number): readonly StyledLine[] {
+  const width = Math.max(1, Math.floor(columns))
+  const parsed = renderMarkdown(displayText(text), Math.max(10, width))
+  return parsed.flatMap(line => styledLines(
+    line.segments.map(segment => lineSegment(segment.text, segment.style)),
+    width,
+  ))
+}
+
+/** Expanded structured tool detail as scrollable, width-safe rows. */
+function toolDetailLines(detail: ToolDetail, columns: number): readonly StyledLine[] {
+  switch (detail.kind) {
+    case 'diff':
+      return detail.diffs.flatMap(diff => [
+        ...styledLines([
+          lineSegment('  ── ', 'dim'),
+          lineSegment(diff.path, 'dim'),
+          lineSegment(diff.truncated ? ' (diff truncated)' : '', 'dim'),
+        ], columns),
+        ...diff.lines.flatMap(line => styledLines([
+          lineSegment(`  ${line.mark}${line.text}`, line.mark === '+' ? 'success' : line.mark === '-' ? 'error' : 'dim'),
+        ], columns)),
+      ])
+    case 'read':
+      return [
+        ...textLines(
+          `  ── ${detail.path} · lines ${detail.offset}-${detail.lines.length > 0 ? detail.lines[detail.lines.length - 1]!.number : detail.offset - 1} of ${detail.totalLines}${detail.truncated ? ' (window truncated)' : ''}`,
+          columns,
+          'dim',
+        ),
+        ...detail.lines.flatMap(line => textLines(`  ${String(line.number).padStart(5, ' ')} | ${line.text}`, columns, 'dim')),
+      ]
+    case 'web-search':
+      return [
+        ...detail.sources.flatMap(source => [
+          ...styledLines([
+            lineSegment(`  ? ${source.title ?? source.url}`, 'brand'),
+            lineSegment(` - ${source.url}`, 'dim'),
+          ], columns),
+          ...(source.snippet === '' ? [] : textLines(`    ${source.snippet}`, columns, 'dim')),
+        ]),
+        ...textLines(`  ${detail.sources.length} sources${detail.truncated ? ' (capped)' : ''}`, columns, 'dim'),
+      ]
+    case 'web-fetch':
+      return textLines(`  ${detail.url} · HTTP ${detail.statusCode}`, columns, 'dim')
+    case 'raw':
+      return [
+        ...textLines(`  ${detail.text}`, columns, 'dim'),
+        ...textLines(detail.truncated ? '  … (output truncated)' : '  (end of output)', columns, 'dim'),
+      ]
+    default: {
+      const exhaustive: never = detail
+      return exhaustive
+    }
+  }
+}
+
+/**
+ * Convert one durable transcript entry to its complete scrollable row model.
+ * The source entry stays intact; only the caller's visible slice is rendered.
+ */
+export function transcriptEntryLines(entry: TranscriptEntry, columns: number): readonly StyledLine[] {
+  const width = Math.max(1, Math.floor(columns))
+  switch (entry.kind) {
+    case 'user':
+      return styledLines([
+        lineSegment(entry.notice ? '⤷ ' : '❯ ', entry.notice ? 'dim' : 'brand'),
+        lineSegment(entry.text, entry.notice ? 'dim' : 'plain'),
+      ], width)
+    case 'assistant':
+      return [
+        ...(entry.reasoning === ''
+          ? []
+          : styledLines([
+            lineSegment('  ✻ ', 'dimItalic'),
+            lineSegment(entry.reasoning, 'dimItalic'),
+          ], width)),
+        ...markdownLines(entry.text, width),
+      ]
+    case 'tool': {
+      const mark = entry.state === 'running' ? '●' : entry.state === 'error' ? '⨯' : '⏺'
+      const markStyle: LineStyle = entry.state === 'running' ? 'brand' : entry.state === 'error' ? 'error' : 'success'
+      return [
+        ...styledLines([
+          lineSegment(`${mark} `, markStyle),
+          lineSegment(entry.name, 'brand'),
+          lineSegment(entry.preview === '' ? '' : ` ${entry.preview}`, 'dim'),
+        ], width),
+        ...(entry.summary === '' ? [] : textLines(`  ⎿ ${entry.summary}`, width, entry.state === 'error' ? 'error' : 'dim')),
+        ...(entry.detail === undefined ? [] : toolDetailLines(entry.detail, width)),
+      ]
+    }
+    case 'command': {
+      const mark = entry.state === 'running' ? '●' : entry.state === 'error' ? '⨯' : '⏺'
+      const markStyle: LineStyle = entry.state === 'running' ? 'brand' : entry.state === 'error' ? 'error' : 'success'
+      return [
+        ...styledLines([
+          lineSegment(`${mark} `, markStyle),
+          lineSegment(`/${entry.name}`, 'brand'),
+          lineSegment(entry.args === '' ? '' : ` ${entry.args}`, 'dim'),
+        ], width),
+        ...(entry.summary === '' ? [] : textLines(`  ⎿ ${entry.summary}`, width, entry.state === 'error' ? 'error' : 'dim')),
+      ]
+    }
+    case 'turn-marker':
+      return textLines(`  ⏹ ${entry.text}`, width, 'dim')
+    case 'compaction':
+      return textLines(entry.ok
+        ? `  ⧉ compacted ~${formatTokens(entry.tokens)} tokens`
+        : `  ⧉ compaction failed: ${entry.error}`, width, 'dim')
+    case 'retry':
+      return textLines(
+        `  ↻ retry ${entry.attempt}/${entry.max} · ${entry.code} · ${Math.round(entry.delayMs / 100) / 10}s`,
+        width,
+        entry.state === 'running' ? 'warn' : 'dim',
+      )
+    case 'files':
+      return entry.paths.length === 0
+        ? textLines('  ⎄ no changed files', width, 'dim')
+        : [
+          ...textLines(`  ⎄ ${entry.paths.length} changed file${entry.paths.length === 1 ? '' : 's'}`, width, 'dim'),
+          ...entry.paths.flatMap(path => textLines(`    ${path}`, width, 'dim')),
+        ]
+    case 'error':
+      return textLines(entry.text, width, 'error')
+    default: {
+      const exhaustive: never = entry
+      return exhaustive
+    }
+  }
+}

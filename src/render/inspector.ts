@@ -1,4 +1,4 @@
-/** Pure viewport and cursor rules for the exclusive Ctrl+O history inspector. */
+/** Pure viewport, selection, and scrolling rules for exclusive TUI panels. */
 
 /** Terminal-space allocation for the inspector's one dynamic screen. */
 export interface InspectorViewport {
@@ -12,7 +12,7 @@ export interface InspectorViewport {
   compact: boolean
 }
 
-/** One compact status row plus the three-row read-only composer frame. */
+/** The three-row read-only composer frame plus its one-row status footer. */
 const INSPECTOR_CHROME_ROWS = 4
 
 /**
@@ -20,10 +20,16 @@ const INSPECTOR_CHROME_ROWS = 4
  * `stdout.rows`: at equality Ink clears the terminal and rewrites all
  * accumulated `<Static>` output on every frame.
  */
-export function inspectorViewport(columns: number, rows: number): InspectorViewport {
+export function panelViewport(columns: number, rows: number): InspectorViewport {
   const safeColumns = Math.max(1, Math.floor(columns))
   const safeRows = Math.max(1, Math.floor(rows))
-  const maxHeight = Math.max(0, safeRows - 1 - INSPECTOR_CHROME_ROWS)
+  // Two spare rows cover Ink's first-frame transition from existing Static
+  // scrollback into a tall dynamic panel. A one-row margin is insufficient:
+  // the transition can still take the full-terminal rewrite path at rows - 1.
+  const maxHeight = Math.max(0, Math.min(
+    safeRows - 2 - INSPECTOR_CHROME_ROWS,
+    Math.floor(safeRows / 2),
+  ))
   const compact = maxHeight < 5 || safeColumns < 8
   return {
     maxHeight,
@@ -31,6 +37,38 @@ export function inspectorViewport(columns: number, rows: number): InspectorViewp
     contentColumns: compact ? Math.max(1, safeColumns - 1) : Math.max(1, safeColumns - 4),
     compact,
   }
+}
+
+/** Backward-compatible name for the Ctrl+O-specific caller and tests. */
+export function inspectorViewport(columns: number, rows: number): InspectorViewport {
+  return panelViewport(columns, rows)
+}
+
+/** Clamp a first-visible row to the range representable by one viewport. */
+export function clampScroll(offset: number, totalRows: number, visibleRows: number): number {
+  const total = Math.max(0, Math.floor(totalRows))
+  const size = Math.max(0, Math.floor(visibleRows))
+  const last = Math.max(0, total - size)
+  return Math.max(0, Math.min(Math.floor(offset), last))
+}
+
+/** Move a viewport by a signed row delta without escaping its content. */
+export function moveScroll(offset: number, delta: number, totalRows: number, visibleRows: number): number {
+  return clampScroll(offset + delta, totalRows, visibleRows)
+}
+
+/** Keep one focused row visible while preserving the current window when possible. */
+export function revealRow(offset: number, row: number, totalRows: number, visibleRows: number): number {
+  const size = Math.max(1, Math.floor(visibleRows))
+  const target = Math.max(0, Math.min(Math.floor(row), Math.max(0, totalRows - 1)))
+  if (target < offset) return clampScroll(target, totalRows, size)
+  if (target >= offset + size) return clampScroll(target - size + 1, totalRows, size)
+  return clampScroll(offset, totalRows, size)
+}
+
+/** Center a selected list row where possible, clamped at both ends. */
+export function selectionWindow(cursor: number, totalRows: number, visibleRows: number): number {
+  return clampScroll(cursor - Math.floor(Math.max(1, visibleRows) / 2), totalRows, visibleRows)
 }
 
 /** Follow appended history only while the inspector cursor was at the tail. */
