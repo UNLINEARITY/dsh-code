@@ -27,6 +27,12 @@
     - id: code-runtime
       name: '@deepseek-ai/dsh-code-runtime-worker-thread'
 
+    # Cross-session @mentions: bounded read-only snapshots of other sessions
+    # as sourced model context. Opt-in upstream; the TUI's completion menu
+    # lists candidates and submission expands them through prepare().
+    - id: session-reference
+      name: '@deepseek-ai/dsh-session-reference'
+
     - id: tui-startup
       name: 'dsh-code/startup'
 

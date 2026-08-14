@@ -32,6 +32,7 @@ import type { CommandsView } from './commands.ts'
 import type { ModelDirectory, ModelRow } from './models.ts'
 import type { QuestionStore } from './questions.ts'
 import type { SkillsView, SkillRow } from './skills.ts'
+import type { MentionCandidate } from './mentions.ts'
 import { buildStatusGroups, type StatusFacts } from './render/status.ts'
 import { displayText } from './render/text.ts'
 
@@ -67,6 +68,8 @@ export interface AppProps {
   quit(): void
   /** Load the selectable model directory (called when /model opens). */
   loadModels(): Promise<ModelDirectory>
+  /** Load @mention candidates for the typed query (files + sessions). */
+  loadMentions(query: string, signal?: AbortSignal): Promise<readonly MentionCandidate[]>
   /** Apply one /model selection; returns the display label. */
   selectModel(row: ModelRow): string
   /** Registers the app's notice channel with the runner (called once on mount). */
@@ -517,7 +520,7 @@ interface CompletionCandidate {
   /** Human-readable description shown beside the label. */
   description: string
   /** Candidate origin; skills land the same literal text but route through the prompt. */
-  origin: 'command' | 'skill'
+  origin: 'command' | 'skill' | 'mention'
 }
 
 /**
@@ -563,7 +566,7 @@ function completionCandidates(
  * While a modal (approval / question / model panel) owns the keys, the
  * box passes every key through untouched.
  */
-function Input({ active, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, notify, toggleReasoning }: {
+function Input({ active, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, notify, toggleReasoning, loadMentions }: {
   active: boolean
   busy: boolean
   descriptors: readonly CommandDescriptor[]
@@ -575,6 +578,7 @@ function Input({ active, busy, descriptors, skills, dispatch, steer, interrupt, 
   openModel(): void
   notify(text: string): void
   toggleReasoning(): void
+  loadMentions(query: string, signal?: AbortSignal): Promise<readonly MentionCandidate[]>
 }): ReactElement {
   const [value, setValue] = useState('')
   const [cursor, setCursor] = useState(0)
@@ -583,7 +587,44 @@ function Input({ active, busy, descriptors, skills, dispatch, steer, interrupt, 
   const draft = useRef('')
   const [completionIndex, setCompletionIndex] = useState(0)
   const candidates = completionCandidates(value, descriptors, skills)
-  const completionActive = candidates.length > 0 && value.startsWith('/') && !value.includes(' ') && !value.includes('\n')
+  const slashActive = candidates.length > 0 && value.startsWith('/') && !value.includes(' ') && !value.includes('\n')
+
+  // @mention token: the last `@word` on the cursor's line before the cursor.
+  const beforeCursor = value.slice(0, cursor)
+  const lastLine = beforeCursor.split('\n').at(-1) ?? ''
+  const tokenMatch = /(^|\s)@([^\s]*)$/u.exec(lastLine)
+  const mentionToken = tokenMatch === null
+    ? undefined
+    : { start: beforeCursor.length - lastLine.length + (tokenMatch.index ?? 0) + (tokenMatch[1]?.length ?? 0), query: tokenMatch[2] ?? '' }
+  const mentionActive = mentionToken !== undefined
+  const [mentionRows, setMentionRows] = useState<readonly MentionCandidate[]>([])
+
+  useEffect(() => {
+    if (!mentionActive) {
+      setMentionRows([])
+      return
+    }
+    const controller = new AbortController()
+    setMentionRows([])
+    loadMentions(mentionToken.query, controller.signal).then(
+      rows => setMentionRows(rows),
+      () => {},
+    )
+    return () => {
+      controller.abort()
+    }
+  }, [mentionActive, mentionToken?.query])
+
+  const menuActive = (slashActive || mentionActive) && !busy
+  const menuRows: readonly CompletionCandidate[] = mentionActive
+    ? mentionRows.map(row => ({
+      label: row.label.startsWith('@')
+        ? row.label
+        : `@${row.label}${row.kind === 'directory' ? '/' : ''}`,
+      description: row.description,
+      origin: 'mention',
+    }))
+    : candidates
 
   useInput((input, key) => {
     // Modal ownership: approval/question/model dialogs consume all keys.
@@ -659,12 +700,12 @@ function Input({ active, busy, descriptors, skills, dispatch, steer, interrupt, 
       dispatch(text)
       return
     }
-    if (completionActive && key.upArrow) {
-      setCompletionIndex(index => (index + candidates.length - 1) % candidates.length)
+    if (menuActive && key.upArrow) {
+      setCompletionIndex(index => (index + menuRows.length - 1) % menuRows.length)
       return
     }
-    if (completionActive && key.downArrow) {
-      setCompletionIndex(index => (index + 1) % candidates.length)
+    if (menuActive && key.downArrow) {
+      setCompletionIndex(index => (index + 1) % menuRows.length)
       return
     }
     if (key.upArrow) {
@@ -692,13 +733,26 @@ function Input({ active, busy, descriptors, skills, dispatch, steer, interrupt, 
       setCursor((entries[next] ?? '').length)
       return
     }
-    if (key.tab && completionActive) {
-      const candidate = candidates[completionIndex % candidates.length]
-      if (candidate !== undefined) {
-        setValue(`${candidate.label} `)
-        setCursor(candidate.label.length + 1)
-        setCompletionIndex(0)
+    if (key.tab && menuActive) {
+      if (mentionActive && mentionToken !== undefined) {
+        const row = mentionRows[completionIndex % mentionRows.length]
+        if (row !== undefined) {
+          // Session rows carry the canonical @[label](dsh-session:…) token;
+          // file rows insert `@path` (directories keep their trailing slash).
+          const insertion = row.label.startsWith('@')
+            ? row.label
+            : `@${row.label}${row.kind === 'directory' ? '/' : ''}`
+          setValue(value.slice(0, mentionToken.start) + insertion + value.slice(cursor))
+          setCursor(mentionToken.start + insertion.length)
+        }
+      } else {
+        const candidate = candidates[completionIndex % candidates.length]
+        if (candidate !== undefined) {
+          setValue(`${candidate.label} `)
+          setCursor(candidate.label.length + 1)
+        }
       }
+      setCompletionIndex(0)
       return
     }
     if (key.backspace || key.delete) {
@@ -737,7 +791,7 @@ function Input({ active, busy, descriptors, skills, dispatch, steer, interrupt, 
     }
   })
 
-  const shown = completionActive && !busy
+  const shown = menuActive
   return createElement(
     Box,
     { flexDirection: 'column' },
@@ -745,15 +799,17 @@ function Input({ active, busy, descriptors, skills, dispatch, steer, interrupt, 
       ? createElement(
         Box,
         { flexDirection: 'column', marginLeft: 1 },
-        ...candidates.map((candidate, index) => createElement(
-          Text,
-          {
-            key: candidate.label,
-            color: index === completionIndex % candidates.length ? inkColor(TUI_RGB.brandBright) : inkColor(TUI_RGB.dim),
-          },
-          `${index === completionIndex % candidates.length ? '❯ ' : '  '}${candidate.label} ${dim(displayText(candidate.description))}`,
-        )),
-        createElement(Text, { dimColor: true }, dim('  ↑↓ choose · tab complete')),
+        ...(menuRows.length === 0
+          ? [createElement(Text, { key: 'loading', dimColor: true }, '  searching…')]
+          : menuRows.map((candidate, index) => createElement(
+            Text,
+            {
+              key: candidate.label,
+              color: index === completionIndex % menuRows.length ? inkColor(TUI_RGB.brandBright) : inkColor(TUI_RGB.dim),
+            },
+            `${index === completionIndex % menuRows.length ? '❯ ' : '  '}${candidate.label} ${dim(displayText(candidate.description))}`,
+          ))),
+        createElement(Text, { dimColor: true }, dim(mentionActive ? '  ↑↓ choose · tab insert' : '  ↑↓ choose · tab complete')),
       )
       : undefined,
     busy && value === ''
@@ -866,6 +922,7 @@ export function App(props: AppProps): ReactElement {
       toggleReasoning: () => {
         setShowReasoning(current => !current)
       },
+      loadMentions: props.loadMentions,
     }),
     createElement(StatusLine, {
       facts: { model: modelLabel, cwd: props.cwd, branch: props.branch, sessionId: props.sessionId },

@@ -20,7 +20,7 @@ import { installModelSelection } from '@deepseek-ai/dsh-agent'
 import type { Agent, ModelSelection, ModelSelectionRef } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
-import { SessionId, type Session, type SessionEvent, type SessionHeader } from '@deepseek-ai/dsh-session'
+import { SessionId, type Session, type SessionEvent, type SessionHeader, type UserMessage } from '@deepseek-ai/dsh-session'
 import type { SessionPersistence } from '@deepseek-ai/dsh-session-persistence'
 // Empty type imports carry the loader Context merge for the settlement await
 // and the cmdline Context merge for the appExit host value.
@@ -31,6 +31,7 @@ import { mountApprovalAnswerer, type ApprovalStore } from './approval.ts'
 import { isSlashLine, watchCommands, type CommandsView } from './commands.ts'
 import { internals, type TuiMount } from './internals.ts'
 import { loadModelDirectory, type ModelRow } from './models.ts'
+import { createMentions, type MentionsApi } from './mentions.ts'
 import { mountQuestionProvider, type QuestionStore } from './questions.ts'
 import { createTranscriptStore } from './store.ts'
 import { watchSkills, type SkillsView } from './skills.ts'
@@ -267,6 +268,10 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   // through this same pipe.
   const questions: QuestionStore = mountQuestionProvider(ctx)
 
+  // @mention support: workspace file scan plus the opt-in session-reference
+  // service (the patch mounts it); submission expands session mentions.
+  const mentions: MentionsApi = createMentions(ctx, agent, session.header.cwd ?? cwd)
+
   // The bridge the React app registers on mount: local notices from the
   // process side (unknown commands, switch confirmations, cancels).
   const bridge: AppBridge = { notify: () => {} }
@@ -289,36 +294,55 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       .then(() => { io.exit(0) })
   }
 
-  /** Dispatch one submitted line: slash commands to the registry, other text to the agent. */
-  const dispatch = (text: string): void => {
+  /** Deliver one readable line to the agent, expanding session mentions first. */
+  const send = (text: string, mode: 'followup' | 'steer'): void => {
     const line = text.trim()
     if (line === '') return
-    if (isSlashLine(line)) {
-      const registry = ctx.get('commands')
-      if (registry === undefined) {
-        bridge.notify('no command registry is mounted in this composition')
-        return
-      }
-      const controller = new AbortController()
-      void registry.execute(agent, line, controller.signal).then((execution) => {
-        if (execution === undefined) {
-          // No command owns this line: send it verbatim so a user-invocable
-          // skill gesture (`/skill-name`) reaches the host's tool-skill
-          // pre-step injection — the web composer's same fall-through.
-          agent.followup(createUserMessage({
-            content: [{ type: 'text', text: line }],
-            source: { kind: 'user' },
-          }))
-        }
-      }, (error: unknown) => {
-        bridge.notify(`command failed: ${error instanceof Error ? error.message : String(error)}`)
-      })
+    // The command registry is a closed namespace: slash lines run out of
+    // band and never reach the model through this path.
+    if (isSlashLine(line) && mode === 'followup') {
+      dispatch(line)
       return
     }
-    agent.followup(createUserMessage({
-      content: [{ type: 'text', text: line }],
-      source: { kind: 'user' },
-    }))
+    let parsed: ReturnType<typeof mentions.parse>
+    try {
+      parsed = mentions.parse(line)
+    } catch (error: unknown) {
+      bridge.notify(`invalid session reference: ${error instanceof Error ? error.message : String(error)}`)
+      return
+    }
+    const deliver = (readable: string, context?: UserMessage): void => {
+      // Session snapshots ride the inbox as model-facing context ahead of
+      // the readable message (upstream README wiring: inject before the
+      // followup/steer that wakes the driver).
+      if (context !== undefined) agent.inject(context)
+      const message = createUserMessage({
+        content: [{ type: 'text', text: readable }],
+        source: { kind: 'user' },
+      })
+      if (mode === 'steer') {
+        agent.steer(message)
+        bridge.notify('steering queued — the next step sees it')
+      } else {
+        agent.followup(message)
+      }
+    }
+    if (parsed.references.length === 0) {
+      deliver(parsed.text)
+      return
+    }
+    const controller = new AbortController()
+    void mentions.prepare(parsed, controller.signal).then((prepared) => {
+      deliver(prepared.text, prepared.additionalContext)
+    }, (error: unknown) => {
+      if (controller.signal.aborted) return
+      bridge.notify(`session reference failed: ${error instanceof Error ? error.message : String(error)}`)
+    })
+  }
+
+  /** Dispatch one submitted line: slash commands to the registry, other text to the agent. */
+  const dispatch = (text: string): void => {
+    send(text, 'followup')
   }
 
   /**
@@ -327,13 +351,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
    * a turn, so this doubles as the busy-state submit path.
    */
   const steer = (text: string): void => {
-    const line = text.trim()
-    if (line === '') return
-    agent.steer(createUserMessage({
-      content: [{ type: 'text', text: line }],
-      source: { kind: 'user' },
-    }))
-    bridge.notify('steering queued — the next step sees it')
+    send(text, 'steer')
   }
 
   /** Interrupt the running turn (Esc); true when a turn was actually cancelled. */
@@ -370,6 +388,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     interrupt,
     quit,
     loadModels: () => loadModelDirectory(ctx),
+    loadMentions: mentions.candidates,
     selectModel,
     onBridgeReady: (instance: AppBridge) => {
       bridge.notify = instance.notify
