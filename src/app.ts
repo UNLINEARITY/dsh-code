@@ -344,8 +344,24 @@ function Input({ busy, descriptors, skills, dispatch, interrupt, quit, openModel
   const completionActive = candidates.length > 0 && value.startsWith('/') && !value.includes(' ') && !value.includes('\n')
 
   useInput((input, key) => {
-    if (key.ctrl && (input === 'c' || input === 'd')) {
-      quit()
+    // Ctrl+C is three-state (community-TUI convention): a running turn is
+    // cancelled, a non-empty draft is cleared, and only an idle empty input
+    // exits. Ctrl+D always means exit but refuses mid-turn.
+    if (key.ctrl && input === 'c') {
+      if (busy) {
+        interrupt()
+      } else if (value !== '') {
+        setValue('')
+        setCursor(0)
+        setCompletionIndex(0)
+      } else {
+        quit()
+      }
+      return
+    }
+    if (key.ctrl && input === 'd') {
+      if (busy) notify('cancel the running turn before exiting (Esc or Ctrl+C)')
+      else quit()
       return
     }
     if (key.escape) {
@@ -373,7 +389,7 @@ function Input({ busy, descriptors, skills, dispatch, interrupt, quit, openModel
         return
       }
       if (text === '/help') {
-        notify('/model switch · /clear clear the screen · /quit exit · other /commands reach the registry · Esc interrupts the turn')
+        notify('/model switch · /clear clear the screen · /quit exit · other /commands reach the registry · Esc or Ctrl+C interrupts the running turn')
         return
       }
       if (text === '/clear') {
@@ -385,7 +401,7 @@ function Input({ busy, descriptors, skills, dispatch, interrupt, quit, openModel
         return
       }
       if (busy) {
-        notify('the agent is working — Esc interrupts the turn')
+        notify('the agent is working — Esc or Ctrl+C interrupts the turn')
         return
       }
       dispatch(text)

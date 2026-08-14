@@ -13,7 +13,7 @@
 - **会话恢复**:`--resume <id|前缀>` 续接持久会话,`--continue` 取当前目录最新一个;完整转录从日志重放,续写同一持久会话
 - **斜杠命令透传**:共享 `ctx.commands` 注册表(Web 作曲栏同一分发面)里的命令都可在终端执行,`/` 弹出补全菜单;用户可调用技能也进同一菜单(标注 `skill`),未知 `/name` 回退为普通提示词、由 host 的技能注入接管
 - **todo 面板**:实时 todo 列表内联渲染,含 done/active/pending 计数与三态标记,每个新 turn 清空(对齐 Web TodoPanel)
-- 输入组件:历史(↑/↓)、光标编辑(←/→、Ctrl+A/E/U)、斜杠命令 Tab 补全;`Esc` 中断运行中的 turn,Ctrl+C/Ctrl+D 退出前先 flush 会话
+- 输入组件:历史(↑/↓)、光标编辑(←/→、Ctrl+A/E/U)、斜杠命令与技能 Tab 补全;`Esc` 或 Ctrl+C 中断运行中的 turn,Ctrl+C 在空闲空输入时退出,Ctrl+D 运行中拒绝退出
 - 融合型状态栏:Claude Code 式身份信息(模型、工作目录、git 分支、会话)+ Web 作曲栏指标(轮数/步数、llm 与 tool 累计时长、缓存命中、token 总量)
 
 ## 安装
