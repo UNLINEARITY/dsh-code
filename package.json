@@ -1,5 +1,5 @@
 {
-  "name": "dsh-cli",
+  "name": "dsh-code",
   "description": "Claude-Code-style interactive TUI bundle for DeepSeek Harness (dsh): DeepSeek-blue whale banner, live session transcript, and a blended status line",
   "version": "0.1.0",
   "type": "module",
@@ -26,7 +26,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/unlinearity/dsh-cli.git"
+    "url": "git+https://github.com/unlinearity/dsh-code.git"
   },
   "dsh": {
     "bundle": {

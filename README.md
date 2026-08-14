@@ -1,4 +1,4 @@
-# dsh-cli
+# dsh-code
 
 English | [中文](README.zh.md)
 
@@ -16,9 +16,9 @@ A Claude-Code-style interactive terminal (TUI) bundle for [DeepSeek Harness](htt
 Requires Node `^22.19 || >=24` and the `dsh` CLI (`npm i -g @deepseek-ai/dsh@next`).
 
 ```sh
-dsh plugin --profile cli add dsh-cli        # from npm, once published
-dsh plugin --profile cli add github:unlinearity/dsh-cli   # track this repo
-dsh plugin --profile cli add file:C:/path/to/dsh-cli      # local checkout
+dsh plugin --profile cli add dsh-code       # from npm, once published
+dsh plugin --profile cli add github:unlinearity/dsh-code  # track this repo
+dsh plugin --profile cli add file:C:/path/to/dsh-code     # local checkout
 ```
 
 Then:

@@ -1,4 +1,4 @@
-# dsh-cli
+# dsh-code
 
 [English](README.md) | 中文
 
@@ -16,9 +16,9 @@
 需要 Node `^22.19 || >=24` 与 `dsh` CLI(`npm i -g @deepseek-ai/dsh@next`)。
 
 ```sh
-dsh plugin --profile cli add dsh-cli        # npm 发布后
-dsh plugin --profile cli add github:unlinearity/dsh-cli   # 跟踪本仓库
-dsh plugin --profile cli add file:C:/path/to/dsh-cli      # 本地目录
+dsh plugin --profile cli add dsh-code       # npm 发布后
+dsh plugin --profile cli add github:unlinearity/dsh-code  # 跟踪本仓库
+dsh plugin --profile cli add file:C:/path/to/dsh-code     # 本地目录
 ```
 
 然后:

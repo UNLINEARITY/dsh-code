@@ -25,4 +25,4 @@
       name: '@deepseek-ai/dsh-code-runtime-worker-thread'
 
     - id: tui-runner
-      name: 'dsh-cli'
+      name: 'dsh-code'
