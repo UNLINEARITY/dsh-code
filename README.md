@@ -4,6 +4,8 @@ English | [中文](README.zh.md)
 
 A Claude-Code-style interactive terminal (TUI) bundle for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`), installed as an out-of-tree plugin bundle over the official `@deepseek-ai/dsh-base` — the same plugin ecosystem the official web surface composes, nothing forked.
 
+<p align='center'><img src='src\pictures\1.png' width=95%></p> 
+
 ## What you get
 
 - DeepSeek-blue banner: the whale wordmark rasterized half-block from the exact FishLogo path, in a compact content-hugging header
