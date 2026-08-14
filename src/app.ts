@@ -30,6 +30,7 @@ import type { CommandsView } from './commands.ts'
 import type { ModelDirectory, ModelRow } from './models.ts'
 import type { SkillsView, SkillRow } from './skills.ts'
 import { buildStatusGroups, type StatusFacts } from './render/status.ts'
+import { displayText } from './render/text.ts'
 
 /** Props the runner hands the app; callbacks stay owned by the runner. */
 export interface AppProps {
@@ -76,9 +77,9 @@ function inkColor(triple: readonly [number, number, number]): string {
 function EntryLine({ entry }: { entry: TranscriptEntry }): ReactElement {
   switch (entry.kind) {
     case 'user':
-      return createElement(Text, null, brand('❯ '), entry.text)
+      return createElement(Text, null, brand('❯ '), displayText(entry.text))
     case 'assistant':
-      return createElement(Text, null, entry.text)
+      return createElement(Text, null, displayText(entry.text))
     case 'tool': {
       const mark = entry.state === 'running'
         ? createElement(Text, { color: inkColor(TUI_RGB.brandBright) }, '◐')
@@ -91,7 +92,7 @@ function EntryLine({ entry }: { entry: TranscriptEntry }): ReactElement {
         mark,
         ' ',
         brand(entry.name),
-        entry.summary === '' ? '' : ` ${dim(entry.summary)}`,
+        entry.summary === '' ? '' : ` ${dim(displayText(entry.summary))}`,
       )
     }
     case 'command': {
@@ -106,12 +107,12 @@ function EntryLine({ entry }: { entry: TranscriptEntry }): ReactElement {
         mark,
         ' ',
         brand(`/${entry.name}`),
-        entry.args === '' ? '' : ` ${dim(entry.args)}`,
-        entry.summary === '' ? '' : ` ${dim(entry.summary)}`,
+        entry.args === '' ? '' : ` ${dim(displayText(entry.args))}`,
+        entry.summary === '' ? '' : ` ${dim(displayText(entry.summary))}`,
       )
     }
     case 'error':
-      return createElement(Text, null, paintError(entry.text))
+      return createElement(Text, null, paintError(displayText(entry.text)))
     default:
       return assertNever(entry, 'transcript entry kind')
   }
@@ -173,7 +174,7 @@ function TodoPanel({ todos }: { todos: readonly TodoItem[] }): ReactElement | un
             ? inkColor(TUI_RGB.brandBright)
             : inkColor(TUI_RGB.dim),
       },
-      `${todoMark(todo.status)} ${todo.content}`,
+      `${todoMark(todo.status)} ${displayText(todo.content)}`,
     )),
   )
 }
@@ -211,8 +212,8 @@ function ApprovalBar({ approval }: { approval: ApprovalStore }): ReactElement | 
     Box,
     { flexDirection: 'column', paddingX: 1, borderStyle: 'round', borderColor: inkColor(TUI_RGB.warn), alignSelf: 'flex-start', marginLeft: 1 },
     createElement(Text, { color: inkColor(TUI_RGB.warn), bold: true }, '⏸ waiting for approval'),
-    createElement(Text, null, warn(pending.headline)),
-    pending.command === '' ? undefined : createElement(Text, { dimColor: true }, dim(`  ${pending.command}`)),
+    createElement(Text, null, warn(displayText(pending.headline))),
+    pending.command === '' ? undefined : createElement(Text, { dimColor: true }, dim(`  ${displayText(pending.command)}`)),
     answered
       ? createElement(Text, { dimColor: true }, '  submitted…')
       : createElement(Text, { dimColor: true }, dim('  y allow once · n reject')),
@@ -261,7 +262,7 @@ function ModelPanel({ directory, error, onSelect, onClose }: {
       : undefined,
     ...visible.map((row) => {
       const index = rows.indexOf(row)
-      const label = `${row.providerName} · ${row.modelName}`
+      const label = displayText(`${row.providerName} · ${row.modelName}`)
       return createElement(
         Text,
         {
@@ -505,7 +506,7 @@ function Input({ busy, descriptors, skills, dispatch, steer, interrupt, quit, op
             key: candidate.label,
             color: index === completionIndex % candidates.length ? inkColor(TUI_RGB.brandBright) : inkColor(TUI_RGB.dim),
           },
-          `${index === completionIndex % candidates.length ? '❯ ' : '  '}${candidate.label} ${dim(candidate.description)}`,
+          `${index === completionIndex % candidates.length ? '❯ ' : '  '}${candidate.label} ${dim(displayText(candidate.description))}`,
         )),
         createElement(Text, { dimColor: true }, dim('  ↑↓ choose · tab complete')),
       )
@@ -564,7 +565,7 @@ export function App(props: AppProps): ReactElement {
       Box,
       { flexDirection: 'column', paddingX: 1 },
       ...view.entries.map((entry, index) => createElement(EntryLine, { key: index, entry })),
-      view.streaming !== '' ? createElement(Text, null, view.streaming) : undefined,
+      view.streaming !== '' ? createElement(Text, null, displayText(view.streaming)) : undefined,
       busy && view.streaming === '' ? createElement(Text, { dimColor: true }, 'thinking…') : undefined,
     ),
     createElement(TodoPanel, { todos: view.todos }),
