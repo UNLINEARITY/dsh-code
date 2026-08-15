@@ -1,9 +1,8 @@
 # DSH-Code
 
-English | [中文](README.zh.md)
+[English](README.en.md) | 中文
 
 <p align="center"><img alt="Typing SVG" src="https://readme-typing-svg.herokuapp.com?font=JetBrains+Mono&amp;weight=500&amp;size=22&amp;duration=4000&amp;pause=700&amp;color=4176E6&amp;center=true&amp;vCenter=true&amp;width=680&amp;lines=DeepSeek+Harness+Code;DSH+%E5%86%85%E6%A0%B8%E7%9A%84%E7%BB%88%E7%AB%AF%E7%BC%96%E7%A0%81%E7%95%8C%E9%9D%A2"></p>
-
 <p align="center">
   <a href="https://github.com/deepseek-ai/deepseek-harness"><img alt="DeepSeek Harness" src="https://img.shields.io/badge/DeepSeek-Harness-4176E6?style=for-the-badge&amp;logo=deepseek&amp;logoColor=white&amp;labelColor=1c1917"></a>
   <a href="https://github.com/UNLINEARITY/dsh-code/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/UNLINEARITY/dsh-code?label=Stars&amp;style=for-the-badge&amp;logo=github&amp;logoColor=white&amp;color=4176E6&amp;labelColor=1c1917"></a>
@@ -11,31 +10,31 @@ English | [中文](README.zh.md)
   <a href="https://github.com/UNLINEARITY/dsh-code/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/github/license/UNLINEARITY/dsh-code?label=License&amp;style=for-the-badge&amp;logo=opensourceinitiative&amp;color=4176E6&amp;labelColor=1c1917"></a>
 </p>
 
-<p align="center"><img src="docs/pictures/1.png" width="95%" alt="DSH-Code terminal with slash-command completion"></p>
+<p align="center"><img src="docs/pictures/1.png" width="80%" alt="带斜杠命令补全的 DSH-Code 终端"></p>
 
-**DSH-Code is a terminal coding interface for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`).** It runs as an out-of-tree bundle over the official `@deepseek-ai/dsh-base` and uses the same Agent, Session, tool, command, skill, permission, sandbox, compaction, and plugin services as the Harness Web UI.
+**DSH-Code 是 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）的终端编码界面。** 它以树外 bundle 的形式组合在官方 `@deepseek-ai/dsh-base` 之上，与 Harness Web UI 使用同一套 Agent、Session、工具、命令、技能、权限、sandbox、上下文压缩与插件服务。
 
-DSH-Code does not implement a separate agent loop. It adds a coding-focused TUI to the DSH runtime, drawing on the session handling of [Codex CLI](https://github.com/openai/codex) and the terminal interaction patterns of [Claude Code](https://code.claude.com/docs/en/overview).
+DSH-Code 没有另外实现一套 Agent loop，而是在 DSH 运行时上增加面向编码工作的 TUI。会话处理参考 [Codex CLI](https://github.com/openai/codex)，终端交互参考 [Claude Code](https://code.claude.com/docs/en/overview)。
 
 ---
 
-## Overview
+## 一、项目概览
 
-DeepSeek Harness treats models, tools, storage, policies, and interfaces as plugins registered through Cordis. Durable session events record the conversation and runtime state needed for replay.
+DeepSeek Harness 将模型、工具、存储、策略和界面作为插件，通过 Cordis 注册。持久化会话事件记录恢复对话与运行状态所需的信息。
 
-DSH-Code keeps that structure and adds a terminal workflow for coding tasks.
+DSH-Code 保留这套结构，并补充适合编码任务的终端工作流。
 
-| Reference | Used in DSH-Code |
+| 参考项目 | DSH-Code 使用的机制 |
 | --- | --- |
-| **DeepSeek Harness** | Plugin composition, scoped services, Agent Presets, durable sessions, tools, skills, policies, sandboxing, and delegation |
-| **Codex CLI** | Session navigation, bounded overlays, history inspection, stable bottom layout, and resize handling |
-| **Claude Code** | Slash-command discovery, thinking folds, approvals, questions, and turn steering |
+| **DeepSeek Harness** | 插件组合、作用域服务、Agent Preset、持久会话、工具、技能、策略、sandbox 与委派 |
+| **Codex CLI** | 会话导航、有界浮层、历史检查、稳定底部布局与缩放处理 |
+| **Claude Code** | 斜杠命令发现、思考折叠、审批、提问与 turn steering |
 
-The interface borrows familiar terminal conventions, while runtime behavior continues to come from DSH services and configuration.
+界面采用开发者熟悉的终端操作方式，运行行为仍由 DSH 服务和配置决定。
 
-## Quick start
+## 二、快速开始
 
-Requires Node `^22.19 || >=24`, the preview `dsh` CLI, and `DEEPSEEK_API_KEY`.
+需要 Node `^22.19 || >=24`、预览版 `dsh` CLI，以及 `DEEPSEEK_API_KEY`。
 
 ```sh
 npm install -g @deepseek-ai/dsh@next dsh-code
@@ -43,165 +42,166 @@ npm install -g pnpm
 dsh plugin --profile cli add dsh-code
 ```
 
-Available launch commands:
-
+可用的启动指令：
 ```sh
 deepseek
 dsh --profile cli
 dsh-code
 ```
 
-`dsh --profile cli`, `deepseek`, and `dsh-code` are parallel launch commands. `deepseek` and `dsh-code` are global aliases for `dsh --profile cli`; all following arguments are forwarded, for example `deepseek --resume abc123`.
+`dsh --profile cli`、`deepseek` 与 `dsh-code` 是并列的启动命令。`deepseek` 与 `dsh-code` 都是 `dsh --profile cli` 的全局别名，后续参数会原样转发，例如 `deepseek --resume abc123`。
 
-### Source development
+> DeepSeek Harness 目前仍处于 developer preview，可能出现破坏兼容性的变化；DSH-Code 会持续跟随其插件接口演进。
 
-For a local checkout:
+安装、原生模块和插件加载问题，请查看[常见问题与排障](docs/problems.md)。
+
+## 三、终端交互
+
+### 基础
+
+DSH-Code 在整个进程中只保留一个 Ink owner。`/new` 和 `/resume` 替换的是活动 Agent，而不是终端本身。若 Agent 忙碌，切换会等待当前 turn 自然结束；最新请求优先，目标加载失败也不会破坏当前会话。
+
+所有动态内容都受到明确的视口约束。流式输出、思考过程、审批、问题、`/help`、`/model`、`/mode`、`/resume`、`/plugin` 与 Ctrl+O 使用统一的终端预算。输入框始终紧贴状态栏上方；终端宽度稳定后，界面会根据保存的会话记录重新绘制一次。
+
+在第一次 turn 之前使用 `/mode`，查看或选择当前会话的 Agent Preset。
+
+<p align="center"><img src="docs/pictures/2.png" width="95%" alt="每会话 Agent Preset 选择器"></p>
+
+使用 `/resume` 搜索持久会话，无需重新启动 TUI。
+
+<p align="center"><img src="docs/pictures/3.png" width="95%" alt="可搜索的会话恢复选择器"></p>
+
+### 常用命令
 
 ```sh
-dsh plugin --profile cli add file:C:/path/to/dsh-code
+dsh --profile cli                    # 新建 standard 会话
+dsh --profile cli --mode code        # 使用 Agent Preset 启动
+dsh --profile cli --continue         # 恢复当前目录最新会话
+dsh --profile cli --resume abc123    # 按 id 或唯一前缀恢复持久会话
+dsh --profile cli --session my-id    # 使用指定 id 新建会话
 ```
 
-GitHub installation is available for source development:
+进入 TUI 后：
 
-```sh
-dsh plugin --profile cli add github:unlinearity/dsh-code
-```
+| 操作 | 用途 |
+| --- | --- |
+| `/new [preset]` | 不重启终端，创建并进入另一个会话 |
+| `/resume [id\|前缀]` | 搜索根会话或全部对话，并按 cwd、排序和密度筛选 |
+| `/mode [preset]` | 检查或选择空会话的 Agent 组合 |
+| `/model` | 在实时 LLM 注册表提供的模型间切换 |
+| `/plugin [query]` | 检查 loader 条目、启用状态、模块身份和 fiber 阶段 |
+| `/permission <name>` | 切换权限预设；Shift+Tab 可循环切换 |
+| `/help` | 浏览本地命令、Harness 命令、技能和快捷键 |
+| `Ctrl+O` | 打开独占历史详情视图，切换条目并滚动完整内容 |
+| `Ctrl+R` | 折叠或展开模型思考过程 |
+| `@` | 引用工作区文件或持久会话的有界快照 |
+| `Esc` / `Ctrl+C` | 关闭最上层界面或中断当前 turn |
 
-The Git package builds during installation. If pnpm asks for an `allowBuilds` entry, copy the complete entry it prints into `~/.dsh/profiles/cli/pnpm-workspace.yaml`, then run the command again. The key includes the Git URL and commit, so do not replace it with only `dsh-code`.
+## 四、功能
 
-> DeepSeek Harness is currently a developer preview and may introduce compatibility-breaking changes. DSH-Code tracks that evolving plugin surface.
+### 1. Agent 与扩展
 
-For installation, native-module, and plugin-loading issues, see the [troubleshooting guide](docs/problems.md).
+- 每会话 Agent Preset：组合工具、提示词、技能、上下文压缩、plan mode 与委派能力
+- 从共享 Harness 注册表实时发现斜杠命令和用户技能
+- 通过 `/plugin` 只读诊断 Cordis loader
+- 从实时 LLM 注册表路由模型，并按持久会话恢复选择
+- 支持 plan、goal、todo、权限、sandbox、subagent 与运行中 steering
 
-## How it works with DSH
+### 2. 会话与上下文
 
-## Terminal behavior
+- `/new`、`/resume`、`--continue` 与显式 session id，且无需重新挂载 Ink
+- Codex 风格可搜索恢复面板，支持根/全部对话、cwd、排序和密度筛选
+- 标题快照按需折叠，完整转录仅在显式请求时加载并支持全量滚动
+- subagent 对话只读检查，以及通过 `@` 注入有界会话引用
+- Markdown 导出、持久标题、上下文占用、缓存、token、TTFT 与耗时指标
 
-DSH-Code keeps one Ink owner for the lifetime of the process. `/new` and `/resume` replace the active Agent, not the terminal itself. If a switch is requested while the Agent is busy, it waits for the turn to finish; the newest request wins, and a failed target leaves the current session untouched.
+### 3. 审批与交互
 
-Dynamic content is deliberately bounded. Streaming output, thinking, approvals, questions, `/help`, `/model`, `/mode`, `/resume`, `/plugin`, and Ctrl+O all share terminal-aware viewport rules. The composer remains immediately above the status line. After a resize, the screen is redrawn from the stored transcript once the new width settles.
+- sandbox 升级与 hook `ask` 决策的一次性工具审批条
+- 结构化 `ask_user_question` 与 plan review 菜单，支持多选和自定义答案
+- 在下一个 step 边界进行 turn steering，并提供明确的中断语义
+- Agent mode、plan、权限 preset、goal 与 sandbox 状态相互独立
 
-Use `/mode` before the first turn to inspect or select the session's Agent Preset.
+### 4. 终端渲染
 
-<p align="center"><img src="docs/pictures/2.png" width="95%" alt="Per-session Agent Preset picker"></p>
+- 已落定历史只追加，流式可变区域严格有界
+- 思考折叠、终端 Markdown、紧凑工具摘要与完整结构化详情
+- Ctrl+O 独占历史检查，支持切换条目与完整纵向滚动
+- CJK/控制字符宽度安全、短终端主动降级、缩放防抖重放
+- 固定底部顺序：内容或面板 → notice → 输入框 → 状态栏
 
-Use `/resume` to search persisted sessions without replacing the TUI.
+## 五、DSH-Code 如何接入 DSH
 
-<p align="center"><img src="docs/pictures/3.png" width="95%" alt="Searchable session resume picker"></p>
+### 1. 运行时组合
 
-### Runtime composition
+DSH-Code 读取 Harness 的实时注册表，不在本地维护另一套副本。模型适配器、工具 provider、技能来源、命令、权限策略、持久化后端、sandbox 和 subagent provider 都可以通过 DSH composition 添加或替换。
 
-DSH-Code reads the live Harness registries instead of maintaining separate copies. Model adapters, tool providers, skill sources, commands, permission policies, persistence backends, sandboxes, and subagent providers can be added or replaced through DSH composition.
+`/plugin` 提供当前 Cordis loader 状态的只读视图。
 
-`/plugin` provides a read-only view of the current Cordis loader state.
+### 2. 会话级 Agent Preset
 
-### Session-scoped Agent Presets
+Host 持有共享基础设施——注册表、持久化、会话查询、权限和 sandbox 策略；每个会话则获得一个隔离的 Agent scope，并由 **Agent Preset** 进行组合：
 
-The Host owns shared infrastructure—registries, persistence, session queries, permissions, and sandbox policy—while each session receives an isolated Agent scope composed from an **Agent Preset**:
+- `standard`——功能完整的通用编码 Agent
+- `code`——面向 Code Mode / PTC 的多操作工作流
+- `minimal`——只保留持久 shell 和 `str_replace_editor`
+- `cordis`——完整 Agent，加上运行时检查与 Preset 编写指导
+- 用户预设——自行定义工具、提示词段落、技能、上下文压缩、plan mode 与 subagent 行为
 
-- `standard` — the full general-purpose coding agent
-- `code` — Code Mode / PTC-oriented multi-operation workflows
-- `minimal` — only persistent shell access and `str_replace_editor`
-- `cordis` — the full agent plus runtime inspection and preset-authoring guidance
-- user presets — your own tools, prompt sections, skills, compaction, plan mode, and subagent behavior
+在第一次 turn 之前使用 `/mode`，或通过 `--mode <preset>` 直接启动。选中的 preset 会写入会话，并在恢复时还原。
 
-Use `/mode` before the first turn or start directly with `--mode <preset>`. The selected preset is written to the session and restored on resume.
+### 3. 会话记录与恢复
 
-### Session history and replay
+提示词、流式 chunk、工具调用与结果、模型选择、plan 状态、权限、标题和 preset 选择都由持久 Session 事件投影得到。会话恢复、导出、历史检查、上下文统计和终端重放使用同一份记录。
 
-Prompts, streamed chunks, tool calls, results, model choices, plan state, permissions, titles, and preset selections are projected from durable Session events. Resume, export, history inspection, context accounting, and terminal replay use the same record.
-
-React state is limited to temporary interface details such as the input draft, cursor, open panel, selection, and scroll position.
+React state 只保存输入草稿、光标、当前面板、选中项和滚动位置等临时界面状态。
 
 ```text
 dsh profile
-└─ Host plane: registries · persistence · query · permissions · sandbox
-   ├─ Agent session A + preset code
-   ├─ Agent session B + preset minimal
+└─ Host plane：注册表 · 持久化 · 查询 · 权限 · sandbox
+   ├─ Agent 会话 A + preset code
+   ├─ Agent 会话 B + preset minimal
    └─ DSH-Code TUI
-      durable events → pure projection → append-only transcript
-                                  └→ bounded panels → composer → status
+      持久事件 → 纯投影 → 只追加的历史转录
+                         └→ 有界面板 → 输入框 → 状态栏
 ```
 
-## Common commands
-
-```sh
-dsh --profile cli                    # start a fresh standard session
-dsh --profile cli --mode code        # start with an Agent Preset
-dsh --profile cli --continue         # newest session for this directory
-dsh --profile cli --resume abc123    # persisted session by id or unique prefix
-dsh --profile cli --session my-id    # fresh session with an explicit id
-```
-
-Inside the TUI:
-
-| Action | Purpose |
-| --- | --- |
-| `/new [preset]` | Create and enter another session without restarting the terminal |
-| `/resume [id\|prefix]` | Search roots or all conversations; filter by cwd, order, and density |
-| `/mode [preset]` | Inspect or select the blank session's Agent composition |
-| `/model` | Switch among models advertised by the live LLM registry |
-| `/plugin [query]` | Inspect loader entries, enabled state, module identity, and fiber phase |
-| `/permission <name>` | Change the permission preset; Shift+Tab cycles presets |
-| `/help` | Browse local commands, Harness commands, skills, and key bindings |
-| `Ctrl+O` | Open the exclusive history detail view; switch entries and scroll all content |
-| `Ctrl+R` | Fold or reveal model reasoning |
-| `@` | Mention workspace files or bounded snapshots of persisted sessions |
-| `Esc` / `Ctrl+C` | Close the topmost surface or interrupt the active turn |
-
-## Features
-
-### Agent and extensions
-
-- Per-session Agent Presets for tools, prompt sections, skills, compaction, plan mode, and delegation
-- Live slash-command and skill discovery from shared Harness registries
-- Read-only Cordis loader diagnostics through `/plugin`
-- Model routing through the live LLM registry, restored per persisted session
-- Plans, goals, todos, permissions, sandbox state, subagents, and runtime steering
-
-### Sessions and context
-
-- `/new`, `/resume`, `--continue`, and explicit session identifiers without remounting Ink
-- Codex-style searchable resume picker with root/conversation, cwd, order, and density filters
-- Lazy title snapshots and explicitly loaded, fully scrollable transcripts
-- Read-only subagent conversation inspection and bounded `@` session references
-- Markdown export, persistent titles, context occupancy, cache, token, TTFT, and timing metrics
-
-### Approvals and interaction
-
-- One-shot tool approval bar for sandbox escalation and hook `ask` decisions
-- Structured `ask_user_question` and plan-review menus with multi-select and custom answers
-- Turn steering at the next step boundary plus explicit interruption semantics
-- Independent Agent mode, plan state, permission preset, goal, and sandbox indicators
-
-### Terminal rendering
-
-- Append-only settled transcript with bounded mutable streaming output
-- Folded thinking, terminal Markdown, compact tool summaries, and full structured details
-- Ctrl+O exclusive history inspection with entry navigation and complete vertical scrolling
-- Width-safe CJK/control-character handling, compact-terminal degradation, and debounced resize replay
-- Stable bottom order: content or panel → notice → composer → status
-
-## References
-
-- Runtime services, events, plugin scopes, and persistence follow **DeepSeek Harness**.
-- Session navigation, popup sizing, scrollback, bottom-pane layout, and resize behavior refer to **Codex CLI**.
-- Slash discovery, turn steering, thinking folds, approvals, and question flows refer to **Claude Code**.
-
-DSH-Code remains an independent MIT-licensed community project and is not affiliated with OpenAI or Anthropic.
-
-## Develop
+## 六、开发
 
 ```sh
 pnpm install
 pnpm test
 pnpm typecheck
 pnpm build
-pnpm run gen:whale   # regenerate src/whale-glyph.ts from the vendored logo path
+pnpm run gen:whale   # 从 vendored Logo 路径重新生成 src/whale-glyph.ts
 ```
 
-The whale glyph is generated from the DeepSeek FishLogo geometry vendored in `scripts/fish-logo.ts` (source: DeepSeek Harness, MIT).
+鲸鱼字形由 `scripts/fish-logo.ts` 中 vendored 的 DeepSeek FishLogo 几何数据生成（来源：DeepSeek Harness，MIT）。
 
-## License
+### 1. 源码开发安装
 
-[MIT](LICENSE). The vendored FishLogo geometry is from DeepSeek Harness (MIT).
+本地 checkout 可使用：
+
+```sh
+dsh plugin --profile cli add file:C:/path/to/dsh-code
+```
+
+GitHub 安装可用于源码开发：
+
+```sh
+dsh plugin --profile cli add github:unlinearity/dsh-code
+```
+
+Git 包会在安装阶段构建。若 pnpm 要求添加 `allowBuilds`，请把它输出的完整条目复制到 `~/.dsh/profiles/cli/pnpm-workspace.yaml`，再重新执行命令。该键包含 Git URL 与 commit，不能只写 `dsh-code`。
+
+### 2. 参考
+
+- 运行时服务、事件、插件作用域和持久化模型遵循 **DeepSeek Harness**。
+- 会话导航、浮层尺寸、scrollback、底部布局与缩放处理参考 **Codex CLI**。
+- 斜杠发现、turn steering、思考折叠、审批和提问流程参考 **Claude Code**。
+
+DSH-Code 是独立的 MIT 社区项目，与 OpenAI 或 Anthropic 无隶属关系。
+
+## 许可
+
+[MIT](LICENSE)。vendored FishLogo 几何数据来自 DeepSeek Harness（MIT）。
