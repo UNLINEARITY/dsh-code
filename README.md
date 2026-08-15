@@ -111,6 +111,8 @@ dsh --profile cli --session my-id    # 使用指定 id 新建会话
 
 - `/new`、`/resume`、`--continue` 与显式 session id，且无需重新挂载 Ink
 - Codex 风格可搜索恢复面板，支持根/全部对话、cwd、排序和密度筛选
+- 裸启动延迟到首次真实输入才创建会话，未输入即退出零残留
+- 全局输入历史：Up/Down 跨会话召回，`/history` 搜索面板回填输入框
 - 标题快照按需折叠，完整转录仅在显式请求时加载并支持全量滚动
 - subagent 对话只读检查，以及通过 `@` 注入有界会话引用
 - Markdown 导出、持久标题、上下文占用、缓存、token、TTFT 与耗时指标
@@ -126,6 +128,9 @@ dsh --profile cli --session my-id    # 使用指定 id 新建会话
 
 - 已落定历史只追加，流式可变区域严格有界
 - 思考折叠、终端 Markdown、紧凑工具摘要与完整结构化详情
+- 双行状态栏：mode 与 context 在第二行，context 为蓝色进度条，全蓝强调
+- 运行中提交即时显示为普通提示词行，Delete 取消排队消息，busy 使用 web StateDot 八点追逐动画
+- 回复与输入框光标对齐，欢迎头字标提亮
 - Ctrl+O 独占历史检查，支持切换条目与完整纵向滚动
 - CJK/控制字符宽度安全、短终端主动降级、缩放防抖重放
 - 固定底部顺序：内容或面板 → notice → 输入框 → 状态栏
@@ -201,6 +206,10 @@ Git 包会在安装阶段构建。若 pnpm 要求添加 `allowBuilds`，请把�
 - 斜杠发现、turn steering、思考折叠、审批和提问流程参考 **Claude Code**。
 
 DSH-Code 是独立的 MIT 社区项目，与 OpenAI 或 Anthropic 无隶属关系。
+
+社区：
+- [Linux DO](https://linux.do/)：学 AI，上 L 站！
+- [Deepseek harness](https://www.deepseek.com/harness): DSH 官方网站
 
 ## 许可
 

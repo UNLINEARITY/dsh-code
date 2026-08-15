@@ -112,6 +112,8 @@ Inside the TUI:
 
 - `/new`, `/resume`, `--continue`, and explicit session identifiers without remounting Ink
 - Codex-style searchable resume panel with root/all-conversation, cwd, order, and density filters
+- Bare launches defer session creation until your first real input; quitting early leaves nothing behind
+- Global input recall: Up/Down walks past prompts across sessions, and `/history` searches and fills the composer
 - Lazy title snapshots and explicitly loaded, fully scrollable transcripts
 - Read-only subagent conversation inspection and bounded `@` session references
 - Markdown export, persistent titles, context occupancy, cache, token, TTFT, and timing metrics
@@ -127,6 +129,9 @@ Inside the TUI:
 
 - Append-only settled transcript with bounded mutable streaming output
 - Folded thinking, terminal Markdown, compact tool summaries, and full structured details
+- Two-row status bar with mode and context on the second row, a blue context-occupancy meter, and all-blue accents
+- Submissions while a turn runs appear immediately as ordinary prompt rows; Delete cancels the newest queued message, and busy states use the web StateDot chase animation
+- Replies align with the input cursor, and the welcome wordmark is brighter
 - Ctrl+O exclusive history inspection with entry navigation and complete vertical scrolling
 - Width-safe CJK/control-character handling, compact-terminal degradation, and debounced resize replay
 - Stable bottom order: content or panel → notice → composer → status
@@ -202,6 +207,10 @@ The Git package builds during installation. If pnpm asks for an `allowBuilds` en
 - Slash discovery, turn steering, thinking folds, approvals, and question flows refer to **Claude Code**.
 
 DSH-Code is an independent MIT-licensed community project and is not affiliated with OpenAI or Anthropic.
+
+Communities:
+- [Linux DO](https://linux.do/): Learn AI, head to L Station!
+- [Deepseek harness](https://www.deepseek.com/harness): DSH official website.
 
 ## License
 
