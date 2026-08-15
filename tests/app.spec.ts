@@ -98,6 +98,9 @@ describe('Ctrl+O history details', () => {
       loadPlugins: () => [],
       statusline: DEFAULT_STATUSLINE_ITEMS,
       saveStatusline: noop,
+      history: [],
+      recordHistory: noop,
+      cancelQueued: noop,
       onBridgeReady: noop,
     }), {
       stdin,
@@ -339,6 +342,9 @@ describe('Ctrl+R reasoning fold', () => {
       loadPlugins: () => [],
       statusline: DEFAULT_STATUSLINE_ITEMS,
       saveStatusline: noop,
+      history: [],
+      recordHistory: noop,
+      cancelQueued: noop,
       onBridgeReady: noop,
     }), {
       stdin,

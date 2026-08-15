@@ -20,7 +20,7 @@ import z from '@deepseek-ai/schemastery'
 import { installModelSelection } from '@deepseek-ai/dsh-agent'
 import type { Agent, AgentHandle, ModelSelection, ModelSelectionRef } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
-import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import { createUserMessage, MessageId } from '@deepseek-ai/dsh-llm'
 import { SessionId, type Session, type SessionEvent, type SessionHeader, type UserMessage } from '@deepseek-ai/dsh-session'
 import type { SessionPersistence } from '@deepseek-ai/dsh-session-persistence'
 // Type-only: carries the ctx.sessionTitle service merge for /title.
@@ -318,6 +318,46 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       .catch((writeError: unknown) => {
         bridge.notify('statusline save failed: ' + (writeError instanceof Error ? writeError.message : String(writeError)), 'error')
       })
+  }
+
+  // Global input recall (Codex composer-history contract): one JSONL file
+  // under the DSH home. A missing file means an empty history; unreadable or
+  // corrupt content degrades to the valid lines it could parse, silently —
+  // recall is a convenience surface, never a gate.
+  const historyPath = join(homedir(), '.dsh', 'dsh-code', 'history.jsonl')
+  let inputHistory: readonly string[] = []
+  try {
+    inputHistory = parseHistoryFile(readFileSync(historyPath, 'utf8'))
+  } catch {
+    inputHistory = []
+  }
+  const recordHistory = (text: string): void => {
+    if (text === '') return
+    inputHistory = [...inputHistory, text].slice(-HISTORY_MAX_ENTRIES)
+    // A missing file on the first save is not an error: start from empty.
+    let current = ''
+    try {
+      current = readFileSync(historyPath, 'utf8')
+    } catch {
+      current = ''
+    }
+    void mkdir(dirname(historyPath), { recursive: true })
+      .then(() => writeFileAsync(historyPath, appendHistoryContent(current, text), 'utf8'))
+      .catch((writeError: unknown) => {
+        bridge.notify('history save failed: ' + (writeError instanceof Error ? writeError.message : String(writeError)), 'error')
+      })
+  }
+
+  /** Cancel one queued inbox message (Delete on the empty composer); the durable splice retires its pending row. */
+  const cancelQueued = (messageId: string): void => {
+    if (agent === undefined) return
+    try {
+      if (agent.inbox.remove(MessageId(messageId))) {
+        bridge.notify('queued message cancelled')
+      }
+    } catch (error: unknown) {
+      bridge.notify('queue cancel failed: ' + (error instanceof Error ? error.message : String(error)), 'error')
+    }
   }
 
   // The mount handle lives in a box: quit closes over it, while the mount

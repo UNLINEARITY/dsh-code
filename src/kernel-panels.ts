@@ -8,7 +8,7 @@ import type { SessionDirectoryOptions, SessionRow } from './session-directory.ts
 import { panelViewport, revealRow } from './render/inspector.ts'
 import { textLines } from './render/lines.ts'
 import { DEFAULT_STATUSLINE_ITEMS, STATUS_ITEMS, type StatusItemId } from './render/status.ts'
-import { singleLineText, truncateColumns } from './render/text.ts'
+import { displayText, singleLineText, truncateColumns } from './render/text.ts'
 import { TUI_RGB } from './theme.ts'
 
 function color(rgb: readonly [number, number, number]): string {
@@ -251,6 +251,81 @@ function DocumentPanel({ title, text, error, close }: {
     createElement(Text, { color: color(TUI_RGB.brandBright), wrap: 'truncate-end' }, truncateColumns(title, viewport.contentColumns)),
     ...body.map((line, index) => createElement(Text, { key: `${scroll}-${index}`, wrap: 'truncate-end' }, truncateColumns(line, viewport.contentColumns))),
     createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns(`lines ${lines.length === 0 ? 0 : scroll + 1}-${Math.min(lines.length, scroll + viewport.bodyRows)}/${lines.length} · ↑↓/pg/g/G · t/esc close`, viewport.contentColumns)),
+  )
+}
+
+/**
+ * The /history recall panel (Codex composer-history search, bounded): one
+ * query line over the newest-first recall space, filtered by substring, with
+ * arrow selection and enter to fill the composer. Editing the query restarts
+ * from the newest match; Esc closes without touching the draft.
+ */
+export function HistoryPanel({ entries, fill, close }: {
+  /** Newest-first recall entries (persistent + in-session, deduped). */
+  entries: readonly string[]
+  /** Accept one entry: its text plus its recall-space index (browsing resumes there). */
+  fill(text: string, index: number): void
+  close(): void
+}): ReactElement {
+  const [query, setQuery] = useState('')
+  const [cursor, setCursor] = useState(0)
+  const matches = query === ''
+    ? entries
+    : entries.filter(entry => entry.toLowerCase().includes(query.toLowerCase()))
+  useInput((input, key) => {
+    if (key.escape) return close()
+    if (key.return) {
+      const entry = matches[cursor]
+      if (entry !== undefined) fill(entry, entries.indexOf(entry))
+      return
+    }
+    if (key.upArrow) return setCursor(value => Math.max(0, value - 1))
+    if (key.downArrow) return setCursor(value => Math.min(matches.length - 1, value + 1))
+    if (input === 'g') return setCursor(0)
+    if (input === 'G') return setCursor(matches.length - 1)
+    if (key.backspace) {
+      setQuery(current => current.slice(0, -1))
+      setCursor(0)
+      return
+    }
+    if (input !== '' && !key.ctrl && !key.meta && !key.shift) {
+      setQuery(current => (current + input).slice(0, 120))
+      setCursor(0)
+    }
+  })
+  const stdout = useStdout().stdout
+  const viewport = panelViewport(stdout?.columns ?? 80, stdout?.rows ?? 30)
+  if (viewport.compact) {
+    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns('/history · esc close', viewport.contentColumns))
+  }
+  if (viewport.maxHeight === 0) return createElement(Box, { display: 'none' })
+  const bodyRows = Math.max(1, viewport.bodyRows - 1)
+  const offset = revealRow(0, cursor, matches.length, bodyRows)
+  const visible = matches.slice(offset, offset + bodyRows)
+  const header = query === ''
+    ? `/history · ${entries.length} prompts · type to filter`
+    : `/history · ${matches.length} of ${entries.length} match '${truncateColumns(singleLineText(query), viewport.contentColumns - 30)}'`
+  return createElement(
+    Box,
+    { width: viewport.outerColumns, borderStyle: 'round', borderColor: color(TUI_RGB.dim), flexDirection: 'column', paddingX: 1 },
+    createElement(Text, { color: color(TUI_RGB.brandBright), wrap: 'truncate-end' }, truncateColumns(header, viewport.contentColumns)),
+    createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns(`  filter ${query === '' ? '· type to search prompts' : '· ' + singleLineText(query)}, enter fills the composer`, viewport.contentColumns)),
+    ...(visible.length === 0
+      ? [createElement(Text, { key: 'empty', dimColor: true, wrap: 'truncate-end' }, truncateColumns('  no matching prompts', viewport.contentColumns))]
+      : visible.map((entry, index) => {
+        const absolute = offset + index
+        const selected = absolute === cursor
+        return createElement(
+          Text,
+          {
+            key: `history-${absolute}`,
+            color: selected ? color(TUI_RGB.brandBright) : undefined,
+            wrap: 'truncate-end',
+          },
+          truncateColumns((selected ? '› ' : '  ') + displayText(entry), viewport.contentColumns),
+        )
+      })),
+    createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns('↑↓ move · g/G ends · enter fill · esc close', viewport.contentColumns)),
   )
 }
 

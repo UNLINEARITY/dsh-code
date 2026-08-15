@@ -66,6 +66,10 @@ export function buildExportMarkdown(view: TranscriptView, sessionId: string): st
       case 'files':
         out.push(`> files changed: ${entry.paths.join(', ')}`, '')
         break
+      case 'pending':
+        // Codex PendingSteer: queued prompts export like ordinary user rows.
+        out.push('## user', '', entry.text, '')
+        break
       default:
         assertNever(entry, 'transcript entry kind')
     }

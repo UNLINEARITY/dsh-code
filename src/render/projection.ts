@@ -7,12 +7,13 @@
  * @module @deepseek-ai/dsh-tui/render/projection
  */
 
-import { boundContextSummary, type ContentBlock } from '@deepseek-ai/dsh-llm'
+import { boundContextSummary, type ContentBlock, type MessageId } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent, TodoItem } from '@deepseek-ai/dsh-session'
 // Type-only imports merge the plugin-owned SessionEventMap variants
-// (command/*, compaction/*, goal/change, llm/retry*, plan/mode,
-// permission/preset, sandbox/mode, session/title) into the union this
-// reducer switches on.
+// (agent/inbox/spliced, command/*, compaction/*, goal/change, llm/retry*,
+// plan/mode, permission/preset, sandbox/mode, session/title) into the union
+// this reducer switches on.
+import type {} from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-commands'
 import type {} from '@deepseek-ai/dsh-compaction'
 import type {} from '@deepseek-ai/dsh-goal'
@@ -41,6 +42,17 @@ export interface UserEntry {
   /** True for collapsed injected context (plugin/continuation notices), which
    * the renderer marks with a dim ↳ instead of the user ❯ prompt. */
   notice: boolean
+}
+
+/** One user message waiting in the agent inbox (the web's queued-message row). */
+export interface PendingEntry {
+  kind: 'pending'
+  /** Stable message identity shared with the durable `user/message` that retires it. */
+  messageId: MessageId
+  /** Which inbox list holds the message: steering is consumed at the next step boundary. */
+  target: 'next-turn' | 'next-step'
+  /** Full message text — Codex PendingSteer renders queued prompts exactly like user rows. */
+  text: string
 }
 
 /** One assembled assistant reply. */
@@ -139,7 +151,7 @@ export interface FilesEntry {
 }
 
 /** Ordered transcript items the renderer draws. */
-export type TranscriptEntry = UserEntry | AssistantEntry | ToolEntry | CommandEntry | ErrorEntry | TurnMarkerEntry | CompactionEntry | RetryEntry | FilesEntry
+export type TranscriptEntry = UserEntry | PendingEntry | AssistantEntry | ToolEntry | CommandEntry | ErrorEntry | TurnMarkerEntry | CompactionEntry | RetryEntry | FilesEntry
 
 /** The live goal the status line badges, folded from `goal/change`. */
 export interface GoalFold {
@@ -224,6 +236,12 @@ export interface TranscriptView {
   /** Current long-running goal folded from the last `goal/change`, undefined when cleared. */
   goal: GoalFold | undefined
   /**
+   * Ordered live message ids per inbox target, mirrored from
+   * `agent/inbox/spliced` exactly like the upstream Inbox projection — the
+   * coordinates later removals resolve against.
+   */
+  pending: { 'next-turn': readonly string[]; 'next-step': readonly string[] }
+  /**
    * Fold-internal timing anchors, never rendered: open step and tool-call
    * start timestamps the next `assistant/message` / `tool/result` resolves
    * against. Keyed `turn:step` and by call id.
@@ -256,9 +274,15 @@ export function createTranscriptView(): TranscriptView {
     title: '',
     sandbox: '',
     goal: undefined,
+    pending: { 'next-turn': [], 'next-step': [] },
     stats: { turns: 0, steps: 0, llmMs: 0, toolMs: 0, usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 }, lastPromptTokens: 0, contextWindow: 0, ttftMs: 0, ttftSteps: 0, decodeMs: 0, decodeTokens: 0 },
     anchors: { stepStart: new Map(), toolStart: new Map(), firstChunkAt: new Map(), compactionTokens: new Map(), lastPruneTokens: 0, turnFiles: new Map() },
   }
+}
+
+/** Full prompt text of a queued message (identical to the durable user row it retires into). */
+function pendingText(content: readonly ContentBlock[]): string {
+  return textOf(content)
 }
 
 /**
@@ -270,17 +294,56 @@ export function createTranscriptView(): TranscriptView {
 export function projectEvent(view: TranscriptView, event: SessionEvent): TranscriptView {
   switch (event.type) {
     case 'user/message': {
+      // A queued row retires when its durable user message lands (the agent
+      // claims the inbox and logs the same message identity) — the transient
+      // steering/queued preview yields to the real transcript entry.
+      const message = event.data
+      let entries = view.entries
+      let pending = view.pending
+      for (const target of ['next-turn', 'next-step'] as const) {
+        const index = pending[target].indexOf(message.id)
+        if (index < 0) continue
+        pending = { ...pending, [target]: pending[target].filter((_, i) => i !== index) }
+        entries = entries.filter(entry => !(entry.kind === 'pending' && entry.messageId === message.id))
+      }
       // Injected context (plugin/model-continuation sources) stays collapsed
       // to a bounded notice row, exactly like collapsed transcript context
       // elsewhere in the product; only direct human prompts render in full.
-      const message = event.data
       if (message.source.kind === 'user') {
-        return { ...view, entries: [...view.entries, { kind: 'user', text: textOf(message.content), notice: false }] }
+        return { ...view, pending, entries: [...entries, { kind: 'user', text: textOf(message.content), notice: false }] }
       }
       const notice = message.source.kind === 'plugin' && message.source.form === 'notice'
         ? message.source.summary
         : message.source.kind
-      return { ...view, entries: [...view.entries, { kind: 'user', text: boundContextSummary(notice), notice: true }] }
+      return { ...view, pending, entries: [...entries, { kind: 'user', text: boundContextSummary(notice), notice: true }] }
+    }
+    case 'agent/inbox/spliced': {
+      // The durable inbox mutation (web queue-mirror contract, event-sourced):
+      // removals drop the projected rows at their inbox coordinates, inserted
+      // messages gain a pending row at their log position.
+      const { target, start, removedCount = 0, inserted } = event.data
+      const ids = view.pending[target]
+      const removed = ids.slice(start, start + removedCount)
+      const nextIds = [
+        ...ids.slice(0, start),
+        ...ids.slice(start + removedCount),
+        ...inserted.map(message => message.id),
+      ]
+      let entries = view.entries
+      if (removed.length > 0) {
+        const removedSet = new Set(removed)
+        entries = entries.filter(entry =>
+          !(entry.kind === 'pending' && entry.target === target && removedSet.has(entry.messageId)))
+      }
+      for (const message of inserted) {
+        entries = [...entries, {
+          kind: 'pending',
+          messageId: message.id,
+          target,
+          text: pendingText(message.content),
+        }]
+      }
+      return { ...view, entries, pending: { ...view.pending, [target]: nextIds } }
     }
     case 'assistant/chunk': {
       const chunk = event.data.chunk

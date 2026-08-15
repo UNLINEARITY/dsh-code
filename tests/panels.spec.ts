@@ -6,6 +6,7 @@ import { render } from 'ink'
 import { describe, expect, it, vi } from 'vitest'
 import { App } from '../src/app.ts'
 import { createTranscriptStore } from '../src/store.ts'
+import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { DEFAULT_STATUSLINE_ITEMS } from '../src/render/status.ts'
 import type { ApprovalSnapshot } from '../src/approval.ts'
 import type { PendingQuestion, QuestionSnapshot } from '../src/questions.ts'
@@ -95,6 +96,9 @@ describe('exclusive panel height budgets', () => {
       })),
       statusline: DEFAULT_STATUSLINE_ITEMS,
       saveStatusline: noop,
+      history: [],
+      recordHistory: noop,
+      cancelQueued: noop,
       onBridgeReady: noop,
     }), {
       stdin,
@@ -334,6 +338,9 @@ describe('exclusive panel height budgets', () => {
         currentItems = items
         saved.push([...items])
       },
+      history: [],
+      recordHistory: noop,
+      cancelQueued: noop,
       onBridgeReady: noop,
     }), {
       stdin,
@@ -386,6 +393,357 @@ describe('exclusive panel height budgets', () => {
       await wait()
       expect(output).toContain('type a message')
       expect(output).not.toContain('customize the status line')
+    } finally {
+      instance.unmount()
+      stdin.destroy()
+      stdout.destroy()
+    }
+  })
+})
+
+describe('queued messages and global recall', () => {
+  it('renders queued inbox rows and cancels the newest with Delete on an empty composer', async () => {
+    const stdin = Object.assign(new PassThrough(), {
+      isTTY: true,
+      isRaw: false,
+      setRawMode(value: boolean) {
+        this.isRaw = value
+        return this
+      },
+      ref() {},
+      unref() {},
+    }) as unknown as NodeJS.ReadStream
+    const stdout = Object.assign(new PassThrough(), {
+      isTTY: true,
+      columns: 100,
+      rows: 24,
+    }) as unknown as NodeJS.WriteStream
+    let output = ''
+    stdout.on('data', chunk => {
+      output += chunk.toString()
+    })
+    const approvalListeners = new Set<() => void>()
+    const questionListeners = new Set<() => void>()
+    const approvalSnapshot: ApprovalSnapshot = { pending: undefined, answered: false }
+    const questionSnapshot: QuestionSnapshot = { pending: undefined }
+    const noop = (): void => {}
+    const steering = createUserMessage({
+      content: [{ type: 'text', text: 'fix the build' }],
+      source: { kind: 'user' },
+    })
+    const queued = createUserMessage({
+      content: [{ type: 'text', text: 'then run tests' }],
+      source: { kind: 'user' },
+    })
+    const cancelled: string[] = []
+    const instance = render(createElement(App, {
+      store: createTranscriptStore([
+        {
+          type: 'agent/inbox/spliced',
+          seq: 1,
+          time: 0,
+          data: { target: 'next-step', start: 0, inserted: [steering] },
+        } as never,
+        {
+          type: 'agent/inbox/spliced',
+          seq: 2,
+          time: 0,
+          data: { target: 'next-turn', start: 0, inserted: [queued] },
+        } as never,
+      ]),
+      approval: {
+        subscribe: (listener: () => void) => {
+          approvalListeners.add(listener)
+          return () => approvalListeners.delete(listener)
+        },
+        getSnapshot: () => approvalSnapshot,
+      },
+      questions: {
+        subscribe: (listener: () => void) => {
+          questionListeners.add(listener)
+          return () => questionListeners.delete(listener)
+        },
+        getSnapshot: () => questionSnapshot,
+        submit: noop,
+        cancel: noop,
+      },
+      commands: { descriptors: [], subscribe: () => noop },
+      skills: { rows: [], subscribe: () => noop },
+      model: 'test/model',
+      cwd: 'dsh-cli',
+      workspaceRoot: 'C:\repo\dsh-cli',
+      branch: 'main',
+      sessionId: '12345678',
+      resumed: false,
+      mode: 'standard',
+      dispatch: noop,
+      steer: noop,
+      interrupt: () => false,
+      quit: noop,
+      loadModels: async () => ({ rows: [], failures: [] }),
+      loadMentions: async () => [],
+      selectModel: () => 'test/model',
+      cyclePermission: () => '',
+      exportTranscript: async () => {},
+      renameTitle: () => '',
+      loadPresets: async () => [],
+      switchMode: async id => id,
+      createSession: noop,
+      loadSessions: async () => [],
+      loadSessionTranscript: async () => '',
+      switchSession: noop,
+      cancelSessionSwitch: () => false,
+      loadPlugins: () => [],
+      statusline: DEFAULT_STATUSLINE_ITEMS,
+      saveStatusline: noop,
+      history: [],
+      recordHistory: noop,
+      cancelQueued: messageId => {
+        cancelled.push(messageId)
+      },
+      onBridgeReady: noop,
+    }), {
+      stdin,
+      stdout,
+      stderr: stdout,
+      exitOnCtrlC: false,
+      patchConsole: false,
+    })
+
+    try {
+      await wait()
+      // Codex PendingSteer: queued prompts render as ordinary user rows.
+      expect(output).toContain('❯ fix the build')
+      expect(output).toContain('❯ then run tests')
+
+      // Delete on the empty composer cancels the NEWEST queued row.
+      output = ''
+      stdin.write('\x1b[3~')
+      await wait()
+      expect(cancelled).toEqual([queued.id])
+
+      // A non-empty draft keeps Delete as text editing — no cancellation.
+      output = ''
+      stdin.write('draft text')
+      await wait()
+      stdin.write('\x1b[3~')
+      await wait()
+      expect(cancelled).toHaveLength(1)
+    } finally {
+      instance.unmount()
+      stdin.destroy()
+      stdout.destroy()
+    }
+  })
+
+  it('searches past prompts in /history and fills the composer from a match', async () => {
+    const stdin = Object.assign(new PassThrough(), {
+      isTTY: true,
+      isRaw: false,
+      setRawMode(value: boolean) {
+        this.isRaw = value
+        return this
+      },
+      ref() {},
+      unref() {},
+    }) as unknown as NodeJS.ReadStream
+    const stdout = Object.assign(new PassThrough(), {
+      isTTY: true,
+      columns: 100,
+      rows: 24,
+    }) as unknown as NodeJS.WriteStream
+    let output = ''
+    stdout.on('data', chunk => {
+      output += chunk.toString()
+    })
+    const noop = (): void => {}
+    const recorded: string[] = []
+    const approvalListeners = new Set<() => void>()
+    const questionListeners = new Set<() => void>()
+    const instance = render(createElement(App, {
+      store: createTranscriptStore(),
+      approval: {
+        subscribe: (listener: () => void) => {
+          approvalListeners.add(listener)
+          return () => approvalListeners.delete(listener)
+        },
+        getSnapshot: () => ({ pending: undefined, answered: false }),
+      },
+      questions: {
+        subscribe: (listener: () => void) => {
+          questionListeners.add(listener)
+          return () => questionListeners.delete(listener)
+        },
+        getSnapshot: () => ({ pending: undefined }),
+        submit: noop,
+        cancel: noop,
+      },
+      commands: { descriptors: [], subscribe: () => noop },
+      skills: { rows: [], subscribe: () => noop },
+      model: 'test/model',
+      cwd: 'dsh-cli',
+      workspaceRoot: 'C:\repo\dsh-cli',
+      branch: 'main',
+      sessionId: '12345678',
+      resumed: false,
+      mode: 'standard',
+      dispatch: noop,
+      steer: noop,
+      interrupt: () => false,
+      quit: noop,
+      loadModels: async () => ({ rows: [], failures: [] }),
+      loadMentions: async () => [],
+      selectModel: () => 'test/model',
+      cyclePermission: () => '',
+      exportTranscript: async () => {},
+      renameTitle: () => '',
+      loadPresets: async () => [],
+      switchMode: async id => id,
+      createSession: noop,
+      loadSessions: async () => [],
+      loadSessionTranscript: async () => '',
+      switchSession: noop,
+      cancelSessionSwitch: () => false,
+      loadPlugins: () => [],
+      statusline: DEFAULT_STATUSLINE_ITEMS,
+      saveStatusline: noop,
+      history: ['fix the login bug', 'bump the package version'],
+      recordHistory: text => {
+        recorded.push(text)
+      },
+      cancelQueued: noop,
+      onBridgeReady: noop,
+    }), {
+      stdin,
+      stdout,
+      stderr: stdout,
+      exitOnCtrlC: false,
+      patchConsole: false,
+    })
+
+    try {
+      await wait()
+      // Submit a new prompt: recorded to the persistent file and recallable.
+      stdin.write('draft prompt')
+      await wait()
+      stdin.write('\r')
+      await wait()
+      expect(recorded).toEqual(['draft prompt'])
+
+      // Open /history: the recall space is newest-first, so the fresh
+      // submission leads the list.
+      output = ''
+      stdin.write('/history')
+      await wait()
+      stdin.write('\r')
+      await wait()
+      expect(output).toContain('/history · 3 prompts · type to filter')
+
+      // Filter to one match and accept it: the composer fills and the panel closes.
+      stdin.write('package')
+      await wait()
+      expect(output).toContain('1 of 3 match')
+      output = ''
+      stdin.write('\r')
+      await wait()
+      expect(output).toContain('bump the package version')
+      expect(output).not.toContain('1 of 3 match')
+
+      // Up from the filled match recalls the older entry (boundary gate).
+      output = ''
+      stdin.write('\x1b[A')
+      await wait()
+      expect(output).toContain('fix the login bug')
+    } finally {
+      instance.unmount()
+      stdin.destroy()
+      stdout.destroy()
+    }
+  })
+
+  it('shows the web StateDot chase in the composer and the Deep-diving line while busy', async () => {
+    const stdin = Object.assign(new PassThrough(), {
+      isTTY: true,
+      isRaw: false,
+      setRawMode(value: boolean) {
+        this.isRaw = value
+        return this
+      },
+      ref() {},
+      unref() {},
+    }) as unknown as NodeJS.ReadStream
+    const stdout = Object.assign(new PassThrough(), {
+      isTTY: true,
+      columns: 100,
+      rows: 24,
+    }) as unknown as NodeJS.WriteStream
+    let output = ''
+    stdout.on('data', chunk => {
+      output += chunk.toString()
+    })
+    const noop = (): void => {}
+    const instance = render(createElement(App, {
+      store: createTranscriptStore([
+        { type: 'turn/start', seq: 1, time: 0, data: { turn: 1 } } as never,
+      ]),
+      approval: {
+        subscribe: () => () => {},
+        getSnapshot: () => ({ pending: undefined, answered: false }),
+      },
+      questions: {
+        subscribe: () => () => {},
+        getSnapshot: () => ({ pending: undefined }),
+        submit: noop,
+        cancel: noop,
+      },
+      commands: { descriptors: [], subscribe: () => noop },
+      skills: { rows: [], subscribe: () => noop },
+      model: 'test/model',
+      cwd: 'dsh-cli',
+      workspaceRoot: 'C:\repo\dsh-cli',
+      branch: 'main',
+      sessionId: '12345678',
+      resumed: false,
+      mode: 'standard',
+      dispatch: noop,
+      steer: noop,
+      interrupt: () => false,
+      quit: noop,
+      loadModels: async () => ({ rows: [], failures: [] }),
+      loadMentions: async () => [],
+      selectModel: () => 'test/model',
+      cyclePermission: () => '',
+      exportTranscript: async () => {},
+      renameTitle: () => '',
+      loadPresets: async () => [],
+      switchMode: async id => id,
+      createSession: noop,
+      loadSessions: async () => [],
+      loadSessionTranscript: async () => '',
+      switchSession: noop,
+      cancelSessionSwitch: () => false,
+      loadPlugins: () => [],
+      statusline: DEFAULT_STATUSLINE_ITEMS,
+      saveStatusline: noop,
+      history: [],
+      recordHistory: noop,
+      cancelQueued: noop,
+      onBridgeReady: noop,
+    }), {
+      stdin,
+      stdout,
+      stderr: stdout,
+      exitOnCtrlC: false,
+      patchConsole: false,
+    })
+
+    try {
+      await wait()
+      expect(output).toContain('Deep diving')
+      // The busy composer replaces '❯ ' with the rotating chase.
+      const frames = ['⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷']
+      expect(frames.some(frame => output.includes(frame))).toBe(true)
+      expect(output).not.toContain('❯ type a message')
     } finally {
       instance.unmount()
       stdin.destroy()

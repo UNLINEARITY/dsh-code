@@ -80,6 +80,9 @@ function renderApp(overrides: Partial<AppProps> = {}): {
     loadPlugins: () => [],
     statusline: DEFAULT_STATUSLINE_ITEMS,
     saveStatusline: noop,
+    history: [],
+    recordHistory: noop,
+    cancelQueued: noop,
     onBridgeReady: noop,
     ...overrides,
   }

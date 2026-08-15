@@ -35,9 +35,16 @@ import type { ModelDirectory, ModelRow } from './models.ts'
 import type { QuestionSnapshot, QuestionStore } from './questions.ts'
 import type { SkillsView, SkillRow } from './skills.ts'
 import type { MentionCandidate } from './mentions.ts'
-import { ModePanel, PluginPanel, ResumePanel, StatuslinePanel } from './kernel-panels.ts'
+import { ModePanel, HistoryPanel, PluginPanel, ResumePanel, StatuslinePanel } from './kernel-panels.ts'
 import type { PresetRow } from './presets.ts'
 import type { PluginRow } from './plugin-inventory.ts'
+import {
+  recallEntries,
+  recallNewer,
+  recallOlder,
+  recordLocalEntry,
+  type RecallState,
+} from './history.ts'
 import type { SessionDirectoryOptions, SessionRow } from './session-directory.ts'
 
 /** Match Codex's settled-resize window before rebuilding terminal scrollback. */
@@ -143,6 +150,12 @@ export interface AppProps {
   statusline: readonly string[]
   /** Persist a new statusline item set; the runner surfaces IO failures as notices. */
   saveStatusline(items: readonly string[]): void
+  /** Persistent cross-session input history (oldest first); the runner owns the file. */
+  history: readonly string[]
+  /** Persist one submitted prompt to the global history file. */
+  recordHistory(text: string): void
+  /** Cancel one queued inbox message by identity (Delete on the empty composer). */
+  cancelQueued(messageId: string): void
 }
 
 /** Ink `color` string for one palette triple. */
@@ -538,6 +551,15 @@ function EntryLine({ entry, showReasoning, verbose }: { entry: TranscriptEntry; 
       const more = entry.paths.length > 3 ? ` (+${entry.paths.length - 3} more)` : ''
       return createElement(Text, { dimColor: true, wrap: verbose ? 'truncate-end' : undefined }, `  ⎄ ${shown}${more}`)
     }
+    case 'pending':
+      // Codex PendingSteer: queued prompts render as ordinary user rows; the
+      // durable user/message retires them seamlessly.
+      return createElement(
+        Text,
+        { wrap: verbose ? 'truncate-end' : undefined },
+        brand('❯ '),
+        displayText(entry.text),
+      )
     case 'error':
       return createElement(Text, { wrap: verbose ? 'truncate-end' : undefined }, paintError(displayText(entry.text)))
     default:
@@ -1224,6 +1246,7 @@ function HelpPanel({ descriptors, skills, commandError, skillError, onClose }: {
     createElement(Text, { key: 'key-mentions', dimColor: true, wrap: 'truncate-end' }, '  tab also completes bare workspace paths · @ mentions files and sessions'),
     createElement(Text, { key: 'key-inspector', dimColor: true, wrap: 'truncate-end' }, '  ctrl+o history details · ctrl+r thinking · shift+tab permission preset'),
     createElement(Text, { key: 'key-cancel', dimColor: true, wrap: 'truncate-end' }, '  esc interrupt the running turn · ctrl+c cancel / clear / quit · ctrl+d exit'),
+    createElement(Text, { key: 'key-queue', dimColor: true, wrap: 'truncate-end' }, '  delete on the empty composer cancels the newest queued message'),
     createElement(Text, { key: 'key-edit', dimColor: true, wrap: 'truncate-end' }, '  ctrl+k cut to end of line · ctrl+u clear line · ctrl+a / ctrl+e line ends'),
     createElement(Text, { key: 'commands-gap' }, ' '),
     createElement(Text, { key: 'commands-title', bold: true, wrap: 'truncate-end' }, ' commands'),
@@ -1241,6 +1264,7 @@ function HelpPanel({ descriptors, skills, commandError, skillError, onClose }: {
     createElement(Box, { key: 'local-resume' }, row('/resume', 'browse or switch root sessions (/resume [id|prefix])')),
     createElement(Box, { key: 'local-plugin' }, row('/plugin', 'inspect the live plugin composition')),
     createElement(Box, { key: 'local-statusline' }, row('/statusline', 'customize the status line items')),
+    createElement(Box, { key: 'local-history' }, row('/history', 'search and recall past prompts')),
     createElement(Box, { key: 'local-clear' }, row('/clear', 'clear the screen')),
     createElement(Box, { key: 'local-export' }, row('/export', 'export the transcript to markdown (/export [path])')),
     createElement(Box, { key: 'local-title' }, row('/title', 'rename this session (/title <text>)')),
@@ -1515,6 +1539,7 @@ function completionCandidates(
     { label: '/resume', description: 'browse or switch sessions', origin: 'command' },
     { label: '/plugin', description: 'inspect the plugin composition', origin: 'command' },
     { label: '/statusline', description: 'customize the status line', origin: 'command' },
+    { label: '/history', description: 'search and recall past prompts', origin: 'command' },
     { label: '/clear', description: 'clear the screen', origin: 'command' },
     { label: '/export', description: 'export the transcript to markdown', origin: 'command' },
     { label: '/title', description: 'rename this session', origin: 'command' },
@@ -1605,7 +1630,7 @@ function CompletionMenu({ active, mention, index, rows }: {
  * While a modal (approval / question / model panel) owns the keys, the
  * box passes every key through untouched.
  */
-function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openHelp, openMode, openResume, openPlugin, openStatusline, createSession, cancelSessionSwitch, notify, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, cyclePermission, exportTranscript, renameTitle }: {
+function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openHelp, openMode, openResume, openPlugin, openStatusline, openHistory, createSession, cancelSessionSwitch, notify, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, cyclePermission, exportTranscript, renameTitle, recallSpace, recordLocal, recordHistory, queued, cancelQueued, historyFill, historyConsumed }: {
   active: boolean
   frozen: boolean
   busy: boolean
@@ -1621,6 +1646,7 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   openResume(): void
   openPlugin(query?: string): void
   openStatusline(): void
+  openHistory(): void
   createSession(mode?: string): void
   cancelSessionSwitch(): boolean
   notify(text: string, tone?: NoticeTone): void
@@ -1634,13 +1660,53 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   cyclePermission(): string
   exportTranscript(argument: string): Promise<void>
   renameTitle(argument: string): string
+  /** Newest-first recall space (persistent + in-session, deduped). */
+  recallSpace: readonly string[]
+  /** Record one in-session submission (deduped, local only). */
+  recordLocal(text: string): void
+  /** Persist one submission to the global history file. */
+  recordHistory(text: string): void
+  /** Live queued inbox rows; Delete on the empty composer cancels the newest. */
+  queued: readonly { messageId: string; target: 'next-turn' | 'next-step'; text: string }[]
+  /** Cancel one queued inbox message by identity. */
+  cancelQueued(messageId: string): void
+  /** Accepted /history entry waiting to be placed into the composer. */
+  historyFill: { text: string; index: number } | undefined
+  /** Marks the accepted entry consumed (called after the fill is applied). */
+  historyConsumed(): void
 }): ReactElement {
   const columns = useStdout().stdout?.columns ?? 80
   const [value, setValue] = useState('')
   const [cursor, setCursor] = useState(0)
-  const history = useRef<readonly string[]>([])
-  const historyIndex = useRef<number | null>(null)
-  const draft = useRef('')
+  // Codex shell-style recall: the navigation cursor, the saved draft restored
+  // on Down past the newest entry, and the boundary-gate anchor.
+  const recall = useRef<RecallState>({ entries: [], index: null, savedDraft: '', lastRecalled: null })
+
+  // A /history panel acceptance lands as a fill: place the text at the end of
+  // the composer and resume recall from that entry.
+  useEffect(() => {
+    if (historyFill === undefined) return
+    setValue(historyFill.text)
+    setCursor(historyFill.text.length)
+    setDismissedMenuValue(undefined)
+    recall.current = {
+      entries: recallSpace,
+      index: historyFill.index,
+      savedDraft: historyFill.text,
+      lastRecalled: historyFill.text,
+    }
+    historyConsumed()
+  }, [historyFill, recallSpace, historyConsumed])
+
+  // Keep the navigation's recall space fresh while browsing state survives
+  // (new local submissions extend the space; the index stays valid unless
+  // the space shrank, in which case browsing ends at the current position).
+  if (recall.current.entries !== recallSpace) {
+    const index = recall.current.index === null || recall.current.index < recallSpace.length
+      ? recall.current.index
+      : null
+    recall.current = { ...recall.current, entries: recallSpace, index }
+  }
   const [completionIndex, setCompletionIndex] = useState(0)
   const [dismissedMenuValue, setDismissedMenuValue] = useState<string | undefined>(undefined)
   const candidates = completionCandidates(value, descriptors, skills)
@@ -1779,6 +1845,12 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
       if (busy) interrupt()
       return
     }
+    // Delete on the empty composer cancels the newest queued message (the
+    // web queue-mirror contract: the durable splice drops the pending row).
+    if (key.delete && value === '' && queued.length > 0) {
+      cancelQueued(queued[queued.length - 1]!.messageId)
+      return
+    }
     if (key.return) {
       // Multi-line editing: most terminals send the same byte for
       // shift+enter as enter, so newline insertion rides alt/meta+enter
@@ -1796,8 +1868,14 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
       setDismissedMenuValue(undefined)
       if (text === '') return
       dismissNotice()
-      history.current = [...history.current, text]
-      historyIndex.current = null
+      // Global recall records non-slash submissions only (slash lines are
+      // commands, not prompts) — Codex record_local_submission semantics;
+      // the submission resets any active recall browsing.
+      if (!text.startsWith('/')) {
+        recordLocal(text)
+        recordHistory(text)
+      }
+      recall.current = { entries: recallSpace, index: null, savedDraft: '', lastRecalled: null }
       if (text === '/quit') {
         quit()
         return
@@ -1861,6 +1939,10 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
         openStatusline()
         return
       }
+      if (text === '/history') {
+        openHistory()
+        return
+      }
       if (busy && !text.startsWith('/')) {
         // A running turn is steered, not blocked: the inbox delivers this
         // text at the next step boundary (Esc/Ctrl+C still cancels outright).
@@ -1880,31 +1962,29 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
       return
     }
     if (key.upArrow) {
-      const entries = history.current
-      if (entries.length === 0) return
-      const next = historyIndex.current === null ? entries.length - 1 : Math.max(0, historyIndex.current - 1)
-      if (historyIndex.current === null) draft.current = value
-      historyIndex.current = next
-      setValue(entries[next] ?? '')
-      setCursor((entries[next] ?? '').length)
-      setDismissedMenuValue(undefined)
+      // Claude-Code shell recall: Up always walks the global history (the
+      // current draft is saved for Down-past-newest restore); the boundary
+      // gate from Codex only blocks interior multiline movement, which the
+      // user experience here deliberately skips.
+      if (recall.current.entries.length === 0) return
+      const step = recallOlder(recall.current, value)
+      recall.current = step.state
+      if (step.entry !== undefined) {
+        setValue(step.entry)
+        setCursor(step.entry.length)
+        setDismissedMenuValue(undefined)
+      }
       return
     }
     if (key.downArrow) {
-      const entries = history.current
-      if (historyIndex.current === null) return
-      const next = historyIndex.current + 1
-      if (next >= entries.length) {
-        historyIndex.current = null
-        setValue(draft.current)
-        setCursor(draft.current.length)
+      if (recall.current.entries.length === 0) return
+      const step = recallNewer(recall.current)
+      recall.current = step.state
+      if (step.entry !== undefined) {
+        setValue(step.entry)
+        setCursor(step.entry.length)
         setDismissedMenuValue(undefined)
-        return
       }
-      historyIndex.current = next
-      setValue(entries[next] ?? '')
-      setCursor((entries[next] ?? '').length)
-      setDismissedMenuValue(undefined)
       return
     }
     if (key.tab && menuActive) {
@@ -2091,13 +2171,34 @@ export function App(props: AppProps): ReactElement {
   const [pluginQuery, setPluginQuery] = useState('')
   const [statuslineOpen, setStatuslineOpen] = useState(false)
   const [statuslineItems, setStatuslineItems] = useState<readonly StatusItemId[]>(() => parseStatuslineItems(props.statusline))
+  const [historyOpen, setHistoryOpen] = useState(false)
+  /** The /history panel's accepted entry: text plus its recall-space index. */
+  const [historyFill, setHistoryFill] = useState<{ text: string; index: number } | undefined>(undefined)
+  /** Submissions recorded in this process (Codex local history; persistent file stays in the runner). */
+  const [localHistory, setLocalHistory] = useState<readonly string[]>([])
+  const recordLocal = useCallback((text: string): void => {
+    setLocalHistory(current => recordLocalEntry(current, text))
+  }, [])
+  /** Newest-first recall space shared by the composer and the /history panel. */
+  const recallSpace = useMemo(
+    () => recallEntries(props.history, localHistory),
+    [props.history, localHistory],
+  )
+  const historyConsumed = useCallback((): void => {
+    setHistoryFill(undefined)
+  }, [])
+  /** Live queued inbox rows (event-sourced from `agent/inbox/spliced`). */
+  const queuedRows = useMemo(
+    () => view.entries.filter((entry): entry is Extract<TranscriptEntry, { kind: 'pending' }> => entry.kind === 'pending'),
+    [view.entries],
+  )
   const [refreshEpoch, setRefreshEpoch] = useState(0)
   const approvalSnapshot = useSyncExternalStore(props.approval.subscribe, props.approval.getSnapshot)
   const questionSnapshot = useSyncExternalStore(props.questions.subscribe, props.questions.getSnapshot)
   const approvalPending = approvalSnapshot.pending !== undefined
   const questionPending = questionSnapshot.pending !== undefined
   // While any modal owns the keys, the prompt box passes everything through.
-  const inputActive = !modelOpen && !helpOpen && !modeOpen && !resumeOpen && !pluginOpen && !statuslineOpen && !verboseOpen && !approvalPending && !questionPending
+  const inputActive = !modelOpen && !helpOpen && !modeOpen && !resumeOpen && !pluginOpen && !statuslineOpen && !historyOpen && !verboseOpen && !approvalPending && !questionPending
 
   // Human questions outrank local inspectors. Close the lower modal instead
   // of leaving an approval/question visible but keyboard-locked behind it.
@@ -2109,6 +2210,7 @@ export function App(props: AppProps): ReactElement {
     setResumeOpen(false)
     setPluginOpen(false)
     setStatuslineOpen(false)
+    setHistoryOpen(false)
     setVerboseOpen(false)
   }, [approvalPending, questionPending])
 
@@ -2213,9 +2315,9 @@ export function App(props: AppProps): ReactElement {
           ? Math.max(1, Math.floor(streamRows / 3))
           : 1
   const answerRows = view.streaming === '' ? 0 : Math.max(1, streamRows - reasoningRows)
-  const transcriptVisible = !modelOpen && !helpOpen && !modeOpen && !resumeOpen && !pluginOpen && !statuslineOpen && !verboseOpen && !approvalPending && !questionPending
+  const transcriptVisible = !modelOpen && !helpOpen && !modeOpen && !resumeOpen && !pluginOpen && !statuslineOpen && !historyOpen && !verboseOpen && !approvalPending && !questionPending
   const inspectorVisible = verboseOpen && !approvalPending && !questionPending
-  const modalVisible = modelOpen || helpOpen || modeOpen || resumeOpen || pluginOpen || statuslineOpen || inspectorVisible || approvalPending || questionPending
+  const modalVisible = modelOpen || helpOpen || modeOpen || resumeOpen || pluginOpen || statuslineOpen || historyOpen || inspectorVisible || approvalPending || questionPending
   const closeInspector = useCallback((): void => {
     setVerboseOpen(false)
   }, [])
@@ -2330,6 +2432,16 @@ export function App(props: AppProps): ReactElement {
         close: () => setStatuslineOpen(false),
       })
       : undefined,
+    historyOpen && !approvalPending && !questionPending
+      ? createElement(HistoryPanel, {
+        entries: recallSpace,
+        fill: (text: string, index: number) => {
+          setHistoryFill({ text, index })
+          setHistoryOpen(false)
+        },
+        close: () => setHistoryOpen(false),
+      })
+      : undefined,
     notice === undefined
       ? undefined
       : createElement(NoticeLine, {
@@ -2365,6 +2477,7 @@ export function App(props: AppProps): ReactElement {
         openResume: () => setResumeOpen(true),
         openPlugin: (query = '') => { setPluginQuery(query); setPluginOpen(true) },
         openStatusline: () => setStatuslineOpen(true),
+        openHistory: () => setHistoryOpen(true),
         createSession: props.createSession,
         cancelSessionSwitch: props.cancelSessionSwitch,
         notify,
@@ -2391,6 +2504,13 @@ export function App(props: AppProps): ReactElement {
         cyclePermission: props.cyclePermission,
         exportTranscript: props.exportTranscript,
         renameTitle: props.renameTitle,
+        recallSpace,
+        recordLocal,
+        recordHistory: props.recordHistory,
+        queued: queuedRows,
+        cancelQueued: props.cancelQueued,
+        historyFill,
+        historyConsumed,
       }),
       createElement(StatusLine, {
         facts: {

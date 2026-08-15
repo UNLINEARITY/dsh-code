@@ -143,6 +143,13 @@ export function transcriptEntryLines(entry: TranscriptEntry, columns: number): r
         lineSegment(entry.notice ? '⤷ ' : '❯ ', entry.notice ? 'dim' : 'brand'),
         lineSegment(entry.text, entry.notice ? 'dim' : 'plain'),
       ], width)
+    case 'pending':
+      // Codex PendingSteer: a queued prompt renders exactly like an ordinary
+      // user row, so the durable user/message retires it without any flicker.
+      return styledLines([
+        lineSegment('❯ ', 'brand'),
+        lineSegment(entry.text, 'plain'),
+      ], width)
     case 'assistant':
       return [
         ...(entry.reasoning === ''

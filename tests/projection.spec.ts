@@ -545,3 +545,106 @@ describe('transcript projection', () => {
     })
   })
 })
+
+describe('queued inbox projection', () => {
+  let seq = 1000
+
+  function pendingMessage(text: string): ReturnType<typeof createUserMessage> {
+    return createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } })
+  }
+
+  function spliceEvent(
+    target: 'next-turn' | 'next-step',
+    start: number,
+    removedCount: number | undefined,
+    inserted: ReturnType<typeof createUserMessage>[],
+  ): SessionEvent {
+    return {
+      type: 'agent/inbox/spliced',
+      seq: seq++,
+      time: 0,
+      data: {
+        target,
+        start,
+        ...(removedCount === undefined ? {} : { removedCount }),
+        inserted,
+      },
+    } as unknown as SessionEvent
+  }
+
+  function userMessageEvent(message: ReturnType<typeof createUserMessage>): SessionEvent {
+    return { type: 'user/message', seq: seq++, time: 0, data: message } as SessionEvent
+  }
+
+  it('shows submitted messages as pending rows in the transcript', () => {
+    const steering = pendingMessage('steer me')
+    const queued = pendingMessage('next turn')
+    const view = projectEvents([
+      spliceEvent('next-step', 0, undefined, [steering]),
+      spliceEvent('next-turn', 0, undefined, [queued]),
+    ])
+    expect(view.entries).toEqual([
+      { kind: 'pending', messageId: steering.id, target: 'next-step', text: 'steer me' },
+      { kind: 'pending', messageId: queued.id, target: 'next-turn', text: 'next turn' },
+    ])
+    expect(view.pending).toEqual({ 'next-turn': [queued.id], 'next-step': [steering.id] })
+  })
+
+  it('retires a pending row when its durable user message lands', () => {
+    const steering = pendingMessage('steer me')
+    const view = projectEvents([
+      spliceEvent('next-step', 0, undefined, [steering]),
+      userMessageEvent(steering),
+    ])
+    expect(view.entries).toEqual([
+      { kind: 'user', text: 'steer me', notice: false },
+    ])
+    expect(view.pending).toEqual({ 'next-turn': [], 'next-step': [] })
+  })
+
+  it('drops pending rows at their inbox coordinates on a removal splice', () => {
+    const first = pendingMessage('first')
+    const second = pendingMessage('second')
+    const view = projectEvents([
+      spliceEvent('next-step', 0, undefined, [first]),
+      spliceEvent('next-step', 1, undefined, [second]),
+      spliceEvent('next-step', 0, 1, []),
+    ])
+    expect(view.entries).toEqual([
+      { kind: 'pending', messageId: second.id, target: 'next-step', text: 'second' },
+    ])
+    expect(view.pending).toEqual({ 'next-turn': [], 'next-step': [second.id] })
+  })
+
+  it('keeps target coordinates independent across interleaved lists', () => {
+    const a = pendingMessage('a')
+    const b = pendingMessage('b')
+    const c = pendingMessage('c')
+    const view = projectEvents([
+      spliceEvent('next-step', 0, undefined, [a]),
+      spliceEvent('next-turn', 0, undefined, [b]),
+      spliceEvent('next-step', 1, undefined, [c]),
+      spliceEvent('next-turn', 0, 1, []),
+    ])
+    expect(view.entries).toEqual([
+      { kind: 'pending', messageId: a.id, target: 'next-step', text: 'a' },
+      { kind: 'pending', messageId: c.id, target: 'next-step', text: 'c' },
+    ])
+  })
+
+  it('carries the full prompt text like an ordinary user row', () => {
+    const long = pendingMessage('x'.repeat(300))
+    const multiline = pendingMessage('a\nb  c')
+    const view = projectEvents([
+      spliceEvent('next-step', 0, undefined, [long, multiline]),
+    ])
+    expect(view.entries[0]).toMatchObject({
+      kind: 'pending',
+      text: 'x'.repeat(300),
+    })
+    expect(view.entries[1]).toMatchObject({
+      kind: 'pending',
+      text: 'a\nb  c',
+    })
+  })
+})
