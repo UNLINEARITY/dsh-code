@@ -8,6 +8,11 @@ export default defineConfig({
   // Declarations come from the tsc step (lib/types); tsdown cleans outDir, so
   // it runs first and emits runtime bundles only.
   dts: false,
-  // react/ink/chalk (dependencies) and every @deepseek-ai peer stay external;
-  // the profile's node_modules resolves them at boot.
+  deps: {
+    // Ink/react/chalk and their transitive deps are bundled into lib to cut
+    // boot-time module loading (es-toolkit alone is ~4000 files, and ink's
+    // cold load measured ~0.8s); every @deepseek-ai peer and commander stay
+    // external for the profile's node_modules to resolve at boot.
+    alwaysBundle: ['ink', 'react', 'chalk'],
+  },
 })
