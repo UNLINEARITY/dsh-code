@@ -1,70 +1,187 @@
-# dsh-code
+# DSH-Code
 
 [English](README.md) | 中文
 
-为 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)(`dsh`)打造的 Claude-Code 式交互终端(TUI)bundle,以树外插件 bundle 的形式组合在官方 `@deepseek-ai/dsh-base` 之上——与官方 Web 界面同一套插件生态,零 fork。
+<p align="center"><img alt="Typing SVG" src="https://readme-typing-svg.herokuapp.com?font=JetBrains+Mono&amp;weight=500&amp;size=22&amp;duration=4000&amp;pause=700&amp;color=4176E6&amp;center=true&amp;vCenter=true&amp;width=680&amp;lines=DeepSeek+Harness+Code;DSH+%E5%86%85%E6%A0%B8%E7%9A%84%E7%BB%88%E7%AB%AF%E7%BC%96%E7%A0%81%E7%95%8C%E9%9D%A2"></p>
+<p align="center">
+  <a href="https://github.com/deepseek-ai/deepseek-harness"><img alt="DeepSeek Harness" src="https://img.shields.io/badge/DeepSeek-Harness-4176E6?style=for-the-badge&amp;logo=deepseek&amp;logoColor=white&amp;labelColor=1c1917"></a>
+  <a href="https://github.com/UNLINEARITY/dsh-code/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/UNLINEARITY/dsh-code?label=Stars&amp;style=for-the-badge&amp;logo=github&amp;logoColor=white&amp;color=4176E6&amp;labelColor=1c1917"></a>
+  <a href="https://www.npmjs.com/package/dsh-code"><img alt="npm version" src="https://img.shields.io/npm/v/dsh-code?label=npm&amp;style=for-the-badge&amp;logo=npm&amp;color=cb3837&amp;labelColor=1c1917"></a>
+  <a href="https://github.com/UNLINEARITY/dsh-code/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/github/license/UNLINEARITY/dsh-code?label=License&amp;style=for-the-badge&amp;logo=opensourceinitiative&amp;color=4176E6&amp;labelColor=1c1917"></a>
+</p>
+
+<p align="center"><img src="src/pictures/1.png" width="95%" alt="带斜杠命令补全的 DSH-Code 终端"></p>
+
+**DSH-Code 是 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）的终端编码界面。** 它以树外 bundle 的形式组合在官方 `@deepseek-ai/dsh-base` 之上，与 Harness Web UI 使用同一套 Agent、Session、工具、命令、技能、权限、sandbox、上下文压缩与插件服务。
+
+DSH-Code 没有另外实现一套 Agent loop，而是在 DSH 运行时上增加面向编码工作的 TUI。会话处理参考 [Codex CLI](https://github.com/openai/codex)，终端交互参考 [Claude Code](https://code.claude.com/docs/en/overview)。
+
+---
+
+## 项目概览
+
+DeepSeek Harness 将模型、工具、存储、策略和界面作为插件，通过 Cordis 注册。持久化会话事件记录恢复对话与运行状态所需的信息。
+
+DSH-Code 保留这套结构，并补充适合编码任务的终端工作流。
+
+| 参考项目 | DSH-Code 使用的机制 |
+| --- | --- |
+| **DeepSeek Harness** | 插件组合、作用域服务、Agent Preset、持久会话、工具、技能、策略、sandbox 与委派 |
+| **Codex CLI** | 会话导航、有界浮层、历史检查、稳定底部布局与缩放处理 |
+| **Claude Code** | 斜杠命令发现、思考折叠、审批、提问与 turn steering |
+
+界面采用开发者熟悉的终端操作方式，运行行为仍由 DSH 服务和配置决定。
+
+## 快速开始
+
+需要 Node `^22.19 || >=24`、预览版 `dsh` CLI，以及 `DEEPSEEK_API_KEY`。
+
+```sh
+npm install -g @deepseek-ai/dsh@next
+dsh plugin --profile cli add github:unlinearity/dsh-code
+dsh --profile cli
+```
+
+也可以使用其他安装来源：
+
+```sh
+dsh plugin --profile cli add dsh-code                 # npm 包，发布后可用
+dsh plugin --profile cli add file:C:/path/to/dsh-code # 本地仓库
+```
+
+Git 插件会在安装阶段构建。若 pnpm 拦截安装脚本，请把 pnpm 输出的键加入 `~/.dsh/profiles/cli/pnpm-workspace.yaml` 的 `allowBuilds`，然后重新执行添加命令。
+
+> DeepSeek Harness 目前仍处于 developer preview，可能出现破坏兼容性的变化；DSH-Code 会持续跟随其插件接口演进。
+
+## DSH-Code 如何接入 DSH
+
+### 运行时组合
+
+DSH-Code 读取 Harness 的实时注册表，不在本地维护另一套副本。模型适配器、工具 provider、技能来源、命令、权限策略、持久化后端、sandbox 和 subagent provider 都可以通过 DSH composition 添加或替换。
+
+`/plugin` 提供当前 Cordis loader 状态的只读视图。
+
+### 会话级 Agent Preset
+
+Host 持有共享基础设施——注册表、持久化、会话查询、权限和 sandbox 策略；每个会话则获得一个隔离的 Agent scope，并由 **Agent Preset** 进行组合：
+
+- `standard`——功能完整的通用编码 Agent
+- `code`——面向 Code Mode / PTC 的多操作工作流
+- `minimal`——只保留持久 shell 和 `str_replace_editor`
+- `cordis`——完整 Agent，加上运行时检查与 Preset 编写指导
+- 用户预设——自行定义工具、提示词段落、技能、上下文压缩、plan mode 与 subagent 行为
+
+在第一次 turn 之前使用 `/mode`，或通过 `--mode <preset>` 直接启动。选中的 preset 会写入会话，并在恢复时还原。
+
+### 会话记录与恢复
+
+提示词、流式 chunk、工具调用与结果、模型选择、plan 状态、权限、标题和 preset 选择都由持久 Session 事件投影得到。会话恢复、导出、历史检查、上下文统计和终端重放使用同一份记录。
+
+React state 只保存输入草稿、光标、当前面板、选中项和滚动位置等临时界面状态。
+
+```text
+dsh profile
+└─ Host plane：注册表 · 持久化 · 查询 · 权限 · sandbox
+   ├─ Agent 会话 A + preset code
+   ├─ Agent 会话 B + preset minimal
+   └─ DSH-Code TUI
+      持久事件 → 纯投影 → 只追加的历史转录
+                         └→ 有界面板 → 输入框 → 状态栏
+```
+
+## 终端交互
+
+DSH-Code 在整个进程中只保留一个 Ink owner。`/new` 和 `/resume` 替换的是活动 Agent，而不是终端本身。若 Agent 忙碌，切换会等待当前 turn 自然结束；最新请求优先，目标加载失败也不会破坏当前会话。
+
+所有动态内容都受到明确的视口约束。流式输出、思考过程、审批、问题、`/help`、`/model`、`/mode`、`/resume`、`/plugin` 与 Ctrl+O 使用统一的终端预算。输入框始终紧贴状态栏上方；终端宽度稳定后，界面会根据保存的会话记录重新绘制一次。
+
+在第一次 turn 之前使用 `/mode`，查看或选择当前会话的 Agent Preset。
+
+<p align="center"><img src="src/pictures/2.png" width="95%" alt="每会话 Agent Preset 选择器"></p>
+
+使用 `/resume` 搜索持久会话，无需重新启动 TUI。
+
+<p align="center"><img src="src/pictures/3.png" width="95%" alt="可搜索的会话恢复选择器"></p>
+
+## 常用命令
+
+```sh
+dsh --profile cli                    # 新建 standard 会话
+dsh --profile cli --mode code        # 使用 Agent Preset 启动
+dsh --profile cli --continue         # 恢复当前目录最新会话
+dsh --profile cli --resume abc123    # 按 id 或唯一前缀恢复持久会话
+dsh --profile cli --session my-id    # 使用指定 id 新建会话
+```
+
+进入 TUI 后：
+
+| 操作 | 用途 |
+| --- | --- |
+| `/new [preset]` | 不重启终端，创建并进入另一个会话 |
+| `/resume [id\|前缀]` | 搜索根会话或全部对话，并按 cwd、排序和密度筛选 |
+| `/mode [preset]` | 检查或选择空会话的 Agent 组合 |
+| `/model` | 在实时 LLM 注册表提供的模型间切换 |
+| `/plugin [query]` | 检查 loader 条目、启用状态、模块身份和 fiber 阶段 |
+| `/permission <name>` | 切换权限预设；Shift+Tab 可循环切换 |
+| `/help` | 浏览本地命令、Harness 命令、技能和快捷键 |
+| `Ctrl+O` | 打开独占历史详情视图，切换条目并滚动完整内容 |
+| `Ctrl+R` | 折叠或展开模型思考过程 |
+| `@` | 引用工作区文件或持久会话的有界快照 |
+| `Esc` / `Ctrl+C` | 关闭最上层界面或中断当前 turn |
 
 ## 功能
 
-- DeepSeek 蓝横幅:鲸鱼字标由官方 FishLogo 精确路径半块栅格化,头部贴内容宽度、紧凑不占满
-- 实时会话流:直接从持久会话日志投影——用户输入、流式助手文本、紧凑工具调用/斜杠命令行(运行/完成/出错标记)、todo 快照
-- **工具审批 y/n 条**:agent 请求许可时(sandbox 升级、hook 的 ask 决策),琥珀色审批条显示原因与配对命令行;`y` 允许一次、`n` 拒绝
-- **`/model` 面板**:列出 `llm` 注册表的全部 provider 路由,为下一步切换会话模型;恢复的会话自动还原其上次的模型
-- **每会话 Agent Preset**:每个会话从 `standard`、`code`、`minimal`、`cordis` 或用户预设组合自己的工具、提示词、技能、压缩、plan 与委派能力;`/mode [preset]` 只允许在空会话切换,状态栏始终显示当前 mode
-- **进程内会话生命周期**:`/new [preset]` 新建会话,`/resume [id|前缀]` 在同一个终端所有者中打开 Codex 风格搜索面板;忙碌时等待当前 turn 自然结束,`/resume cancel` 可取消排队切换
-- **会话恢复**:`--resume <id|前缀>` 续接持久会话,`--continue` 取当前目录最新一个;`--mode <preset>` 为新会话选择预设
-- **Resume 检查器**:默认列出全部根会话,可切换全部会话、当前/全部工作目录、排序和密度;subagent 会话保持只读,`e` 展开元数据,只有显式按 `t` 才加载完整可滚动转录
-- **插件诊断**:`/plugin [query]` 只读展示实时 Cordis loader,包括 Preset 挂载条目、启用状态与 fiber 阶段
-- **斜杠命令透传**:共享 `ctx.commands` 注册表(Web 作曲栏同一分发面)里的命令都可在终端执行,`/` 弹出补全菜单;用户可调用技能也进同一菜单(标注 `skill`),未知 `/name` 回退为普通提示词、由 host 的技能注入接管
-- **todo 面板**:实时 todo 列表内联渲染,含 done/active/pending 计数与三态标记,每个新 turn 清空(对齐 Web TodoPanel)
-- **思考行**:模型推理以 Claude Code 式 `✻` 折叠呈现——默认收起为 dim 标记 + 字符数,展开为 dim 斜体,模型思考时流式显示;Ctrl+R 全局切换
-- **终端 markdown**:助手回复经纯 GFM 子集渲染器(标题/围栏与行内代码/强调/列表/引用/链接)按终端宽度排版;流式阶段保持纯文本直到消息落定
-- **Ctrl+O 历史检查器**:逐条浏览保留的完整转录,同时保留输入框与状态栏;←/→ 切换条目,↑/↓ 与 PageUp/PageDown 滚动全部内容,`g`/`G` 跳到两端
-- **结构化工具详情**:持久化的 edit/write diff、带行号 read 窗口、web 搜索来源、fetch 摘要与有界原始输出在普通转录中保持紧凑,并可在 Ctrl+O 中展开查看完整展示
-- **ask_user_question 问答条**:模型提问呈现为选项菜单(↑/↓ 移动、space 多选、`c` 自定义答案、Esc 中断);计划评审(exit_plan_mode)走同一条并高亮 approve 选项
-- **@ 补全**:`@` 触发工作区文件与持久会话补全;会话引用展开为有界只读快照,以带来源的上下文注入到提示词之前
-- **plan 与权限**:plan、权限与 Agent Preset mode 在状态栏中相互独立;`/permission <name>` 与 Shift+Tab 切换权限预设,registry 自带的 `/plan` 命令启用 plan 模式
-- **终端本地工作流**:`/help` 打开完整按键/命令/技能说明,`/export` 将折叠转录写为 Markdown,`/title` 固定会话标题,Ctrl+K 删除到行尾,Ctrl+L 重绘终端,裸工作区路径参与 Tab 补全
-- 输入组件:历史(↑/↓)、光标编辑(←/→、Ctrl+A/E/U)、斜杠命令/技能/@ 补全 Tab 补全;运行中提交即 steering(下一个 step 边界消费),`Esc` 或 Ctrl+C 中断本轮,Ctrl+C 在空闲空输入时退出,Ctrl+D 运行中拒绝退出
-- 融合型状态栏:Claude Code 式身份信息(模型、工作目录、git 分支、标题/会话、plan、权限预设、goal 与 sandbox 覆盖)+ Web 作曲栏指标(轮数/步数、llm 与 tool 累计时长、TTFT、解码 tok/s、上下文占用、缓存命中、token 总量)
-- 有界动态渲染:流式输出、Ctrl+O、全部斜杠子页、审批与问题/计划评审面板均受终端视口约束;输入框始终位于状态栏正上方,连续缩放只在最终宽度执行一次防抖重排
+### Agent 与扩展
 
-## 安装
+- 每会话 Agent Preset：组合工具、提示词、技能、上下文压缩、plan mode 与委派能力
+- 从共享 Harness 注册表实时发现斜杠命令和用户技能
+- 通过 `/plugin` 只读诊断 Cordis loader
+- 从实时 LLM 注册表路由模型，并按持久会话恢复选择
+- 支持 plan、goal、todo、权限、sandbox、subagent 与运行中 steering
 
-需要 Node `^22.19 || >=24` 与 `dsh` CLI(`npm i -g @deepseek-ai/dsh@next`)。
+### 会话与上下文
 
-```sh
-dsh plugin --profile cli add dsh-code       # npm 发布后
-dsh plugin --profile cli add github:unlinearity/dsh-code  # 跟踪本仓库
-dsh plugin --profile cli add file:C:/path/to/dsh-code     # 本地目录
-```
+- `/new`、`/resume`、`--continue` 与显式 session id，且无需重新挂载 Ink
+- Codex 风格可搜索恢复面板，支持根/全部对话、cwd、排序和密度筛选
+- 标题快照按需折叠，完整转录仅在显式请求时加载并支持全量滚动
+- subagent 对话只读检查，以及通过 `@` 注入有界会话引用
+- Markdown 导出、持久标题、上下文占用、缓存、token、TTFT 与耗时指标
 
-然后:
+### 审批与交互
 
-```sh
-dsh --profile cli                    # 全新会话
-dsh --profile cli --continue         # 恢复本目录最新的会话
-dsh --profile cli --resume abc123    # 按会话 id 或唯一前缀恢复
-dsh --profile cli --session my-id    # 以显式 id 建新会话
-dsh --profile cli --mode minimal     # 使用指定 Agent Preset 新建会话
-```
+- sandbox 升级与 hook `ask` 决策的一次性工具审批条
+- 结构化 `ask_user_question` 与 plan review 菜单，支持多选和自定义答案
+- 在下一个 step 边界进行 turn steering，并提供明确的中断语义
+- Agent mode、plan、权限 preset、goal 与 sandbox 状态相互独立
 
-在环境变量(或启动目录 / `$DSH_HOME` 的 `.env`)里设置 `DEEPSEEK_API_KEY`。
+### 终端渲染
 
-git 安装会在安装期执行构建脚本,pnpm 会先行拦截:若 `add` 失败,按提示把对应键加入 `~/.dsh/profiles/cli/pnpm-workspace.yaml` 的 `allowBuilds` 后重试。
+- 已落定历史只追加，流式可变区域严格有界
+- 思考折叠、终端 Markdown、紧凑工具摘要与完整结构化详情
+- Ctrl+O 独占历史检查，支持切换条目与完整纵向滚动
+- CJK/控制字符宽度安全、短终端主动降级、缩放防抖重放
+- 固定底部顺序：内容或面板 → notice → 输入框 → 状态栏
+
+## 参考
+
+- 运行时服务、事件、插件作用域和持久化模型遵循 **DeepSeek Harness**。
+- 会话导航、浮层尺寸、scrollback、底部布局与缩放处理参考 **Codex CLI**。
+- 斜杠发现、turn steering、思考折叠、审批和提问流程参考 **Claude Code**。
+
+DSH-Code 是独立的 MIT 社区项目，与 OpenAI 或 Anthropic 无隶属关系。
 
 ## 开发
 
 ```sh
 pnpm install
-pnpm test         # vitest 单元测试
+pnpm test
 pnpm typecheck
-pnpm build        # tsdown 打包 lib/*.mjs,tsc 产出 lib/types
-pnpm run gen:whale   # 从 vendor 的官方路径重新生成 src/whale-glyph.ts
+pnpm build
+pnpm run gen:whale   # 从 vendored Logo 路径重新生成 src/whale-glyph.ts
 ```
 
-鲸鱼点阵由 `scripts/fish-logo.ts` 中 vendor 的 DeepSeek 鱼形 Logo 路径生成(来源:[deepseek-harness](https://github.com/deepseek-ai/deepseek-harness),MIT)。
+鲸鱼字形由 `scripts/fish-logo.ts` 中 vendored 的 DeepSeek FishLogo 几何数据生成（来源：DeepSeek Harness，MIT）。
 
 ## 许可
 
-[MIT](LICENSE)。vendor 的鱼形 Logo 几何数据来自 DeepSeek Harness(MIT)。
+[MIT](LICENSE)。vendored FishLogo 几何数据来自 DeepSeek Harness（MIT）。
