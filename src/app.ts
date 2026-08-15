@@ -581,7 +581,7 @@ function Header({ resumed }: { resumed: boolean }): ReactElement {
     return createElement(
       Box,
       { flexDirection: 'row', gap: 1, borderStyle: 'round', borderColor: inkColor(TUI_RGB.brand), paddingX: 1, alignSelf: 'flex-start' },
-      createElement(Text, { color: inkColor(TUI_RGB.brand), bold: true }, 'DeepSeek Harness'),
+      createElement(Text, { color: inkColor(TUI_RGB.brandBright), bold: true }, 'DeepSeek Harness'),
       createElement(Text, { dimColor: true }, hint),
     )
   }
@@ -590,16 +590,16 @@ function Header({ resumed }: { resumed: boolean }): ReactElement {
     // alignSelf shrinks the border to the whale-plus-wordmark content instead
     // of stretching across the terminal and stranding empty space on the right
     // (the compact-banner treatment the Claude Code welcome uses).
-    { flexDirection: 'row', gap: 1, borderStyle: 'round', borderColor: inkColor(TUI_RGB.brand), paddingX: 1, alignSelf: 'flex-start' },
+    { flexDirection: 'row', gap: 2, borderStyle: 'round', borderColor: inkColor(TUI_RGB.brand), paddingX: 1, alignSelf: 'flex-start' },
     createElement(
       Box,
-      { flexDirection: 'column', width: WHALE_GLYPH_COLUMNS },
+      { flexDirection: 'column', width: WHALE_GLYPH_COLUMNS, justifyContent: 'center' },
       ...WHALE_GLYPH.map((row, index) => createElement(Text, { key: index, color: inkColor(TUI_RGB.brand) }, row)),
     ),
     createElement(
       Box,
       { flexDirection: 'column', justifyContent: 'center' },
-      createElement(Text, { color: inkColor(TUI_RGB.brand), bold: true }, 'DeepSeek Harness'),
+      createElement(Text, { color: inkColor(TUI_RGB.brandBright), bold: true }, 'DeepSeek Harness'),
       createElement(Text, { dimColor: true }, hint),
     ),
   )
