@@ -6,6 +6,7 @@ import { visibleColumns } from '../src/render/markdown.ts'
 import {
   cacheHitPercent,
   contextBar,
+  CONTEXT_BAR_WIDTH,
   DEFAULT_STATUSLINE_ITEMS,
   formatDuration,
   formatTokens,
@@ -28,6 +29,7 @@ const emptyStats: TranscriptStats = {
   usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 },
   lastPromptTokens: 0,
   contextWindow: 0,
+  contextSegments: { system: 0, prompt: 0, assistant: 0, thinking: 0, tools: 0 },
   ttftMs: 0,
   ttftSteps: 0,
   decodeMs: 0,
@@ -100,54 +102,83 @@ describe('status formatting', () => {
 
 describe('context progress bar', () => {
   /** Joined text of the tone-split bar spans. */
-  const barText = (percent: number): string => contextBar(percent).map(span => span.text).join('')
+  const barText = (spans: readonly { text: string }[]): string => spans.map(span => span.text).join('')
 
-  it('renders occupancy as bracketed filled/empty cells plus a blue percent', () => {
-    expect(contextBar(25)).toEqual([
-      { text: '[', tone: 'label' },
-      { text: '▰▰▰', tone: 'accent' },
-      { text: '▱▱▱▱▱▱▱', tone: 'label' },
-      { text: ']', tone: 'label' },
-      { text: ' 25%', tone: 'accent' },
-    ])
-    expect(contextBar(50)).toEqual([
-      { text: '[', tone: 'label' },
-      { text: '▰▰▰▰▰', tone: 'accent' },
-      { text: '▱▱▱▱▱', tone: 'label' },
-      { text: ']', tone: 'label' },
-      { text: ' 50%', tone: 'accent' },
+  const segments = { system: 8, prompt: 12, assistant: 6, thinking: 8, tools: 10 }
+
+  it('renders proportional per-type segments with a dim free track and right-aligned readout', () => {
+    expect(contextBar(segments, 32_000, 128_000, CONTEXT_BAR_WIDTH)).toEqual([
+      { text: 's', tone: 'ctxSystem' },
+      { text: 'pr', tone: 'ctxPrompt' },
+      { text: 'a', tone: 'ctxAssistant' },
+      { text: 't', tone: 'ctxThinking' },
+      { text: 'x', tone: 'ctxTools' },
+      { text: '▱▱▱▱▱▱', tone: 'label' },
+      { text: '32K/128K 25%', tone: 'value' },
     ])
   })
 
-  it('drops the fill span at 0% and the empty span at 100%', () => {
-    expect(contextBar(0)).toEqual([
-      { text: '[', tone: 'label' },
-      { text: '▱▱▱▱▱▱▱▱▱▱', tone: 'label' },
-      { text: ']', tone: 'label' },
-      { text: ' 0%', tone: 'accent' },
-    ])
-    expect(contextBar(100)).toEqual([
-      { text: '[', tone: 'label' },
-      { text: '▰▰▰▰▰▰▰▰▰▰', tone: 'warn' },
-      { text: ']', tone: 'label' },
-      { text: ' 100%', tone: 'warn' },
+  it('fills exactly the requested width at any occupancy', () => {
+    for (const used of [8_000, 32_000, 64_000, 96_000, 121_600, 150_000]) {
+      const spans = contextBar(segments, used, 128_000, CONTEXT_BAR_WIDTH)
+      expect(visibleColumns(barText(spans))).toBe(CONTEXT_BAR_WIDTH)
+    }
+  })
+
+  it('lengthens segment labels and keeps the full readout on a wider bar', () => {
+    const wide = contextBar(
+      { system: 8_000, prompt: 12_000, assistant: 6_000, thinking: 8_000, tools: 4_000 },
+      32_000,
+      128_000,
+      40,
+    )
+    expect(barText(wide)).toBe('s pr a thx' + '▱'.repeat(18) + '32K/128K 25%')
+    expect(wide.map(span => span.tone)).toEqual([
+      'ctxSystem', 'ctxPrompt', 'ctxAssistant', 'ctxThinking', 'ctxTools', 'label', 'value',
     ])
   })
 
-  it('stays brand blue below 90% and flips to a single amber at the threshold', () => {
-    expect(barText(89)).toBe('[▰▰▰▰▰▰▰▰▰▱] 89%')
-    expect(contextBar(89).map(span => span.tone)).toEqual(['label', 'accent', 'label', 'label', 'accent'])
-    expect(barText(90)).toBe('[▰▰▰▰▰▰▰▰▰▱] 90%')
-    expect(contextBar(90).map(span => span.tone)).toEqual(['label', 'warn', 'label', 'label', 'warn'])
-    expect(barText(94)).toBe('[▰▰▰▰▰▰▰▰▰▱] 94%')
-    expect(contextBar(94).map(span => span.tone)).toEqual(['label', 'warn', 'label', 'label', 'warn'])
+  it('shrinks the readout to the bare percent as the free tail narrows', () => {
+    const tight = contextBar(
+      { system: 8_000, prompt: 12_000, assistant: 6_000, thinking: 8_000, tools: 4_000 },
+      96_000,
+      128_000,
+      CONTEXT_BAR_WIDTH,
+    )
+    expect(barText(tight)).toBe('sys  pr  ast th tl▱▱▱75%')
+    expect(tight.map(span => span.tone)).toEqual([
+      'ctxSystem', 'ctxPrompt', 'ctxAssistant', 'ctxThinking', 'ctxTools', 'label', 'value',
+    ])
   })
 
-  it('clamps the fill at 100 while the percent keeps the raw over-budget value', () => {
-    expect(barText(150)).toBe('[▰▰▰▰▰▰▰▰▰▰] 150%')
-    expect(contextBar(150).map(span => span.tone)).toEqual(['label', 'warn', 'label', 'warn'])
-    expect(barText(-5)).toBe('[▱▱▱▱▱▱▱▱▱▱] 0%')
-    expect(contextBar(-5).map(span => span.tone)).toEqual(['label', 'label', 'label', 'accent'])
+  it('flips the readout to amber at the warning threshold while the segment blues stay', () => {
+    const at = contextBar(segments, 121_600, 128_000, CONTEXT_BAR_WIDTH)
+    expect(barText(at)).toMatch(/▱▱95%$/)
+    expect(at.at(-1)).toEqual({ text: '95%', tone: 'warn' })
+    expect(at.map(span => span.tone).filter(tone => tone.startsWith('ctx')))
+      .toEqual(['ctxSystem', 'ctxPrompt', 'ctxAssistant', 'ctxThinking', 'ctxTools'])
+    const over = contextBar(segments, 200_000, 128_000, CONTEXT_BAR_WIDTH)
+    // Over budget: the percent keeps the raw value while the fill saturates.
+    expect(barText(over)).toMatch(/▱156%$/)
+    expect(over.at(-1)).toEqual({ text: '156%', tone: 'warn' })
+  })
+
+  it('treats the whole used context as one prompt segment when no estimate exists', () => {
+    expect(contextBar(
+      { system: 0, prompt: 0, assistant: 0, thinking: 0, tools: 0 },
+      32_000,
+      128_000,
+      CONTEXT_BAR_WIDTH,
+    )).toEqual([
+      { text: 'prompt', tone: 'ctxPrompt' },
+      { text: '▱▱▱▱▱▱', tone: 'label' },
+      { text: '32K/128K 25%', tone: 'value' },
+    ])
+  })
+
+  it('returns no spans for a non-positive width or window', () => {
+    expect(contextBar(segments, 32_000, 128_000, 0)).toEqual([])
+    expect(contextBar(segments, 32_000, 0, CONTEXT_BAR_WIDTH)).toEqual([])
   })
 })
 
@@ -236,13 +267,14 @@ describe('status layout', () => {
         usage: { inputTokens: 32_000, outputTokens: 800, cacheReadTokens: 0 },
         lastPromptTokens: 32_000,
         contextWindow: 128_000,
+        contextSegments: { system: 2_000, prompt: 12_000, assistant: 6_000, thinking: 8_000, tools: 4_000 },
       },
       120,
     )
     expect(groupText(layout.row1)).toEqual(['○ m · r', 'in 32K · out 800'])
     expect(groupText(layout.row2)).toEqual([
       'cache 0%',
-      'context [▰▰▰▱▱▱▱▱▱▱] 25%',
+      'context spratx▱▱▱▱▱▱32K/128K 25%',
     ])
   })
 
@@ -374,6 +406,7 @@ const richStats: TranscriptStats = {
   usage: { inputTokens: 12_160, outputTokens: 2_400, cacheReadTokens: 9_728 },
   lastPromptTokens: 32_000,
   contextWindow: 128_000,
+  contextSegments: { system: 2_000, prompt: 12_000, assistant: 6_000, thinking: 8_000, tools: 4_000 },
 }
 
 describe('status width degradation', () => {
@@ -390,7 +423,7 @@ describe('status width degradation', () => {
       'mode code',
       'model 45.2s · latency 0.6s · 20 tokens/s · tool 2m42s',
       'cache 80%',
-      'context [▰▰▰▱▱▱▱▱▱▱] 25%',
+      'context spratx▱▱▱▱▱▱32K/128K 25%',
     ])
   })
 
@@ -405,7 +438,7 @@ describe('status width degradation', () => {
     expect(groups).toContain('turns 3 · steps 9')
     expect(groups).toContain('workspace-write')
     expect(groups).toContain('mode code')
-    expect(groups).toContain('context [▰▰▰▱▱▱▱▱▱▱] 25%')
+    expect(groups).toContain('context spratx▱▱▱▱▱▱32K/128K 25%')
   })
 
   it('sheds row-1 figures while row-2 meters and state badges survive', () => {

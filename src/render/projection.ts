@@ -176,6 +176,25 @@ export interface UsageTotals {
   cacheReadTokens: number
 }
 
+/**
+ * Estimated used tokens per context content type, folded from transcript
+ * events via {@link estimateTokens}. The segmented context bar's composition
+ * source: proportions across types are meaningful, absolute values are not
+ * (they never touch billing or the reported `lastPromptTokens`).
+ */
+export interface ContextSegments {
+  /** Rendered system-prompt text (latest `request/header`) plus injected-context notices. */
+  system: number
+  /** Direct human prompts (durable `user/message` rows). */
+  prompt: number
+  /** Assistant text blocks (visible replies). */
+  assistant: number
+  /** Assistant reasoning blocks (hidden thinking). */
+  thinking: number
+  /** Tool call arguments plus result text. */
+  tools: number
+}
+
 /** Window-scoped figures the status line shows; timing uses event timestamps. */
 export interface TranscriptStats {
   /** Durable turns opened (`turn/start` events). */
@@ -192,6 +211,8 @@ export interface TranscriptStats {
   lastPromptTokens: number
   /** Newest advertised route capacity, 0 when no adapter ever advertised one. */
   contextWindow: number
+  /** Estimated used tokens per content type (the segmented bar's composition). */
+  contextSegments: ContextSegments
   /** Summed first-token waits: `step/start` → first non-empty chunk, in ms. */
   ttftMs: number
   /** Steps that produced a first chunk (the TTFT average's denominator). */
@@ -259,6 +280,24 @@ function reasoningOf(content: readonly ContentBlock[]): string {
   return content.filter(block => block.type === 'reasoning').map(block => block.text).join('')
 }
 
+/**
+ * Rough token estimate for the segmented context bar (pi-nano-context's ~4
+ * chars/token heuristic, CJK-aware so a Chinese prompt is not quartered):
+ * CJK/wide chars cost ~1 token each, ASCII ~4 chars per token. Estimates
+ * drive bar PROPORTIONS, never billing, so precision is not required.
+ * @param text - the text to estimate.
+ * @returns an integer token estimate, 0 for empty text.
+ */
+function estimateTokens(text: string): number {
+  let wide = 0
+  let narrow = 0
+  for (const char of text) {
+    if ((char.codePointAt(0) ?? 0) > 0x2e7f) wide += 1
+    else narrow += 1
+  }
+  return wide + Math.ceil(narrow / 4)
+}
+
 /** A fresh, empty transcript view. */
 export function createTranscriptView(): TranscriptView {
   return {
@@ -275,7 +314,7 @@ export function createTranscriptView(): TranscriptView {
     sandbox: '',
     goal: undefined,
     pending: { 'next-turn': [], 'next-step': [] },
-    stats: { turns: 0, steps: 0, llmMs: 0, toolMs: 0, usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 }, lastPromptTokens: 0, contextWindow: 0, ttftMs: 0, ttftSteps: 0, decodeMs: 0, decodeTokens: 0 },
+    stats: { turns: 0, steps: 0, llmMs: 0, toolMs: 0, usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 }, lastPromptTokens: 0, contextWindow: 0, contextSegments: { system: 0, prompt: 0, assistant: 0, thinking: 0, tools: 0 }, ttftMs: 0, ttftSteps: 0, decodeMs: 0, decodeTokens: 0 },
     anchors: { stepStart: new Map(), toolStart: new Map(), firstChunkAt: new Map(), compactionTokens: new Map(), lastPruneTokens: 0, turnFiles: new Map() },
   }
 }
@@ -309,13 +348,37 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
       // Injected context (plugin/model-continuation sources) stays collapsed
       // to a bounded notice row, exactly like collapsed transcript context
       // elsewhere in the product; only direct human prompts render in full.
+      const text = textOf(message.content)
       if (message.source.kind === 'user') {
-        return { ...view, pending, entries: [...entries, { kind: 'user', text: textOf(message.content), notice: false }] }
+        return {
+          ...view,
+          pending,
+          entries: [...entries, { kind: 'user', text, notice: false }],
+          stats: {
+            ...view.stats,
+            contextSegments: {
+              ...view.stats.contextSegments,
+              prompt: view.stats.contextSegments.prompt + estimateTokens(text),
+            },
+          },
+        }
       }
       const notice = message.source.kind === 'plugin' && message.source.form === 'notice'
         ? message.source.summary
         : message.source.kind
-      return { ...view, pending, entries: [...entries, { kind: 'user', text: boundContextSummary(notice), notice: true }] }
+      const summary = boundContextSummary(notice)
+      return {
+        ...view,
+        pending,
+        entries: [...entries, { kind: 'user', text: summary, notice: true }],
+        stats: {
+          ...view.stats,
+          contextSegments: {
+            ...view.stats.contextSegments,
+            system: view.stats.contextSegments.system + estimateTokens(summary),
+          },
+        },
+      }
     }
     case 'agent/inbox/spliced': {
       // The durable inbox mutation (web queue-mirror contract, event-sourced):
@@ -380,14 +443,16 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
       view.anchors.firstChunkAt.delete(key)
       const usage = event.data.usage
       const totals = view.stats.usage
+      const text = textOf(event.data.message.content)
+      const reasoning = reasoningOf(event.data.message.content)
       return {
         ...view,
         streaming: '',
         streamingReasoning: '',
         entries: [...view.entries, {
           kind: 'assistant',
-          text: textOf(event.data.message.content),
-          reasoning: reasoningOf(event.data.message.content),
+          text,
+          reasoning,
         }],
         stats: {
           ...view.stats,
@@ -403,6 +468,11 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
           // chunk landed) contributes neither, so the rate stays honest.
           decodeMs: view.stats.decodeMs + (firstChunk === undefined ? 0 : Math.max(0, event.time - firstChunk)),
           decodeTokens: view.stats.decodeTokens + (firstChunk === undefined || usage === undefined ? 0 : usage.outputTokens),
+          contextSegments: {
+            ...view.stats.contextSegments,
+            thinking: view.stats.contextSegments.thinking + estimateTokens(reasoning),
+            assistant: view.stats.contextSegments.assistant + estimateTokens(text),
+          },
         },
       }
     }
@@ -421,6 +491,14 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
           summary: '',
           detail: undefined,
         }],
+        stats: {
+          ...view.stats,
+          contextSegments: {
+            ...view.stats.contextSegments,
+            tools: view.stats.contextSegments.tools
+              + (typeof data.arguments === 'string' ? estimateTokens(data.arguments) : 0),
+          },
+        },
       }
     }
     case 'tool/result': {
@@ -449,6 +527,10 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
         stats: {
           ...view.stats,
           toolMs: view.stats.toolMs + (started === undefined ? 0 : Math.max(0, event.time - started)),
+          contextSegments: {
+            ...view.stats.contextSegments,
+            tools: view.stats.contextSegments.tools + estimateTokens(rawText),
+          },
         },
       }
     }
@@ -586,8 +668,20 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
     case 'request/header': {
       // The session's own model record: the latest snapshot's provider/model
       // pair, exactly what a resumed TUI restores as the selection.
+      // The snapshot's rendered system prompt is the current system slot, so
+      // it REPLACES the estimate (an older system prompt is not re-sent).
       const config = event.data.header.config
-      return { ...view, model: `${config.provider}/${config.model}` }
+      return {
+        ...view,
+        model: `${config.provider}/${config.model}`,
+        stats: {
+          ...view.stats,
+          contextSegments: {
+            ...view.stats.contextSegments,
+            system: estimateTokens(event.data.header.system ?? ''),
+          },
+        },
+      }
     }
     case 'plan/mode':
       // Whole-value replace; the last one wins (upstream fold semantics).

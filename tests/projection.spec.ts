@@ -538,11 +538,103 @@ describe('transcript projection', () => {
       usage: { inputTokens: 450, outputTokens: 20, cacheReadTokens: 300 },
       lastPromptTokens: 450,
       contextWindow: 0,
+      contextSegments: { system: 0, prompt: 0, assistant: 2, thinking: 0, tools: 5 },
       ttftMs: 0,
       ttftSteps: 0,
       decodeMs: 0,
       decodeTokens: 0,
     })
+  })
+})
+
+describe('context segment estimates', () => {
+  it('counts a direct human prompt into the prompt segment', () => {
+    const view = projectEvent(createTranscriptView(), userEvent('hello', 1))
+    expect(view.stats.contextSegments).toEqual({ system: 0, prompt: 2, assistant: 0, thinking: 0, tools: 0 })
+  })
+
+  it('counts CJK prompts at ~1 token per char instead of 4 chars per token', () => {
+    const view = projectEvent(createTranscriptView(), userEvent('你好世界', 1))
+    expect(view.stats.contextSegments.prompt).toBe(4)
+  })
+
+  it('splits assistant replies into visible text and hidden thinking', () => {
+    const view = projectEvent(createTranscriptView(), {
+      type: 'assistant/message',
+      seq: 1,
+      time: 0,
+      data: {
+        turn: 1,
+        step: 1,
+        message: createAssistantMessage({
+          content: [
+            { type: 'reasoning', text: 'let me think' },
+            { type: 'text', text: 'here is the answer' },
+          ],
+        }),
+      },
+    } as unknown as SessionEvent)
+    expect(view.stats.contextSegments).toEqual({ system: 0, prompt: 0, assistant: 5, thinking: 3, tools: 0 })
+  })
+
+  it('counts tool call arguments and result text into the tools segment', () => {
+    const view = projectEvents([
+      toolCallEvent('read_file', callId.current, 1),
+      toolResultEvent(callId.current, 'ok', false, 2),
+    ])
+    expect(view.stats.contextSegments.tools).toBe(5)
+  })
+
+  it('counts injected plugin context into the system segment', () => {
+    const event = {
+      type: 'user/message',
+      seq: 1,
+      time: 0,
+      data: createUserMessage({
+        content: [{ type: 'text', text: 'x'.repeat(400) }],
+        source: { kind: 'plugin', plugin: 'watcher', form: 'notice', summary: 'files changed' },
+      }),
+    } as SessionEvent
+    const view = projectEvent(createTranscriptView(), event)
+    expect(view.stats.contextSegments.system).toBe(4)
+  })
+
+  it('replaces the system segment from the latest request header system prompt', () => {
+    const header = (system: string | undefined, seq: number) => ({
+      type: 'request/header',
+      seq,
+      time: 0,
+      data: {
+        header: {
+          config: { provider: 'p', model: 'm' },
+          ...(system === undefined ? {} : { system }),
+        },
+        reason: 'change',
+      },
+    }) as unknown as SessionEvent
+    let view = projectEvent(createTranscriptView(), header('you are helpful', 1))
+    expect(view.stats.contextSegments.system).toBe(4)
+    view = projectEvent(view, header(undefined, 2))
+    expect(view.stats.contextSegments.system).toBe(0)
+  })
+
+  it('does not estimate queued rows until their durable user message lands', () => {
+    const message = createUserMessage({ content: [{ type: 'text', text: 'hello' }], source: { kind: 'user' } })
+    const spliced = {
+      type: 'agent/inbox/spliced',
+      seq: 1,
+      time: 0,
+      data: { target: 'next-turn', start: 0, inserted: [message] },
+    } as unknown as SessionEvent
+    const queued = projectEvent(createTranscriptView(), spliced)
+    expect(queued.stats.contextSegments.prompt).toBe(0)
+    const landed = projectEvent(queued, { type: 'user/message', seq: 2, time: 0, data: message } as SessionEvent)
+    expect(landed.stats.contextSegments.prompt).toBe(2)
+  })
+
+  it('accumulates estimates across events', () => {
+    const view = projectEvents([userEvent('hello', 1), userEvent('world', 2)])
+    expect(view.stats.contextSegments.prompt).toBe(4)
   })
 })
 

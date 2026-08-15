@@ -2,6 +2,7 @@
 
 import { createElement, useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
 import { Box, Text, useInput, useStdout } from 'ink'
+import type { ModelRow } from './models.ts'
 import type { PresetRow } from './presets.ts'
 import type { PluginRow } from './plugin-inventory.ts'
 import type { SessionDirectoryOptions, SessionRow } from './session-directory.ts'
@@ -9,11 +10,7 @@ import { panelViewport, revealRow } from './render/inspector.ts'
 import { textLines } from './render/lines.ts'
 import { DEFAULT_STATUSLINE_ITEMS, STATUS_ITEMS, type StatusItemId } from './render/status.ts'
 import { displayText, singleLineText, truncateColumns } from './render/text.ts'
-import { TUI_RGB } from './theme.ts'
-
-function color(rgb: readonly [number, number, number]): string {
-  return `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`
-}
+import { getPalette, inkColor } from './theme.ts'
 
 interface ListFrameProps {
   readonly title: string
@@ -44,15 +41,15 @@ function ListFrame(props: ListFrameProps): ReactElement {
   const visible = stateRows.slice(offset, offset + bodyRows)
   return createElement(
     Box,
-    { width: viewport.outerColumns, borderStyle: 'round', borderColor: color(TUI_RGB.dim), flexDirection: 'column', paddingX: 1 },
-    createElement(Text, { color: color(TUI_RGB.brandBright), wrap: 'truncate-end' }, truncateColumns(props.title, viewport.contentColumns)),
+    { width: viewport.outerColumns, borderStyle: 'round', borderColor: inkColor(getPalette().dim), flexDirection: 'column', paddingX: 1 },
+    createElement(Text, { color: inkColor(getPalette().brandBright), wrap: 'truncate-end' }, truncateColumns(props.title, viewport.contentColumns)),
     createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns(`search: ${props.query === '' ? 'type to filter' : props.query}`, viewport.contentColumns)),
     ...visible.map((row, index) => {
       const absolute = offset + index
       const selected = !props.loading && props.error === undefined && props.rows.length > 0 && absolute === props.cursor
       return createElement(Text, {
         key: row.key,
-        color: selected ? color(TUI_RGB.brandBright) : row.disabled ? color(TUI_RGB.dim) : undefined,
+        color: selected ? inkColor(getPalette().brandBright) : row.disabled ? inkColor(getPalette().dim) : undefined,
         dimColor: row.disabled,
         wrap: 'truncate-end',
       }, truncateColumns(`${selected ? '› ' : '  '}${row.text}`, viewport.contentColumns))
@@ -247,8 +244,8 @@ function DocumentPanel({ title, text, error, close }: {
       : lines.slice(scroll, scroll + viewport.bodyRows)
   return createElement(
     Box,
-    { width: viewport.outerColumns, borderStyle: 'round', borderColor: color(TUI_RGB.dim), flexDirection: 'column', paddingX: 1 },
-    createElement(Text, { color: color(TUI_RGB.brandBright), wrap: 'truncate-end' }, truncateColumns(title, viewport.contentColumns)),
+    { width: viewport.outerColumns, borderStyle: 'round', borderColor: inkColor(getPalette().dim), flexDirection: 'column', paddingX: 1 },
+    createElement(Text, { color: inkColor(getPalette().brandBright), wrap: 'truncate-end' }, truncateColumns(title, viewport.contentColumns)),
     ...body.map((line, index) => createElement(Text, { key: `${scroll}-${index}`, wrap: 'truncate-end' }, truncateColumns(line, viewport.contentColumns))),
     createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns(`lines ${lines.length === 0 ? 0 : scroll + 1}-${Math.min(lines.length, scroll + viewport.bodyRows)}/${lines.length} · ↑↓/pg/g/G · t/esc close`, viewport.contentColumns)),
   )
@@ -307,8 +304,8 @@ export function HistoryPanel({ entries, fill, close }: {
     : `/history · ${matches.length} of ${entries.length} match '${truncateColumns(singleLineText(query), viewport.contentColumns - 30)}'`
   return createElement(
     Box,
-    { width: viewport.outerColumns, borderStyle: 'round', borderColor: color(TUI_RGB.dim), flexDirection: 'column', paddingX: 1 },
-    createElement(Text, { color: color(TUI_RGB.brandBright), wrap: 'truncate-end' }, truncateColumns(header, viewport.contentColumns)),
+    { width: viewport.outerColumns, borderStyle: 'round', borderColor: inkColor(getPalette().dim), flexDirection: 'column', paddingX: 1 },
+    createElement(Text, { color: inkColor(getPalette().brandBright), wrap: 'truncate-end' }, truncateColumns(header, viewport.contentColumns)),
     createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns(`  filter ${query === '' ? '· type to search prompts' : '· ' + singleLineText(query)}, enter fills the composer`, viewport.contentColumns)),
     ...(visible.length === 0
       ? [createElement(Text, { key: 'empty', dimColor: true, wrap: 'truncate-end' }, truncateColumns('  no matching prompts', viewport.contentColumns))]
@@ -319,7 +316,7 @@ export function HistoryPanel({ entries, fill, close }: {
           Text,
           {
             key: `history-${absolute}`,
-            color: selected ? color(TUI_RGB.brandBright) : undefined,
+            color: selected ? inkColor(getPalette().brandBright) : undefined,
             wrap: 'truncate-end',
           },
           truncateColumns((selected ? '› ' : '  ') + displayText(entry), viewport.contentColumns),
@@ -397,8 +394,8 @@ export function StatuslinePanel({ enabled, change, close }: {
   const meta = new Map(STATUS_ITEMS.map(item => [item.id, item]))
   return createElement(
     Box,
-    { width: viewport.outerColumns, borderStyle: 'round', borderColor: color(TUI_RGB.dim), flexDirection: 'column', paddingX: 1 },
-    createElement(Text, { color: color(TUI_RGB.brandBright), wrap: 'truncate-end' }, truncateColumns('/statusline · items apply to the live status line below', viewport.contentColumns)),
+    { width: viewport.outerColumns, borderStyle: 'round', borderColor: inkColor(getPalette().dim), flexDirection: 'column', paddingX: 1 },
+    createElement(Text, { color: inkColor(getPalette().brandBright), wrap: 'truncate-end' }, truncateColumns('/statusline · items apply to the live status line below', viewport.contentColumns)),
     ...visible.map((id, index) => {
       const absolute = offset + index
       const selected = absolute === cursor
@@ -407,7 +404,7 @@ export function StatuslinePanel({ enabled, change, close }: {
         Text,
         {
           key: id,
-          color: selected ? color(TUI_RGB.brandBright) : undefined,
+          color: selected ? inkColor(getPalette().brandBright) : undefined,
           dimColor: !on.has(id) || undefined,
           wrap: 'truncate-end',
         },
@@ -416,4 +413,57 @@ export function StatuslinePanel({ enabled, change, close }: {
     }),
     createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns('↑↓ move · space toggle · ←→ reorder · d default · esc close', viewport.contentColumns)),
   )
+}
+
+/**
+ * The `/model` reasoning-effort stage (the Codex model → reasoning popup
+ * contract): one bounded list over the selected model's adapter-advertised
+ * effort levels, with the effective effort and the model default marked.
+ * Enter applies one level; Esc returns to the model list without applying.
+ */
+export function EffortPanel({ row, current, select, back }: {
+  /** The model row whose advertised levels this stage lists. */
+  row: ModelRow
+  /** Effective effort currently in force ('' when none), for the ● mark. */
+  current: string | undefined
+  /** Accept one advertised effort id. */
+  select(effortId: string): void
+  /** Return to the model list without applying. */
+  back(): void
+}): ReactElement {
+  const [cursor, setCursor] = useState(0)
+  const efforts = row.reasoning?.efforts ?? []
+  useEffect(() => {
+    if (efforts.length === 0) {
+      if (cursor !== 0) setCursor(0)
+      return
+    }
+    if (cursor >= efforts.length) setCursor(efforts.length - 1)
+  }, [efforts.length, cursor])
+  useInput((input, key) => {
+    if (key.escape || input === 'q') return back()
+    if (efforts.length === 0) return
+    if (key.upArrow) {
+      setCursor(cursor > 0 ? cursor - 1 : efforts.length - 1)
+      return
+    }
+    if (key.downArrow) {
+      setCursor(cursor < efforts.length - 1 ? cursor + 1 : 0)
+      return
+    }
+    if (key.return && efforts[cursor] !== undefined) {
+      select(efforts[cursor]!.id)
+    }
+  })
+  return createElement(ListFrame, {
+    title: `/model — effort for ${row.providerName} · ${row.modelName}`,
+    rows: efforts.map(effort => ({
+      key: effort.id,
+      text: `${effort.id === current ? '●' : '○'} ${effort.name}${effort.id === row.reasoning?.defaultEffort ? ' · default' : ''}${effort.description === undefined ? '' : ` · ${effort.description}`}`,
+    })),
+    cursor,
+    loading: false,
+    query: '',
+    footer: '↑↓ choose · enter apply · esc/q back',
+  })
 }

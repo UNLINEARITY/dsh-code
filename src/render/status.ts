@@ -11,7 +11,7 @@
  */
 
 import { visibleColumns } from './markdown.ts'
-import type { TranscriptStats } from './projection.ts'
+import type { ContextSegments, TranscriptStats } from './projection.ts'
 import { singleLineText, truncateColumns } from './text.ts'
 
 /**
@@ -79,6 +79,14 @@ export type StatusTone =
   | 'success'
   | 'warn'
   | 'error'
+  // Context-bar segment tones, one DeepSeek blue shade per content type
+  // (dark → light: system/prompt/assistant/thinking/tools). Only the
+  // context bar emits them; the footer maps each to an existing theme color.
+  | 'ctxSystem'
+  | 'ctxPrompt'
+  | 'ctxAssistant'
+  | 'ctxThinking'
+  | 'ctxTools'
 
 /** One colored run inside the status bar. */
 export interface StatusSpan {
@@ -124,31 +132,150 @@ export const STATUS_ITEM_SEPARATOR = ' · '
 /** The Codex-style mode cycle hint appended to the permission badge. */
 export const STATUS_CYCLE_HINT = ' (shift+tab to cycle)'
 
-/** Cells in the context-occupancy progress bar (block glyphs count two columns in the budget). */
-export const CONTEXT_BAR_CELLS = 10
-/** Occupancy at which the bar switches from brand blue to a single amber warning. */
+/**
+ * Interior columns of the segmented context bar (content-type segments plus
+ * the free tail whose right edge carries the usage readout). Fixed so the
+ * row-2 drop ladder can pre-measure the group; the bar shrinks its labels and
+ * readout inside this budget rather than asking the layout for more room.
+ */
+export const CONTEXT_BAR_WIDTH = 24
+/** Occupancy at which the usage readout flips from brand blue to amber. */
 export const CONTEXT_WARN_PERCENT = 90
+/** Free-tail floor in columns: wide enough for the bare percent readout, so
+ * the warning stays visible even at 100%+ occupancy. */
+const CONTEXT_MIN_FREE = 5
+
+/** One content-type segment of the context bar (pure data; colors live in app.ts). */
+export interface ContextSegmentSpec {
+  key: keyof ContextSegments
+  /** Tone the footer maps to a DeepSeek blue shade. */
+  tone: StatusTone
+  /** Labels longest → shortest; the first one fitting the segment width wins. */
+  labels: readonly string[]
+}
+
+/** The five content types in conversation order, dark → light blue. */
+export const CONTEXT_SEGMENTS: readonly ContextSegmentSpec[] = [
+  { key: 'system', tone: 'ctxSystem', labels: ['system', 'sys', 's'] },
+  { key: 'prompt', tone: 'ctxPrompt', labels: ['prompt', 'pr', 'p'] },
+  { key: 'assistant', tone: 'ctxAssistant', labels: ['assistant', 'ast', 'a'] },
+  { key: 'thinking', tone: 'ctxThinking', labels: ['think', 'th', 't'] },
+  { key: 'tools', tone: 'ctxTools', labels: ['tools', 'tl', 'x'] },
+] as const
+
+/** First label whose visible width fits the segment; empty only when none do. */
+function chooseContextLabel(labels: readonly string[], width: number): string {
+  for (const label of labels) {
+    if (visibleColumns(label) <= width) return label
+  }
+  return ''
+}
+
+/** Center a label inside its segment width; the padding spaces carry the tone. */
+function centerInSegment(text: string, width: number): string {
+  const textWidth = visibleColumns(text)
+  const left = Math.floor((width - textWidth) / 2)
+  return ' '.repeat(Math.max(0, left)) + text + ' '.repeat(Math.max(0, width - textWidth - left))
+}
 
 /**
- * Render a context-occupancy percent as a bracketed fixed-width progress bar
- * plus the percentage: `[▰▰▰▱▱▱▱▱▱▱] 25%`. Filled cells and the percent read
- * in brand blue (accent), empty cells and the brackets read dim (label), and
- * the whole meter flips to one amber warning once occupancy reaches the
- * warning threshold. The bar fill clamps to 100 while the printed percent
- * keeps the raw value so an over-budget session reads as such.
- * @param percent - occupancy percent (may exceed 100).
+ * Largest-remainder allocation: distribute `columns` across `values`
+ * proportionally, handing each leftover column to the largest remainder.
+ */
+function allocateProportionally(values: readonly number[], columns: number): number[] {
+  if (columns <= 0) return values.map(() => 0)
+  const total = values.reduce((sum, value) => sum + value, 0)
+  if (total <= 0) return values.map(() => 0)
+  const raw = values.map(value => value / total * columns)
+  const allocated = raw.map(Math.floor)
+  let remaining = columns - allocated.reduce((sum, value) => sum + value, 0)
+  const remainders = raw
+    .map((value, index) => ({ index, remainder: value - Math.floor(value) }))
+    .sort((left, right) => right.remainder - left.remainder)
+  for (const slot of remainders) {
+    if (remaining <= 0) break
+    allocated[slot.index] = (allocated[slot.index] ?? 0) + 1
+    remaining -= 1
+  }
+  return allocated
+}
+
+/** Bar column widths: every non-zero segment keeps at least one column before
+ * the remaining columns share by token proportion. */
+function allocateBarColumns(values: readonly number[], width: number): number[] {
+  const visible = values
+    .map((value, index) => (value > 0 ? index : -1))
+    .filter(index => index >= 0)
+  if (visible.length === 0 || visible.length >= width) {
+    return allocateProportionally(values, width)
+  }
+  const minimum = values.map(() => 0)
+  for (const index of visible) minimum[index] = 1
+  const remaining = allocateProportionally(values, width - visible.length)
+  return minimum.map((min, index) => min + (remaining[index] ?? 0))
+}
+
+/**
+ * Render context occupancy as a segmented bar: one DeepSeek-blue run per
+ * content type (system/prompt/assistant/thinking/tools), column widths
+ * proportional to their estimated token share, each with a centered label
+ * that shortens to fit (system→sys→s). The remaining free tail is a dim
+ * track whose right edge carries the usage readout (`12.3K/1.0M 25%`,
+ * shrinking to the bare percent as the tail narrows). The readout flips to
+ * amber once occupancy reaches the warning threshold; the segment blues stay
+ * untouched so the composition remains readable at full context. The used
+ * total comes from the reported `lastPromptTokens`, never from the estimates.
+ * @param segments - estimated used tokens per content type.
+ * @param usedTokens - reported used tokens (drives the readout and percent).
+ * @param contextWindow - route capacity.
+ * @param width - total bar interior columns.
  * @returns tone-split spans for the footer to paint.
  */
-export function contextBar(percent: number): readonly StatusSpan[] {
-  const clamped = Math.max(0, Math.min(100, Math.round(percent)))
-  const filled = Math.round(clamped / 100 * CONTEXT_BAR_CELLS)
-  const warning = clamped >= CONTEXT_WARN_PERCENT
-  const tone: StatusTone = warning ? 'warn' : 'accent'
-  const percentText = ' ' + Math.max(0, Math.min(999, Math.round(percent))) + '%'
-  const spans: StatusSpan[] = [{ text: '[', tone: 'label' }]
-  if (filled > 0) spans.push({ text: '▰'.repeat(filled), tone })
-  if (filled < CONTEXT_BAR_CELLS) spans.push({ text: '▱'.repeat(CONTEXT_BAR_CELLS - filled), tone: 'label' })
-  spans.push({ text: ']', tone: 'label' }, { text: percentText, tone })
+export function contextBar(
+  segments: ContextSegments,
+  usedTokens: number,
+  contextWindow: number,
+  width: number,
+): readonly StatusSpan[] {
+  if (width <= 0 || contextWindow <= 0) return []
+  const used = Math.max(0, usedTokens)
+  const percent = Math.round(used / contextWindow * 100)
+  const warning = percent >= CONTEXT_WARN_PERCENT
+  const readoutTone: StatusTone = warning ? 'warn' : 'value'
+
+  const freeShare = Math.round(Math.max(0, contextWindow - used) / contextWindow * width)
+  const freeColumns = Math.min(width, Math.max(freeShare, CONTEXT_MIN_FREE))
+  const usedColumns = Math.max(0, width - freeColumns)
+
+  const total = `${formatTokens(used)}/${formatTokens(contextWindow)}`
+  const percentText = `${percent}%`
+  const readout = freeColumns >= visibleColumns(`${total} ${percentText}`)
+    ? `${total} ${percentText}`
+    : freeColumns >= visibleColumns(percentText)
+      ? percentText
+      : ''
+
+  const values = CONTEXT_SEGMENTS.map(segment => segments[segment.key])
+  const estimated = values.reduce((sum, value) => sum + value, 0)
+  // No estimate yet (a resumed session before any text-bearing event): treat
+  // the whole reported used context as one prompt segment instead of an
+  // empty bar.
+  const allocation = allocateBarColumns(
+    estimated > 0 ? values : [0, used, 0, 0, 0],
+    usedColumns,
+  )
+  const spans: StatusSpan[] = []
+  for (let index = 0; index < CONTEXT_SEGMENTS.length; index += 1) {
+    const columns = allocation[index] ?? 0
+    if (columns <= 0) continue
+    spans.push({
+      text: centerInSegment(chooseContextLabel(CONTEXT_SEGMENTS[index].labels, columns), columns),
+      tone: CONTEXT_SEGMENTS[index].tone,
+    })
+  }
+  const pad = freeColumns - visibleColumns(readout)
+  if (pad > 0) spans.push({ text: '▱'.repeat(pad), tone: 'label' })
+  if (readout !== '') spans.push({ text: readout, tone: readoutTone })
   return spans
 }
 
@@ -409,12 +536,18 @@ function buildCandidates(
       id: 'cache',
     })
   }
-  // Context occupancy as a bracketed blue progress bar (the web StatsLine
-  // meter): the most recent reported prompt size against the advertised
-  // route capacity, rendered as fixed-width filled/empty cells plus percent.
+  // Context occupancy as a segmented bar: per-content-type runs colored by
+  // their own blue shade with a right-aligned usage readout. The used total
+  // is the most recent reported prompt size against the advertised route
+  // capacity (the same figures the old bracket bar showed).
   if (stats.contextWindow > 0 && stats.lastPromptTokens > 0 && enabled.has('context')) {
     row2.push({
-      group: { spans: [{ text: 'context ', tone: 'label' }, ...contextBar(stats.lastPromptTokens / stats.contextWindow * 100)] },
+      group: {
+        spans: [
+          { text: 'context ', tone: 'label' },
+          ...contextBar(stats.contextSegments, stats.lastPromptTokens, stats.contextWindow, CONTEXT_BAR_WIDTH),
+        ],
+      },
       rank: RANK2_CONTEXT,
       id: 'context',
     })

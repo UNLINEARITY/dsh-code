@@ -8,10 +8,17 @@ import { App } from '../src/app.ts'
 import { createTranscriptStore } from '../src/store.ts'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { DEFAULT_STATUSLINE_ITEMS } from '../src/render/status.ts'
+import type { ModelRow } from '../src/models.ts'
 import type { ApprovalSnapshot } from '../src/approval.ts'
 import type { PendingQuestion, QuestionSnapshot } from '../src/questions.ts'
 
 const wait = async (): Promise<void> => new Promise(resolve => setTimeout(resolve, 100))
+
+// useSyncExternalStore compares getSnapshot results by identity: these
+// doubles must return one frozen object forever, or React spins into an
+// infinite re-render loop (Maximum update depth exceeded).
+const approvalSnapshot = Object.freeze({ pending: undefined, answered: false })
+const questionSnapshot = Object.freeze({ pending: undefined })
 
 describe('exclusive panel height budgets', () => {
   it('bounds long approval and plan-review content without clearing the terminal', async () => {
@@ -567,14 +574,14 @@ describe('queued messages and global recall', () => {
           approvalListeners.add(listener)
           return () => approvalListeners.delete(listener)
         },
-        getSnapshot: () => ({ pending: undefined, answered: false }),
+        getSnapshot: () => approvalSnapshot,
       },
       questions: {
         subscribe: (listener: () => void) => {
           questionListeners.add(listener)
           return () => questionListeners.delete(listener)
         },
-        getSnapshot: () => ({ pending: undefined }),
+        getSnapshot: () => questionSnapshot,
         submit: noop,
         cancel: noop,
       },
@@ -688,11 +695,11 @@ describe('queued messages and global recall', () => {
       ]),
       approval: {
         subscribe: () => () => {},
-        getSnapshot: () => ({ pending: undefined, answered: false }),
+        getSnapshot: () => approvalSnapshot,
       },
       questions: {
         subscribe: () => () => {},
-        getSnapshot: () => ({ pending: undefined }),
+        getSnapshot: () => questionSnapshot,
         submit: noop,
         cancel: noop,
       },
@@ -744,6 +751,312 @@ describe('queued messages and global recall', () => {
       const frames = ['⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷']
       expect(frames.some(frame => output.includes(frame))).toBe(true)
       expect(output).not.toContain('❯ type a message')
+    } finally {
+      instance.unmount()
+      stdin.destroy()
+      stdout.destroy()
+    }
+  })
+})
+
+describe('/model effort stage', () => {
+  it('lists a multi-level model’s efforts, backs out without applying, and applies a picked level', async () => {
+    const stdin = Object.assign(new PassThrough(), {
+      isTTY: true,
+      isRaw: false,
+      setRawMode(value: boolean) {
+        this.isRaw = value
+        return this
+      },
+      ref() {},
+      unref() {},
+    }) as unknown as NodeJS.ReadStream
+    const stdout = Object.assign(new PassThrough(), {
+      isTTY: true,
+      columns: 100,
+      rows: 24,
+    }) as unknown as NodeJS.WriteStream
+    let output = ''
+    stdout.on('data', chunk => {
+      output += chunk.toString()
+    })
+    const noop = (): void => {}
+    const approvalListeners = new Set<() => void>()
+    const questionListeners = new Set<() => void>()
+    const approvalSnapshot: ApprovalSnapshot = { pending: undefined, answered: false }
+    const questionSnapshot: QuestionSnapshot = { pending: undefined }
+    const picked: { row: ModelRow; effortId?: string }[] = []
+    const rows: readonly ModelRow[] = [
+      {
+        provider: 'deepseek-official',
+        providerName: 'DeepSeek',
+        model: 'deepseek-v4',
+        modelName: 'V4',
+        reasoning: {
+          efforts: [
+            { id: 'off', name: 'Off' },
+            { id: 'high', name: 'High' },
+            { id: 'max', name: 'Max' },
+          ],
+          defaultEffort: 'high',
+        },
+      },
+      {
+        provider: 'acme',
+        providerName: 'Acme',
+        model: 'single',
+        modelName: 'Single',
+        reasoning: { efforts: [{ id: 'high', name: 'High' }] },
+      },
+      { provider: 'acme', providerName: 'Acme', model: 'plain', modelName: 'Plain' },
+    ]
+    const instance = render(createElement(App, {
+      store: createTranscriptStore(),
+      approval: {
+        subscribe: (listener: () => void) => {
+          approvalListeners.add(listener)
+          return () => approvalListeners.delete(listener)
+        },
+        getSnapshot: () => approvalSnapshot,
+      },
+      questions: {
+        subscribe: (listener: () => void) => {
+          questionListeners.add(listener)
+          return () => questionListeners.delete(listener)
+        },
+        getSnapshot: () => questionSnapshot,
+        submit: noop,
+        cancel: noop,
+      },
+      commands: { descriptors: [], subscribe: () => noop },
+      skills: { rows: [], subscribe: () => noop },
+      model: 'acme/plain',
+      cwd: 'dsh-cli',
+      workspaceRoot: 'C:\\repo\\dsh-cli',
+      branch: 'main',
+      sessionId: '12345678',
+      resumed: false,
+      mode: 'standard',
+      dispatch: noop,
+      steer: noop,
+      interrupt: () => false,
+      quit: noop,
+      loadModels: async () => ({ rows, failures: [] }),
+      loadMentions: async () => [],
+      selectModel: (row: ModelRow, effortId?: string) => {
+        picked.push({ row, effortId })
+        return `${row.provider}/${row.model}`
+      },
+      cyclePermission: () => '',
+      exportTranscript: async () => {},
+      renameTitle: () => '',
+      loadPresets: async () => [],
+      switchMode: async id => id,
+      createSession: noop,
+      loadSessions: async () => [],
+      loadSessionTranscript: async () => '',
+      switchSession: noop,
+      cancelSessionSwitch: () => false,
+      loadPlugins: () => [],
+      statusline: DEFAULT_STATUSLINE_ITEMS,
+      saveStatusline: noop,
+      history: [],
+      recordHistory: noop,
+      cancelQueued: noop,
+      onBridgeReady: noop,
+    }), {
+      stdin,
+      stdout,
+      stderr: stdout,
+      exitOnCtrlC: false,
+      patchConsole: false,
+    })
+
+    try {
+      await wait()
+      output = ''
+      stdin.write('/model')
+      await wait()
+      stdin.write('\r')
+      await wait()
+      stdin.write('\r')
+      await wait()
+      // The first row advertises three levels: the effort stage opens instead
+      // of applying directly, with the model default marked.
+      expect(output).toContain('effort for DeepSeek · V4')
+      expect(output).toContain('Off')
+      expect(output).toContain('Max')
+      expect(output).toContain('· default')
+      expect(picked).toHaveLength(0)
+
+      // Esc returns to the model list without applying anything.
+      output = ''
+      stdin.write('\x1b')
+      await wait()
+      expect(output).toContain('select model')
+      expect(output).toContain('Plain')
+      expect(picked).toHaveLength(0)
+
+      // A single advertised level is applied directly, no stage.
+      output = ''
+      stdin.write('\x1b[B')
+      await wait()
+      stdin.write('\r')
+      await wait()
+      expect(picked).toEqual([{ row: rows[1], effortId: 'high' }])
+      expect(output).toContain('model → next step uses acme/single@high')
+
+      // A model without reasoning applies with no effort at all.
+      output = ''
+      stdin.write('/model')
+      await wait()
+      stdin.write('\r')
+      await wait()
+      stdin.write('\x1b[B')
+      await wait()
+      stdin.write('\x1b[B')
+      await wait()
+      stdin.write('\r')
+      await wait()
+      expect(picked).toEqual([
+        { row: rows[1], effortId: 'high' },
+        { row: rows[2] },
+      ])
+      expect(output).toContain('model → next step uses acme/plain')
+
+      // Re-open the multi-level model and pick the third level.
+      output = ''
+      stdin.write('/model')
+      await wait()
+      stdin.write('\r')
+      await wait()
+      stdin.write('\r')
+      await wait()
+      expect(output).toContain('effort for DeepSeek · V4')
+      stdin.write('\x1b[B')
+      await wait()
+      stdin.write('\x1b[B')
+      await wait()
+      stdin.write('\r')
+      await wait()
+      expect(picked).toEqual([
+        { row: rows[1], effortId: 'high' },
+        { row: rows[2] },
+        { row: rows[0], effortId: 'max' },
+      ])
+      expect(output).toContain('model → next step uses deepseek-official/deepseek-v4@max')
+      expect(output).toContain('type a message')
+    } finally {
+      instance.unmount()
+      stdin.destroy()
+      stdout.destroy()
+    }
+  })
+})
+
+describe('/effort command', () => {
+  it('opens the effort stage for the current model even when its default route name differs from the catalog', async () => {
+    const stdin = Object.assign(new PassThrough(), {
+      isTTY: true,
+      isRaw: false,
+      setRawMode(value: boolean) {
+        this.isRaw = value
+        return this
+      },
+      ref() {},
+      unref() {},
+    }) as unknown as NodeJS.ReadStream
+    const stdout = Object.assign(new PassThrough(), {
+      isTTY: true,
+      columns: 100,
+      rows: 24,
+    }) as unknown as NodeJS.WriteStream
+    let output = ''
+    stdout.on('data', chunk => {
+      output += chunk.toString()
+    })
+    const noop = (): void => {}
+    const rows: readonly ModelRow[] = [
+      {
+        provider: 'deepseek-official',
+        providerName: 'DeepSeek',
+        model: 'deepseek-v4',
+        modelName: 'V4',
+        reasoning: {
+          efforts: [
+            { id: 'off', name: 'Off' },
+            { id: 'high', name: 'High' },
+            { id: 'max', name: 'Max' },
+          ],
+          defaultEffort: 'high',
+        },
+      },
+      { provider: 'acme', providerName: 'Acme', model: 'plain', modelName: 'Plain' },
+    ]
+    const instance = render(createElement(App, {
+      store: createTranscriptStore(),
+      approval: { subscribe: () => noop, getSnapshot: () => approvalSnapshot },
+      questions: {
+        subscribe: () => noop,
+        getSnapshot: () => questionSnapshot,
+        submit: noop,
+        cancel: noop,
+      },
+      commands: { descriptors: [], subscribe: () => noop },
+      skills: { rows: [], subscribe: () => noop },
+      // The deployment default names the route `deepseek`, while the catalog
+      // registers `deepseek-official` for the same model id — the fallback
+      // match must still resolve the row and open the effort stage.
+      model: 'deepseek/deepseek-v4',
+      cwd: 'dsh-cli',
+      workspaceRoot: 'C:\\repo\\dsh-cli',
+      branch: 'main',
+      sessionId: '12345678',
+      resumed: false,
+      mode: 'standard',
+      dispatch: noop,
+      steer: noop,
+      interrupt: () => false,
+      quit: noop,
+      loadModels: async () => ({ rows, failures: [] }),
+      loadMentions: async () => [],
+      selectModel: () => 'deepseek/deepseek-v4',
+      cyclePermission: () => '',
+      exportTranscript: async () => {},
+      renameTitle: () => '',
+      loadPresets: async () => [],
+      switchMode: async id => id,
+      createSession: noop,
+      loadSessions: async () => [],
+      loadSessionTranscript: async () => '',
+      switchSession: noop,
+      cancelSessionSwitch: () => false,
+      loadPlugins: () => [],
+      statusline: DEFAULT_STATUSLINE_ITEMS,
+      saveStatusline: noop,
+      history: [],
+      recordHistory: noop,
+      cancelQueued: noop,
+      onBridgeReady: noop,
+    }), {
+      stdin,
+      stdout,
+      stderr: stdout,
+      exitOnCtrlC: false,
+      patchConsole: false,
+    })
+
+    try {
+      await wait()
+      stdin.write('/effort')
+      await wait()
+      stdin.write('\r')
+      await wait()
+      // The fallback match opened the effort stage for the catalog row.
+      expect(output).toContain('effort for DeepSeek · V4')
+      expect(output).toContain('○ Off')
+      expect(output).toContain('High · default')
+      expect(output).toContain('Max')
     } finally {
       instance.unmount()
       stdin.destroy()
