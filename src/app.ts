@@ -17,7 +17,7 @@
 import {
   createElement, memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactElement,
 } from 'react'
-import { Box, Static, Text, useInput, useStdout } from 'ink'
+import { Box, Static, Text, useInput, useStdout, type Key } from 'ink'
 import { assertNever } from '@deepseek-ai/dsh-llm'
 import type { CommandDescriptor } from '@deepseek-ai/dsh-commands'
 import type { TodoItem } from '@deepseek-ai/dsh-session'
@@ -164,6 +164,21 @@ function useFrames(intervalMs: number): number {
     }
   }, [intervalMs])
   return tick
+}
+
+/**
+ * Ink re-subscribes its input effect whenever the handler identity changes.
+ * Keep terminal input ownership stable while a local surface updates cursor,
+ * scroll, or draft state; otherwise every key toggles raw mode and can make
+ * Ink repeatedly repaint the live region.
+ */
+function useStableInput(handler: (input: string, key: Key) => void, active: boolean): void {
+  const handlerRef = useRef(handler)
+  handlerRef.current = handler
+  const stableHandler = useCallback((input: string, key: Key): void => {
+    handlerRef.current(input, key)
+  }, [])
+  useInput(stableHandler, { isActive: active })
 }
 
 /** Single-cell stepped pulse: the web's 125ms flat-hold brightness steps over 1s. */
@@ -753,7 +768,7 @@ function ApprovalBar({ snapshot, locked }: { snapshot: ApprovalSnapshot; locked:
   const { answered } = snapshot
   return createElement(
     Box,
-    { flexDirection: 'column', paddingX: 1, borderStyle: 'round', borderColor: inkColor(TUI_RGB.warn) },
+    { flexDirection: 'column', width: viewport.outerColumns, paddingX: 1, borderStyle: 'round', borderColor: inkColor(TUI_RGB.warn) },
     createElement(Text, { color: inkColor(TUI_RGB.warn), bold: true, wrap: 'truncate-end' }, truncateColumns(`⏸ waiting for approval · lines ${content.length === 0 ? 0 : visibleScroll + 1}-${Math.min(content.length, visibleScroll + viewport.bodyRows)}/${content.length}`, viewport.contentColumns)),
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
     createElement(StyledRows, { lines: content.slice(visibleScroll, visibleScroll + viewport.bodyRows) }),
@@ -776,6 +791,7 @@ function QuestionBar({ store, snapshot, locked }: { store: QuestionStore; snapsh
   const stdout = useStdout().stdout
   const viewport = panelViewport(stdout?.columns ?? 80, stdout?.rows ?? 30)
   const pending = snapshot.pending
+  const request = pending?.request
   const [index, setIndex] = useState(0)
   const [cursor, setCursor] = useState(0)
   const [selected, setSelected] = useState<readonly number[]>([])
@@ -784,20 +800,27 @@ function QuestionBar({ store, snapshot, locked }: { store: QuestionStore; snapsh
   const [answers, setAnswers] = useState<readonly AskUserQuestionAnswerItem[]>([])
   const [submitted, setSubmitted] = useState(false)
   const [scroll, setScroll] = useState(0)
+  const [manualScroll, setManualScroll] = useState(false)
+  const [followCustomTail, setFollowCustomTail] = useState(false)
 
   // A new request resets the walk; questions without options start in the
-  // custom-answer box (a free-form question).
+  // custom-answer box (a free-form question). Depend on the request rather
+  // than its wrapper snapshot: external stores may refresh that wrapper while
+  // a question is still active, and a reset must never become a render loop.
   useEffect(() => {
-    const question = pending?.request.questions[0]
-    setIndex(0)
-    setCursor(0)
-    setSelected([])
-    setMode(question?.options === undefined || question.options.length === 0 ? 'custom' : 'options')
-    setCustom('')
-    setAnswers([])
-    setSubmitted(false)
-    setScroll(0)
-  }, [pending])
+    const first = request?.questions[0]
+    const initialMode = first?.options === undefined || first.options.length === 0 ? 'custom' : 'options'
+    setIndex(current => current === 0 ? current : 0)
+    setCursor(current => current === 0 ? current : 0)
+    setSelected(current => current.length === 0 ? current : [])
+    setMode(current => current === initialMode ? current : initialMode)
+    setCustom(current => current === '' ? current : '')
+    setAnswers(current => current.length === 0 ? current : [])
+    setSubmitted(current => current ? false : current)
+    setScroll(current => current === 0 ? current : 0)
+    setManualScroll(current => current ? false : current)
+    setFollowCustomTail(current => current === (initialMode === 'custom') ? current : initialMode === 'custom')
+  }, [request])
 
   const question = pending?.request.questions[index]
   const options = question?.options ?? []
@@ -841,20 +864,18 @@ function QuestionBar({ store, snapshot, locked }: { store: QuestionStore; snapsh
     }
     return { lines, optionRows }
   }, [question, isPlan, submitted, mode, options, custom, isMulti, selected, cursor, viewport.contentColumns])
-  const visibleScroll = clampScroll(scroll, rendered.lines.length, viewport.bodyRows)
-
-  useEffect(() => {
-    if (visibleScroll !== scroll) setScroll(visibleScroll)
-  }, [visibleScroll, scroll])
-
-  useEffect(() => {
-    if (mode === 'options' && options.length > 0) {
-      const focused = rendered.optionRows[cursor] ?? 0
-      setScroll(current => revealRow(current, focused, rendered.lines.length, viewport.bodyRows))
-      return
-    }
-    setScroll(Math.max(0, rendered.lines.length - viewport.bodyRows))
-  }, [cursor, mode, custom.length, rendered.lines.length, viewport.bodyRows])
+  // Keeping a focused option visible is derived from the current render. It
+  // deliberately does not write state from an effect: keyboard selection
+  // then has one update path, rather than a cursor update repeatedly causing
+  // a post-render scroll update (and, under rapid input, an update-depth
+  // loop). Page scrolling explicitly takes ownership until focus moves again.
+  const focusedRow = rendered.optionRows[cursor] ?? 0
+  const automaticScroll = mode === 'options' && options.length > 0 && !manualScroll
+    ? revealRow(scroll, focusedRow, rendered.lines.length, viewport.bodyRows)
+    : (mode === 'custom' || options.length === 0) && followCustomTail
+      ? Math.max(0, rendered.lines.length - viewport.bodyRows)
+      : scroll
+  const visibleScroll = clampScroll(automaticScroll, rendered.lines.length, viewport.bodyRows)
 
   const commit = (answer: AskUserQuestionAnswerItem): void => {
     if (pending === undefined) return
@@ -874,6 +895,8 @@ function QuestionBar({ store, snapshot, locked }: { store: QuestionStore; snapsh
     setMode(nextQuestion?.options === undefined || nextQuestion.options.length === 0 ? 'custom' : 'options')
     setCustom('')
     setScroll(0)
+    setManualScroll(false)
+    setFollowCustomTail(nextQuestion?.options === undefined || nextQuestion.options.length === 0)
   }
 
   const commitOption = (): void => {
@@ -891,27 +914,56 @@ function QuestionBar({ store, snapshot, locked }: { store: QuestionStore; snapsh
     commit({ id: question.id, selected: [option.label] })
   }
 
-  useInput((input, key) => {
+  /**
+   * A question with choices has two local focus surfaces, just like Codex:
+   * the choice list and the optional custom-answer editor. Returning to the
+   * list keeps the user's current choice (and multi-select state), but drops
+   * the transient custom draft so a second Escape can cancel the question.
+   */
+  const returnToOptions = (): void => {
+    if (options.length === 0) return
+    setMode('options')
+    setCustom('')
+    setScroll(0)
+    setManualScroll(false)
+    setFollowCustomTail(false)
+  }
+
+  useStableInput((input, key) => {
     if (pending === undefined || question === undefined || submitted) return
     if (key.escape) {
+      if (mode === 'custom' && options.length > 0) {
+        returnToOptions()
+        return
+      }
       store.cancel(pending)
       return
     }
     if (key.pageUp) {
-      setScroll(current => moveScroll(current, -Math.max(1, viewport.bodyRows - 1), rendered.lines.length, viewport.bodyRows))
+      setManualScroll(true)
+      setFollowCustomTail(false)
+      setScroll(moveScroll(visibleScroll, -Math.max(1, viewport.bodyRows - 1), rendered.lines.length, viewport.bodyRows))
       return
     }
     if (key.pageDown) {
-      setScroll(current => moveScroll(current, Math.max(1, viewport.bodyRows - 1), rendered.lines.length, viewport.bodyRows))
+      setManualScroll(true)
+      setFollowCustomTail(false)
+      setScroll(moveScroll(visibleScroll, Math.max(1, viewport.bodyRows - 1), rendered.lines.length, viewport.bodyRows))
       return
     }
     if (mode === 'custom' || options.length === 0) {
+      if (key.tab && options.length > 0) {
+        returnToOptions()
+        return
+      }
       if (key.upArrow) {
-        setScroll(current => moveScroll(current, -1, rendered.lines.length, viewport.bodyRows))
+        setFollowCustomTail(false)
+        setScroll(moveScroll(visibleScroll, -1, rendered.lines.length, viewport.bodyRows))
         return
       }
       if (key.downArrow) {
-        setScroll(current => moveScroll(current, 1, rendered.lines.length, viewport.bodyRows))
+        setFollowCustomTail(false)
+        setScroll(moveScroll(visibleScroll, 1, rendered.lines.length, viewport.bodyRows))
         return
       }
       if (key.return) {
@@ -928,7 +980,11 @@ function QuestionBar({ store, snapshot, locked }: { store: QuestionStore; snapsh
         })
         return
       }
-      if (key.backspace) {
+      if (key.backspace || key.delete) {
+        if (custom === '' && options.length > 0) {
+          returnToOptions()
+          return
+        }
         setCustom(current => current.slice(0, -1))
         return
       }
@@ -938,10 +994,12 @@ function QuestionBar({ store, snapshot, locked }: { store: QuestionStore; snapsh
       return
     }
     if (key.upArrow) {
+      setManualScroll(false)
       setCursor(current => (current + options.length - 1) % options.length)
       return
     }
     if (key.downArrow) {
+      setManualScroll(false)
       setCursor(current => (current + 1) % options.length)
       return
     }
@@ -951,12 +1009,14 @@ function QuestionBar({ store, snapshot, locked }: { store: QuestionStore; snapsh
     }
     if (key.tab || input === 'c' || input === 'C') {
       setMode('custom')
+      setManualScroll(false)
+      setFollowCustomTail(true)
       return
     }
     if (input === ' ' && isMulti) {
       setSelected(current => current.includes(cursor) ? current.filter(at => at !== cursor) : [...current, cursor])
     }
-  }, { isActive: active })
+  }, active)
 
   if (pending === undefined || question === undefined) return undefined
   if (viewport.maxHeight === 0) return createElement(Box, { display: 'none' })
@@ -965,14 +1025,18 @@ function QuestionBar({ store, snapshot, locked }: { store: QuestionStore; snapsh
   }
   const footer = submitted
     ? 'submitted…'
-    : mode === 'custom' || options.length === 0
-      ? '↑↓/pgup/pgdn scroll · type answer · enter submit · esc interrupt'
+    : mode === 'custom'
+      ? options.length === 0
+        ? '↑↓/pgup/pgdn scroll · type answer · enter submit · esc interrupt'
+        : '↑↓/pgup/pgdn scroll · type answer · enter submit · tab/esc or empty backspace: options'
+      : options.length === 0
+        ? '↑↓/pgup/pgdn scroll · type answer · enter submit · esc interrupt'
       : isMulti
         ? '↑↓ choose · pgup/pgdn scroll · space toggle · enter submit · c custom · esc interrupt'
         : '↑↓ choose · pgup/pgdn scroll · enter submit · c custom · esc interrupt'
   return createElement(
     Box,
-    { flexDirection: 'column', paddingX: 1, borderStyle: 'round', borderColor: inkColor(isPlan ? TUI_RGB.brand : TUI_RGB.brandDeep) },
+    { flexDirection: 'column', width: viewport.outerColumns, paddingX: 1, borderStyle: 'round', borderColor: inkColor(isPlan ? TUI_RGB.brand : TUI_RGB.brandDeep) },
     createElement(
       Text,
       { color: inkColor(isPlan ? TUI_RGB.brand : TUI_RGB.brandDeep), bold: true, wrap: 'truncate-end' },
@@ -1078,7 +1142,7 @@ function ModelPanel({ directory, error, onSelect, onRetry, onClose }: {
   const visible = rowBudget === 0 ? [] : rows.slice(first, first + rowBudget)
   return createElement(
     Box,
-    { flexDirection: 'column', paddingX: 1, borderStyle: 'round', borderColor: inkColor(TUI_RGB.brand) },
+    { flexDirection: 'column', width: viewport.outerColumns, paddingX: 1, borderStyle: 'round', borderColor: inkColor(TUI_RGB.brand) },
     createElement(Text, { color: inkColor(TUI_RGB.brand), bold: true, wrap: 'truncate-end' }, truncateColumns(`/model — select model${rows.length === 0 ? '' : ` · ${cursor + 1}/${rows.length}`}`, viewport.contentColumns)),
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
     ...stateRows,
@@ -1203,7 +1267,7 @@ function HelpPanel({ descriptors, skills, commandError, skillError, onClose }: {
 
   return createElement(
     Box,
-    { flexDirection: 'column', paddingX: 1, borderStyle: 'round', borderColor: inkColor(TUI_RGB.brand) },
+    { flexDirection: 'column', width: viewport.outerColumns, paddingX: 1, borderStyle: 'round', borderColor: inkColor(TUI_RGB.brand) },
     createElement(Text, { color: inkColor(TUI_RGB.brand), bold: true, wrap: 'truncate-end' }, truncateColumns(`/help — keys and commands · rows ${content.length === 0 ? 0 : visibleScroll + 1}-${Math.min(content.length, visibleScroll + viewport.bodyRows)}/${content.length}`, viewport.contentColumns)),
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
     ...content.slice(visibleScroll, visibleScroll + viewport.bodyRows),
@@ -1348,6 +1412,7 @@ function VerbosePanel({ entries, onClose }: { entries: readonly TranscriptEntry[
     Box,
     {
       flexDirection: 'column',
+      width: viewport.outerColumns,
       paddingX: 1,
       borderStyle: 'round',
       borderColor: inkColor(TUI_RGB.brand),
@@ -1903,7 +1968,7 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
       : verboseLine(value, Math.max(1, columns - 6))
     return createElement(
       Box,
-      { borderStyle: 'round', borderColor: inkColor(TUI_RGB.dim), paddingX: 1 },
+      { width: Math.max(1, columns - 1), borderStyle: 'round', borderColor: inkColor(TUI_RGB.dim), paddingX: 1 },
       createElement(
         Text,
         { wrap: 'truncate-end' },
@@ -1932,7 +1997,7 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
     // no extra space, so the empty state reads `❯ ▮type a message…`.
     createElement(
       Box,
-      { borderStyle: 'round', borderColor: inkColor(TUI_RGB.dim), paddingX: 1 },
+      { width: Math.max(1, columns - 1), borderStyle: 'round', borderColor: inkColor(TUI_RGB.dim), paddingX: 1 },
       createElement(
         Text,
         { wrap: 'truncate-end' },

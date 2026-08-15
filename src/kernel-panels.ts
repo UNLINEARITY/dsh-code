@@ -44,7 +44,7 @@ function ListFrame(props: ListFrameProps): ReactElement {
   const visible = stateRows.slice(offset, offset + bodyRows)
   return createElement(
     Box,
-    { borderStyle: 'round', borderColor: color(TUI_RGB.dim), flexDirection: 'column', paddingX: 1 },
+    { width: viewport.outerColumns, borderStyle: 'round', borderColor: color(TUI_RGB.dim), flexDirection: 'column', paddingX: 1 },
     createElement(Text, { color: color(TUI_RGB.brandBright), wrap: 'truncate-end' }, truncateColumns(props.title, viewport.contentColumns)),
     createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns(`search: ${props.query === '' ? 'type to filter' : props.query}`, viewport.contentColumns)),
     ...visible.map((row, index) => {
@@ -247,7 +247,7 @@ function DocumentPanel({ title, text, error, close }: {
       : lines.slice(scroll, scroll + viewport.bodyRows)
   return createElement(
     Box,
-    { borderStyle: 'round', borderColor: color(TUI_RGB.dim), flexDirection: 'column', paddingX: 1 },
+    { width: viewport.outerColumns, borderStyle: 'round', borderColor: color(TUI_RGB.dim), flexDirection: 'column', paddingX: 1 },
     createElement(Text, { color: color(TUI_RGB.brandBright), wrap: 'truncate-end' }, truncateColumns(title, viewport.contentColumns)),
     ...body.map((line, index) => createElement(Text, { key: `${scroll}-${index}`, wrap: 'truncate-end' }, truncateColumns(line, viewport.contentColumns))),
     createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns(`lines ${lines.length === 0 ? 0 : scroll + 1}-${Math.min(lines.length, scroll + viewport.bodyRows)}/${lines.length} · ↑↓/pg/g/G · t/esc close`, viewport.contentColumns)),
@@ -322,7 +322,7 @@ export function StatuslinePanel({ enabled, change, close }: {
   const meta = new Map(STATUS_ITEMS.map(item => [item.id, item]))
   return createElement(
     Box,
-    { borderStyle: 'round', borderColor: color(TUI_RGB.dim), flexDirection: 'column', paddingX: 1 },
+    { width: viewport.outerColumns, borderStyle: 'round', borderColor: color(TUI_RGB.dim), flexDirection: 'column', paddingX: 1 },
     createElement(Text, { color: color(TUI_RGB.brandBright), wrap: 'truncate-end' }, truncateColumns('/statusline · items apply to the live status line below', viewport.contentColumns)),
     ...visible.map((id, index) => {
       const absolute = offset + index

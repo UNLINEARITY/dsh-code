@@ -10,6 +10,8 @@ export interface InspectorViewport {
   gapRows: 0 | 2
   /** Columns available inside the horizontal border and padding. */
   contentColumns: number
+  /** Safe outer width for a bordered dynamic panel; never writes column N. */
+  outerColumns: number
   /** Tiny terminals use a borderless one-line close hint. */
   compact: boolean
 }
@@ -39,11 +41,18 @@ export function panelViewport(columns: number, rows: number): InspectorViewport 
   ))
   const compact = maxHeight < 5 || safeColumns < 8
   const gapRows = !compact && maxHeight >= 7 ? 2 : 0
+  // A terminal may autowrap a glyph written into its final column. Ink still
+  // accounts for that border as one logical row, so the next dynamic update
+  // erases too few physical rows and leaves stacked frames behind. Codex
+  // renders overlays within an inset surface; reserve the final column here
+  // so every Ink panel follows the same contract.
+  const outerColumns = compact ? safeColumns : Math.max(1, safeColumns - 1)
   return {
     maxHeight,
     bodyRows: compact ? 0 : maxHeight - 4 - gapRows,
     gapRows,
-    contentColumns: compact ? Math.max(1, safeColumns - 1) : Math.max(1, safeColumns - 4),
+    contentColumns: compact ? Math.max(1, safeColumns - 1) : Math.max(1, outerColumns - 4),
+    outerColumns,
     compact,
   }
 }

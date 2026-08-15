@@ -24,7 +24,8 @@ describe('inspectorViewport', () => {
       maxHeight: 12,
       bodyRows: 6,
       gapRows: 2,
-      contentColumns: 96,
+      contentColumns: 95,
+      outerColumns: 99,
       compact: false,
     })
   })

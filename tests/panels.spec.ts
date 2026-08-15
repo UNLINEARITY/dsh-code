@@ -3,7 +3,7 @@
 import { PassThrough } from 'node:stream'
 import { createElement } from 'react'
 import { render } from 'ink'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { App } from '../src/app.ts'
 import { createTranscriptStore } from '../src/store.ts'
 import { DEFAULT_STATUSLINE_ITEMS } from '../src/render/status.ts'
@@ -14,10 +14,12 @@ const wait = async (): Promise<void> => new Promise(resolve => setTimeout(resolv
 
 describe('exclusive panel height budgets', () => {
   it('bounds long approval and plan-review content without clearing the terminal', async () => {
+    let rawModeChanges = 0
     const stdin = Object.assign(new PassThrough(), {
       isTTY: true,
       isRaw: false,
       setRawMode(value: boolean) {
+        rawModeChanges += 1
         this.isRaw = value
         return this
       },
@@ -37,6 +39,7 @@ describe('exclusive panel height budgets', () => {
     const questionListeners = new Set<() => void>()
     let approvalSnapshot: ApprovalSnapshot = { pending: undefined, answered: false }
     let questionSnapshot: QuestionSnapshot = { pending: undefined }
+    let questionCancelCount = 0
     const noop = (): void => {}
     const instance = render(createElement(App, {
       store: createTranscriptStore(),
@@ -54,7 +57,9 @@ describe('exclusive panel height budgets', () => {
         },
         getSnapshot: () => questionSnapshot,
         submit: noop,
-        cancel: noop,
+        cancel: () => {
+          questionCancelCount += 1
+        },
       },
       commands: { descriptors: [], subscribe: () => noop },
       skills: { rows: [], subscribe: () => noop },
@@ -193,6 +198,58 @@ describe('exclusive panel height budgets', () => {
       expect(output).toContain('plan review')
       expect(output.lastIndexOf('type a message')).toBeLessThan(output.lastIndexOf('test/model'))
       expect(output).not.toContain('\x1b[2J')
+
+      // Moving a question choice updates local focus and may reveal a distant
+      // option. It must not create an effect-driven update loop or erase the
+      // terminal while the modal owns input.
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+      try {
+        output = ''
+        const rawModeChangesBeforeSelection = rawModeChanges
+        for (let index = 0; index < 8; index += 1) {
+          stdin.write('\x1b[B')
+          await wait()
+        }
+        expect(output).toContain('option 8')
+        expect(output).not.toContain('\x1b[2J')
+        expect(rawModeChanges).toBe(rawModeChangesBeforeSelection)
+        expect(errorSpy.mock.calls.flat().join(' ')).not.toContain('Maximum update depth exceeded')
+
+        // Codex treats choices and the custom editor as two focus layers. A
+        // custom draft can return to the preserved choice with Tab, an empty
+        // Backspace, or one Escape; only the following Escape cancels.
+        stdin.write('c')
+        await wait()
+        stdin.write('temporary answer')
+        await wait()
+        output = ''
+        stdin.write('\t')
+        await wait()
+        expect(output).toContain('option 8')
+
+        stdin.write('c')
+        await wait()
+        output = ''
+        stdin.write('\x7f')
+        await wait()
+        expect(output).toContain('option 8')
+
+        stdin.write('c')
+        await wait()
+        output = ''
+        stdin.write('\x1b')
+        await wait()
+        expect(output).toContain('option 8')
+        expect(questionCancelCount).toBe(0)
+
+        stdin.write('\x1b')
+        await wait()
+        expect(questionCancelCount).toBe(1)
+        expect(rawModeChanges).toBe(rawModeChangesBeforeSelection)
+        expect(errorSpy.mock.calls.flat().join(' ')).not.toContain('Maximum update depth exceeded')
+      } finally {
+        errorSpy.mockRestore()
+      }
     } finally {
       instance.unmount()
       stdin.destroy()
