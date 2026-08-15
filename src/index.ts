@@ -34,10 +34,11 @@ import { mountApprovalAnswerer, type ApprovalStore } from './approval.ts'
 import { isSlashLine, watchCommands, type CommandsView } from './commands.ts'
 import { internals, type TuiMount } from './internals.ts'
 import { loadModelDirectory, type ModelRow } from './models.ts'
-import { createMentions, type MentionsApi } from './mentions.ts'
+import { createMentions, type MentionCandidate, type MentionsApi } from './mentions.ts'
 import { mountQuestionProvider, type QuestionStore } from './questions.ts'
-import { createTranscriptStore } from './store.ts'
+import { createTranscriptStore, type TranscriptStore } from './store.ts'
 import { parseStatuslineItems } from './render/status.ts'
+import { appendHistoryContent, HISTORY_MAX_ENTRIES, parseHistoryFile } from './history.ts'
 import { watchSkills, type SkillsView } from './skills.ts'
 import { toolArgumentsPreview } from './render/tool-preview.ts'
 import { buildExportMarkdown } from './render/export.ts'
@@ -187,10 +188,14 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   if (agents === undefined || defaultModel === undefined || sessions === undefined) return
 
   const cwd = process.cwd()
-  const target = await resolveTarget(startup, persistence, cwd)
   const defaults = defaultModel.currentSelection()
   const presets = agentPresetsFrom(ctx)
   if (presets === undefined) throw new Error('agent preset service is unavailable; check the dsh-code bundle patch')
+
+  // A bare fresh launch stays transient: no Agent or session is composed, and
+  // nothing is persisted, until the user's first real input. Explicit flags
+  // (--resume/--continue/--session/--mode) keep the eager create/resume path.
+  const lazy = startup.kind === 'fresh' && startup.mode === undefined
 
   interface ActiveSession {
     handle: AgentHandle
@@ -259,30 +264,42 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     }
   }
 
-  let active = await prepare(target)
-  let agent = active.agent
-  let session = active.session
-  let store = active.store
-  let mentions = active.mentions
+  let active: ActiveSession | undefined
+  let agent: Agent | undefined
+  let session: Session | undefined
+  let store: TranscriptStore = createTranscriptStore()
+  let mentions: MentionsApi | undefined
+
+  if (!lazy) {
+    const target = await resolveTarget(startup, persistence, cwd)
+    const prepared = await prepare(target)
+    active = prepared
+    agent = prepared.agent
+    session = prepared.session
+    store = prepared.store
+    mentions = prepared.mentions
+  }
 
   // Seed the transcript from the full session log: constructor seeds never
-  // fire on `session/event`, so a resumed session paints its history once,
-  // here, before the first render.
+  // fire on `session/event`, so a resumed session paints its history once
+  // before the first render. The handler reads the current session/store, so
+  // the deferred first session of a bare launch is covered by the same feed.
   const off = ctx.on('session/event', (subject: Session, event: SessionEvent) => {
-    if (subject.id === session.id) store.apply(event)
+    if (session !== undefined && subject.id === session.id) store.apply(event)
   })
 
   const commands: CommandsView = watchCommands(ctx)
-  commands.setAgent(agent)
+  if (agent !== undefined) commands.setAgent(agent)
 
   const skills: SkillsView = watchSkills(ctx)
-  skills.setAgent(agent)
+  if (agent !== undefined) skills.setAgent(agent)
 
   // Approval answerer: renders the ask as a y/n bar; only this TUI's agent is
-  // claimed, every other ask falls through to the fail-closed waterfall.
+  // claimed, every other ask falls through to the fail-closed waterfall. The
+  // owner predicate is empty until the first session exists.
   const approval: ApprovalStore = mountApprovalAnswerer(
     ctx,
-    candidate => candidate.id === agent.id,
+    candidate => agent !== undefined && candidate.id === agent.id,
     request => approvalCommandPreview(store.getView().entries, request.callId, request.toolName),
   )
 
@@ -370,13 +387,21 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     switchQueue.cancel()
     off()
     mountRef.current?.unmount()
-    void sessions.flush(session)
+    // A bare launch that exits before the first input has no session: exit
+    // cleanly without flushing or disposing anything.
+    const currentSession = session
+    const currentActive = active
+    if (currentSession === undefined || currentActive === undefined) {
+      io.exit(0)
+      return
+    }
+    void sessions.flush(currentSession)
       .catch((flushError: unknown) => {
         // The session log already carries every durable event; a failed flush
         // must not trap the user in a dead terminal, so report and still exit.
         internals.stderr.write(`dsh: session flush failed: ${flushError instanceof Error ? flushError.message : String(flushError)}\n`)
       })
-      .then(() => active.handle.dispose())
+      .then(() => currentActive.handle.dispose())
       .catch((disposeError: unknown) => {
         internals.stderr.write(`dsh: agent disposal failed: ${disposeError instanceof Error ? disposeError.message : String(disposeError)}\n`)
       })
@@ -385,6 +410,8 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
 
   /** Run one slash line through the command registry (closed namespace). */
   const runSlash = (line: string): void => {
+    const currentAgent = agent
+    if (currentAgent === undefined) return
     if (line.startsWith('/mode ')) {
       void switchModeAction(line.slice(6).trim())
       return
@@ -399,13 +426,13 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       return
     }
     const controller = new AbortController()
-    void Promise.resolve().then(() => registry.execute(agent, line, controller.signal)).then((execution) => {
+    void Promise.resolve().then(() => registry.execute(currentAgent, line, controller.signal)).then((execution) => {
       if (execution === undefined) {
         // No command owns this line: send it verbatim so a user-invocable
         // skill gesture (`/skill-name`) reaches the host's tool-skill
         // pre-step injection — the web composer's same fall-through.
         try {
-          agent.followup(createUserMessage({
+          currentAgent.followup(createUserMessage({
             content: [{ type: 'text', text: line }],
             source: { kind: 'user' },
           }))
@@ -418,10 +445,10 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     })
   }
 
-  /** Deliver one readable line to the agent, expanding session mentions first. */
-  const send = (text: string, mode: 'followup' | 'steer'): void => {
-    const line = text.trim()
-    if (line === '') return
+  /** Deliver one trimmed line to the live session, expanding mentions first. */
+  const deliverLine = (line: string, mode: 'followup' | 'steer'): void => {
+    const currentAgent = agent!
+    const currentMentions = mentions!
     // The command registry is a closed namespace: slash lines run out of
     // band and never reach the model through this path (steering keeps the
     // registry out of the inbox, so slash lines steer as literal text).
@@ -429,9 +456,9 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       runSlash(line)
       return
     }
-    let parsed: ReturnType<typeof mentions.parse>
+    let parsed: ReturnType<MentionsApi['parse']>
     try {
-      parsed = mentions.parse(line)
+      parsed = currentMentions.parse(line)
     } catch (error: unknown) {
       bridge.notify(`invalid session reference: ${error instanceof Error ? error.message : String(error)}`, 'error')
       return
@@ -441,16 +468,17 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       // the readable message (upstream README wiring: inject before the
       // followup/steer that wakes the driver).
       try {
-        if (context !== undefined) agent.inject(context)
+        if (context !== undefined) currentAgent.inject(context)
         const message = createUserMessage({
           content: [{ type: 'text', text: readable }],
           source: { kind: 'user' },
         })
         if (mode === 'steer') {
-          agent.steer(message)
-          bridge.notify('steering queued — the next step sees it')
+          // The queued message is visible as a pending transcript row (the
+          // web queue-mirror contract); no notice noise on the happy path.
+          currentAgent.steer(message)
         } else {
-          agent.followup(message)
+          currentAgent.followup(message)
         }
       } catch (error: unknown) {
         bridge.notify(`${mode === 'steer' ? 'steering' : 'message'} failed: ${error instanceof Error ? error.message : String(error)}`, 'error')
@@ -461,12 +489,62 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       return
     }
     const controller = new AbortController()
-    void mentions.prepare(parsed, controller.signal).then((prepared) => {
+    void currentMentions.prepare(parsed, controller.signal).then((prepared) => {
       deliver(prepared.text, prepared.additionalContext)
     }, (error: unknown) => {
       if (controller.signal.aborted) return
       bridge.notify(`session reference failed: ${error instanceof Error ? error.message : String(error)}`, 'error')
     })
+  }
+
+  // Deferred first-session creation for a bare launch: the session is composed
+  // only when the user submits real input (or /new), and every line that
+  // arrives during creation is delivered in order afterwards. A creation
+  // failure reports and clears the queue, leaving the transient state ready
+  // for the next attempt.
+  const pendingInputs: Array<{ text: string; mode: 'followup' | 'steer' }> = []
+  let creating: Promise<void> | undefined
+  const ensureSession = (mode?: string): void => {
+    if (creating !== undefined) return
+    const attempt = (async () => {
+      const next = await prepare({
+        sessionId: `session-${randomUUID()}`,
+        resume: false,
+        ...(mode === undefined ? {} : { mode }),
+      })
+      if (quitting) {
+        void next.handle.dispose().catch(() => {})
+        return
+      }
+      active = next
+      agent = next.agent
+      session = next.session
+      store = next.store
+      mentions = next.mentions
+      commands.setAgent(agent)
+      skills.setAgent(agent)
+      renderCurrent()
+      const queued = pendingInputs.splice(0)
+      for (const item of queued) deliverLine(item.text, item.mode)
+    })().catch((error: unknown) => {
+      pendingInputs.length = 0
+      bridge.notify(`session creation failed: ${error instanceof Error ? error.message : String(error)}`, 'error')
+    }).finally(() => {
+      creating = undefined
+    })
+    creating = attempt
+  }
+
+  /** Deliver one readable line to the agent, expanding session mentions first. */
+  const send = (text: string, mode: 'followup' | 'steer'): void => {
+    const line = text.trim()
+    if (line === '') return
+    if (session === undefined) {
+      pendingInputs.push({ text: line, mode })
+      ensureSession()
+      return
+    }
+    deliverLine(line, mode)
   }
 
   /** Dispatch one submitted line: slash commands to the registry, other text to the agent. */
@@ -485,7 +563,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
 
   /** Interrupt the running turn (Esc); true when a turn was actually cancelled. */
   const interrupt = (): boolean => {
-    if (agent.status !== 'running') return false
+    if (agent === undefined || agent.status !== 'running') return false
     try {
       agent.cancel({ kind: 'user' })
       bridge.notify('turn cancelled — Ctrl+C or /quit to exit')
@@ -502,6 +580,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
    * custom knob state wraps to the first declared preset.
    */
   const cyclePermission = (): string => {
+    if (session === undefined) throw new Error('no session yet — submit a message to start')
     const service = ctx.get('permissionPresets') as
       | {
         names: readonly string[]
@@ -527,6 +606,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
 
   /** Apply one /model selection: takes effect from the next assembled step. */
   const selectModel = (row: ModelRow): string => {
+    if (active === undefined) throw new Error('no session yet — submit a message to start')
     active.selection.picked = { provider: row.provider, model: row.model }
     return `${row.provider}/${row.model}`
   }
@@ -537,6 +617,10 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
    * workspace; an absolute or cwd-relative argument overrides it.
    */
   const exportTranscript = async (argument: string): Promise<void> => {
+    if (session === undefined) {
+      bridge.notify('no session yet — submit a message to start', 'warning')
+      return
+    }
     const wanted = argument.trim()
     const sessionCwd = session.header.cwd ?? cwd
     const defaultName = `dsh-session-${session.id.slice(-8)}.md`
@@ -562,6 +646,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   const renameTitle = (argument: string): string => {
     const title = argument.trim()
     if (title === '') return 'usage: /title <text>'
+    if (session === undefined) return 'no session yet — submit a message to start'
     const service = ctx.get('sessionTitle')
     if (service === undefined) return 'session titles are unavailable in this profile'
     try {
@@ -591,10 +676,15 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
 
   const switchModeAction = async (id: string): Promise<string> => {
     if (id === '') throw new Error('usage: /mode <preset>')
-    const preset = await switchPreset(presets, agent, id)
-    active.mode = preset.id
-    commands.setAgent(agent)
-    skills.setAgent(agent)
+    const currentAgent = agent
+    const currentActive = active
+    if (currentAgent === undefined || currentActive === undefined) {
+      throw new Error('no session yet — submit a message to start')
+    }
+    const preset = await switchPreset(presets, currentAgent, id)
+    currentActive.mode = preset.id
+    commands.setAgent(currentAgent)
+    skills.setAgent(currentAgent)
     renderCurrent()
     return preset.id
   }
@@ -616,15 +706,21 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       renderCurrent()
     } catch (error: unknown) {
       active = previous
-      agent = previous.agent
-      session = previous.session
-      store = previous.store
-      mentions = previous.mentions
-      commands.setAgent(agent)
-      skills.setAgent(agent)
+      agent = previous?.agent
+      session = previous?.session
+      store = previous === undefined ? createTranscriptStore() : previous.store
+      mentions = previous?.mentions
+      if (agent !== undefined) commands.setAgent(agent)
+      if (agent !== undefined) skills.setAgent(agent)
       await next.handle.dispose()
       renderCurrent()
       throw error
+    }
+    // No previous session (a bare launch switched straight into a resume):
+    // nothing to flush or dispose, so just confirm the activation.
+    if (previous === undefined) {
+      bridge.notify(`${next.resumed ? 'resumed' : 'created'} ${next.session.id.slice(-12)} · mode ${next.mode}`)
+      return
     }
     let cleanupWarning: string | undefined
     try {
@@ -649,11 +745,20 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   )
 
   const requestSwitch = (request: PendingSwitch): void => {
+    if (session === undefined) {
+      // No session yet (a bare launch using /resume before any input): activate
+      // the target directly — there is no running turn to wait on and nothing
+      // to flush.
+      void activate(request.target).catch((error: unknown) => {
+        bridge.notify(`session switch failed: ${error instanceof Error ? error.message : String(error)}`, 'error')
+      })
+      return
+    }
     if (request.target.sessionId === session.id) {
       bridge.notify('that session is already active', 'warning')
       return
     }
-    const outcome = switchQueue.request(agent, request)
+    const outcome = switchQueue.request(agent!, request)
     if (outcome === 'queued') {
       bridge.notify(`will switch to ${request.label} when the current turn finishes · /resume cancel to abort`)
     }
@@ -670,7 +775,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     if (matches[0]!.header.parentSession !== undefined || matches[0]!.header.origin === 'subagent') {
       throw new Error('subagent conversations are read-only in /resume; resume a root session')
     }
-    if (agents.get(SessionId(matches[0]!.header.id)) !== undefined && matches[0]!.header.id !== session.id) {
+    if (session !== undefined && agents.get(SessionId(matches[0]!.header.id)) !== undefined && matches[0]!.header.id !== session.id) {
       throw new Error('that session is already live in another owner')
     }
     return matches[0]!.header.id
@@ -683,6 +788,11 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   }
 
   const createSession = (mode?: string): void => {
+    // /new before any input is the first-session creation itself, not a switch.
+    if (session === undefined) {
+      ensureSession(mode)
+      return
+    }
     const nextCwd = session.header.cwd ?? cwd
     const id = `session-${randomUUID()}`
     requestSwitch({ target: { sessionId: id, resume: false, mode, cwd: nextCwd }, label: id.slice(-12) })
@@ -701,10 +811,14 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   }
 
   const appElement = (): ReturnType<typeof createElement> => {
-    const sessionCwd = session.header.cwd ?? cwd
+    // A bare launch mounts with placeholder facts until the first input
+    // composes a real session: empty session id/mode, the deployment default
+    // model, and the working directory's basename. `status.ts` drops empty
+    // mode/sessionId, so the bar renders only the identity it actually has.
+    const sessionCwd = session?.header.cwd ?? cwd
     const model = store.getView().model !== '' ? store.getView().model : `${defaults.provider}/${defaults.model}`
     return createElement(App, {
-      key: session.id,
+      key: session?.id ?? 'pending',
       store,
       approval,
       questions,
@@ -714,15 +828,17 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       cwd: basename(sessionCwd),
       workspaceRoot: sessionCwd,
       branch: gitBranch(sessionCwd),
-      sessionId: session.id.slice(-8),
-      resumed: active.resumed,
-      mode: active.mode,
+      sessionId: session === undefined ? '' : session.id.slice(-8),
+      resumed: active?.resumed ?? false,
+      mode: active?.mode ?? '',
       dispatch,
       steer,
       interrupt,
       quit,
       loadModels: () => loadModelDirectory(ctx),
-      loadMentions: mentions.candidates,
+      loadMentions: mentions === undefined
+        ? () => Promise.resolve<readonly MentionCandidate[]>([])
+        : mentions.candidates,
       cyclePermission,
       selectModel,
       exportTranscript,
@@ -737,6 +853,9 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       loadPlugins: () => listPluginRows(ctx),
       statusline: statuslineItems,
       saveStatusline,
+      history: inputHistory,
+      recordHistory,
+      cancelQueued,
       onBridgeReady: (instance: AppBridge) => { bridge.notify = instance.notify },
     })
   }
