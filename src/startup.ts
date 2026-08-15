@@ -1,9 +1,9 @@
 /**
  * The interactive terminal app's command-line provider: parses `--resume`,
- * `--continue`, `--session`, `--mode`, and `--help`, then publishes
- * {@link TUI_STARTUP_SERVICE} for the runner to consume lazily. Follows the
- * headless bundle's startup shape (a commander action publishing a service
- * through {@link parseCmdline}).
+ * `--continue`, `--session`, `--mode`, `--theme`, and `--help`, then
+ * publishes {@link TUI_STARTUP_SERVICE} for the runner to consume lazily.
+ * Follows the headless bundle's startup shape (a commander action publishing
+ * a service through {@link parseCmdline}).
  *
  * Semantics:
  * - `--resume <id|prefix>` — continue the persisted session whose id or unique
@@ -13,6 +13,8 @@
  *   whose project directory matches the current working directory.
  * - `--session <id>` — create a new session under an explicit identity (the
  *   id must not exist yet).
+ * - `--theme <dark|light|auto>` — the color palette; auto follows the
+ *   terminal (dark fallback until OSC-11 detection lands).
  * - no flags — a fresh session with a minted id.
  *
  * @module @deepseek-ai/dsh-tui/startup
@@ -21,6 +23,7 @@
 import { Command } from 'commander'
 import type { Context } from '@deepseek-ai/cordis'
 import { parseCmdline } from '@deepseek-ai/dsh-cmdline'
+import { THEME_NAMES, type ThemeName } from './theme.ts'
 
 /** Stable Cordis plugin name. */
 export const name = 'tui-startup'
@@ -33,16 +36,17 @@ export const TUI_STARTUP_SERVICE = 'tuiStartup'
 
 /** How the runner obtains its session identity. */
 export type TuiStartup =
-  | { readonly kind: 'fresh'; readonly mode?: string }
-  | { readonly kind: 'named'; readonly sessionId: string; readonly mode?: string }
-  | { readonly kind: 'resume'; readonly sessionId: string }
-  | { readonly kind: 'latest' }
+  | { readonly kind: 'fresh'; readonly mode?: string; readonly theme?: ThemeName }
+  | { readonly kind: 'named'; readonly sessionId: string; readonly mode?: string; readonly theme?: ThemeName }
+  | { readonly kind: 'resume'; readonly sessionId: string; readonly theme?: ThemeName }
+  | { readonly kind: 'latest'; readonly theme?: ThemeName }
 
 export interface TuiStartupOptions {
   readonly resume?: string
   readonly continue?: boolean
   readonly session?: string
   readonly mode?: string
+  readonly theme?: ThemeName
 }
 
 /** Pure option policy shared by Commander and tests. */
@@ -55,13 +59,17 @@ export function resolveTuiStartup(options: TuiStartupOptions): TuiStartup {
   if (options.mode !== undefined && (options.resume !== undefined || options.continue === true)) {
     throw new Error('--mode applies only to a new session; it cannot be combined with --resume or --continue')
   }
+  if (options.theme !== undefined && !THEME_NAMES.includes(options.theme)) {
+    throw new Error('--theme must be dark, light, or auto')
+  }
+  const theme = options.theme === undefined ? {} : { theme: options.theme }
   return options.resume !== undefined
-    ? { kind: 'resume', sessionId: options.resume }
+    ? { kind: 'resume', sessionId: options.resume, ...theme }
     : options.continue === true
-      ? { kind: 'latest' }
+      ? { kind: 'latest', ...theme }
       : options.session !== undefined
-        ? { kind: 'named', sessionId: options.session, ...options.mode === undefined ? {} : { mode: options.mode } }
-        : { kind: 'fresh', ...options.mode === undefined ? {} : { mode: options.mode } }
+        ? { kind: 'named', sessionId: options.session, ...options.mode === undefined ? {} : { mode: options.mode }, ...theme }
+        : { kind: 'fresh', ...options.mode === undefined ? {} : { mode: options.mode }, ...theme }
 }
 
 /**
@@ -78,12 +86,14 @@ function tuiCommand(): Command {
     .option('-c, --continue', 'resume the most recent persisted session for this working directory')
     .option('--session <id>', 'create a new session under this explicit id')
     .option('--mode <preset>', 'agent preset for a newly created session')
+    .option('--theme <name>', 'color theme: dark (default), light, or auto')
     .addHelpText('after', `
 Examples:
   dsh --profile cli                       fresh session, minted id
   dsh --profile cli --resume abc123       resume session by id prefix
   dsh --profile cli --continue            resume the latest local session
   dsh --profile cli --mode minimal        fresh session using the minimal preset
+  dsh --profile cli --theme light         light palette for bright terminals
 `)
 }
 
