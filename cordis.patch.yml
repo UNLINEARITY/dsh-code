@@ -1,8 +1,8 @@
-# The dsh-code bundle patch: the interactive terminal app over dsh-base.
-# It mounts no Host, HTTP server, or browser plugin. An ordinary provider
-# plugin injects `cmdlineArgs`, parses this app's flags (`--resume`, `--continue`,
-# `--session`) and its --help, then the runner creates (or resumes) one Agent
-# through the core registry, renders the live session stream as an Ink TUI
+# The dsh-code bundle patch: an Ink client over the Harness host plane. Model-
+# facing rows move behind per-session agent presets, while process registries,
+# persistence, sandbox/approval, session query, permissions, goals, and
+# subagent providers stay shared. The runner owns one persistent terminal and
+# can create, resume, and switch between top-level Agent sessions.
 # (DeepSeek blue, whale wordmark), answers approval asks with a y/n bar,
 # dispatches slash commands through the shared registry, and folds submitted
 # prompts back into the same durable session until the user quits.
@@ -19,8 +19,57 @@
 
 - id: tools
   config:
-    # Keep the same temporary process-wide Code Mode opt-in as the Web surface.
     mode: !!js process.env.DSH_TOOLS_MODE
+
+# Agent-plane rows are mounted by the selected preset. Keep this list aligned
+# with the upstream Web bundle so two sessions can use different compositions
+# without leaking model-facing registrations through the host layer.
+- id: tool-bash
+  disabled: true
+- id: tool-pwsh
+  disabled: true
+- id: tool-jobs
+  disabled: true
+- id: tool-fs
+  disabled: true
+- id: tool-fs-search
+  disabled: true
+- id: tool-str-replace-editor
+  disabled: true
+- id: skill-filesystem
+  disabled: true
+- id: tool-skill
+  disabled: true
+- id: tool-goal
+  disabled: true
+- id: plan-mode
+  disabled: true
+- id: compaction-basic
+  disabled: true
+- id: command-compact
+  disabled: true
+- id: tool-result-pruner
+  disabled: true
+- id: tool-subagent-control
+  disabled: true
+- id: tool-subagent-list-agents
+  disabled: true
+- id: tool-subagent
+  disabled: true
+- id: tool-subagent-fork
+  disabled: true
+- id: workflow-worker-thread
+  disabled: true
+- id: tool-workflow
+  disabled: true
+- id: tool-ralph
+  disabled: true
+- id: agent-instructions
+  disabled: true
+- id: tool-todo
+  disabled: true
+- id: tool-web
+  disabled: true
 
 - insert:
     # Code Mode is a core execution capability, not a Web component.
@@ -32,6 +81,13 @@
     # lists candidates and submission expands them through prepare().
     - id: session-reference
       name: '@deepseek-ai/dsh-session-reference'
+
+    # The launcher supplies the shipped preset root beside its own config and
+    # the service also discovers the user's local preset root.
+    - id: agent-presets
+      name: '@deepseek-ai/dsh-agent-presets'
+      config:
+        default: standard
 
     - id: tui-startup
       name: 'dsh-code/startup'

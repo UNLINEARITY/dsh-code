@@ -1,6 +1,6 @@
 /**
  * The interactive terminal app's command-line provider: parses `--resume`,
- * `--continue`, `--session`, and `--help`, then publishes
+ * `--continue`, `--session`, `--mode`, and `--help`, then publishes
  * {@link TUI_STARTUP_SERVICE} for the runner to consume lazily. Follows the
  * headless bundle's startup shape (a commander action publishing a service
  * through {@link parseCmdline}).
@@ -33,10 +33,36 @@ export const TUI_STARTUP_SERVICE = 'tuiStartup'
 
 /** How the runner obtains its session identity. */
 export type TuiStartup =
-  | { readonly kind: 'fresh' }
-  | { readonly kind: 'named'; readonly sessionId: string }
+  | { readonly kind: 'fresh'; readonly mode?: string }
+  | { readonly kind: 'named'; readonly sessionId: string; readonly mode?: string }
   | { readonly kind: 'resume'; readonly sessionId: string }
   | { readonly kind: 'latest' }
+
+export interface TuiStartupOptions {
+  readonly resume?: string
+  readonly continue?: boolean
+  readonly session?: string
+  readonly mode?: string
+}
+
+/** Pure option policy shared by Commander and tests. */
+export function resolveTuiStartup(options: TuiStartupOptions): TuiStartup {
+  const selected = [options.resume !== undefined, options.continue === true, options.session !== undefined]
+  if (selected.filter(Boolean).length > 1) throw new Error('--resume, --continue, and --session are mutually exclusive')
+  if (options.session === '') throw new Error('--session needs an id')
+  if (options.resume === '') throw new Error('--resume needs a session id or id prefix')
+  if (options.mode === '') throw new Error('--mode needs a preset id')
+  if (options.mode !== undefined && (options.resume !== undefined || options.continue === true)) {
+    throw new Error('--mode applies only to a new session; it cannot be combined with --resume or --continue')
+  }
+  return options.resume !== undefined
+    ? { kind: 'resume', sessionId: options.resume }
+    : options.continue === true
+      ? { kind: 'latest' }
+      : options.session !== undefined
+        ? { kind: 'named', sessionId: options.session, ...options.mode === undefined ? {} : { mode: options.mode } }
+        : { kind: 'fresh', ...options.mode === undefined ? {} : { mode: options.mode } }
+}
 
 /**
  * This app's command: the launcher's flags this app owns, its description,
@@ -51,11 +77,13 @@ function tuiCommand(): Command {
     .option('-r, --resume <session>', 'resume the persisted session with this id (or unique id prefix)')
     .option('-c, --continue', 'resume the most recent persisted session for this working directory')
     .option('--session <id>', 'create a new session under this explicit id')
+    .option('--mode <preset>', 'agent preset for a newly created session')
     .addHelpText('after', `
 Examples:
   dsh --profile cli                       fresh session, minted id
   dsh --profile cli --resume abc123       resume session by id prefix
   dsh --profile cli --continue            resume the latest local session
+  dsh --profile cli --mode minimal        fresh session using the minimal preset
 `)
 }
 
@@ -67,24 +95,14 @@ Examples:
 export function apply(ctx: Context): void {
   const program = tuiCommand()
   program.action(() => {
-    const options = program.opts<{ resume?: string; continue?: boolean; session?: string }>()
-    const selected = [options.resume !== undefined, options.continue === true, options.session !== undefined]
-    if (selected.filter(Boolean).length > 1) {
-      program.error('error: --resume, --continue, and --session are mutually exclusive')
+    const options = program.opts<TuiStartupOptions>()
+    let startup: TuiStartup | undefined
+    try {
+      startup = resolveTuiStartup(options)
+    } catch (error: unknown) {
+      program.error(`error: ${error instanceof Error ? error.message : String(error)}`)
     }
-    if (options.session !== undefined && options.session === '') {
-      program.error('error: --session needs an id')
-    }
-    if (options.resume !== undefined && options.resume === '') {
-      program.error('error: --resume needs a session id or id prefix')
-    }
-    const startup: TuiStartup = options.resume !== undefined
-      ? { kind: 'resume', sessionId: options.resume }
-      : options.continue === true
-        ? { kind: 'latest' }
-        : options.session !== undefined
-          ? { kind: 'named', sessionId: options.session }
-          : { kind: 'fresh' }
+    if (startup === undefined) return
     ctx.provide(TUI_STARTUP_SERVICE, { startup } satisfies { startup: TuiStartup })
   })
   parseCmdline(ctx, program)

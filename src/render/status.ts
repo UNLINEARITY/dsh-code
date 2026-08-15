@@ -63,6 +63,8 @@ export function cacheHitPercent(usage: TranscriptStats['usage']): number | null 
 export interface StatusFacts {
   /** `provider/model` selection serving this session. */
   model: string
+  /** Agent preset composing this session. */
+  mode?: string
   /** Working-directory basename the session serves. */
   cwd: string
   /** Git branch name, empty outside a repository or on a detached HEAD file. */
@@ -96,6 +98,7 @@ export function buildStatusGroups(facts: StatusFacts, stats: TranscriptStats): s
     facts.plan ? '⧉ plan' : undefined,
   ].filter(part => part !== undefined && part !== '')
   if (identity.length > 0) groups.push(identity.join(' · '))
+  if (facts.mode !== undefined && facts.mode !== '') groups.push(`mode ${facts.mode}`)
   if (stats.turns > 0 || stats.steps > 0) {
     groups.push(`T${stats.turns} · S${stats.steps}`)
     const durations: string[] = []

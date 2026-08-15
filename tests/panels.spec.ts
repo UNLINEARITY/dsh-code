@@ -59,9 +59,11 @@ describe('exclusive panel height budgets', () => {
       skills: { rows: [], subscribe: () => noop },
       model: 'test/model',
       cwd: 'dsh-cli',
+      workspaceRoot: 'C:\\repo\\dsh-cli',
       branch: 'main',
       sessionId: '12345678',
       resumed: false,
+      mode: 'standard',
       dispatch: noop,
       steer: noop,
       interrupt: () => false,
@@ -72,6 +74,19 @@ describe('exclusive panel height budgets', () => {
       cyclePermission: () => '',
       exportTranscript: async () => {},
       renameTitle: () => '',
+      loadPresets: async () => Array.from({ length: 40 }, (_, index) => ({ id: `mode-${index}`, trust: 'user' as const, description: `preset ${index}` })),
+      switchMode: async id => id,
+      createSession: noop,
+      loadSessions: async () => Array.from({ length: 80 }, (_, index) => ({
+        id: `session-${index}`, createdAt: index, cwd: 'C:\\repo', workspace: 'repo', subagent: false,
+        resumable: true, live: false, persisted: true, preset: 'standard', title: `Conversation ${index}`,
+      })),
+      loadSessionTranscript: async id => `# ${id}\n${Array.from({ length: 200 }, (_, index) => `line ${index}`).join('\n')}`,
+      switchSession: noop,
+      cancelSessionSwitch: () => false,
+      loadPlugins: () => Array.from({ length: 100 }, (_, index) => ({
+        entryId: `plugin-${index}`, moduleName: `@test/plugin-${index}`, enabled: true, phase: 'active' as const,
+      })),
       onBridgeReady: noop,
     }), {
       stdin,
@@ -98,6 +113,57 @@ describe('exclusive panel height budgets', () => {
       expect(output).toContain('waiting for approval')
       expect(output.lastIndexOf('type a message')).toBeLessThan(output.lastIndexOf('test/model'))
       expect(output).not.toContain('\x1b[2J')
+
+      approvalSnapshot = { pending: undefined, answered: false }
+      approvalListeners.forEach(listener => listener())
+      questionSnapshot = { pending: undefined }
+      questionListeners.forEach(listener => listener())
+      await wait()
+
+      output = ''
+      stdin.write('/resume')
+      await wait()
+      stdin.write('\r')
+      await wait()
+      expect(output).toContain('/resume')
+      expect(output.lastIndexOf('type a message')).toBeLessThan(output.lastIndexOf('test/model'))
+      expect(output).not.toContain('\x1b[2J')
+      stdin.write('G')
+      await wait()
+      expect(output).toContain('Conversation 79')
+      output = ''
+      stdin.write('t')
+      await wait()
+      expect(output).toContain('transcript · session-79')
+      stdin.write('G')
+      await wait()
+      expect(output).toContain('line 199')
+      stdin.write('t')
+      await wait()
+      stdin.write('q')
+      await wait()
+
+      output = ''
+      stdin.write('/plugin')
+      await wait()
+      stdin.write('\r')
+      await wait()
+      expect(output).toContain('loader inspector')
+      expect(output.lastIndexOf('type a message')).toBeLessThan(output.lastIndexOf('test/model'))
+      expect(output).not.toContain('\x1b[2J')
+      stdin.write('q')
+      await wait()
+
+      output = ''
+      stdin.write('/mode')
+      await wait()
+      stdin.write('\r')
+      await wait()
+      expect(output).toContain('current standard')
+      expect(output.lastIndexOf('type a message')).toBeLessThan(output.lastIndexOf('test/model'))
+      expect(output).not.toContain('\x1b[2J')
+      stdin.write('q')
+      await wait()
 
       approvalSnapshot = { pending: undefined, answered: false }
       approvalListeners.forEach(listener => listener())

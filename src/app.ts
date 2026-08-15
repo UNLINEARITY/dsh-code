@@ -29,12 +29,16 @@ import { settledEntryCount, type TranscriptEntry } from './render/projection.ts'
 import { renderMarkdown, type MdSegment, visibleColumns } from './render/markdown.ts'
 import type { ToolDetail } from './render/tool-detail.ts'
 import { caretVisible, pulseFrame } from './render/animations.ts'
-import type { ApprovalStore } from './approval.ts'
+import type { ApprovalSnapshot, ApprovalStore } from './approval.ts'
 import type { CommandsView } from './commands.ts'
 import type { ModelDirectory, ModelRow } from './models.ts'
-import type { QuestionStore } from './questions.ts'
+import type { QuestionSnapshot, QuestionStore } from './questions.ts'
 import type { SkillsView, SkillRow } from './skills.ts'
 import type { MentionCandidate } from './mentions.ts'
+import { ModePanel, PluginPanel, ResumePanel } from './kernel-panels.ts'
+import type { PresetRow } from './presets.ts'
+import type { PluginRow } from './plugin-inventory.ts'
+import type { SessionDirectoryOptions, SessionRow } from './session-directory.ts'
 
 /** Match Codex's settled-resize window before rebuilding terminal scrollback. */
 const RESIZE_REFLOW_DELAY_MS = 75
@@ -82,12 +86,16 @@ export interface AppProps {
   model: string
   /** Working-directory basename the session serves. */
   cwd: string
+  /** Absolute working directory used by session filters and references. */
+  workspaceRoot: string
   /** Git branch name, empty outside a repository. */
   branch: string
   /** Short session identifier. */
   sessionId: string
   /** Whether this session was resumed from persistence. */
   resumed: boolean
+  /** Agent preset currently composing the session. */
+  mode: string
   /** Submit one line: slash commands to the registry, other text to the agent. */
   dispatch(text: string): void
   /** Submit steering: consumed at the running turn's next step boundary. */
@@ -108,6 +116,15 @@ export interface AppProps {
   exportTranscript(argument: string): Promise<void>
   /** Rename the session (/title <text>); returns the outcome line for the notice. */
   renameTitle(argument: string): string
+  /** Preset/session/plugin kernel operations. */
+  loadPresets(): Promise<readonly PresetRow[]>
+  switchMode(id: string): Promise<string>
+  createSession(mode?: string): void
+  loadSessions(options: SessionDirectoryOptions, signal?: AbortSignal): Promise<readonly SessionRow[]>
+  loadSessionTranscript(id: string, signal?: AbortSignal): Promise<string>
+  switchSession(row: SessionRow): void
+  cancelSessionSwitch(): boolean
+  loadPlugins(): readonly PluginRow[]
   /** Registers the app's notice channel with the runner (called once on mount). */
   onBridgeReady(bridge: { notify(text: string, tone?: NoticeTone): void }): void
 }
@@ -600,8 +617,7 @@ function NoticeLine({ text, tone, columns }: {
 }
 
 /** The y/n approval bar rendered while an approval ask is pending. */
-function ApprovalBar({ approval, locked }: { approval: ApprovalStore; locked: boolean }): ReactElement | undefined {
-  const snapshot = useSyncExternalStore(approval.subscribe, approval.getSnapshot)
+function ApprovalBar({ snapshot, locked }: { snapshot: ApprovalSnapshot; locked: boolean }): ReactElement | undefined {
   const stdout = useStdout().stdout
   const viewport = panelViewport(stdout?.columns ?? 80, stdout?.rows ?? 30)
   const [scroll, setScroll] = useState(0)
@@ -677,8 +693,7 @@ function ApprovalBar({ approval, locked }: { approval: ApprovalStore; locked: bo
  * service with a `plan-review` intent — the approve option gets a ✓ mark,
  * the answer encoding stays identical.
  */
-function QuestionBar({ store, locked }: { store: QuestionStore; locked: boolean }): ReactElement | undefined {
-  const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot)
+function QuestionBar({ store, snapshot, locked }: { store: QuestionStore; snapshot: QuestionSnapshot; locked: boolean }): ReactElement | undefined {
   const stdout = useStdout().stdout
   const viewport = panelViewport(stdout?.columns ?? 80, stdout?.rows ?? 30)
   const pending = snapshot.pending
@@ -1047,6 +1062,10 @@ function HelpPanel({ descriptors, skills, commandError, skillError, onClose }: {
       )]),
     createElement(Box, { key: 'local-help' }, row('/help', 'show this overlay')),
     createElement(Box, { key: 'local-model' }, row('/model', 'switch the model')),
+    createElement(Box, { key: 'local-mode' }, row('/mode', 'inspect or select the agent preset (/mode [preset])')),
+    createElement(Box, { key: 'local-new' }, row('/new', 'create and switch to a fresh session (/new [preset])')),
+    createElement(Box, { key: 'local-resume' }, row('/resume', 'browse or switch root sessions (/resume [id|prefix])')),
+    createElement(Box, { key: 'local-plugin' }, row('/plugin', 'inspect the live plugin composition')),
     createElement(Box, { key: 'local-clear' }, row('/clear', 'clear the screen')),
     createElement(Box, { key: 'local-export' }, row('/export', 'export the transcript to markdown (/export [path])')),
     createElement(Box, { key: 'local-title' }, row('/title', 'rename this session (/title <text>)')),
@@ -1315,6 +1334,10 @@ function completionCandidates(
   const local: CompletionCandidate[] = [
     { label: '/help', description: 'show commands', origin: 'command' },
     { label: '/model', description: 'switch the model', origin: 'command' },
+    { label: '/mode', description: 'select the agent preset', origin: 'command' },
+    { label: '/new', description: 'start a fresh session', origin: 'command' },
+    { label: '/resume', description: 'browse or switch sessions', origin: 'command' },
+    { label: '/plugin', description: 'inspect the plugin composition', origin: 'command' },
     { label: '/clear', description: 'clear the screen', origin: 'command' },
     { label: '/export', description: 'export the transcript to markdown', origin: 'command' },
     { label: '/title', description: 'rename this session', origin: 'command' },
@@ -1402,7 +1425,7 @@ function CompletionMenu({ active, mention, index, rows }: {
  * While a modal (approval / question / model panel) owns the keys, the
  * box passes every key through untouched.
  */
-function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openHelp, notify, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, cyclePermission, exportTranscript, renameTitle }: {
+function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openHelp, openMode, openResume, openPlugin, createSession, cancelSessionSwitch, notify, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, cyclePermission, exportTranscript, renameTitle }: {
   active: boolean
   frozen: boolean
   busy: boolean
@@ -1414,6 +1437,11 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   quit(): void
   openModel(): void
   openHelp(): void
+  openMode(): void
+  openResume(): void
+  openPlugin(query?: string): void
+  createSession(mode?: string): void
+  cancelSessionSwitch(): boolean
   notify(text: string, tone?: NoticeTone): void
   hasNotice: boolean
   dismissNotice(): void
@@ -1622,6 +1650,30 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
       }
       if (text === '/model' || text.startsWith('/model ')) {
         openModel()
+        return
+      }
+      if (text === '/mode' || text.startsWith('/mode ')) {
+        const mode = text.slice(5).trim()
+        if (mode === '') openMode()
+        else dispatch(text)
+        return
+      }
+      if (text === '/resume cancel') {
+        notify(cancelSessionSwitch() ? 'pending session switch cancelled' : 'no pending session switch', 'info')
+        return
+      }
+      if (text === '/resume' || text.startsWith('/resume ')) {
+        const id = text.slice(7).trim()
+        if (id === '') openResume()
+        else dispatch(text)
+        return
+      }
+      if (text === '/new' || text.startsWith('/new ')) {
+        createSession(text.slice(4).trim() || undefined)
+        return
+      }
+      if (text === '/plugin' || text.startsWith('/plugin ')) {
+        openPlugin(text.slice(7).trim())
         return
       }
       if (busy && !text.startsWith('/')) {
@@ -1846,13 +1898,17 @@ export function App(props: AppProps): ReactElement {
   const [showReasoning, setShowReasoning] = useState(false)
   const [verboseOpen, setVerboseOpen] = useState(false)
   const [helpOpen, setHelpOpen] = useState(false)
+  const [modeOpen, setModeOpen] = useState(false)
+  const [resumeOpen, setResumeOpen] = useState(false)
+  const [pluginOpen, setPluginOpen] = useState(false)
+  const [pluginQuery, setPluginQuery] = useState('')
   const [refreshEpoch, setRefreshEpoch] = useState(0)
   const approvalSnapshot = useSyncExternalStore(props.approval.subscribe, props.approval.getSnapshot)
   const questionSnapshot = useSyncExternalStore(props.questions.subscribe, props.questions.getSnapshot)
   const approvalPending = approvalSnapshot.pending !== undefined
   const questionPending = questionSnapshot.pending !== undefined
   // While any modal owns the keys, the prompt box passes everything through.
-  const inputActive = !modelOpen && !helpOpen && !verboseOpen && !approvalPending && !questionPending
+  const inputActive = !modelOpen && !helpOpen && !modeOpen && !resumeOpen && !pluginOpen && !verboseOpen && !approvalPending && !questionPending
 
   // Human questions outrank local inspectors. Close the lower modal instead
   // of leaving an approval/question visible but keyboard-locked behind it.
@@ -1860,6 +1916,9 @@ export function App(props: AppProps): ReactElement {
     if (!approvalPending && !questionPending) return
     setModelOpen(false)
     setHelpOpen(false)
+    setModeOpen(false)
+    setResumeOpen(false)
+    setPluginOpen(false)
     setVerboseOpen(false)
   }, [approvalPending, questionPending])
 
@@ -1962,9 +2021,9 @@ export function App(props: AppProps): ReactElement {
           ? Math.max(1, Math.floor(streamRows / 3))
           : 1
   const answerRows = view.streaming === '' ? 0 : Math.max(1, streamRows - reasoningRows)
-  const transcriptVisible = !modelOpen && !helpOpen && !verboseOpen && !approvalPending && !questionPending
+  const transcriptVisible = !modelOpen && !helpOpen && !modeOpen && !resumeOpen && !pluginOpen && !verboseOpen && !approvalPending && !questionPending
   const inspectorVisible = verboseOpen && !approvalPending && !questionPending
-  const modalVisible = modelOpen || helpOpen || inspectorVisible || approvalPending || questionPending
+  const modalVisible = modelOpen || helpOpen || modeOpen || resumeOpen || pluginOpen || inspectorVisible || approvalPending || questionPending
   const closeInspector = useCallback((): void => {
     setVerboseOpen(false)
   }, [])
@@ -2004,8 +2063,8 @@ export function App(props: AppProps): ReactElement {
       )
       : undefined,
     transcriptVisible ? createElement(TodoPanel, { todos: view.todos }) : undefined,
-    createElement(QuestionBar, { store: props.questions, locked: false }),
-    createElement(ApprovalBar, { approval: props.approval, locked: questionPending }),
+    createElement(QuestionBar, { store: props.questions, snapshot: questionSnapshot, locked: false }),
+    createElement(ApprovalBar, { snapshot: approvalSnapshot, locked: questionPending }),
     modelOpen && !approvalPending && !questionPending
       ? createElement(ModelPanel, {
         directory,
@@ -2044,6 +2103,31 @@ export function App(props: AppProps): ReactElement {
         onClose: closeInspector,
       })
       : undefined,
+    modeOpen && !approvalPending && !questionPending
+      ? createElement(ModePanel, {
+        current: props.mode,
+        load: props.loadPresets,
+        select: (id: string) => {
+          void props.switchMode(id).then(label => {
+            notify(`mode → ${label}`)
+            setModeOpen(false)
+          }, (reason: unknown) => notify(`mode switch failed: ${reason instanceof Error ? reason.message : String(reason)}`, 'error'))
+        },
+        close: () => setModeOpen(false),
+      })
+      : undefined,
+    resumeOpen && !approvalPending && !questionPending
+      ? createElement(ResumePanel, {
+        currentCwd: props.workspaceRoot,
+        load: props.loadSessions,
+        readTranscript: props.loadSessionTranscript,
+        select: (row: SessionRow) => { props.switchSession(row); setResumeOpen(false) },
+        close: () => setResumeOpen(false),
+      })
+      : undefined,
+    pluginOpen && !approvalPending && !questionPending
+      ? createElement(PluginPanel, { load: props.loadPlugins, initialQuery: pluginQuery, close: () => setPluginOpen(false) })
+      : undefined,
     notice === undefined
       ? undefined
       : createElement(NoticeLine, {
@@ -2075,6 +2159,11 @@ export function App(props: AppProps): ReactElement {
         openHelp: () => {
           setHelpOpen(true)
         },
+        openMode: () => setModeOpen(true),
+        openResume: () => setResumeOpen(true),
+        openPlugin: (query = '') => { setPluginQuery(query); setPluginOpen(true) },
+        createSession: props.createSession,
+        cancelSessionSwitch: props.cancelSessionSwitch,
         notify,
         hasNotice: notice !== undefined,
         dismissNotice: () => {
@@ -2098,6 +2187,7 @@ export function App(props: AppProps): ReactElement {
       createElement(StatusLine, {
         facts: {
           model: modelLabel,
+          mode: props.mode,
           cwd: props.cwd,
           branch: props.branch,
           sessionId: props.sessionId,

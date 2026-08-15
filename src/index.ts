@@ -1,11 +1,10 @@
 /**
  * @deepseek-ai/dsh-code — the interactive terminal driver. The bundle patch
  * rides over dsh-base without Host, HTTP, or browser plugins; this runner
- * creates (or resumes) one Agent through the core registry, mounts the Ink
- * app (DeepSeek blue, whale wordmark), folds submitted prompts into the same
- * durable session, answers approval asks with a y/n bar, dispatches slash
- * commands through the shared registry, and on quit flushes and requests
- * process exit.
+ * creates or resumes preset-composed Agents through the core registry, keeps
+ * one Ink owner while the active session changes, folds submitted prompts
+ * into the selected durable session, answers approval asks with a y/n bar,
+ * dispatches slash commands, and on quit flushes and requests process exit.
  *
  * @module @deepseek-ai/dsh-code
  */
@@ -18,7 +17,7 @@ import { createElement } from 'react'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { installModelSelection } from '@deepseek-ai/dsh-agent'
-import type { Agent, ModelSelection, ModelSelectionRef } from '@deepseek-ai/dsh-agent'
+import type { Agent, AgentHandle, ModelSelection, ModelSelectionRef } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId, type Session, type SessionEvent, type SessionHeader, type UserMessage } from '@deepseek-ai/dsh-session'
@@ -41,6 +40,16 @@ import { watchSkills, type SkillsView } from './skills.ts'
 import { toolArgumentsPreview } from './render/tool-preview.ts'
 import { buildExportMarkdown } from './render/export.ts'
 import type { TuiStartup } from './startup.ts'
+import { SessionSwitchQueue } from './session-switch.ts'
+import { agentPresetsFrom, resolvePreset, switchPreset } from './presets.ts'
+import { listPluginRows } from './plugin-inventory.ts'
+import {
+  mergeSessionTitles,
+  projectSessionRows,
+  type SessionDirectoryOptions,
+  type SessionQueryService,
+  type SessionRow,
+} from './session-directory.ts'
 
 /** Stable Cordis plugin name. */
 export const name = 'tui-runner'
@@ -51,13 +60,14 @@ export const inject = ['agentDefaultModel', 'agents', 'sessions']
 /** Plugin config: the startup resolved from this app's injected provider service. */
 export interface Config {
   /** How this invocation obtains its session identity (validated loosely; narrowed in {@link apply}). */
-  startup: { kind: string; sessionId?: string }
+  startup: { kind: string; sessionId?: string; mode?: string }
 }
 
 export const Config: z<Config> = z.object({
   startup: z.object({
     kind: z.string().required(),
     sessionId: z.string(),
+    mode: z.string(),
   }),
 })
 
@@ -93,6 +103,8 @@ function gitBranch(cwd: string): string {
 interface Target {
   sessionId: string
   resume: boolean
+  mode?: string
+  cwd?: string
 }
 
 /**
@@ -104,8 +116,8 @@ interface Target {
  * @throws with a user-facing message when the flags name nothing resolvable.
  */
 async function resolveTarget(startup: TuiStartup, persistence: SessionPersistence | undefined, cwd: string): Promise<Target> {
-  if (startup.kind === 'fresh') return { sessionId: `session-${randomUUID()}`, resume: false }
-  if (startup.kind === 'named') return { sessionId: startup.sessionId, resume: false }
+  if (startup.kind === 'fresh') return { sessionId: `session-${randomUUID()}`, resume: false, mode: startup.mode }
+  if (startup.kind === 'named') return { sessionId: startup.sessionId, resume: false, mode: startup.mode }
   if (persistence === undefined) {
     throw new Error('cannot resolve the requested session: session persistence is not configured')
   }
@@ -168,76 +180,92 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   const defaultModel = ctx.get('agentDefaultModel')
   const sessions = ctx.get('sessions')
   const persistence = ctx.get('sessionPersistence')
+  const sessionQuery = (ctx as unknown as { get(name: string): unknown }).get('sessionQuery') as SessionQueryService | undefined
   // Early process shutdown can dispose the tree while settlement is pending.
   if (agents === undefined || defaultModel === undefined || sessions === undefined) return
 
   const cwd = process.cwd()
   const target = await resolveTarget(startup, persistence, cwd)
-
   const defaults = defaultModel.currentSelection()
-  let picked: ModelSelection | undefined
-  let session: Session
-  let agent: Agent
-  if (target.resume) {
-    const resumed = await agents.resume({
-      resumeSessionId: SessionId(target.sessionId),
-      agentOptions: { provider: defaults.provider, model: defaults.model },
-      setup: (agentCtx) => {
-        // The getter order mirrors the web host's resume selection: an
-        // in-process switch wins, then the session's own last logged request
-        // header, then the deployment default. Without this, a resumed
-        // session's first request would silently fall back to the default.
-        const selection: ModelSelectionRef = {
-          get current(): ModelSelection | undefined {
-            if (picked !== undefined) return picked
-            const logged = agentCtx.agent?.session.requestHeader()?.config
-            if (logged !== undefined) {
-              return {
-                provider: logged.provider,
-                model: logged.model,
-                ...logged.reasoningEffort === undefined ? {} : { reasoningEffort: logged.reasoningEffort },
-              }
-            }
-            return defaults
-          },
-          set current(next: ModelSelection | undefined) {
-            picked = next
-          },
-          assembled: undefined,
-        }
-        installModelSelection(agentCtx, selection)
-      },
-    })
-    agent = resumed.agent
-    session = agent.session
-  } else {
-    const created = await agents.create({
-      sessionId: SessionId(target.sessionId),
-      meta: { cwd },
-      agentOptions: { provider: defaults.provider, model: defaults.model },
-      setup: (agentCtx) => {
-        // Same getter shape as resume, minus the logged-header arm (a fresh
-        // session has no request header yet).
-        const selection: ModelSelectionRef = {
-          get current(): ModelSelection | undefined {
-            return picked ?? defaults
-          },
-          set current(next: ModelSelection | undefined) {
-            picked = next
-          },
-          assembled: undefined,
-        }
-        installModelSelection(agentCtx, selection)
-      },
-    })
-    agent = created.agent
-    session = agent.session
+  const presets = agentPresetsFrom(ctx)
+  if (presets === undefined) throw new Error('agent preset service is unavailable; check the dsh-code bundle patch')
+
+  interface ActiveSession {
+    handle: AgentHandle
+    agent: Agent
+    session: Session
+    store: ReturnType<typeof createTranscriptStore>
+    mentions: MentionsApi
+    mode: string
+    selection: { picked?: ModelSelection }
+    resumed: boolean
   }
+
+  /** Prepare a complete next session before disturbing the currently visible one. */
+  const prepare = async (next: Target): Promise<ActiveSession> => {
+    const nextCwd = next.cwd ?? cwd
+    const selectionState: { picked?: ModelSelection } = {}
+    let mode = next.mode
+    if (!next.resume) mode = (await presets.resolve(mode)).id
+    const setup = async (agentCtx: Context): Promise<void> => {
+      const sessionPreset = next.resume
+        ? resolvePreset(agentCtx.agent!.session)
+        : mode
+      const mounted = await presets.mount(agentCtx, sessionPreset)
+      mode = mounted.id
+      const selection: ModelSelectionRef = {
+        get current(): ModelSelection | undefined {
+          if (selectionState.picked !== undefined) return selectionState.picked
+          const logged = agentCtx.agent?.session.requestHeader()?.config
+          if (logged !== undefined) {
+            return {
+              provider: logged.provider,
+              model: logged.model,
+              ...logged.reasoningEffort === undefined ? {} : { reasoningEffort: logged.reasoningEffort },
+            }
+          }
+          return defaults
+        },
+        set current(value: ModelSelection | undefined) { selectionState.picked = value },
+        assembled: undefined,
+      }
+      installModelSelection(agentCtx, selection)
+    }
+    const handle = next.resume
+      ? await agents.resume({
+        resumeSessionId: SessionId(next.sessionId),
+        agentOptions: { provider: defaults.provider, model: defaults.model },
+        setup,
+      })
+      : await agents.create({
+        sessionId: SessionId(next.sessionId),
+        meta: { cwd: nextCwd, agentPreset: mode },
+        agentOptions: { provider: defaults.provider, model: defaults.model },
+        setup,
+      })
+    const session = handle.agent.session
+    const sessionCwd = session.header.cwd ?? nextCwd
+    return {
+      handle,
+      agent: handle.agent,
+      session,
+      store: createTranscriptStore(session.events),
+      mentions: createMentions(ctx, handle.agent, sessionCwd),
+      mode: mode ?? 'standard',
+      selection: selectionState,
+      resumed: next.resume,
+    }
+  }
+
+  let active = await prepare(target)
+  let agent = active.agent
+  let session = active.session
+  let store = active.store
+  let mentions = active.mentions
 
   // Seed the transcript from the full session log: constructor seeds never
   // fire on `session/event`, so a resumed session paints its history once,
   // here, before the first render.
-  const store = createTranscriptStore(session.events)
   const off = ctx.on('session/event', (subject: Session, event: SessionEvent) => {
     if (subject.id === session.id) store.apply(event)
   })
@@ -261,10 +289,6 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   // through this same pipe.
   const questions: QuestionStore = mountQuestionProvider(ctx)
 
-  // @mention support: workspace file scan plus the opt-in session-reference
-  // service (the patch mounts it); submission expands session mentions.
-  const mentions: MentionsApi = createMentions(ctx, agent, session.header.cwd ?? cwd)
-
   // The bridge the React app registers on mount: local notices from the
   // process side (unknown commands, switch confirmations, cancels).
   const bridge: AppBridge = { notify: () => {} }
@@ -276,6 +300,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   const quit = (): void => {
     if (quitting) return
     quitting = true
+    switchQueue.cancel()
     off()
     mountRef.current?.unmount()
     void sessions.flush(session)
@@ -284,11 +309,23 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
         // must not trap the user in a dead terminal, so report and still exit.
         internals.stderr.write(`dsh: session flush failed: ${flushError instanceof Error ? flushError.message : String(flushError)}\n`)
       })
+      .then(() => active.handle.dispose())
+      .catch((disposeError: unknown) => {
+        internals.stderr.write(`dsh: agent disposal failed: ${disposeError instanceof Error ? disposeError.message : String(disposeError)}\n`)
+      })
       .then(() => { io.exit(0) })
   }
 
   /** Run one slash line through the command registry (closed namespace). */
   const runSlash = (line: string): void => {
+    if (line.startsWith('/mode ')) {
+      void switchModeAction(line.slice(6).trim())
+      return
+    }
+    if (line.startsWith('/resume ')) {
+      requestResume(line.slice(8).trim())
+      return
+    }
     const registry = ctx.get('commands')
     if (registry === undefined) {
       bridge.notify('no command registry is mounted in this composition', 'error')
@@ -423,7 +460,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
 
   /** Apply one /model selection: takes effect from the next assembled step. */
   const selectModel = (row: ModelRow): string => {
-    picked = { provider: row.provider, model: row.model }
+    active.selection.picked = { provider: row.provider, model: row.model }
     return `${row.provider}/${row.model}`
   }
 
@@ -434,12 +471,13 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
    */
   const exportTranscript = async (argument: string): Promise<void> => {
     const wanted = argument.trim()
+    const sessionCwd = session.header.cwd ?? cwd
     const defaultName = `dsh-session-${session.id.slice(-8)}.md`
     const target = wanted === ''
-      ? join(cwd, defaultName)
+      ? join(sessionCwd, defaultName)
       : /^[a-zA-Z]:[\\/]/u.test(wanted) || wanted.startsWith('/')
         ? wanted
-        : join(cwd, wanted)
+        : join(sessionCwd, wanted)
     const markdown = buildExportMarkdown(store.getView(), session.id)
     try {
       await writeFileAsync(target, `${markdown}\n`, 'utf8')
@@ -467,35 +505,178 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     }
   }
 
-  const initialModel = store.getView().model !== ''
-    ? store.getView().model
-    : `${defaults.provider}/${defaults.model}`
+  const loadSessions = async (options: SessionDirectoryOptions, signal?: AbortSignal): Promise<readonly SessionRow[]> => {
+    if (sessionQuery === undefined) throw new Error('session query is unavailable in this profile')
+    const projected = projectSessionRows(await sessionQuery.listSessions(signal), options)
+    // Titles are the expensive fold. Fetch only the first bounded picker page;
+    // navigation/filter changes trigger a fresh, cancellable observation.
+    const page = projected.slice(0, 32)
+    if (page.length === 0) return projected
+    const observations = await sessionQuery.readTitleSnapshots(page.map(row => row.id), signal)
+    return mergeSessionTitles(projected, observations)
+  }
 
-  mountRef.current = io.mount(createElement(App, {
-    store,
-    approval,
-    questions,
-    commands,
-    skills,
-    model: initialModel,
-    cwd: basename(cwd),
-    branch: gitBranch(cwd),
-    sessionId: session.id.slice(-8),
-    resumed: target.resume,
-    dispatch,
-    steer,
-    interrupt,
-    quit,
-    loadModels: () => loadModelDirectory(ctx),
-    loadMentions: mentions.candidates,
-    cyclePermission,
-    selectModel,
-    exportTranscript,
-    renameTitle,
-    onBridgeReady: (instance: AppBridge) => {
-      bridge.notify = instance.notify
-    },
-  }))
+  const loadSessionTranscript = async (id: string, signal?: AbortSignal): Promise<string> => {
+    if (sessionQuery === undefined) throw new Error('session query is unavailable in this profile')
+    const snapshot = await sessionQuery.readSession(id, signal)
+    return buildExportMarkdown(createTranscriptStore(snapshot.events).getView(), snapshot.session.id)
+  }
+
+  const switchModeAction = async (id: string): Promise<string> => {
+    if (id === '') throw new Error('usage: /mode <preset>')
+    const preset = await switchPreset(presets, agent, id)
+    active.mode = preset.id
+    commands.setAgent(agent)
+    skills.setAgent(agent)
+    renderCurrent()
+    return preset.id
+  }
+
+  interface PendingSwitch { readonly target: Target; readonly label: string }
+
+  const activate = async (nextTarget: Target): Promise<void> => {
+    const previous = active
+    const next = await prepare(nextTarget)
+    active = next
+    agent = next.agent
+    session = next.session
+    store = next.store
+    mentions = next.mentions
+    commands.setAgent(agent)
+    skills.setAgent(agent)
+    try {
+      process.stdout.write('\x1b[r\x1b[0m\x1b[H\x1b[2J\x1b[3J\x1b[H')
+      renderCurrent()
+    } catch (error: unknown) {
+      active = previous
+      agent = previous.agent
+      session = previous.session
+      store = previous.store
+      mentions = previous.mentions
+      commands.setAgent(agent)
+      skills.setAgent(agent)
+      await next.handle.dispose()
+      renderCurrent()
+      throw error
+    }
+    let cleanupWarning: string | undefined
+    try {
+      await sessions.flush(previous.session)
+    } catch (error: unknown) {
+      cleanupWarning = `previous session flush failed: ${error instanceof Error ? error.message : String(error)}`
+    }
+    try {
+      await previous.handle.dispose()
+    } catch (error: unknown) {
+      cleanupWarning = `${cleanupWarning === undefined ? '' : `${cleanupWarning}; `}previous agent release failed: ${error instanceof Error ? error.message : String(error)}`
+    }
+    bridge.notify(cleanupWarning === undefined
+      ? `${next.resumed ? 'resumed' : 'created'} ${next.session.id.slice(-12)} · mode ${next.mode}`
+      : `switched to ${next.session.id.slice(-12)}, but ${cleanupWarning}`,
+    cleanupWarning === undefined ? 'info' : 'warning')
+  }
+
+  const switchQueue = new SessionSwitchQueue<PendingSwitch>(
+    async request => { if (!quitting) await activate(request.target) },
+    error => bridge.notify(`session switch failed: ${error instanceof Error ? error.message : String(error)}`, 'error'),
+  )
+
+  const requestSwitch = (request: PendingSwitch): void => {
+    if (request.target.sessionId === session.id) {
+      bridge.notify('that session is already active', 'warning')
+      return
+    }
+    const outcome = switchQueue.request(agent, request)
+    if (outcome === 'queued') {
+      bridge.notify(`will switch to ${request.label} when the current turn finishes · /resume cancel to abort`)
+    }
+  }
+
+  const resolveResumeId = async (wanted: string): Promise<string> => {
+    if (wanted === '') throw new Error('usage: /resume <id|prefix>')
+    if (sessionQuery === undefined) throw new Error('session query is unavailable in this profile')
+    const records = await sessionQuery.listSessions()
+    const exact = records.filter(record => record.header.id === wanted)
+    const matches = exact.length > 0 ? exact : records.filter(record => record.header.id.startsWith(wanted))
+    if (matches.length === 0) throw new Error(`no session matches "${wanted}"`)
+    if (matches.length > 1) throw new Error(`session prefix "${wanted}" is ambiguous (${matches.length} matches)`)
+    if (matches[0]!.header.parentSession !== undefined || matches[0]!.header.origin === 'subagent') {
+      throw new Error('subagent conversations are read-only in /resume; resume a root session')
+    }
+    if (agents.get(SessionId(matches[0]!.header.id)) !== undefined && matches[0]!.header.id !== session.id) {
+      throw new Error('that session is already live in another owner')
+    }
+    return matches[0]!.header.id
+  }
+
+  const requestResume = (wanted: string): void => {
+    void resolveResumeId(wanted).then(id => {
+      requestSwitch({ target: { sessionId: id, resume: true }, label: id.slice(-12) })
+    }, (error: unknown) => bridge.notify(`resume failed: ${error instanceof Error ? error.message : String(error)}`, 'error'))
+  }
+
+  const createSession = (mode?: string): void => {
+    const nextCwd = session.header.cwd ?? cwd
+    const id = `session-${randomUUID()}`
+    requestSwitch({ target: { sessionId: id, resume: false, mode, cwd: nextCwd }, label: id.slice(-12) })
+  }
+
+  const switchSession = (row: SessionRow): void => {
+    if (!row.resumable) {
+      bridge.notify('subagent conversations are read-only', 'warning')
+      return
+    }
+    requestSwitch({ target: { sessionId: row.id, resume: true }, label: row.title ?? row.id.slice(-12) })
+  }
+
+  const cancelSessionSwitch = (): boolean => {
+    return switchQueue.cancel()
+  }
+
+  const appElement = (): ReturnType<typeof createElement> => {
+    const sessionCwd = session.header.cwd ?? cwd
+    const model = store.getView().model !== '' ? store.getView().model : `${defaults.provider}/${defaults.model}`
+    return createElement(App, {
+      key: session.id,
+      store,
+      approval,
+      questions,
+      commands,
+      skills,
+      model,
+      cwd: basename(sessionCwd),
+      workspaceRoot: sessionCwd,
+      branch: gitBranch(sessionCwd),
+      sessionId: session.id.slice(-8),
+      resumed: active.resumed,
+      mode: active.mode,
+      dispatch,
+      steer,
+      interrupt,
+      quit,
+      loadModels: () => loadModelDirectory(ctx),
+      loadMentions: mentions.candidates,
+      cyclePermission,
+      selectModel,
+      exportTranscript,
+      renameTitle,
+      loadPresets: () => presets.list(),
+      switchMode: switchModeAction,
+      createSession,
+      loadSessions,
+      loadSessionTranscript,
+      switchSession,
+      cancelSessionSwitch,
+      loadPlugins: () => listPluginRows(ctx),
+      onBridgeReady: (instance: AppBridge) => { bridge.notify = instance.notify },
+    })
+  }
+
+  const renderCurrent = (): void => {
+    mountRef.current?.rerender(appElement())
+  }
+
+  mountRef.current = io.mount(appElement())
 }
 
 /**
@@ -510,8 +691,8 @@ export function apply(ctx: Context, config: Config): void {
       : config.startup.kind === 'latest'
         ? { kind: 'latest' }
         : config.startup.kind === 'named' && config.startup.sessionId !== undefined
-          ? { kind: 'named', sessionId: config.startup.sessionId }
-          : { kind: 'fresh' }
+          ? { kind: 'named', sessionId: config.startup.sessionId, ...config.startup.mode === undefined ? {} : { mode: config.startup.mode } }
+          : { kind: 'fresh', ...config.startup.mode === undefined ? {} : { mode: config.startup.mode } }
   // Read through the global service store, not the property proxy: appExit is
   // an optional host value, never an injected dependency.
   const exit = ctx.get('appExit')

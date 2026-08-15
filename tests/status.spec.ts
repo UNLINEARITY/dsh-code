@@ -52,6 +52,13 @@ describe('status groups', () => {
     )).toEqual(['deepseek/chat · repo'])
   })
 
+  it('shows the agent preset as a stable status group', () => {
+    expect(buildStatusGroups(
+      { model: 'deepseek/chat', mode: 'code', cwd: 'repo', branch: '', sessionId: 's' },
+      emptyStats,
+    )).toEqual(['deepseek/chat · repo', 'mode code', 's'])
+  })
+
   it('adds counts, durations, cache, and tokens once work lands', () => {
     const groups = buildStatusGroups(
       { model: 'm', cwd: 'r', branch: 'main', sessionId: 's' },

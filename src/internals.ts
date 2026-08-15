@@ -11,6 +11,8 @@ import type { ReactElement } from 'react'
 
 /** A mounted terminal app instance; the runner owns unmount ordering. */
 export interface TuiMount {
+  /** Replace the root element while preserving Ink's single terminal owner. */
+  rerender(element: ReactElement): void
   /** Tear the terminal app down before flush and exit. */
   unmount(): void
 }
@@ -28,6 +30,9 @@ export const internals: {
   mount: (element: ReactElement): TuiMount => {
     const instance = render(element)
     return {
+      rerender(element: ReactElement): void {
+        instance.rerender(element)
+      },
       unmount(): void {
         instance.unmount()
       },

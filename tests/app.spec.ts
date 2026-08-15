@@ -67,9 +67,11 @@ describe('Ctrl+O history details', () => {
       skills: { rows: skills, subscribe: () => unsubscribe },
       model: 'test/model',
       cwd: 'dsh-cli',
+      workspaceRoot: 'C:\\repo\\dsh-cli',
       branch: 'main',
       sessionId: '12345678',
       resumed: false,
+      mode: 'standard',
       dispatch: (text: string) => {
         dispatched = text
       },
@@ -82,6 +84,14 @@ describe('Ctrl+O history details', () => {
       cyclePermission: () => '',
       exportTranscript: async () => {},
       renameTitle: () => '',
+      loadPresets: async () => [],
+      switchMode: async id => id,
+      createSession: noop,
+      loadSessions: async () => [],
+      loadSessionTranscript: async () => '',
+      switchSession: noop,
+      cancelSessionSwitch: () => false,
+      loadPlugins: () => [],
       onBridgeReady: noop,
     }), {
       stdin,

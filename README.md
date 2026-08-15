@@ -12,7 +12,11 @@ A Claude-Code-style interactive terminal (TUI) bundle for [DeepSeek Harness](htt
 - Live transcript streamed from the durable session log: user prompts, streaming assistant text, compact tool-call and slash-command rows with running/done/error marks, todo snapshots
 - **Tool approval y/n bar**: when the agent asks for permission (a sandbox escalation, a hook's `ask` decision), an amber bar shows the reason plus the paired command line; `y` allows once, `n` rejects
 - **`/model` panel**: list every provider route the live `llm` registry advertises, switch the session's model for the next step; a resumed session restores its own last model
-- **Session resume**: `--resume <id|prefix>` continues a persisted session, `--continue` picks the newest one for the working directory; the full transcript replays from the log and appends to the same durable session
+- **Per-session Agent Presets**: each session composes its model-facing tools, prompt sections, skills, compaction, plan mode, and delegation surface from `standard`, `code`, `minimal`, `cordis`, or a user preset; `/mode [preset]` switches only while the session is blank and the status line always shows the active mode
+- **In-process session lifecycle**: `/new [preset]` creates a session and `/resume [id|prefix]` opens a Codex-style searchable picker without replacing the terminal owner; busy switches wait for the current turn, and `/resume cancel` cancels a queued switch
+- **Session resume**: `--resume <id|prefix>` continues a persisted session, `--continue` picks the newest one for the working directory; `--mode <preset>` selects the preset for a new session
+- **Resume inspector**: the picker defaults to all root sessions and can toggle all conversations, current/all working directories, sort order, and density; subagent conversations remain read-only, metadata expands with `e`, and only explicit `t` loads the complete scrollable transcript
+- **Plugin diagnostics**: `/plugin [query]` is a read-only view of the live Cordis loader, including preset-mounted entries, enabled state, and fiber phase
 - **Slash-command passthrough**: every command registered in the shared `ctx.commands` registry (the same surface the web composer dispatches) is executable from the terminal, with a completion menu on `/`; user-invocable skills join the same menu (marked `skill`), and an unknown `/name` falls through to the prompt so the host's skill injection picks it up
 - **Todo panel**: the live todo list renders inline with done/active/pending counts and three-state markers, cleared at each fresh turn (mirroring the web TodoPanel)
 - **Thinking lines**: model reasoning renders as a Claude-Code-style `✻` fold — collapsed to a dim marker with a character count, expanded to dim-italic text, live-streamed while the model thinks; Ctrl+R toggles globally
@@ -21,11 +25,11 @@ A Claude-Code-style interactive terminal (TUI) bundle for [DeepSeek Harness](htt
 - **Structured tool details**: persisted edit/write diffs, numbered read windows, web-search sources, fetch summaries, and bounded raw output remain compact in the transcript and expand into their full presentation inside Ctrl+O
 - **ask_user_question bar**: the model's questions appear as an option menu (↑/↓, space multi-select, `c` custom answer, Esc interrupts); plan reviews (`exit_plan_mode`) arrive through the same bar with the approve option highlighted
 - **@ mentions**: `@` completion over workspace files and persisted sessions; session mentions expand into bounded read-only snapshots injected as sourced context before the prompt
-- **Plan mode and permissions**: `⧉ plan` and `⛨ <preset>` badges in the status line; `/permission <name>` switches the session preset, Shift+Tab cycles through them (the registry's own `/plan` command enables plan mode)
+- **Plan mode and permissions**: plan and permission badges stay independent from the Agent Preset mode; `/permission <name>` and Shift+Tab change the permission preset, while the registry's `/plan` command enables plan mode
 - **Local terminal workflows**: `/help` opens the complete key/command/skill surface, `/export` writes the folded transcript to Markdown, `/title` pins a session title, Ctrl+K deletes to end of line, Ctrl+L redraws the terminal, and bare workspace paths participate in Tab completion
 - Input with history (↑/↓), cursor editing (←/→, Ctrl+A/E/U), Tab completion for slash commands, skills, and @ mentions; submitting while the agent runs steers the live turn (consumed at the next step boundary), `Esc` or Ctrl+C interrupts it, Ctrl+C on an empty idle input exits, Ctrl+D refuses to exit mid-turn
 - A blended status line: Claude-Code-style identity facts (model, working directory, git branch, title/session, plan, permission preset, goal and sandbox overrides) beside the web composer's figures (turns/steps, llm and tool wall time, TTFT, decode tok/s, context occupancy, cache hit, token totals)
-- Bounded live rendering: streaming output, Ctrl+O, `/help`, `/model`, approvals, and question/plan-review panels stay within terminal-aware viewports; the composer remains directly above its status footer, and a debounced resize reflows the screen once at the settled width
+- Bounded live rendering: streaming output, Ctrl+O, every slash subpage, approvals, and question/plan-review panels stay within terminal-aware viewports; the composer remains directly above its status footer, and a debounced resize reflows the screen once at the settled width
 
 ## Install
 
@@ -44,6 +48,7 @@ dsh --profile cli                    # fresh session
 dsh --profile cli --continue         # resume the newest session in this directory
 dsh --profile cli --resume abc123    # resume by session id or unique prefix
 dsh --profile cli --session my-id    # fresh session under an explicit id
+dsh --profile cli --mode minimal     # fresh session using an Agent Preset
 ```
 
 Set `DEEPSEEK_API_KEY` in your environment (or a `.env` in the launch directory or `$DSH_HOME`).
