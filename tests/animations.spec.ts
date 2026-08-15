@@ -1,7 +1,14 @@
 /** Terminal animation frames (web StateDot pulse + chase) and caret blink. */
 
 import { describe, expect, it } from 'vitest'
-import { BUSY_CHASE_FRAMES, busyChaseFrame, caretVisible, pulseFrame } from '../src/render/animations.ts'
+import {
+  BUSY_CHASE_FRAMES,
+  busyChaseFrame,
+  caretVisible,
+  DEEPSEEK_WAVE_FRAMES,
+  isOfficialDeepSeekLabel,
+  pulseFrame,
+} from '../src/render/animations.ts'
 
 describe('pulseFrame', () => {
   it('steps brightness with flat holds over an 8-frame 1s cycle', () => {
@@ -31,5 +38,28 @@ describe('caretVisible', () => {
     expect(caretVisible(0)).toBe(true)
     expect(caretVisible(1)).toBe(false)
     expect(caretVisible(2)).toBe(true)
+  })
+})
+
+describe('isOfficialDeepSeekLabel', () => {
+  it('accepts the official deepseek-official route and deepseek-* models', () => {
+    expect(isOfficialDeepSeekLabel('deepseek-official/deepseek-v4-flash')).toBe(true)
+    expect(isOfficialDeepSeekLabel('deepseek-official/deepseek-reasoner')).toBe(true)
+    expect(isOfficialDeepSeekLabel('deepseek/deepseek-chat')).toBe(true)
+  })
+
+  it('accepts a deepseek model id under any provider route', () => {
+    expect(isOfficialDeepSeekLabel('acme/deepseek-v4-flash')).toBe(true)
+  })
+
+  it('rejects non-DeepSeek labels, empty labels, and case differences only in the provider name', () => {
+    expect(isOfficialDeepSeekLabel('anthropic/claude')).toBe(false)
+    expect(isOfficialDeepSeekLabel('acme/model-01')).toBe(false)
+    expect(isOfficialDeepSeekLabel('')).toBe(false)
+  })
+
+  it('matches case-insensitively', () => {
+    expect(isOfficialDeepSeekLabel('DeepSeek-Official/DeepSeek-V4-Flash')).toBe(true)
+    expect(isOfficialDeepSeekLabel('DEEPSEEK/deepseek-chat')).toBe(true)
   })
 })

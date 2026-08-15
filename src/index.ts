@@ -33,7 +33,7 @@ import { App, type NoticeTone } from './app.ts'
 import { mountApprovalAnswerer, type ApprovalStore } from './approval.ts'
 import { isSlashLine, watchCommands, type CommandsView } from './commands.ts'
 import { internals, type TuiMount } from './internals.ts'
-import { loadModelDirectory, type ModelRow } from './models.ts'
+import { buildModelSelection, loadModelDirectory, resolveEffectiveSelection, type ModelRow } from './models.ts'
 import { createMentions, type MentionCandidate, type MentionsApi } from './mentions.ts'
 import { mountQuestionProvider, type QuestionStore } from './questions.ts'
 import { createTranscriptStore, type TranscriptStore } from './store.ts'
@@ -46,6 +46,7 @@ import type { TuiStartup } from './startup.ts'
 import { SessionSwitchQueue } from './session-switch.ts'
 import { agentPresetsFrom, resolvePreset, switchPreset } from './presets.ts'
 import { listPluginRows } from './plugin-inventory.ts'
+import { parseThemeName, setTheme, type ThemeName } from './theme.ts'
 import {
   mergeSessionTitles,
   projectSessionRows,
@@ -63,7 +64,7 @@ export const inject = ['agentDefaultModel', 'agents', 'sessions']
 /** Plugin config: the startup resolved from this app's injected provider service. */
 export interface Config {
   /** How this invocation obtains its session identity (validated loosely; narrowed in {@link apply}). */
-  startup: { kind: string; sessionId?: string; mode?: string }
+  startup: { kind: string; sessionId?: string; mode?: string; theme?: string }
 }
 
 export const Config: z<Config> = z.object({
@@ -71,6 +72,7 @@ export const Config: z<Config> = z.object({
     kind: z.string().required(),
     sessionId: z.string(),
     mode: z.string(),
+    theme: z.string(),
   }),
 })
 
@@ -211,7 +213,12 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   /** Prepare a complete next session before disturbing the currently visible one. */
   const prepare = async (next: Target): Promise<ActiveSession> => {
     const nextCwd = next.cwd ?? cwd
-    const selectionState: { picked?: ModelSelection } = {}
+    // A bare launch can pick a model before any session exists: the process
+    // keeps that explicit choice and every prepared session starts from it
+    // (the documented precedence: explicit pick > session header > default).
+    const selectionState: { picked?: ModelSelection } = pendingSelection === undefined
+      ? {}
+      : { picked: pendingSelection }
     let mode = next.mode
     if (!next.resume) mode = (await presets.resolve(mode)).id
     const setup = async (agentCtx: Context): Promise<void> => {
@@ -222,16 +229,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       mode = mounted.id
       const selection: ModelSelectionRef = {
         get current(): ModelSelection | undefined {
-          if (selectionState.picked !== undefined) return selectionState.picked
-          const logged = agentCtx.agent?.session.requestHeader()?.config
-          if (logged !== undefined) {
-            return {
-              provider: logged.provider,
-              model: logged.model,
-              ...logged.reasoningEffort === undefined ? {} : { reasoningEffort: logged.reasoningEffort },
-            }
-          }
-          return defaults
+          return resolveEffectiveSelection(selectionState.picked, agentCtx.agent?.session.requestHeader()?.config, defaults)
         },
         set current(value: ModelSelection | undefined) { selectionState.picked = value },
         assembled: undefined,
@@ -269,6 +267,8 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   let session: Session | undefined
   let store: TranscriptStore = createTranscriptStore()
   let mentions: MentionsApi | undefined
+  /** Explicit model pick made before any session exists (a bare launch). */
+  let pendingSelection: ModelSelection | undefined
 
   if (!lazy) {
     const target = await resolveTarget(startup, persistence, cwd)
@@ -334,6 +334,33 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       .then(() => writeFileAsync(statuslinePath, JSON.stringify({ items }, null, 2) + '\n', 'utf8'))
       .catch((writeError: unknown) => {
         bridge.notify('statusline save failed: ' + (writeError instanceof Error ? writeError.message : String(writeError)), 'error')
+      })
+  }
+
+  // /theme persistence: one user-level JSON file under the DSH home, mirroring
+  // the statusline file. A missing file means the dark default; a corrupt file
+  // degrades to dark with a surfaced warning. Precedence: CLI --theme > file >
+  // auto detection > dark (auto detection itself is a later enhancement and
+  // currently falls back to dark inside theme.ts).
+  const themePath = join(homedir(), '.dsh', 'dsh-code', 'theme.json')
+  let themeWarning: string | undefined
+  if (startup.theme === undefined) {
+    try {
+      setTheme(parseThemeName(JSON.parse(readFileSync(themePath, 'utf8')).theme))
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        themeWarning = error instanceof Error ? error.message : String(error)
+      }
+    }
+  } else {
+    setTheme(startup.theme)
+  }
+  const saveTheme = (name: ThemeName): void => {
+    setTheme(name)
+    void mkdir(dirname(themePath), { recursive: true })
+      .then(() => writeFileAsync(themePath, JSON.stringify({ theme: name }, null, 2) + '\n', 'utf8'))
+      .catch((writeError: unknown) => {
+        bridge.notify('theme save failed: ' + (writeError instanceof Error ? writeError.message : String(writeError)), 'error')
       })
   }
 
@@ -609,10 +636,21 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     }
   }
 
-  /** Apply one /model selection: takes effect from the next assembled step. */
-  const selectModel = (row: ModelRow): string => {
-    if (active === undefined) throw new Error('no session yet — submit a message to start')
-    active.selection.picked = { provider: row.provider, model: row.model }
+  /**
+   * Apply one /model selection: takes effect from the next assembled step.
+   * The optional reasoning effort must be one the row advertises (the picker
+   * only offers those), so an unsupported value cannot reach the request
+   * pipeline; an absent effort restores the model's own default.
+   */
+  const selectModel = (row: ModelRow, effortId?: string): string => {
+    const selection = buildModelSelection(row, effortId)
+    if (active === undefined) {
+      // A bare launch has no session yet: keep the pick process-wide so the
+      // first composed session starts from it.
+      pendingSelection = selection
+    } else {
+      active.selection.picked = selection
+    }
     return `${row.provider}/${row.model}`
   }
 
@@ -821,7 +859,16 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     // model, and the working directory's basename. `status.ts` drops empty
     // mode/sessionId, so the bar renders only the identity it actually has.
     const sessionCwd = session?.header.cwd ?? cwd
-    const model = store.getView().model !== '' ? store.getView().model : `${defaults.provider}/${defaults.model}`
+    const model = store.getView().model !== ''
+      ? store.getView().model
+      : pendingSelection !== undefined
+        ? `${pendingSelection.provider}/${pendingSelection.model}`
+        : `${defaults.provider}/${defaults.model}`
+    const effort = resolveEffectiveSelection(
+      active?.selection.picked ?? pendingSelection,
+      session?.requestHeader()?.config,
+      defaults,
+    ).reasoningEffort
     return createElement(App, {
       key: session?.id ?? 'pending',
       store,
@@ -830,6 +877,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       commands,
       skills,
       model,
+      effort,
       cwd: basename(sessionCwd),
       workspaceRoot: sessionCwd,
       branch: gitBranch(sessionCwd),
@@ -858,6 +906,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       loadPlugins: () => listPluginRows(ctx),
       statusline: statuslineItems,
       saveStatusline,
+      saveTheme,
       history: inputHistory,
       recordHistory,
       cancelQueued,
@@ -878,6 +927,12 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       bridge.notify('statusline config unreadable, using defaults: ' + statuslineWarning, 'warning')
     }, 50)
   }
+  // Same one-shot surface for a corrupt theme file (dark fallback stays live).
+  if (themeWarning !== undefined) {
+    setTimeout(() => {
+      bridge.notify('theme config unreadable, using dark: ' + themeWarning, 'warning')
+    }, 50)
+  }
 }
 
 /**
@@ -886,14 +941,17 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
  * @param config - validated startup config resolved from the tuiStartup provider.
  */
 export function apply(ctx: Context, config: Config): void {
+  // The CLI validated --theme at parse time; the loose config schema falls
+  // back to dark for anything unexpected.
+  const theme = config.startup.theme === undefined ? undefined : parseThemeName(config.startup.theme)
   const startup: TuiStartup =
     config.startup.kind === 'resume' && config.startup.sessionId !== undefined
-      ? { kind: 'resume', sessionId: config.startup.sessionId }
+      ? { kind: 'resume', sessionId: config.startup.sessionId, ...(theme === undefined ? {} : { theme }) }
       : config.startup.kind === 'latest'
-        ? { kind: 'latest' }
+        ? { kind: 'latest', ...(theme === undefined ? {} : { theme }) }
         : config.startup.kind === 'named' && config.startup.sessionId !== undefined
-          ? { kind: 'named', sessionId: config.startup.sessionId, ...config.startup.mode === undefined ? {} : { mode: config.startup.mode } }
-          : { kind: 'fresh', ...config.startup.mode === undefined ? {} : { mode: config.startup.mode } }
+          ? { kind: 'named', sessionId: config.startup.sessionId, ...config.startup.mode === undefined ? {} : { mode: config.startup.mode }, ...(theme === undefined ? {} : { theme }) }
+          : { kind: 'fresh', ...config.startup.mode === undefined ? {} : { mode: config.startup.mode }, ...(theme === undefined ? {} : { theme }) }
   // Read through the global service store, not the property proxy: appExit is
   // an optional host value, never an injected dependency.
   const exit = ctx.get('appExit')

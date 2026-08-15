@@ -22,20 +22,36 @@ import { assertNever } from '@deepseek-ai/dsh-llm'
 import type { CommandDescriptor } from '@deepseek-ai/dsh-commands'
 import type { TodoItem } from '@deepseek-ai/dsh-session'
 import type { AskUserQuestionAnswerItem } from '@deepseek-ai/dsh-user-questions'
-import { TUI_RGB, brand, dim, error as paintError } from './theme.ts'
+import {
+  brand,
+  dim,
+  error as paintError,
+  getPalette,
+  getTheme,
+  inkColor,
+  setTheme,
+  type ThemeName,
+} from './theme.ts'
+import { ThemePanel } from './theme-panel.ts'
 import { WHALE_GLYPH, WHALE_GLYPH_COLUMNS } from './whale-glyph.ts'
 import type { TranscriptStore } from './store.ts'
 import { settledEntryCount, type TranscriptEntry } from './render/projection.ts'
 import { renderMarkdown, type MdSegment, visibleColumns } from './render/markdown.ts'
 import type { ToolDetail } from './render/tool-detail.ts'
-import { busyChaseFrame, caretVisible, pulseFrame } from './render/animations.ts'
+import {
+  busyChaseFrame,
+  caretVisible,
+  DEEPSEEK_WAVE_FRAMES,
+  isOfficialDeepSeekLabel,
+  pulseFrame,
+} from './render/animations.ts'
 import type { ApprovalSnapshot, ApprovalStore } from './approval.ts'
 import type { CommandsView } from './commands.ts'
 import type { ModelDirectory, ModelRow } from './models.ts'
 import type { QuestionSnapshot, QuestionStore } from './questions.ts'
 import type { SkillsView, SkillRow } from './skills.ts'
 import type { MentionCandidate } from './mentions.ts'
-import { ModePanel, HistoryPanel, PluginPanel, ResumePanel, StatuslinePanel } from './kernel-panels.ts'
+import { EffortPanel, ModePanel, HistoryPanel, PluginPanel, ResumePanel, StatuslinePanel } from './kernel-panels.ts'
 import type { PresetRow } from './presets.ts'
 import type { PluginRow } from './plugin-inventory.ts'
 import {
@@ -103,6 +119,8 @@ export interface AppProps {
   skills: SkillsView
   /** `provider/model` selection serving this session (updated on /model). */
   model: string
+  /** Effective reasoning effort in force ('' when none), for the /model picker mark. */
+  effort?: string
   /** Working-directory basename the session serves. */
   cwd: string
   /** Absolute working directory used by session filters and references. */
@@ -127,8 +145,8 @@ export interface AppProps {
   loadModels(): Promise<ModelDirectory>
   /** Load @mention candidates for the typed query (files + sessions). */
   loadMentions(query: string, signal?: AbortSignal): Promise<readonly MentionCandidate[]>
-  /** Apply one /model selection; returns the display label. */
-  selectModel(row: ModelRow): string
+  /** Apply one /model selection (with an advertised reasoning effort, when picked); returns the display label. */
+  selectModel(row: ModelRow, effortId?: string): string
   /** Cycle to the next permission preset (Shift+Tab); returns the new label. */
   cyclePermission(): string
   /** Export the transcript to a markdown file (/export [path]); reports via notices. */
@@ -150,17 +168,14 @@ export interface AppProps {
   statusline: readonly string[]
   /** Persist a new statusline item set; the runner surfaces IO failures as notices. */
   saveStatusline(items: readonly string[]): void
+  /** Apply and persist one /theme selection; the runner owns the theme.json file. */
+  saveTheme?(name: ThemeName): void
   /** Persistent cross-session input history (oldest first); the runner owns the file. */
   history: readonly string[]
   /** Persist one submitted prompt to the global history file. */
   recordHistory(text: string): void
   /** Cancel one queued inbox message by identity (Delete on the empty composer). */
   cancelQueued(messageId: string): void
-}
-
-/** Ink `color` string for one palette triple. */
-function inkColor(triple: readonly [number, number, number]): string {
-  return `rgb(${triple[0]}, ${triple[1]}, ${triple[2]})`
 }
 
 /** Pad text with spaces to a visible-column target (menu name column). */
@@ -199,7 +214,7 @@ function useStableInput(handler: (input: string, key: Key) => void, active: bool
 /** Single-cell stepped pulse: the web's 125ms flat-hold brightness steps over 1s. */
 function Pulse(): ReactElement {
   const tick = useFrames(125)
-  return createElement(Text, { color: inkColor(TUI_RGB.brandBright) }, pulseFrame(tick))
+  return createElement(Text, { color: inkColor(getPalette().brandBright) }, pulseFrame(tick))
 }
 
 /**
@@ -210,7 +225,7 @@ function Pulse(): ReactElement {
  */
 function BusyChase(): ReactElement {
   const tick = useFrames(125)
-  return createElement(Text, { color: inkColor(TUI_RGB.brandBright) }, busyChaseFrame(tick) + ' ')
+  return createElement(Text, { color: inkColor(getPalette().brandBright) }, busyChaseFrame(tick) + ' ')
 }
 
 /** Blinking block caret appended to streaming text. */
@@ -298,11 +313,11 @@ function segmentProps(style: MdSegment['style']): {
 } {
   switch (style) {
     case 'accent':
-      return { color: inkColor(TUI_RGB.brandBright), bold: undefined, italic: undefined, strikethrough: undefined }
+      return { color: inkColor(getPalette().brandBright), bold: undefined, italic: undefined, strikethrough: undefined }
     case 'code':
-      return { color: inkColor(TUI_RGB.code), bold: undefined, italic: undefined, strikethrough: undefined }
+      return { color: inkColor(getPalette().code), bold: undefined, italic: undefined, strikethrough: undefined }
     case 'dim':
-      return { color: inkColor(TUI_RGB.dim), bold: undefined, italic: undefined, strikethrough: undefined }
+      return { color: inkColor(getPalette().dim), bold: undefined, italic: undefined, strikethrough: undefined }
     case 'bold':
       return { color: undefined, bold: true, italic: undefined, strikethrough: undefined }
     case 'italic':
@@ -310,7 +325,7 @@ function segmentProps(style: MdSegment['style']): {
     case 'boldItalic':
       return { color: undefined, bold: true, italic: true, strikethrough: undefined }
     case 'strike':
-      return { color: inkColor(TUI_RGB.dim), bold: undefined, italic: undefined, strikethrough: true }
+      return { color: inkColor(getPalette().dim), bold: undefined, italic: undefined, strikethrough: true }
     default:
       return { color: undefined, bold: undefined, italic: undefined, strikethrough: undefined }
   }
@@ -326,13 +341,13 @@ function lineStyleProps(style: LineStyle): {
 } {
   switch (style) {
     case 'brand':
-      return { color: inkColor(TUI_RGB.brandBright), bold: undefined, italic: undefined, strikethrough: undefined, dimColor: undefined }
+      return { color: inkColor(getPalette().brandBright), bold: undefined, italic: undefined, strikethrough: undefined, dimColor: undefined }
     case 'success':
-      return { color: inkColor(TUI_RGB.success), bold: undefined, italic: undefined, strikethrough: undefined, dimColor: undefined }
+      return { color: inkColor(getPalette().success), bold: undefined, italic: undefined, strikethrough: undefined, dimColor: undefined }
     case 'error':
-      return { color: inkColor(TUI_RGB.error), bold: undefined, italic: undefined, strikethrough: undefined, dimColor: undefined }
+      return { color: inkColor(getPalette().error), bold: undefined, italic: undefined, strikethrough: undefined, dimColor: undefined }
     case 'warn':
-      return { color: inkColor(TUI_RGB.warn), bold: undefined, italic: undefined, strikethrough: undefined, dimColor: undefined }
+      return { color: inkColor(getPalette().warn), bold: undefined, italic: undefined, strikethrough: undefined, dimColor: undefined }
     case 'dimItalic':
       return { color: undefined, bold: undefined, italic: true, strikethrough: undefined, dimColor: true }
     default:
@@ -407,7 +422,7 @@ function ToolDetailBody({ detail }: { detail: ToolDetail }): ReactElement {
             Text,
               {
                 key: at,
-                color: line.mark === '+' ? inkColor(TUI_RGB.success) : line.mark === '-' ? inkColor(TUI_RGB.error) : inkColor(TUI_RGB.dim),
+                color: line.mark === '+' ? inkColor(getPalette().success) : line.mark === '-' ? inkColor(getPalette().error) : inkColor(getPalette().dim),
                 wrap: 'truncate-end',
               },
             `  ${line.mark}${displayText(line.text)}`,
@@ -482,8 +497,8 @@ function EntryLine({ entry, showReasoning, verbose }: { entry: TranscriptEntry; 
       const mark = entry.state === 'running'
         ? createElement(Pulse)
         : entry.state === 'error'
-          ? createElement(Text, { color: inkColor(TUI_RGB.error) }, '⨯')
-          : createElement(Text, { color: inkColor(TUI_RGB.success) }, '⏺')
+          ? createElement(Text, { color: inkColor(getPalette().error) }, '⨯')
+          : createElement(Text, { color: inkColor(getPalette().success) }, '⏺')
       return createElement(
         Box,
         { flexDirection: 'column' },
@@ -499,7 +514,7 @@ function EntryLine({ entry, showReasoning, verbose }: { entry: TranscriptEntry; 
           ? undefined
           : createElement(
             Text,
-            { color: entry.state === 'error' ? inkColor(TUI_RGB.error) : inkColor(TUI_RGB.dim), wrap: verbose ? 'truncate-end' : undefined },
+            { color: entry.state === 'error' ? inkColor(getPalette().error) : inkColor(getPalette().dim), wrap: verbose ? 'truncate-end' : undefined },
             `  ⎿ ${displayText(entry.summary)}`,
           ),
         verbose && entry.detail !== undefined
@@ -511,8 +526,8 @@ function EntryLine({ entry, showReasoning, verbose }: { entry: TranscriptEntry; 
       const mark = entry.state === 'running'
         ? createElement(Pulse)
         : entry.state === 'error'
-          ? createElement(Text, { color: inkColor(TUI_RGB.error) }, '⨯')
-          : createElement(Text, { color: inkColor(TUI_RGB.success) }, '⏺')
+          ? createElement(Text, { color: inkColor(getPalette().error) }, '⨯')
+          : createElement(Text, { color: inkColor(getPalette().success) }, '⏺')
       return createElement(
         Box,
         { flexDirection: 'column' },
@@ -526,7 +541,7 @@ function EntryLine({ entry, showReasoning, verbose }: { entry: TranscriptEntry; 
         ),
         entry.summary === ''
           ? undefined
-          : createElement(Text, { color: inkColor(TUI_RGB.dim), wrap: verbose ? 'truncate-end' : undefined }, `  ⎿ ${displayText(entry.summary)}`),
+          : createElement(Text, { color: inkColor(getPalette().dim), wrap: verbose ? 'truncate-end' : undefined }, `  ⎿ ${displayText(entry.summary)}`),
       )
     }
     case 'turn-marker':
@@ -546,7 +561,7 @@ function EntryLine({ entry, showReasoning, verbose }: { entry: TranscriptEntry; 
       // next attempt is underway.
       return createElement(
         Text,
-        { color: entry.state === 'running' ? inkColor(TUI_RGB.warn) : inkColor(TUI_RGB.dim), wrap: verbose ? 'truncate-end' : undefined },
+        { color: entry.state === 'running' ? inkColor(getPalette().warn) : inkColor(getPalette().dim), wrap: verbose ? 'truncate-end' : undefined },
         `  ↻ retry ${entry.attempt}/${entry.max} · ${displayText(entry.code)} · ${Math.round(entry.delayMs / 100) / 10}s`,
       )
     case 'files': {
@@ -584,8 +599,8 @@ function Header({ resumed }: { resumed: boolean }): ReactElement {
   if (rows < 20) {
     return createElement(
       Box,
-      { flexDirection: 'row', gap: 1, borderStyle: 'round', borderColor: inkColor(TUI_RGB.brand), paddingX: 1, alignSelf: 'flex-start' },
-      createElement(Text, { color: inkColor(TUI_RGB.brandBright), bold: true }, 'DeepSeek Harness'),
+      { flexDirection: 'row', gap: 1, borderStyle: 'round', borderColor: inkColor(getPalette().brand), paddingX: 1, alignSelf: 'flex-start' },
+      createElement(Text, { color: inkColor(getPalette().brandBright), bold: true }, 'DeepSeek Harness'),
       createElement(Text, { dimColor: true }, hint),
     )
   }
@@ -594,16 +609,16 @@ function Header({ resumed }: { resumed: boolean }): ReactElement {
     // alignSelf shrinks the border to the whale-plus-wordmark content instead
     // of stretching across the terminal and stranding empty space on the right
     // (the compact-banner treatment the Claude Code welcome uses).
-    { flexDirection: 'row', gap: 2, borderStyle: 'round', borderColor: inkColor(TUI_RGB.brand), paddingX: 1, alignSelf: 'flex-start' },
+    { flexDirection: 'row', gap: 2, borderStyle: 'round', borderColor: inkColor(getPalette().brand), paddingX: 1, alignSelf: 'flex-start' },
     createElement(
       Box,
       { flexDirection: 'column', width: WHALE_GLYPH_COLUMNS, justifyContent: 'center' },
-      ...WHALE_GLYPH.map((row, index) => createElement(Text, { key: index, color: inkColor(TUI_RGB.brand) }, row)),
+      ...WHALE_GLYPH.map((row, index) => createElement(Text, { key: index, color: inkColor(getPalette().brand) }, row)),
     ),
     createElement(
       Box,
       { flexDirection: 'column', justifyContent: 'center' },
-      createElement(Text, { color: inkColor(TUI_RGB.brandBright), bold: true }, 'DeepSeek Harness'),
+      createElement(Text, { color: inkColor(getPalette().brandBright), bold: true }, 'DeepSeek Harness'),
       createElement(Text, { dimColor: true }, hint),
     ),
   )
@@ -626,10 +641,10 @@ function TodoPanel({ todos }: { todos: readonly TodoItem[] }): ReactElement | un
     { paddingX: 1 },
     createElement(
       Text,
-      { color: inkColor(TUI_RGB.brand), bold: true, wrap: 'truncate-end' },
+      { color: inkColor(getPalette().brand), bold: true, wrap: 'truncate-end' },
       `todos ${completed}/${todos.length}`,
       createElement(Text, { dimColor: true }, ` · ${inProgress} active · ${pending} pending`),
-      current === undefined ? '' : createElement(Text, { color: inkColor(TUI_RGB.brandBright) }, ` · ${todoMark(current.status)} ${displayText(current.content)}`),
+      current === undefined ? '' : createElement(Text, { color: inkColor(getPalette().brandBright) }, ` · ${todoMark(current.status)} ${displayText(current.content)}`),
     ),
   )
 }
@@ -637,7 +652,7 @@ function TodoPanel({ todos }: { todos: readonly TodoItem[] }): ReactElement | un
 /**
  * Ink props for one status tone: the Codex status-line accent mapping over
  * the DeepSeek palette, all blue by design — the status bar speaks only in
- * degrees of blue (deep accent, primary figures, bright model identity, sky
+ * degrees of blue (deep accent, primary figures, model identity, sky
  * paths and done states), with amber/red reserved for warnings and errors.
  */
 function statusToneProps(tone: StatusTone): {
@@ -647,28 +662,47 @@ function statusToneProps(tone: StatusTone): {
 } {
   switch (tone) {
     case 'model':
-      return { color: inkColor(TUI_RGB.brandBright), bold: true, dimColor: undefined }
+      // Same tone as the working-directory segment: the model name reads as
+      // a path fact, not a brand accent.
+      return { color: inkColor(getPalette().code), bold: true, dimColor: undefined }
     case 'live':
-      return { color: inkColor(TUI_RGB.brandBright), bold: undefined, dimColor: undefined }
+      return { color: inkColor(getPalette().brandBright), bold: undefined, dimColor: undefined }
     case 'path':
-      return { color: inkColor(TUI_RGB.code), bold: undefined, dimColor: undefined }
+      return { color: inkColor(getPalette().code), bold: undefined, dimColor: undefined }
     case 'branch':
-      return { color: inkColor(TUI_RGB.text), bold: undefined, dimColor: undefined }
+      return { color: inkColor(getPalette().text), bold: undefined, dimColor: undefined }
     case 'value':
-      return { color: inkColor(TUI_RGB.brand), bold: undefined, dimColor: undefined }
+      return { color: inkColor(getPalette().brand), bold: undefined, dimColor: undefined }
     case 'label':
     case 'meta':
-      return { color: undefined, bold: undefined, dimColor: true }
+      // Explicit RGB gray, not SGR dim: Ink's token stream inherits an
+      // unclosed `dim` into the next span (the model name after the busy dot
+      // rendered dim+bold and looked gray), and a concrete color closes
+      // cleanly on the style transition. Theme-aware via the palette.
+      return { color: inkColor(getPalette().dim), bold: undefined, dimColor: undefined }
     case 'accent':
-      return { color: inkColor(TUI_RGB.brandDeep), bold: undefined, dimColor: undefined }
+      return { color: inkColor(getPalette().brandDeep), bold: undefined, dimColor: undefined }
+    // Context-bar segment shades, dark → light across the DeepSeek blues:
+    // system/prompt/assistant/thinking/tools. The tools segment borrows the
+    // code sky-blue as the fifth shade (no new theme token).
+    case 'ctxSystem':
+      return { color: inkColor(getPalette().brandDeep), bold: undefined, dimColor: undefined }
+    case 'ctxPrompt':
+      return { color: inkColor(getPalette().brand), bold: undefined, dimColor: undefined }
+    case 'ctxAssistant':
+      return { color: inkColor(getPalette().brandMid), bold: undefined, dimColor: undefined }
+    case 'ctxThinking':
+      return { color: inkColor(getPalette().brandBright), bold: undefined, dimColor: undefined }
+    case 'ctxTools':
+      return { color: inkColor(getPalette().code), bold: undefined, dimColor: undefined }
     case 'success':
-      return { color: inkColor(TUI_RGB.code), bold: true, dimColor: undefined }
+      return { color: inkColor(getPalette().code), bold: true, dimColor: undefined }
     case 'warn':
-      return { color: inkColor(TUI_RGB.warn), bold: true, dimColor: undefined }
+      return { color: inkColor(getPalette().warn), bold: true, dimColor: undefined }
     case 'error':
-      return { color: inkColor(TUI_RGB.error), bold: true, dimColor: undefined }
+      return { color: inkColor(getPalette().error), bold: true, dimColor: undefined }
     default:
-      return { color: undefined, bold: undefined, dimColor: true }
+      return { color: inkColor(getPalette().dim), bold: undefined, dimColor: undefined }
   }
 }
 
@@ -681,7 +715,24 @@ function statusToneProps(tone: StatusTone): {
  * content, so the footer degrades to a single row on narrow terminals. Both
  * layouts arrive pre-measured from the pure reducer, so Ink only paints;
  * truncation degrades groups, it never wraps a row.
+ *
+ * The DeepSeek easter egg: when the model label *switches* to an official
+ * DeepSeek route, the model name plays a one-shot blue gradient wave
+ * (12 × 125ms = 1.5s) and returns to static. The wave only recolors the
+ * existing model span — same characters, same width — so the row budget is
+ * untouched and every other status figure stays visible throughout.
  */
+
+/** Frame interval of the DeepSeek model-switch wave (matches the busy chase cadence). */
+const DEEPSEEK_WAVE_INTERVAL_MS = 125
+
+/** Wave shade palette, indexed by frame: deep → bright brand blues. The
+ * composer frame cycles through these on the one-shot easter-egg wave. */
+function deepseekWavePalette(): readonly (readonly [number, number, number])[] {
+  const palette = getPalette()
+  return [palette.brandDeep, palette.brand, palette.brandMid, palette.brandBright]
+}
+
 function StatusLine({ facts, stats, busy, columns, items }: {
   facts: StatusFacts
   stats: Parameters<typeof layoutStatusBar>[1]
@@ -690,11 +741,12 @@ function StatusLine({ facts, stats, busy, columns, items }: {
   items: readonly string[]
 }): ReactElement {
   const layout = layoutStatusBar(facts, stats, Math.max(8, columns - 2), { busy, items })
+
   const renderRow = (row: { left: readonly StatusGroup[]; right: readonly StatusSpan[]; hint: boolean }, key: string): ReactElement => {
     const leftParts: ReactElement[] = []
     row.left.forEach((group, groupIndex) => {
       if (groupIndex > 0) {
-        leftParts.push(createElement(Text, { key: key + 'gs' + groupIndex, dimColor: true }, STATUS_GROUP_SEPARATOR))
+        leftParts.push(createElement(Text, { key: key + 'gs' + groupIndex, color: inkColor(getPalette().dim) }, STATUS_GROUP_SEPARATOR))
       }
       group.spans.forEach((span, spanIndex) => {
         leftParts.push(createElement(
@@ -707,7 +759,7 @@ function StatusLine({ facts, stats, busy, columns, items }: {
     const rightParts: ReactElement[] = []
     row.right.forEach((span, index) => {
       if (index > 0) {
-        rightParts.push(createElement(Text, { key: key + 'rs' + index, dimColor: true }, STATUS_ITEM_SEPARATOR))
+        rightParts.push(createElement(Text, { key: key + 'rs' + index, color: inkColor(getPalette().dim) }, STATUS_ITEM_SEPARATOR))
       }
       rightParts.push(createElement(
         Text,
@@ -716,7 +768,7 @@ function StatusLine({ facts, stats, busy, columns, items }: {
       ))
     })
     if (row.hint) {
-      rightParts.push(createElement(Text, { key: key + 'hint', dimColor: true }, STATUS_CYCLE_HINT))
+      rightParts.push(createElement(Text, { key: key + 'hint', color: inkColor(getPalette().dim) }, STATUS_CYCLE_HINT))
     }
     // Each row already fits the column budget; truncate-end stays as the
     // terminal-measurement backstop so a drifting cell count clips instead
@@ -751,10 +803,10 @@ function NoticeLine({ text, tone, columns }: {
   columns: number
 }): ReactElement {
   const color = tone === 'error'
-    ? TUI_RGB.error
+    ? getPalette().error
     : tone === 'warning'
-      ? TUI_RGB.warn
-      : TUI_RGB.brandBright
+      ? getPalette().warn
+      : getPalette().brandBright
   const mark = tone === 'error' ? '⨯' : tone === 'warning' ? '!' : '•'
   return createElement(
     Box,
@@ -825,8 +877,8 @@ function ApprovalBar({ snapshot, locked }: { snapshot: ApprovalSnapshot; locked:
   const { answered } = snapshot
   return createElement(
     Box,
-    { flexDirection: 'column', width: viewport.outerColumns, paddingX: 1, borderStyle: 'round', borderColor: inkColor(TUI_RGB.warn) },
-    createElement(Text, { color: inkColor(TUI_RGB.warn), bold: true, wrap: 'truncate-end' }, truncateColumns(`⏸ waiting for approval · lines ${content.length === 0 ? 0 : visibleScroll + 1}-${Math.min(content.length, visibleScroll + viewport.bodyRows)}/${content.length}`, viewport.contentColumns)),
+    { flexDirection: 'column', width: viewport.outerColumns, paddingX: 1, borderStyle: 'round', borderColor: inkColor(getPalette().warn) },
+    createElement(Text, { color: inkColor(getPalette().warn), bold: true, wrap: 'truncate-end' }, truncateColumns(`⏸ waiting for approval · lines ${content.length === 0 ? 0 : visibleScroll + 1}-${Math.min(content.length, visibleScroll + viewport.bodyRows)}/${content.length}`, viewport.contentColumns)),
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
     createElement(StyledRows, { lines: content.slice(visibleScroll, visibleScroll + viewport.bodyRows) }),
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
@@ -1093,10 +1145,10 @@ function QuestionBar({ store, snapshot, locked }: { store: QuestionStore; snapsh
         : '↑↓ choose · pgup/pgdn scroll · enter submit · c custom · esc interrupt'
   return createElement(
     Box,
-    { flexDirection: 'column', width: viewport.outerColumns, paddingX: 1, borderStyle: 'round', borderColor: inkColor(isPlan ? TUI_RGB.brand : TUI_RGB.brandDeep) },
+    { flexDirection: 'column', width: viewport.outerColumns, paddingX: 1, borderStyle: 'round', borderColor: inkColor(isPlan ? getPalette().brand : getPalette().brandDeep) },
     createElement(
       Text,
-      { color: inkColor(isPlan ? TUI_RGB.brand : TUI_RGB.brandDeep), bold: true, wrap: 'truncate-end' },
+      { color: inkColor(isPlan ? getPalette().brand : getPalette().brandDeep), bold: true, wrap: 'truncate-end' },
       truncateColumns(`${isPlan ? '📋 plan review' : '❓ question'} ${index + 1}/${pending.request.questions.length} · lines ${rendered.lines.length === 0 ? 0 : visibleScroll + 1}-${Math.min(rendered.lines.length, visibleScroll + viewport.bodyRows)}/${rendered.lines.length}`, viewport.contentColumns),
     ),
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
@@ -1176,7 +1228,7 @@ function ModelPanel({ directory, error, onSelect, onRetry, onClose }: {
     : error !== undefined
       ? [createElement(
         Text,
-        { key: 'error', color: inkColor(TUI_RGB.error), wrap: 'truncate-end' },
+        { key: 'error', color: inkColor(getPalette().error), wrap: 'truncate-end' },
         truncateColumns(`  ${singleLineText(error)}`, viewport.contentColumns),
       )]
       : [
@@ -1184,7 +1236,7 @@ function ModelPanel({ directory, error, onSelect, onRetry, onClose }: {
           ? []
           : [createElement(
             Text,
-            { key: 'failures', color: inkColor(TUI_RGB.warn), wrap: 'truncate-end' },
+            { key: 'failures', color: inkColor(getPalette().warn), wrap: 'truncate-end' },
             truncateColumns(`  unavailable providers: ${directory?.failures.join(', ')}`, viewport.contentColumns),
           )]),
         ...(rows.length === 0
@@ -1199,8 +1251,8 @@ function ModelPanel({ directory, error, onSelect, onRetry, onClose }: {
   const visible = rowBudget === 0 ? [] : rows.slice(first, first + rowBudget)
   return createElement(
     Box,
-    { flexDirection: 'column', width: viewport.outerColumns, paddingX: 1, borderStyle: 'round', borderColor: inkColor(TUI_RGB.brand) },
-    createElement(Text, { color: inkColor(TUI_RGB.brand), bold: true, wrap: 'truncate-end' }, truncateColumns(`/model — select model${rows.length === 0 ? '' : ` · ${cursor + 1}/${rows.length}`}`, viewport.contentColumns)),
+    { flexDirection: 'column', width: viewport.outerColumns, paddingX: 1, borderStyle: 'round', borderColor: inkColor(getPalette().brand) },
+    createElement(Text, { color: inkColor(getPalette().brand), bold: true, wrap: 'truncate-end' }, truncateColumns(`/model — select model${rows.length === 0 ? '' : ` · ${cursor + 1}/${rows.length}`}`, viewport.contentColumns)),
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
     ...stateRows,
     ...visible.map((row) => {
@@ -1210,7 +1262,7 @@ function ModelPanel({ directory, error, onSelect, onRetry, onClose }: {
         Text,
         {
           key: `${row.provider}/${row.model}`,
-          color: index === cursor ? inkColor(TUI_RGB.brandBright) : inkColor(TUI_RGB.dim),
+          color: index === cursor ? inkColor(getPalette().brandBright) : inkColor(getPalette().dim),
           wrap: 'truncate-end',
         },
         truncateColumns(`${index === cursor ? '❯ ' : '  '}${label}`, viewport.contentColumns),
@@ -1258,16 +1310,18 @@ function HelpPanel({ descriptors, skills, commandError, skillError, onClose }: {
       ? []
       : [createElement(
         Text,
-        { key: 'commands-error', color: inkColor(TUI_RGB.error), wrap: 'truncate-end' },
+        { key: 'commands-error', color: inkColor(getPalette().error), wrap: 'truncate-end' },
         truncateColumns(`  command catalog unavailable: ${singleLineText(commandError)}`, viewport.contentColumns),
       )]),
     createElement(Box, { key: 'local-help' }, row('/help', 'show this overlay')),
     createElement(Box, { key: 'local-model' }, row('/model', 'switch the model')),
+    createElement(Box, { key: 'local-effort' }, row('/effort', 'adjust reasoning effort for the current model')),
     createElement(Box, { key: 'local-mode' }, row('/mode', 'inspect or select the agent preset (/mode [preset])')),
     createElement(Box, { key: 'local-new' }, row('/new', 'create and switch to a fresh session (/new [preset])')),
     createElement(Box, { key: 'local-resume' }, row('/resume', 'browse or switch root sessions (/resume [id|prefix])')),
     createElement(Box, { key: 'local-plugin' }, row('/plugin', 'inspect the live plugin composition')),
     createElement(Box, { key: 'local-statusline' }, row('/statusline', 'customize the status line items')),
+    createElement(Box, { key: 'local-theme' }, row('/theme', 'switch the color theme')),
     createElement(Box, { key: 'local-history' }, row('/history', 'search and recall past prompts')),
     createElement(Box, { key: 'local-clear' }, row('/clear', 'clear the screen')),
     createElement(Box, { key: 'local-export' }, row('/export', 'export the transcript to markdown (/export [path])')),
@@ -1288,7 +1342,7 @@ function HelpPanel({ descriptors, skills, commandError, skillError, onClose }: {
       ? []
       : [createElement(
         Text,
-        { key: 'skills-error', color: inkColor(TUI_RGB.error), wrap: 'truncate-end' },
+        { key: 'skills-error', color: inkColor(getPalette().error), wrap: 'truncate-end' },
         truncateColumns(`  skill catalog unavailable: ${singleLineText(skillError)}`, viewport.contentColumns),
       )]),
     ...skills.map(skill => createElement(
@@ -1326,8 +1380,8 @@ function HelpPanel({ descriptors, skills, commandError, skillError, onClose }: {
 
   return createElement(
     Box,
-    { flexDirection: 'column', width: viewport.outerColumns, paddingX: 1, borderStyle: 'round', borderColor: inkColor(TUI_RGB.brand) },
-    createElement(Text, { color: inkColor(TUI_RGB.brand), bold: true, wrap: 'truncate-end' }, truncateColumns(`/help — keys and commands · rows ${content.length === 0 ? 0 : visibleScroll + 1}-${Math.min(content.length, visibleScroll + viewport.bodyRows)}/${content.length}`, viewport.contentColumns)),
+    { flexDirection: 'column', width: viewport.outerColumns, paddingX: 1, borderStyle: 'round', borderColor: inkColor(getPalette().brand) },
+    createElement(Text, { color: inkColor(getPalette().brand), bold: true, wrap: 'truncate-end' }, truncateColumns(`/help — keys and commands · rows ${content.length === 0 ? 0 : visibleScroll + 1}-${Math.min(content.length, visibleScroll + viewport.bodyRows)}/${content.length}`, viewport.contentColumns)),
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
     ...content.slice(visibleScroll, visibleScroll + viewport.bodyRows),
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
@@ -1474,11 +1528,11 @@ function VerbosePanel({ entries, onClose }: { entries: readonly TranscriptEntry[
       width: viewport.outerColumns,
       paddingX: 1,
       borderStyle: 'round',
-      borderColor: inkColor(TUI_RGB.brand),
+      borderColor: inkColor(getPalette().brand),
     },
     createElement(
       Text,
-      { color: inkColor(TUI_RGB.brand), bold: true, wrap: 'truncate-end' },
+      { color: inkColor(getPalette().brand), bold: true, wrap: 'truncate-end' },
       truncateColumns(title, viewport.contentColumns),
     ),
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
@@ -1538,11 +1592,13 @@ function completionCandidates(
   const local: CompletionCandidate[] = [
     { label: '/help', description: 'show commands', origin: 'command' },
     { label: '/model', description: 'switch the model', origin: 'command' },
+    { label: '/effort', description: 'adjust reasoning effort for the current model', origin: 'command' },
     { label: '/mode', description: 'select the agent preset', origin: 'command' },
     { label: '/new', description: 'start a fresh session', origin: 'command' },
     { label: '/resume', description: 'browse or switch sessions', origin: 'command' },
     { label: '/plugin', description: 'inspect the plugin composition', origin: 'command' },
     { label: '/statusline', description: 'customize the status line', origin: 'command' },
+    { label: '/theme', description: 'switch the color theme', origin: 'command' },
     { label: '/history', description: 'search and recall past prompts', origin: 'command' },
     { label: '/clear', description: 'clear the screen', origin: 'command' },
     { label: '/export', description: 'export the transcript to markdown', origin: 'command' },
@@ -1618,7 +1674,7 @@ function CompletionMenu({ active, mention, index, rows }: {
         Text,
         {
           key: candidate.label,
-          color: absolute === selected ? inkColor(TUI_RGB.brandBright) : inkColor(TUI_RGB.dim),
+          color: absolute === selected ? inkColor(getPalette().brandBright) : inkColor(getPalette().dim),
           wrap: 'truncate-end',
         },
         `${absolute === selected ? '❯ ' : '  '}${padColumns(candidate.label, nameWidth)}${dim(truncateColumns(displayText(candidate.description), descBudget))}`,
@@ -1634,7 +1690,7 @@ function CompletionMenu({ active, mention, index, rows }: {
  * While a modal (approval / question / model panel) owns the keys, the
  * box passes every key through untouched.
  */
-function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openHelp, openMode, openResume, openPlugin, openStatusline, openHistory, createSession, cancelSessionSwitch, notify, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, cyclePermission, exportTranscript, renameTitle, recallSpace, recordLocal, recordHistory, queued, cancelQueued, historyFill, historyConsumed }: {
+function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openEffort, openHelp, openMode, openResume, openPlugin, openStatusline, openTheme, openHistory, createSession, cancelSessionSwitch, notify, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, cyclePermission, exportTranscript, renameTitle, recallSpace, recordLocal, recordHistory, queued, cancelQueued, historyFill, historyConsumed, waveTick }: {
   active: boolean
   frozen: boolean
   busy: boolean
@@ -1645,11 +1701,13 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   interrupt(): boolean
   quit(): void
   openModel(): void
+  openEffort(): void
   openHelp(): void
   openMode(): void
   openResume(): void
   openPlugin(query?: string): void
   openStatusline(): void
+  openTheme(): void
   openHistory(): void
   createSession(mode?: string): void
   cancelSessionSwitch(): boolean
@@ -1678,6 +1736,9 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   historyFill: { text: string; index: number } | undefined
   /** Marks the accepted entry consumed (called after the fill is applied). */
   historyConsumed(): void
+  /** DeepSeek easter-egg wave frame (null when static): the composer frame
+   * cycles the brand-blue shades for the one-shot 1.5s wave. */
+  waveTick: number | null
 }): ReactElement {
   const columns = useStdout().stdout?.columns ?? 80
   const [value, setValue] = useState('')
@@ -1915,6 +1976,10 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
         openModel()
         return
       }
+      if (text === '/effort' || text.startsWith('/effort ')) {
+        openEffort()
+        return
+      }
       if (text === '/mode' || text.startsWith('/mode ')) {
         const mode = text.slice(5).trim()
         if (mode === '') openMode()
@@ -1941,6 +2006,10 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
       }
       if (text === '/statusline') {
         openStatusline()
+        return
+      }
+      if (text === '/theme') {
+        openTheme()
         return
       }
       if (text === '/history') {
@@ -2077,17 +2146,22 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
 
   // Every exclusive panel keeps the composer as a stable visual anchor, but
   // freezes it to one row: no menu, multiline wrap, or animation.
+  const wavePalette = deepseekWavePalette()
+  const waveFrame = waveTick === null ? null : wavePalette[waveTick % wavePalette.length]
+  const promptColor = waveFrame === null
+    ? inkColor(getPalette().brand)
+    : inkColor(wavePalette[(waveTick! + 1) % wavePalette.length])
   if (frozen) {
     const frozen = value === ''
       ? 'type a message'
       : verboseLine(value, Math.max(1, columns - 6))
     return createElement(
       Box,
-      { width: Math.max(1, columns - 1), borderStyle: 'round', borderColor: inkColor(TUI_RGB.dim), paddingX: 1 },
+      { width: Math.max(1, columns - 1), borderStyle: 'round', borderColor: waveFrame === null ? inkColor(getPalette().dim) : inkColor(waveFrame), paddingX: 1 },
       createElement(
         Text,
         { wrap: 'truncate-end' },
-        createElement(Text, { color: inkColor(TUI_RGB.brand) }, busy ? '… ' : '❯ '),
+        createElement(Text, { color: promptColor }, busy ? '… ' : '❯ '),
         frozen,
       ),
     )
@@ -2112,13 +2186,13 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
     // no extra space, so the empty state reads `❯ ▮type a message…`.
     createElement(
       Box,
-      { width: Math.max(1, columns - 1), borderStyle: 'round', borderColor: inkColor(TUI_RGB.dim), paddingX: 1 },
+      { width: Math.max(1, columns - 1), borderStyle: 'round', borderColor: waveFrame === null ? inkColor(getPalette().dim) : inkColor(waveFrame), paddingX: 1 },
       createElement(
         Text,
         { wrap: 'truncate-end' },
         busy
           ? createElement(BusyChase)
-          : createElement(Text, { color: inkColor(TUI_RGB.brand) }, '❯ '),
+          : createElement(Text, { color: promptColor }, '❯ '),
         value === '' ? undefined : editor.before,
         createElement(CursorBlock, { char: editor.caret }),
         value === '' && !busy
@@ -2136,6 +2210,35 @@ export function App(props: AppProps): ReactElement {
   const skills = useSyncExternalStore(props.skills.subscribe, () => props.skills.rows)
   const [modelLabel, setModelLabel] = useState(props.model)
   const [modelOpen, setModelOpen] = useState(false)
+  /** The model row whose effort levels the /model stage lists; undefined shows the model list. */
+  const [effortFor, setEffortFor] = useState<ModelRow | undefined>(undefined)
+  /** Effective reasoning effort, shown in the /model picker and switch notice. */
+  const [effortLabel, setEffortLabel] = useState<string | undefined>(props.effort)
+  /** DeepSeek easter egg: switching INTO an official DeepSeek route plays a
+   * one-shot blue wave across the composer frame (Codex-style frame glow),
+   * then the border returns to static. The trigger follows the applied model
+   * label (what the status bar actually shows), never the initial paint. */
+  const [waveTick, setWaveTick] = useState<number | null>(null)
+  const previousModel = useRef<string | undefined>(undefined)
+  useEffect(() => {
+    const previous = previousModel.current
+    previousModel.current = modelLabel
+    if (previous === undefined || previous === modelLabel) return
+    if (isOfficialDeepSeekLabel(modelLabel)) setWaveTick(0)
+  }, [modelLabel])
+  const waveActive = waveTick !== null && waveTick < DEEPSEEK_WAVE_FRAMES
+  useEffect(() => {
+    if (!waveActive) return
+    const id = setInterval(() => {
+      setWaveTick(current => (current === null ? 0 : current + 1))
+    }, DEEPSEEK_WAVE_INTERVAL_MS)
+    return () => {
+      clearInterval(id)
+    }
+  }, [waveActive])
+  useEffect(() => {
+    if (waveTick !== null && waveTick >= DEEPSEEK_WAVE_FRAMES) setWaveTick(null)
+  }, [waveTick])
   const [directory, setDirectory] = useState<ModelDirectory | undefined>(undefined)
   const [modelError, setModelError] = useState<string | undefined>(undefined)
   const [modelLoadEpoch, setModelLoadEpoch] = useState(0)
@@ -2175,6 +2278,7 @@ export function App(props: AppProps): ReactElement {
   const [pluginQuery, setPluginQuery] = useState('')
   const [statuslineOpen, setStatuslineOpen] = useState(false)
   const [statuslineItems, setStatuslineItems] = useState<readonly StatusItemId[]>(() => parseStatuslineItems(props.statusline))
+  const [themeOpen, setThemeOpen] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
   /** The /history panel's accepted entry: text plus its recall-space index. */
   const [historyFill, setHistoryFill] = useState<{ text: string; index: number } | undefined>(undefined)
@@ -2202,18 +2306,20 @@ export function App(props: AppProps): ReactElement {
   const approvalPending = approvalSnapshot.pending !== undefined
   const questionPending = questionSnapshot.pending !== undefined
   // While any modal owns the keys, the prompt box passes everything through.
-  const inputActive = !modelOpen && !helpOpen && !modeOpen && !resumeOpen && !pluginOpen && !statuslineOpen && !historyOpen && !verboseOpen && !approvalPending && !questionPending
+  const inputActive = !modelOpen && !helpOpen && !modeOpen && !resumeOpen && !pluginOpen && !statuslineOpen && !themeOpen && !historyOpen && !verboseOpen && !approvalPending && !questionPending
 
   // Human questions outrank local inspectors. Close the lower modal instead
   // of leaving an approval/question visible but keyboard-locked behind it.
   useEffect(() => {
     if (!approvalPending && !questionPending) return
     setModelOpen(false)
+    setEffortFor(undefined)
     setHelpOpen(false)
     setModeOpen(false)
     setResumeOpen(false)
     setPluginOpen(false)
     setStatuslineOpen(false)
+    setThemeOpen(false)
     setHistoryOpen(false)
     setVerboseOpen(false)
   }, [approvalPending, questionPending])
@@ -2319,15 +2425,29 @@ export function App(props: AppProps): ReactElement {
           ? Math.max(1, Math.floor(streamRows / 3))
           : 1
   const answerRows = view.streaming === '' ? 0 : Math.max(1, streamRows - reasoningRows)
-  const transcriptVisible = !modelOpen && !helpOpen && !modeOpen && !resumeOpen && !pluginOpen && !statuslineOpen && !historyOpen && !verboseOpen && !approvalPending && !questionPending
+  const transcriptVisible = !modelOpen && !helpOpen && !modeOpen && !resumeOpen && !pluginOpen && !statuslineOpen && !themeOpen && !historyOpen && !verboseOpen && !approvalPending && !questionPending
   const inspectorVisible = verboseOpen && !approvalPending && !questionPending
-  const modalVisible = modelOpen || helpOpen || modeOpen || resumeOpen || pluginOpen || statuslineOpen || historyOpen || inspectorVisible || approvalPending || questionPending
+  const modalVisible = modelOpen || helpOpen || modeOpen || resumeOpen || pluginOpen || statuslineOpen || themeOpen || historyOpen || inspectorVisible || approvalPending || questionPending
   const closeInspector = useCallback((): void => {
     setVerboseOpen(false)
   }, [])
   const refreshScreen = (): void => {
     if (appStdout !== undefined) appStdout.write('\x1b[2J\x1b[3J\x1b[H')
     setRefreshEpoch(epoch => epoch + 1)
+  }
+
+  /** Apply one /model pick: record the selection, close the panel, report via notice. */
+  const applyModel = (row: ModelRow, effortId: string | undefined): void => {
+    try {
+      const label = props.selectModel(row, effortId)
+      setModelLabel(label)
+      setEffortLabel(effortId)
+      notify(`model → next step uses ${label}${effortId === undefined ? '' : `@${effortId}`}`)
+      setModelOpen(false)
+      setEffortFor(undefined)
+    } catch (error: unknown) {
+      notify(`model switch failed: ${error instanceof Error ? error.message : String(error)}`, 'error')
+    }
   }
 
   return createElement(
@@ -2368,25 +2488,36 @@ export function App(props: AppProps): ReactElement {
     createElement(QuestionBar, { store: props.questions, snapshot: questionSnapshot, locked: false }),
     createElement(ApprovalBar, { snapshot: approvalSnapshot, locked: questionPending }),
     modelOpen && !approvalPending && !questionPending
-      ? createElement(ModelPanel, {
-        directory,
-        error: modelError,
-        onSelect: (row: ModelRow) => {
-          try {
-            setModelLabel(props.selectModel(row))
-            notify(`model → next step uses ${row.provider}/${row.model}`)
+      ? effortFor === undefined
+        ? createElement(ModelPanel, {
+          directory,
+          error: modelError,
+          onSelect: (row: ModelRow) => {
+            // A model advertising several levels opens the effort stage first;
+            // one advertised level is its only option (Codex's
+            // single-supported-effort shortcut), and no capability applies
+            // the model default exactly as before.
+            if (row.reasoning !== undefined && row.reasoning.efforts.length > 1) {
+              setEffortFor(row)
+              return
+            }
+            const effortId = row.reasoning?.efforts.length === 1 ? row.reasoning.efforts[0]!.id : undefined
+            applyModel(row, effortId)
+          },
+          onRetry: () => {
+            setModelLoadEpoch(epoch => epoch + 1)
+          },
+          onClose: () => {
             setModelOpen(false)
-          } catch (error: unknown) {
-            notify(`model switch failed: ${error instanceof Error ? error.message : String(error)}`, 'error')
-          }
-        },
-        onRetry: () => {
-          setModelLoadEpoch(epoch => epoch + 1)
-        },
-        onClose: () => {
-          setModelOpen(false)
-        },
-      })
+            setEffortFor(undefined)
+          },
+        })
+        : createElement(EffortPanel, {
+          row: effortFor,
+          current: effortLabel,
+          select: (effortId: string) => applyModel(effortFor, effortId),
+          back: () => setEffortFor(undefined),
+        })
       : undefined,
     helpOpen && !approvalPending && !questionPending
       ? createElement(HelpPanel, {
@@ -2440,6 +2571,21 @@ export function App(props: AppProps): ReactElement {
         close: () => setStatuslineOpen(false),
       })
       : undefined,
+    themeOpen && !approvalPending && !questionPending
+      ? createElement(ThemePanel, {
+        current: getTheme(),
+        select: (name: ThemeName) => {
+          // Apply immediately (module-level palette), persist through the
+          // runner, then close: the close re-render paints with the new
+          // palette. `auto` stores as requested; detection is a later step.
+          setTheme(name)
+          props.saveTheme?.(name)
+          notify(`theme → ${name}`)
+          setThemeOpen(false)
+        },
+        close: () => setThemeOpen(false),
+      })
+      : undefined,
     historyOpen && !approvalPending && !questionPending
       ? createElement(HistoryPanel, {
         entries: recallSpace,
@@ -2476,7 +2622,33 @@ export function App(props: AppProps): ReactElement {
         openModel: () => {
           setDirectory(undefined)
           setModelError(undefined)
+          setEffortFor(undefined)
           setModelOpen(true)
+        },
+        openEffort: () => {
+          // /effort adjusts the CURRENT model's reasoning: resolve it from
+          // the live catalog, then open the same effort stage the /model
+          // picker would. Match on the applied label (what the status bar
+          // shows) — `props.model` may still carry the deployment default
+          // until the next request header lands. A model without advertised
+          // efforts gets a bounded notice instead of an empty picker.
+          void props.loadModels().then((loaded) => {
+            const [provider, model] = modelLabel.split('/')
+            // Exact route match first; then fall back to the model id alone —
+            // the deployment default may name a provider route differently
+            // from the adapter's registered id (e.g. `deepseek` vs
+            // `deepseek-official`) while still serving the same model.
+            const row = loaded.rows.find(candidate => candidate.provider === provider && candidate.model === model)
+              ?? loaded.rows.find(candidate => candidate.model === model)
+            if (row?.reasoning === undefined || row.reasoning.efforts.length === 0) {
+              notify('current model does not expose reasoning efforts', 'warning')
+              return
+            }
+            setEffortFor(row)
+            setModelOpen(true)
+          }, (error: unknown) => {
+            notify(`model lookup failed: ${error instanceof Error ? error.message : String(error)}`, 'error')
+          })
         },
         openHelp: () => {
           setHelpOpen(true)
@@ -2485,6 +2657,7 @@ export function App(props: AppProps): ReactElement {
         openResume: () => setResumeOpen(true),
         openPlugin: (query = '') => { setPluginQuery(query); setPluginOpen(true) },
         openStatusline: () => setStatuslineOpen(true),
+        openTheme: () => setThemeOpen(true),
         openHistory: () => setHistoryOpen(true),
         createSession: props.createSession,
         cancelSessionSwitch: props.cancelSessionSwitch,
@@ -2519,6 +2692,7 @@ export function App(props: AppProps): ReactElement {
         cancelQueued: props.cancelQueued,
         historyFill,
         historyConsumed,
+        waveTick,
       }),
       createElement(StatusLine, {
         facts: {

@@ -1,6 +1,7 @@
 /** App-level Ctrl+O rendering regression over real Node streams. */
 
 import { PassThrough } from 'node:stream'
+import chalk from 'chalk'
 import { createElement } from 'react'
 import { render } from 'ink'
 import { describe, expect, it } from 'vitest'
@@ -9,6 +10,7 @@ import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { App } from '../src/app.ts'
 import { createTranscriptStore } from '../src/store.ts'
 import { DEFAULT_STATUSLINE_ITEMS } from '../src/render/status.ts'
+import { setTheme } from '../src/theme.ts'
 
 const wait = async (): Promise<void> => new Promise(resolve => setTimeout(resolve, 100))
 const resizeClear = '\x1b[r\x1b[0m\x1b[H\x1b[2J\x1b[3J\x1b[H'
@@ -255,6 +257,138 @@ describe('Ctrl+O history details', () => {
       stdout.destroy()
     }
   })
+})
+
+describe('DeepSeek model-switch easter egg', () => {
+  it('plays the one-shot blue wave on the model name after /model selects DeepSeek, then restores static modelBright', async () => {
+    // The color assertions need truecolor ANSI output; the default test
+    // environment disables colors (chalk level 0), so force level 3 here and
+    // restore the baseline in the finally block.
+    const originalChalkLevel = chalk.level
+    chalk.level = 3
+    const stdin = Object.assign(new PassThrough(), {
+      isTTY: true,
+      isRaw: false,
+      setRawMode(value: boolean) {
+        this.isRaw = value
+        return this
+      },
+      ref() {},
+      unref() {},
+    }) as unknown as NodeJS.ReadStream
+    const stdout = Object.assign(new PassThrough(), {
+      isTTY: true,
+      columns: 100,
+      rows: 24,
+    }) as unknown as NodeJS.WriteStream
+    let output = ''
+    stdout.on('data', chunk => {
+      output += chunk.toString()
+    })
+    const unsubscribe = (): void => {}
+    const noop = (): void => {}
+    const store = createTranscriptStore()
+    // The last selectable row is the official DeepSeek route; 'G' jumps to it.
+    const models = [
+      ...Array.from({ length: 30 }, (_, index) => ({
+        provider: 'acme',
+        providerName: 'Acme',
+        model: `model-${String(index).padStart(2, '0')}`,
+        modelName: `Model ${String(index).padStart(2, '0')}`,
+      })),
+      { provider: 'deepseek-official', providerName: 'DeepSeek', model: 'deepseek-v4-flash', modelName: 'DeepSeek-V4-Flash' },
+    ]
+    const instance = render(createElement(App, {
+      store,
+      approval: { subscribe: () => unsubscribe, getSnapshot: () => approvalSnapshot },
+      questions: {
+        subscribe: () => unsubscribe,
+        getSnapshot: () => questionSnapshot,
+        submit: noop,
+        cancel: noop,
+      },
+      commands: { descriptors: [], subscribe: () => unsubscribe },
+      skills: { rows: [], subscribe: () => unsubscribe },
+      model: 'acme/model-01',
+      cwd: 'dsh-cli',
+      workspaceRoot: 'C:\\repo\\dsh-cli',
+      branch: 'main',
+      sessionId: '12345678',
+      resumed: false,
+      mode: 'standard',
+      dispatch: noop,
+      steer: noop,
+      interrupt: () => false,
+      quit: noop,
+      loadModels: async () => ({ rows: models, failures: [] }),
+      loadMentions: async () => [],
+      selectModel: row => `${row.provider}/${row.model}`,
+      cyclePermission: () => '',
+      exportTranscript: async () => {},
+      renameTitle: () => '',
+      loadPresets: async () => [],
+      switchMode: async id => id,
+      createSession: noop,
+      loadSessions: async () => [],
+      loadSessionTranscript: async () => '',
+      switchSession: noop,
+      cancelSessionSwitch: () => false,
+      loadPlugins: () => [],
+      statusline: DEFAULT_STATUSLINE_ITEMS,
+      saveStatusline: noop,
+      history: [],
+      recordHistory: noop,
+      cancelQueued: noop,
+      onBridgeReady: noop,
+    }), {
+      stdin,
+      stdout,
+      stderr: stdout,
+      exitOnCtrlC: false,
+      patchConsole: false,
+    })
+
+    try {
+      await wait()
+      expect(output).not.toContain('deepseek-v4-flash')
+
+      // /model → jump to the bottom (the DeepSeek row) → select it.
+      output = ''
+      stdin.write('/model')
+      await wait()
+      stdin.write('\r')
+      await wait()
+      stdin.write('G')
+      await wait()
+      stdin.write('\r')
+      await wait()
+
+      const label = 'deepseek-official/deepseek-v4-flash'
+      // The easter egg paints the COMPOSER frame (Codex-style wave): the
+      // round-border and prompt marker cycle the four brand-blue shades for
+      // 1.5s. brandMid appears nowhere in the static empty session (the mode
+      // item uses accent brandDeep, the notice brandBright), so it counts
+      // wave frames only: the count must grow while the wave runs and stay
+      // frozen after it finishes — proving the one-shot return to static.
+      expect(output).toContain(label)
+      const brandMidCount = (): number => (output.match(/38;2;86;134;254/g) ?? []).length
+      await new Promise(resolve => setTimeout(resolve, 300))
+      expect(brandMidCount()).toBeGreaterThan(0) // wave frame 2 paints brandMid
+      await new Promise(resolve => setTimeout(resolve, 2_000)) // wave over (~1.5s)
+      const settled = brandMidCount()
+      await new Promise(resolve => setTimeout(resolve, 1_000))
+      expect(brandMidCount()).toBe(settled) // no new wave frames
+      // The static frame shows the dim composer border and the code-blue
+      // model name throughout.
+      expect(output).toContain('38;2;129;133;140') // dim border
+      expect(output).toContain('38;2;125;211;252') // model name, code tone
+    } finally {
+      instance.unmount()
+      stdin.destroy()
+      stdout.destroy()
+      chalk.level = originalChalkLevel
+    }
+  }, 15_000)
 })
 
 describe('Ctrl+R reasoning fold', () => {
@@ -641,6 +775,240 @@ describe('deferred session remount', () => {
       instance.unmount()
       stdin.destroy()
       stdout.destroy()
+    }
+  })
+})
+
+describe('context segmented bar', () => {
+  it('paints one DeepSeek-blue run per content type with the usage readout', async () => {
+    // The color assertions need truecolor ANSI output; force level 3 and
+    // restore the baseline in the finally block.
+    const originalChalkLevel = chalk.level
+    chalk.level = 3
+    const stdin = Object.assign(new PassThrough(), {
+      isTTY: true,
+      isRaw: false,
+      setRawMode(value: boolean) {
+        this.isRaw = value
+        return this
+      },
+      ref() {},
+      unref() {},
+    }) as unknown as NodeJS.ReadStream
+    const stdout = Object.assign(new PassThrough(), {
+      isTTY: true,
+      columns: 100,
+      rows: 24,
+    }) as unknown as NodeJS.WriteStream
+    let output = ''
+    stdout.on('data', chunk => {
+      output += chunk.toString()
+    })
+    const unsubscribe = (): void => {}
+    const noop = (): void => {}
+    const store = createTranscriptStore()
+    const callId = 'parse-tool' as CallId
+    store.apply({ type: 'request/context', seq: 1, time: 1, data: { provider: 'p', model: 'm', contextWindow: 128_000 } } as SessionEvent)
+    store.apply({
+      type: 'request/header', seq: 2, time: 2,
+      data: { header: { config: { provider: 'p', model: 'm' }, system: 'you are a helpful assistant' }, reason: 'initial' },
+    } as unknown as SessionEvent)
+    store.apply({ type: 'turn/start', seq: 3, time: 3, data: { turn: 1 } } as SessionEvent)
+    store.apply({ type: 'step/start', seq: 4, time: 4, data: { turn: 1, step: 1 } } as SessionEvent)
+    store.apply({
+      type: 'user/message', seq: 5, time: 5,
+      data: createUserMessage({ content: [{ type: 'text', text: 'please fix the failing test in the parser module' }], source: { kind: 'user' } }),
+    } as SessionEvent)
+    store.apply({
+      type: 'assistant/message', seq: 6, time: 1_006,
+      data: {
+        turn: 1,
+        step: 1,
+        message: createAssistantMessage({
+          content: [
+            { type: 'reasoning', text: 'the parser fails on empty input' },
+            { type: 'text', text: 'done, fixed the parser' },
+          ],
+          source: { provider: 'p', model: 'm' },
+        }),
+        usage: { inputTokens: 100_000, outputTokens: 100, cacheReadTokens: 0, cacheWriteTokens: 0 },
+      },
+    } as unknown as SessionEvent)
+    store.apply({
+      type: 'tool/call', seq: 7, time: 2_000,
+      data: { turn: 1, step: 1, callId, name: 'edit', arguments: '{"path":"src/parser.ts"}' },
+    } as unknown as SessionEvent)
+    store.apply({
+      type: 'tool/result', seq: 8, time: 2_500,
+      data: { turn: 1, step: 1, message: createToolResultMessage({ callId, content: [{ type: 'text', text: 'patched the file' }], isError: false }) },
+    } as unknown as SessionEvent)
+    const instance = render(createElement(App, {
+      store,
+      approval: { subscribe: () => unsubscribe, getSnapshot: () => approvalSnapshot },
+      questions: {
+        subscribe: () => unsubscribe,
+        getSnapshot: () => questionSnapshot,
+        submit: noop,
+        cancel: noop,
+      },
+      commands: { descriptors: [], subscribe: () => unsubscribe },
+      skills: { rows: [], subscribe: () => unsubscribe },
+      model: 'test/model',
+      cwd: 'dsh-cli',
+      workspaceRoot: 'C:\\repo\\dsh-cli',
+      branch: 'main',
+      sessionId: '12345678',
+      resumed: false,
+      mode: 'standard',
+      dispatch: noop,
+      steer: noop,
+      interrupt: () => false,
+      quit: noop,
+      loadModels: async () => ({ rows: [], failures: [] }),
+      loadMentions: async () => [],
+      selectModel: () => 'test/model',
+      cyclePermission: () => '',
+      exportTranscript: async () => {},
+      renameTitle: () => '',
+      loadPresets: async () => [],
+      switchMode: async id => id,
+      createSession: noop,
+      loadSessions: async () => [],
+      loadSessionTranscript: async () => '',
+      switchSession: noop,
+      cancelSessionSwitch: () => false,
+      loadPlugins: () => [],
+      statusline: DEFAULT_STATUSLINE_ITEMS,
+      saveStatusline: noop,
+      history: [],
+      recordHistory: noop,
+      cancelQueued: noop,
+      onBridgeReady: noop,
+    }), {
+      stdin,
+      stdout,
+      stderr: stdout,
+      exitOnCtrlC: false,
+      patchConsole: false,
+    })
+
+    try {
+      await wait()
+      // The segmented bar: centered per-type labels, dim free track, and the
+      // right-aligned readout, all on one row-2 budget.
+      const stripAnsi = (text: string): string => text.replace(/\x1b\[[0-9;]*m/g, '')
+      expect(stripAnsi(output)).toContain('sys pr  ast th  tl ▱▱78%')
+      // Each segment tone paints its own blue run around its label (the
+      // mapping-layer regression: all five ctx* tones resolve to colors).
+      expect(output).toMatch(/38;2;72;104;178m[^\x1b]*sys/) // system → brandDeep
+      expect(output).toMatch(/38;2;65;118;230m[^\x1b]*pr/) // prompt → brand
+      expect(output).toMatch(/38;2;86;134;254m[^\x1b]*ast/) // assistant → brandMid
+      expect(output).toMatch(/38;2;103;158;254m[^\x1b]*th/) // thinking → brandBright
+      expect(output).toMatch(/38;2;125;211;252m[^\x1b]*tl/) // tools → code sky
+    } finally {
+      instance.unmount()
+      stdin.destroy()
+      stdout.destroy()
+      chalk.level = originalChalkLevel
+    }
+  }, 15_000)
+})
+
+describe('light theme rendering', () => {
+  // The active palette is process-global: the switch must survive into the
+  // Ink paint path (statusToneProps and every direct token call site read
+  // getPalette()), and the test must restore dark for its siblings.
+  it('paints theme-aware tokens after a light switch', async () => {
+    const stdin = Object.assign(new PassThrough(), {
+      isTTY: true,
+      isRaw: false,
+      setRawMode(value: boolean) {
+        this.isRaw = value
+        return this
+      },
+      ref() {},
+      unref() {},
+    }) as unknown as NodeJS.ReadStream
+    const stdout = Object.assign(new PassThrough(), {
+      isTTY: true,
+      columns: 100,
+      rows: 24,
+    }) as unknown as NodeJS.WriteStream
+    let output = ''
+    stdout.on('data', chunk => {
+      output += chunk.toString()
+    })
+    const noop = (): void => {}
+    // vitest runs colorless (chalk level 0): force level 3 like the other
+    // color-asserting App tests, and restore both chalk and the theme after.
+    const originalChalkLevel = chalk.level
+    chalk.level = 3
+    setTheme('light')
+    const instance = render(createElement(App, {
+      store: createTranscriptStore(),
+      approval: { subscribe: () => noop, getSnapshot: () => approvalSnapshot },
+      questions: {
+        subscribe: () => noop,
+        getSnapshot: () => questionSnapshot,
+        submit: noop,
+        cancel: noop,
+      },
+      commands: { descriptors: [], subscribe: () => noop },
+      skills: { rows: [], subscribe: () => noop },
+      model: 'test/model',
+      cwd: 'dsh-cli',
+      workspaceRoot: 'C:\\repo\\dsh-cli',
+      branch: 'main',
+      sessionId: '12345678',
+      resumed: false,
+      mode: 'standard',
+      dispatch: noop,
+      steer: noop,
+      interrupt: () => false,
+      quit: noop,
+      loadModels: async () => ({ rows: [], failures: [] }),
+      loadMentions: async () => [],
+      selectModel: () => 'test/model',
+      cyclePermission: () => '',
+      exportTranscript: async () => {},
+      renameTitle: () => '',
+      loadPresets: async () => [],
+      switchMode: async id => id,
+      createSession: noop,
+      loadSessions: async () => [],
+      loadSessionTranscript: async () => '',
+      switchSession: noop,
+      cancelSessionSwitch: () => false,
+      loadPlugins: () => [],
+      statusline: DEFAULT_STATUSLINE_ITEMS,
+      saveStatusline: noop,
+      history: [],
+      recordHistory: noop,
+      cancelQueued: noop,
+      onBridgeReady: noop,
+    }), {
+      stdin,
+      stdout,
+      stderr: stdout,
+      exitOnCtrlC: false,
+      patchConsole: false,
+    })
+
+    setTheme('light')
+    try {
+      await wait()
+      // The model tone paints the LIGHT code cyan (14,116,144), not the dark
+      // value (125,211,252): the mapping layer follows the palette.
+      expect(output).toContain('38;2;14;116;144m')
+      expect(output).not.toContain('38;2;125;211;252m')
+      // The prompt marker and header keep their theme-aware brand blue.
+      expect(output).toContain('38;2;65;118;230m')
+    } finally {
+      instance.unmount()
+      stdin.destroy()
+      stdout.destroy()
+      chalk.level = originalChalkLevel
+      setTheme('dark')
     }
   })
 })
