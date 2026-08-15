@@ -95,8 +95,8 @@ export interface StatusGroup {
   spans: readonly StatusSpan[]
 }
 
-/** The footer layout: leading clusters, trailing state spans, cycle hint. */
-export interface StatusLayout {
+/** One physical row of the footer: leading clusters and trailing badges. */
+export interface StatusRow {
   /** Leading clusters, pipe-separated in display order; index 0 is identity. */
   left: readonly StatusGroup[]
   /** Trailing spans pinned to the right edge, dot-separated in display order. */
@@ -105,12 +105,52 @@ export interface StatusLayout {
   hint: boolean
 }
 
+/**
+ * The footer layout: two stacked physical rows. Row 1 is the identity/state
+ * row (busy dot, model, cwd, branch, plan, turns, tokens, title; goal,
+ * sandbox, and permission badges). Row 2 is the run-meters row (mode, the
+ * context progress bar, cache, and duration figures) and degrades to empty
+ * before any row-1 content is touched.
+ */
+export interface StatusLayout {
+  row1: StatusRow
+  row2: StatusRow
+}
+
 /** Separator between leading clusters. */
 export const STATUS_GROUP_SEPARATOR = ' | '
 /** Separator between trailing state spans. */
 export const STATUS_ITEM_SEPARATOR = ' · '
 /** The Codex-style mode cycle hint appended to the permission badge. */
 export const STATUS_CYCLE_HINT = ' (shift+tab to cycle)'
+
+/** Cells in the context-occupancy progress bar (block glyphs count two columns in the budget). */
+export const CONTEXT_BAR_CELLS = 10
+/** Occupancy at which the bar switches from brand blue to a single amber warning. */
+export const CONTEXT_WARN_PERCENT = 90
+
+/**
+ * Render a context-occupancy percent as a bracketed fixed-width progress bar
+ * plus the percentage: `[▰▰▰▱▱▱▱▱▱▱] 25%`. Filled cells and the percent read
+ * in brand blue (accent), empty cells and the brackets read dim (label), and
+ * the whole meter flips to one amber warning once occupancy reaches the
+ * warning threshold. The bar fill clamps to 100 while the printed percent
+ * keeps the raw value so an over-budget session reads as such.
+ * @param percent - occupancy percent (may exceed 100).
+ * @returns tone-split spans for the footer to paint.
+ */
+export function contextBar(percent: number): readonly StatusSpan[] {
+  const clamped = Math.max(0, Math.min(100, Math.round(percent)))
+  const filled = Math.round(clamped / 100 * CONTEXT_BAR_CELLS)
+  const warning = clamped >= CONTEXT_WARN_PERCENT
+  const tone: StatusTone = warning ? 'warn' : 'accent'
+  const percentText = ' ' + Math.max(0, Math.min(999, Math.round(percent))) + '%'
+  const spans: StatusSpan[] = [{ text: '[', tone: 'label' }]
+  if (filled > 0) spans.push({ text: '▰'.repeat(filled), tone })
+  if (filled < CONTEXT_BAR_CELLS) spans.push({ text: '▱'.repeat(CONTEXT_BAR_CELLS - filled), tone: 'label' })
+  spans.push({ text: ']', tone: 'label' }, { text: percentText, tone })
+  return spans
+}
 
 /**
  * One customizable status item (the Codex /statusline picker contract).
@@ -197,23 +237,24 @@ const WIDTH_SAFETY = 1
 const TITLE_BUDGET = 48
 
 /**
- * Drop ranks: when the row overflows, the lowest rank disappears first. The
- * identity cluster never drops — it ellipsizes instead. State outlives
- * telemetry: the goal and divergent-sandbox badges drop only after every
- * figure, and the permission badge outlives everything so the autonomy
- * selection stays readable while it fits.
+ * Row 1 drop ranks (lowest drops first): the session title, then the token
+ * figures, then turn/step counts, then the goal and divergent-sandbox badges,
+ * with the permission badge last. The identity cluster never drops — it
+ * ellipsizes instead.
  */
 const RANK_TITLE = 10
-const RANK_MODE = 40
 const RANK_TOKENS = 50
-const RANK_CONTEXT = 60
-const RANK_CACHE = 70
-const RANK_DURATIONS = 80
 const RANK_COUNTS = 90
 const RANK_SANDBOX = 92
 const RANK_GOAL = 95
 const RANK_BADGE = 100
 const RANK_IDENTITY = Number.POSITIVE_INFINITY
+
+/** Row 2 drop ranks: duration figures go first, then cache, then the context bar, and mode survives longest. */
+const RANK2_DURATIONS = 40
+const RANK2_CACHE = 50
+const RANK2_CONTEXT = 60
+const RANK2_MODE = 70
 
 /** Identity facts the runner resolves once at mount; empty strings drop out. */
 export interface StatusFacts {
@@ -288,6 +329,7 @@ function buildCandidates(
   left: { group: StatusGroup; rank: number; id: string }[]
   right: { span: StatusSpan; rank: number; id: string }[]
   badge: number
+  row2: { group: StatusGroup; rank: number; id: string }[]
 } {
   const identity: StatusSpan[] = [
     { text: busy ? '● ' : '○ ', tone: busy ? 'live' : 'meta' },
@@ -310,83 +352,82 @@ function buildCandidates(
     { group: { spans: identity }, rank: RANK_IDENTITY, id: 'identity' },
   ]
   const right: { span: StatusSpan; rank: number; id: string }[] = []
+  const row2: { group: StatusGroup; rank: number; id: string }[] = []
 
+  // Row 2 anchor: the agent preset composing the session.
   const mode = safe(facts.mode ?? '')
   if (mode !== '' && enabled.has('mode')) {
-    left.push({
+    row2.push({
       group: { spans: [{ text: 'mode ', tone: 'label' }, { text: mode, tone: 'accent' }] },
-      rank: RANK_MODE,
+      rank: RANK2_MODE,
       id: 'mode',
     })
   }
 
   if (stats.turns > 0 || stats.steps > 0) {
     if (enabled.has('turns')) {
-      left.push({
-        group: { spans: [{ text: 'T' + stats.turns + ' · S' + stats.steps, tone: 'value' }] },
-        rank: RANK_COUNTS,
-        id: 'turns',
-      })
+      // Label/value pairs join through explicit dim separators.
+      const counts: StatusSpan[] = []
+      const pair = (label: string, value: string): void => {
+        if (counts.length > 0) counts.push(sep())
+        counts.push({ text: label + ' ', tone: 'label' }, { text: value, tone: 'value' })
+      }
+      pair('turns', String(stats.turns))
+      pair('steps', String(stats.steps))
+      left.push({ group: { spans: counts }, rank: RANK_COUNTS, id: 'turns' })
     }
     if (enabled.has('durations')) {
-      // Decode latency figures (the web StatsLine's TTFT and throughput):
-      // average first-token wait and tokens per second over timed steps.
-      // Pairs join through explicit dim separators; the label keeps its one
-      // trailing space so 'llm 45.2s' reads as one figure.
+      // Model round-trip, first-token latency, decode rate, and tool wall
+      // time; the label keeps its one trailing space so each reads as one
+      // figure ('model 45.2s'). Named in full — no single-letter codes.
       const durations: StatusSpan[] = []
       const pair = (label: string, value: string): void => {
         if (durations.length > 0) durations.push(sep())
         durations.push({ text: label + ' ', tone: 'label' }, { text: value, tone: 'value' })
       }
-      if (stats.llmMs > 0) pair('llm', formatDuration(stats.llmMs))
-      if (stats.ttftSteps > 0) pair('ttft', formatDuration(stats.ttftMs / stats.ttftSteps))
+      if (stats.llmMs > 0) pair('model', formatDuration(stats.llmMs))
+      if (stats.ttftSteps > 0) pair('latency', formatDuration(stats.ttftMs / stats.ttftSteps))
       if (stats.decodeMs > 0 && stats.decodeTokens > 0) {
         if (durations.length > 0) durations.push(sep())
         durations.push(
           { text: formatRate(stats.decodeTokens / (stats.decodeMs / 1_000)), tone: 'value' },
-          { text: ' tok/s', tone: 'label' },
+          { text: ' tokens/s', tone: 'label' },
         )
       }
       if (stats.toolMs > 0) pair('tool', formatDuration(stats.toolMs))
       if (durations.length > 0) {
-        left.push({ group: { spans: durations }, rank: RANK_DURATIONS, id: 'durations' })
+        row2.push({ group: { spans: durations }, rank: RANK2_DURATIONS, id: 'durations' })
       }
     }
   }
 
   const cacheHit = cacheHitPercent(stats.usage)
   if (cacheHit !== null && enabled.has('cache')) {
-    left.push({
+    row2.push({
       group: { spans: [{ text: 'cache ', tone: 'label' }, { text: cacheHit + '%', tone: 'value' }] },
-      rank: RANK_CACHE,
+      rank: RANK2_CACHE,
       id: 'cache',
     })
   }
-  // Context occupancy (the web StatsLine's meter): the most recent reported
-  // prompt size against the advertised route capacity.
+  // Context occupancy as a bracketed blue progress bar (the web StatsLine
+  // meter): the most recent reported prompt size against the advertised
+  // route capacity, rendered as fixed-width filled/empty cells plus percent.
   if (stats.contextWindow > 0 && stats.lastPromptTokens > 0 && enabled.has('context')) {
-    left.push({
-      group: {
-        spans: [
-          { text: 'ctx ', tone: 'label' },
-          { text: Math.min(999, Math.round(stats.lastPromptTokens / stats.contextWindow * 100)) + '%', tone: 'value' },
-        ],
-      },
-      rank: RANK_CONTEXT,
+    row2.push({
+      group: { spans: [{ text: 'context ', tone: 'label' }, ...contextBar(stats.lastPromptTokens / stats.contextWindow * 100)] },
+      rank: RANK2_CONTEXT,
       id: 'context',
     })
   }
   if ((stats.usage.inputTokens > 0 || stats.usage.outputTokens > 0) && enabled.has('tokens')) {
-    left.push({
-      group: {
-        spans: [{
-          text: '↑' + formatTokens(stats.usage.inputTokens) + ' ↓' + formatTokens(stats.usage.outputTokens),
-          tone: 'value',
-        }],
-      },
-      rank: RANK_TOKENS,
-      id: 'tokens',
-    })
+    const tokens: StatusSpan[] = []
+    const pair = (label: string, value: string): void => {
+      if (tokens.length > 0) tokens.push(sep())
+      tokens.push({ text: label + ' ', tone: 'label' }, { text: value, tone: 'value' })
+    }
+    pair('in', formatTokens(stats.usage.inputTokens))
+    pair('out', formatTokens(stats.usage.outputTokens))
+    left.push({ group: { spans: tokens }, rank: RANK_TOKENS, id: 'tokens' })
   }
 
   // The session title replaces the bare short id whenever one has landed
@@ -404,7 +445,7 @@ function buildCandidates(
     right.push({
       span: {
         text: facts.goal.phase === 'active'
-          ? '◎ r' + facts.goal.rounds + '/' + facts.goal.max
+          ? '◎ round ' + facts.goal.rounds + '/' + facts.goal.max
           : '◎ ' + safe(facts.goal.phase),
         tone: 'accent',
       },
@@ -424,22 +465,24 @@ function buildCandidates(
     right.push({ span: { text: permission, tone: permissionTone(permission) }, rank: RANK_BADGE, id: 'permission' })
     badge = right.length - 1
   }
-  return { left, right, badge }
+  return { left, right, badge, row2 }
 }
 
 /**
- * Compose the one-row footer layout under a column budget. Degrades in a
- * fixed order — cycle hint, then title, mode preset, token figures, context,
- * cache, durations, counts, goal, divergent sandbox, permission badge — and
- * only then ellipsizes the identity cluster, so the row never wraps.
+ * Compose the two-row footer layout under a column budget. Row 1 (identity
+ * and state badges) degrades in a fixed order — cycle hint, then title, token
+ * figures, turn/step counts, goal, divergent sandbox, permission badge — and
+ * only then ellipsizes the identity cluster, so the row never wraps. Row 2
+ * (mode, context bar, cache, duration figures) fits its own budget and
+ * degrades to empty before any row-1 content is touched.
  * @param facts - identity facts resolved by the runner.
  * @param stats - session figures folded from the durable log.
- * @param columns - usable columns for the row (before its left padding).
+ * @param columns - usable columns for each row (before their left padding).
  * @param options - 'busy' hides the cycle hint while a turn runs (Codex
  * keeps mode hints idle-only); 'items' is the ordered enabled-item config
  * from /statusline (defaults to the full catalog). Display order follows the
  * config per side while the drop ladder keeps its fixed ranks.
- * @returns the segments to render; left is never empty.
+ * @returns the two rows to render; row1.left is never empty.
  */
 export function layoutStatusBar(
   facts: StatusFacts,
@@ -451,7 +494,7 @@ export function layoutStatusBar(
   const items = options.items ?? DEFAULT_STATUSLINE_ITEMS
   const enabled = new Set(items)
   const budget = Math.max(1, Math.floor(columns) - WIDTH_SAFETY)
-  const { left, right, badge } = buildCandidates(facts, stats, busy, enabled)
+  const { left, right, badge, row2 } = buildCandidates(facts, stats, busy, enabled)
   const groupSeparator = visibleColumns(STATUS_GROUP_SEPARATOR)
   const itemSeparator = visibleColumns(STATUS_ITEM_SEPARATOR)
 
@@ -462,6 +505,7 @@ export function layoutStatusBar(
     (position.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (position.get(b.id) ?? Number.MAX_SAFE_INTEGER)
   const orderedLeft = [left[0], ...left.slice(1).sort(byPosition)]
   const orderedRight = right.slice().sort(byPosition)
+  const orderedRow2 = row2.slice().sort(byPosition)
 
   let hint = badge >= 0 && !busy
   const leftKept = [...orderedLeft]
@@ -526,9 +570,34 @@ export function layoutStatusBar(
     }
   }
 
+  // Row 2 fits its own budget; the lowest-rank group drops first until the
+  // row fits or nothing is left. An empty row2 is a valid state — the footer
+  // degrades back to a single status row.
+  const row2Kept = [...orderedRow2]
+  const row2Width = (): number =>
+    joinWidth(row2Kept.map(entry => spansWidth(entry.group.spans)), groupSeparator)
+  while (row2Width() > budget && row2Kept.length > 0) {
+    let dropIndex = 0
+    let dropRank = Number.POSITIVE_INFINITY
+    for (let index = 0; index < row2Kept.length; index += 1) {
+      if (row2Kept[index].rank < dropRank) {
+        dropRank = row2Kept[index].rank
+        dropIndex = index
+      }
+    }
+    row2Kept.splice(dropIndex, 1)
+  }
+
   return {
-    left: leftKept.map(entry => entry.group),
-    right: rightKept.map(entry => entry.span),
-    hint,
+    row1: {
+      left: leftKept.map(entry => entry.group),
+      right: rightKept.map(entry => entry.span),
+      hint,
+    },
+    row2: {
+      left: row2Kept.map(entry => entry.group),
+      right: [],
+      hint: false,
+    },
   }
 }

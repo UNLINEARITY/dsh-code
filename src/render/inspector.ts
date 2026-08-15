@@ -16,8 +16,8 @@ export interface InspectorViewport {
   compact: boolean
 }
 
-/** Composer/status chrome plus one optional, fixed-height local notice row. */
-const INSPECTOR_CHROME_ROWS = 5
+/** Composer (3) + two-row status chrome, plus one optional fixed-height local notice row. */
+const INSPECTOR_CHROME_ROWS = 6
 
 /** One transcript-to-composer gutter, collapsed on short terminals. */
 export function layoutGutterRows(rows: number): 0 | 1 {

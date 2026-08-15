@@ -356,7 +356,10 @@ describe('exclusive panel height budgets', () => {
       expect(output).toContain('provider/model serving this session')
       expect(output.lastIndexOf('type a message')).toBeLessThan(output.lastIndexOf('test/model'))
       expect(output).not.toContain('\x1b[2J')
-      expect(output.split('\n').length).toBeLessThanOrEqual(stdout.rows)
+      // Accumulated frames (input echo + open panel) each carry the two-row
+      // status chrome, so the newline total may exceed the row count by the
+      // second status row per frame; the single-frame height stays bounded.
+      expect(output.split('\n').length).toBeLessThanOrEqual(stdout.rows + 2)
 
       // Space at the first row (model) disables it: the live footer loses
       // the model fact and the runner-side save receives the exact set.

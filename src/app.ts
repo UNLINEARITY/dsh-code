@@ -53,7 +53,9 @@ import {
   STATUS_GROUP_SEPARATOR,
   STATUS_ITEM_SEPARATOR,
   type StatusFacts,
+  type StatusGroup,
   type StatusItemId,
+  type StatusSpan,
   type StatusTone,
 } from './render/status.ts'
 import { displayTail, displayText, singleLineText, truncateColumns } from './render/text.ts'
@@ -591,8 +593,9 @@ function TodoPanel({ todos }: { todos: readonly TodoItem[] }): ReactElement | un
 
 /**
  * Ink props for one status tone: the Codex status-line accent mapping over
- * the DeepSeek palette — model identity in bright brand, paths in code sky,
- * figures in success green, labels dimmed, state badges traffic-lit.
+ * the DeepSeek palette, all blue by design — the status bar speaks only in
+ * degrees of blue (deep accent, primary figures, bright model identity, sky
+ * paths and done states), with amber/red reserved for warnings and errors.
  */
 function statusToneProps(tone: StatusTone): {
   color: string | undefined
@@ -609,14 +612,14 @@ function statusToneProps(tone: StatusTone): {
     case 'branch':
       return { color: inkColor(TUI_RGB.text), bold: undefined, dimColor: undefined }
     case 'value':
-      return { color: inkColor(TUI_RGB.success), bold: undefined, dimColor: undefined }
+      return { color: inkColor(TUI_RGB.brand), bold: undefined, dimColor: undefined }
     case 'label':
     case 'meta':
       return { color: undefined, bold: undefined, dimColor: true }
     case 'accent':
-      return { color: inkColor(TUI_RGB.brand), bold: undefined, dimColor: undefined }
+      return { color: inkColor(TUI_RGB.brandDeep), bold: undefined, dimColor: undefined }
     case 'success':
-      return { color: inkColor(TUI_RGB.success), bold: true, dimColor: undefined }
+      return { color: inkColor(TUI_RGB.code), bold: true, dimColor: undefined }
     case 'warn':
       return { color: inkColor(TUI_RGB.warn), bold: true, dimColor: undefined }
     case 'error':
@@ -627,12 +630,14 @@ function statusToneProps(tone: StatusTone): {
 }
 
 /**
- * The footer status line, one physical row in every mode: Claude-Code-style
- * identity facts and session figures flow from the left while the Codex-style
- * permission badge — the autonomous-selection anchor with its shift+tab
- * cycle hint — pins to the right edge. The layout arrives pre-measured from
- * the pure reducer, so Ink only paints; truncation degrades groups, it never
- * wraps the row.
+ * The footer status line: two stacked physical rows in every mode. Row 1
+ * carries Claude-Code-style identity facts and session figures from the left
+ * with the Codex-style permission badge — the autonomous-selection anchor
+ * with its shift+tab cycle hint — pinned to the right edge. Row 2 (mode,
+ * context progress bar, cache, duration figures) renders only while it has
+ * content, so the footer degrades to a single row on narrow terminals. Both
+ * layouts arrive pre-measured from the pure reducer, so Ink only paints;
+ * truncation degrades groups, it never wraps a row.
  */
 function StatusLine({ facts, stats, busy, columns, items }: {
   facts: StatusFacts
@@ -642,44 +647,53 @@ function StatusLine({ facts, stats, busy, columns, items }: {
   items: readonly string[]
 }): ReactElement {
   const layout = layoutStatusBar(facts, stats, Math.max(8, columns - 2), { busy, items })
-  const leftParts: ReactElement[] = []
-  layout.left.forEach((group, groupIndex) => {
-    if (groupIndex > 0) {
-      leftParts.push(createElement(Text, { key: 'gs' + groupIndex, dimColor: true }, STATUS_GROUP_SEPARATOR))
-    }
-    group.spans.forEach((span, spanIndex) => {
-      leftParts.push(createElement(
+  const renderRow = (row: { left: readonly StatusGroup[]; right: readonly StatusSpan[]; hint: boolean }, key: string): ReactElement => {
+    const leftParts: ReactElement[] = []
+    row.left.forEach((group, groupIndex) => {
+      if (groupIndex > 0) {
+        leftParts.push(createElement(Text, { key: key + 'gs' + groupIndex, dimColor: true }, STATUS_GROUP_SEPARATOR))
+      }
+      group.spans.forEach((span, spanIndex) => {
+        leftParts.push(createElement(
+          Text,
+          { key: key + 'g' + groupIndex + 's' + spanIndex, wrap: 'truncate-end', ...statusToneProps(span.tone) },
+          span.text,
+        ))
+      })
+    })
+    const rightParts: ReactElement[] = []
+    row.right.forEach((span, index) => {
+      if (index > 0) {
+        rightParts.push(createElement(Text, { key: key + 'rs' + index, dimColor: true }, STATUS_ITEM_SEPARATOR))
+      }
+      rightParts.push(createElement(
         Text,
-        { key: 'g' + groupIndex + 's' + spanIndex, wrap: 'truncate-end', ...statusToneProps(span.tone) },
+        { key: key + 'r' + index, wrap: 'truncate-end', ...statusToneProps(span.tone) },
         span.text,
       ))
     })
-  })
-  const rightParts: ReactElement[] = []
-  layout.right.forEach((span, index) => {
-    if (index > 0) {
-      rightParts.push(createElement(Text, { key: 'rs' + index, dimColor: true }, STATUS_ITEM_SEPARATOR))
+    if (row.hint) {
+      rightParts.push(createElement(Text, { key: key + 'hint', dimColor: true }, STATUS_CYCLE_HINT))
     }
-    rightParts.push(createElement(
-      Text,
-      { key: 'r' + index, wrap: 'truncate-end', ...statusToneProps(span.tone) },
-      span.text,
-    ))
-  })
-  if (layout.hint) {
-    rightParts.push(createElement(Text, { key: 'hint', dimColor: true }, STATUS_CYCLE_HINT))
+    // Each row already fits the column budget; truncate-end stays as the
+    // terminal-measurement backstop so a drifting cell count clips instead
+    // of wrapping.
+    return createElement(
+      Box,
+      // Match the prompt text inside the bordered composer: one border column
+      // plus one padding column. Keeping these rows margin-free also makes
+      // the composer and status a fixed bottom unit in every interface.
+      { paddingLeft: 2, justifyContent: rightParts.length > 0 ? 'space-between' : undefined },
+      createElement(Text, { wrap: 'truncate-end' }, ...leftParts),
+      rightParts.length > 0 ? createElement(Text, { wrap: 'truncate-end' }, ...rightParts) : undefined,
+    )
   }
-  // One physical row in every mode: the reducer already fit both sides into
-  // the column budget, and truncate-end stays as the terminal-measurement
-  // backstop so a drifting cell count clips instead of wrapping.
+  const row2Present = layout.row2.left.length > 0
   return createElement(
     Box,
-    // Match the prompt text inside the bordered composer: one border column
-    // plus one padding column. Keeping this row margin-free also makes the
-    // composer and status a fixed four-row unit in every interface.
-    { paddingLeft: 2, justifyContent: rightParts.length > 0 ? 'space-between' : undefined },
-    createElement(Text, { wrap: 'truncate-end' }, ...leftParts),
-    rightParts.length > 0 ? createElement(Text, { wrap: 'truncate-end' }, ...rightParts) : undefined,
+    { flexDirection: 'column' },
+    renderRow(layout.row1, 's1'),
+    row2Present ? renderRow(layout.row2, 's2') : undefined,
   )
 }
 
@@ -2150,7 +2164,9 @@ export function App(props: AppProps): ReactElement {
   const terminalRows = terminalSize.rows
   const terminalColumns = terminalSize.columns
   const composerGutterRows = layoutGutterRows(terminalRows)
-  const dynamicRows = Math.max(1, terminalRows - 12 - composerGutterRows)
+  // Bottom chrome is now composer (3) + status (up to 2 rows); the budget
+  // keeps the live/streaming area strictly below the terminal height.
+  const dynamicRows = Math.max(1, terminalRows - 13 - composerGutterRows)
   const streamingActive = view.streaming !== '' || view.streamingReasoning !== ''
   const deepDivingVisible = busy && !streamingActive
   const allLiveLines = useMemo(

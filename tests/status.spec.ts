@@ -1,10 +1,11 @@
-/** Status-bar formatting, tone layout, and one-row width degradation. */
+/** Status-bar formatting, tone layout, and two-row width degradation. */
 
 import { describe, expect, it } from 'vitest'
 import type { TranscriptStats } from '../src/render/projection.ts'
 import { visibleColumns } from '../src/render/markdown.ts'
 import {
   cacheHitPercent,
+  contextBar,
   DEFAULT_STATUSLINE_ITEMS,
   formatDuration,
   formatTokens,
@@ -16,6 +17,7 @@ import {
   STATUS_ITEM_SEPARATOR,
   type StatusFacts,
   type StatusLayout,
+  type StatusRow,
 } from '../src/render/status.ts'
 
 const emptyStats: TranscriptStats = {
@@ -44,26 +46,36 @@ const baseFacts: StatusFacts = {
   permission: '',
 }
 
-/** Plain text of the whole bar exactly as the footer would join it. */
-function rowText(layout: StatusLayout): string {
-  const left = layout.left
+/** Plain text of one row exactly as the footer would join it. */
+function rowText(row: StatusRow): string {
+  const left = row.left
     .map(group => group.spans.map(span => span.text).join(''))
     .join(STATUS_GROUP_SEPARATOR)
-  const right = layout.right.map(span => span.text).join(STATUS_ITEM_SEPARATOR)
-    + (layout.hint ? STATUS_CYCLE_HINT : '')
+  const right = row.right.map(span => span.text).join(STATUS_ITEM_SEPARATOR)
+    + (row.hint ? STATUS_CYCLE_HINT : '')
   return right === '' ? left : left + '  ' + right
 }
 
 /** Group text with spans concatenated (separators ride inside the spans). */
-function groupText(layout: StatusLayout): string[] {
-  return layout.left.map(group => group.spans.map(span => span.text).join(''))
+function groupText(row: StatusRow): string[] {
+  return row.left.map(group => group.spans.map(span => span.text).join(''))
 }
 
-/** Texts of every kept group/span, for monotonic degradation checks. */
+/** Texts of every kept group/span across both rows, for degradation checks. */
 function keptTexts(layout: StatusLayout): string[] {
   return [
-    ...layout.left.flatMap(group => group.spans.map(span => span.text)),
-    ...layout.right.map(span => span.text),
+    ...layout.row1.left.flatMap(group => group.spans.map(span => span.text)),
+    ...layout.row1.right.map(span => span.text),
+    ...layout.row2.left.flatMap(group => group.spans.map(span => span.text)),
+  ]
+}
+
+/** Joined text of every kept group across both rows (groups, not spans). */
+function keptGroups(layout: StatusLayout): string[] {
+  return [
+    ...layout.row1.left.map(group => group.spans.map(span => span.text).join('')),
+    ...layout.row1.right.map(span => span.text),
+    ...layout.row2.left.map(group => group.spans.map(span => span.text).join('')),
   ]
 }
 
@@ -86,29 +98,83 @@ describe('status formatting', () => {
   })
 })
 
+describe('context progress bar', () => {
+  /** Joined text of the tone-split bar spans. */
+  const barText = (percent: number): string => contextBar(percent).map(span => span.text).join('')
+
+  it('renders occupancy as bracketed filled/empty cells plus a blue percent', () => {
+    expect(contextBar(25)).toEqual([
+      { text: '[', tone: 'label' },
+      { text: '▰▰▰', tone: 'accent' },
+      { text: '▱▱▱▱▱▱▱', tone: 'label' },
+      { text: ']', tone: 'label' },
+      { text: ' 25%', tone: 'accent' },
+    ])
+    expect(contextBar(50)).toEqual([
+      { text: '[', tone: 'label' },
+      { text: '▰▰▰▰▰', tone: 'accent' },
+      { text: '▱▱▱▱▱', tone: 'label' },
+      { text: ']', tone: 'label' },
+      { text: ' 50%', tone: 'accent' },
+    ])
+  })
+
+  it('drops the fill span at 0% and the empty span at 100%', () => {
+    expect(contextBar(0)).toEqual([
+      { text: '[', tone: 'label' },
+      { text: '▱▱▱▱▱▱▱▱▱▱', tone: 'label' },
+      { text: ']', tone: 'label' },
+      { text: ' 0%', tone: 'accent' },
+    ])
+    expect(contextBar(100)).toEqual([
+      { text: '[', tone: 'label' },
+      { text: '▰▰▰▰▰▰▰▰▰▰', tone: 'warn' },
+      { text: ']', tone: 'label' },
+      { text: ' 100%', tone: 'warn' },
+    ])
+  })
+
+  it('stays brand blue below 90% and flips to a single amber at the threshold', () => {
+    expect(barText(89)).toBe('[▰▰▰▰▰▰▰▰▰▱] 89%')
+    expect(contextBar(89).map(span => span.tone)).toEqual(['label', 'accent', 'label', 'label', 'accent'])
+    expect(barText(90)).toBe('[▰▰▰▰▰▰▰▰▰▱] 90%')
+    expect(contextBar(90).map(span => span.tone)).toEqual(['label', 'warn', 'label', 'label', 'warn'])
+    expect(barText(94)).toBe('[▰▰▰▰▰▰▰▰▰▱] 94%')
+    expect(contextBar(94).map(span => span.tone)).toEqual(['label', 'warn', 'label', 'label', 'warn'])
+  })
+
+  it('clamps the fill at 100 while the percent keeps the raw over-budget value', () => {
+    expect(barText(150)).toBe('[▰▰▰▰▰▰▰▰▰▰] 150%')
+    expect(contextBar(150).map(span => span.tone)).toEqual(['label', 'warn', 'label', 'warn'])
+    expect(barText(-5)).toBe('[▱▱▱▱▱▱▱▱▱▱] 0%')
+    expect(contextBar(-5).map(span => span.tone)).toEqual(['label', 'label', 'label', 'accent'])
+  })
+})
+
 describe('status layout', () => {
-  it('accents identity facts and trails the session label', () => {
+  it('accents identity facts and trails the session label on row 1', () => {
     const layout = layoutStatusBar(
       { ...baseFacts, model: 'deepseek/chat', cwd: 'deepseek-harness', branch: 'dsh-cli', sessionId: 'ab12cd34' },
       emptyStats,
       120,
     )
-    expect(layout.left).toHaveLength(2)
-    expect(groupText(layout)).toEqual(['○ deepseek/chat · deepseek-harness · ⑂ dsh-cli', 'ab12cd34'])
-    expect(layout.left[0].spans.map(span => span.tone)).toEqual(['meta', 'model', 'label', 'path', 'label', 'branch'])
-    expect(layout.left[1].spans).toEqual([{ text: 'ab12cd34', tone: 'meta' }])
-    expect(layout.right).toEqual([])
-    expect(layout.hint).toBe(false)
+    expect(layout.row1.left).toHaveLength(2)
+    expect(groupText(layout.row1)).toEqual(['○ deepseek/chat · deepseek-harness · ⑂ dsh-cli', 'ab12cd34'])
+    expect(layout.row1.left[0].spans.map(span => span.tone)).toEqual(['meta', 'model', 'label', 'path', 'label', 'branch'])
+    expect(layout.row1.left[1].spans).toEqual([{ text: 'ab12cd34', tone: 'meta' }])
+    expect(layout.row1.right).toEqual([])
+    expect(layout.row1.hint).toBe(false)
+    expect(layout.row2.left).toEqual([])
   })
 
   it('marks the busy dot live and the plan state accented', () => {
     const layout = layoutStatusBar({ ...baseFacts, plan: true }, emptyStats, 120, { busy: true })
-    const identity = layout.left[0].spans
+    const identity = layout.row1.left[0].spans
     expect(identity[0]).toEqual({ text: '● ', tone: 'live' })
     expect(identity.at(-1)).toEqual({ text: '⧉ plan', tone: 'accent' })
   })
 
-  it('keeps preset, counts, durations, cache, context, and tokens as pipe groups', () => {
+  it('splits identity/state to row 1 and run meters to row 2', () => {
     const layout = layoutStatusBar(
       { ...baseFacts, mode: 'code', model: 'm', cwd: 'r', branch: 'main', sessionId: 's' },
       {
@@ -121,22 +187,48 @@ describe('status layout', () => {
       },
       160,
     )
-    expect(groupText(layout)).toEqual([
+    expect(groupText(layout.row1)).toEqual([
       '○ m · r · ⑂ main',
-      'mode code',
-      'T2 · S5',
-      'llm 45.2s · tool 2m42s',
-      'cache 80%',
-      '↑12.2K ↓2.4K',
+      'turns 2 · steps 5',
+      'in 12.2K · out 2.4K',
       's',
     ])
-    expect(layout.left[0].spans[1]).toEqual({ text: 'm', tone: 'model' })
-    expect(layout.left[2].spans[0]).toEqual({ text: 'T2 · S5', tone: 'value' })
-    expect(layout.left[3].spans[0]).toEqual({ text: 'llm ', tone: 'label' })
-    expect(layout.left[3].spans[1]).toEqual({ text: '45.2s', tone: 'value' })
+    expect(groupText(layout.row2)).toEqual([
+      'mode code',
+      'model 45.2s · tool 2m42s',
+      'cache 80%',
+    ])
+    expect(layout.row1.left[0].spans[1]).toEqual({ text: 'm', tone: 'model' })
+    expect(layout.row1.left[1].spans[0]).toEqual({ text: 'turns ', tone: 'label' })
+    expect(layout.row1.left[1].spans[1]).toEqual({ text: '2', tone: 'value' })
+    expect(layout.row2.left[1].spans[0]).toEqual({ text: 'model ', tone: 'label' })
+    expect(layout.row2.left[1].spans[1]).toEqual({ text: '45.2s', tone: 'value' })
   })
 
-  it('adds the context-occupancy meter once capacity and a report exist', () => {
+  it('writes duration parameters in full words, no single-letter codes', () => {
+    const layout = layoutStatusBar(
+      { ...baseFacts, mode: 'code' },
+      {
+        ...emptyStats,
+        turns: 1,
+        steps: 2,
+        llmMs: 45_233,
+        ttftMs: 2_400,
+        ttftSteps: 4,
+        decodeMs: 60_000,
+        decodeTokens: 1_200,
+        toolMs: 162_000,
+      },
+      160,
+    )
+    expect(groupText(layout.row1)).toEqual(['○ m · r', 'turns 1 · steps 2', 's'])
+    expect(groupText(layout.row2)).toEqual([
+      'mode code',
+      'model 45.2s · latency 0.6s · 20 tokens/s · tool 2m42s',
+    ])
+  })
+
+  it('shows context occupancy as a progress bar once capacity and a report exist', () => {
     const layout = layoutStatusBar(
       { ...baseFacts, model: 'm', cwd: 'r', sessionId: '' },
       {
@@ -147,31 +239,30 @@ describe('status layout', () => {
       },
       120,
     )
-    expect(groupText(layout)).toEqual([
-      '○ m · r',
+    expect(groupText(layout.row1)).toEqual(['○ m · r', 'in 32K · out 800'])
+    expect(groupText(layout.row2)).toEqual([
       'cache 0%',
-      'ctx 25%',
-      '↑32K ↓800',
+      'context [▰▰▰▱▱▱▱▱▱▱] 25%',
     ])
   })
 
   it('shows the session title in place of the short id once one lands', () => {
     const titled = layoutStatusBar({ ...baseFacts, sessionId: 'ab12cd34', title: 'fix the login bug' }, emptyStats, 120)
-    expect(titled.left.at(-1).spans).toEqual([{ text: 'fix the login bug', tone: 'meta' }])
+    expect(titled.row1.left.at(-1).spans).toEqual([{ text: 'fix the login bug', tone: 'meta' }])
     const untitled = layoutStatusBar({ ...baseFacts, sessionId: 'ab12cd34', title: '' }, emptyStats, 120)
-    expect(untitled.left.at(-1).spans).toEqual([{ text: 'ab12cd34', tone: 'meta' }])
+    expect(untitled.row1.left.at(-1).spans).toEqual([{ text: 'ab12cd34', tone: 'meta' }])
   })
 
   it('pins the permission badge right with the idle cycle hint', () => {
     const layout = layoutStatusBar({ ...baseFacts, permission: 'workspace-write' }, emptyStats, 120)
-    expect(layout.right).toEqual([{ text: 'workspace-write', tone: 'warn' }])
-    expect(layout.hint).toBe(true)
+    expect(layout.row1.right).toEqual([{ text: 'workspace-write', tone: 'warn' }])
+    expect(layout.row1.hint).toBe(true)
     const busy = layoutStatusBar({ ...baseFacts, permission: 'workspace-write' }, emptyStats, 120, { busy: true })
-    expect(busy.hint).toBe(false)
-    expect(busy.right).toEqual([{ text: 'workspace-write', tone: 'warn' }])
+    expect(busy.row1.hint).toBe(false)
+    expect(busy.row1.right).toEqual([{ text: 'workspace-write', tone: 'warn' }])
   })
 
-  it('traffic-lights presets, surfaces divergent sandbox, and badges the goal', () => {
+  it('traffic-lights presets, surfaces divergent sandbox, and spells the goal round', () => {
     expect(permissionTone('read-only')).toBe('success')
     expect(permissionTone('workspace-write')).toBe('warn')
     expect(permissionTone('danger-full-access')).toBe('error')
@@ -185,8 +276,8 @@ describe('status layout', () => {
       emptyStats,
       160,
     )
-    expect(layout.right).toEqual([
-      { text: '◎ r2/8', tone: 'accent' },
+    expect(layout.row1.right).toEqual([
+      { text: '◎ round 2/8', tone: 'accent' },
       { text: 'sandbox danger-full-access', tone: 'warn' },
       { text: 'workspace-write', tone: 'warn' },
     ])
@@ -200,7 +291,7 @@ describe('status layout', () => {
       emptyStats,
       160,
     )
-    expect(echo.right).toEqual([
+    expect(echo.row1.right).toEqual([
       { text: '◎ blocked', tone: 'accent' },
       { text: 'workspace-write', tone: 'warn' },
     ])
@@ -208,9 +299,9 @@ describe('status layout', () => {
 
   it('sanitizes external text and bounds the title by columns, not characters', () => {
     const layout = layoutStatusBar({ ...baseFacts, title: 'a\u0007b\nc' }, emptyStats, 120)
-    expect(layout.left.at(-1).spans[0].text).toBe('a\\x07b ↵ c')
+    expect(layout.row1.left.at(-1).spans[0].text).toBe('a\\x07b ↵ c')
     const cjk = layoutStatusBar({ ...baseFacts, title: '深'.repeat(30) }, emptyStats, 320)
-    const titleSpan = cjk.left.at(-1).spans[0]
+    const titleSpan = cjk.row1.left.at(-1).spans[0]
     expect(visibleColumns(titleSpan.text)).toBeLessThanOrEqual(48)
     expect(titleSpan.text.endsWith('…')).toBe(true)
   })
@@ -231,15 +322,17 @@ describe('statusline item configuration', () => {
       120,
       { items: ['model', 'permission'] },
     )
-    expect(groupText(layout)).toEqual(['○ m'])
-    expect(layout.right.map(span => span.text)).toEqual(['workspace-write'])
+    expect(groupText(layout.row1)).toEqual(['○ m'])
+    expect(layout.row1.right.map(span => span.text)).toEqual(['workspace-write'])
+    expect(layout.row2.left).toEqual([])
   })
 
   it('degrades to the lone busy dot with an empty item set', () => {
     const layout = layoutStatusBar(richFacts, richStats, 120, { items: [] })
-    expect(groupText(layout)).toEqual(['○ '])
-    expect(layout.right).toEqual([])
-    expect(layout.hint).toBe(false)
+    expect(groupText(layout.row1)).toEqual(['○ '])
+    expect(layout.row1.right).toEqual([])
+    expect(layout.row1.hint).toBe(false)
+    expect(layout.row2.left).toEqual([])
   })
 
   it('reorders left clusters and right badges per the configured order', () => {
@@ -249,8 +342,8 @@ describe('statusline item configuration', () => {
       160,
       { items: ['turns', 'cwd', 'model', 'permission', 'goal'] },
     )
-    expect(groupText(layout)).toEqual(['○ m · r', 'T1 · S1'])
-    expect(layout.right.map(span => span.text)).toEqual(['workspace-write', '◎ r1/4'])
+    expect(groupText(layout.row1)).toEqual(['○ m · r', 'turns 1 · steps 1'])
+    expect(layout.row1.right.map(span => span.text)).toEqual(['workspace-write', '◎ round 1/4'])
   })
 })
 
@@ -284,76 +377,108 @@ const richStats: TranscriptStats = {
 }
 
 describe('status width degradation', () => {
-  it('keeps every group and the cycle hint on a roomy terminal', () => {
+  it('keeps every group on both rows and the cycle hint on a roomy terminal', () => {
     const layout = layoutStatusBar(richFacts, richStats, 320)
-    expect(layout.hint).toBe(true)
-    expect(layout.left).toHaveLength(8)
-    expect(layout.right.map(span => span.text)).toEqual(['◎ r2/8', 'sandbox danger-full-access', 'workspace-write'])
+    expect(layout.row1.hint).toBe(true)
+    expect(layout.row1.left).toHaveLength(4)
+    expect(layout.row1.right.map(span => span.text)).toEqual([
+      '◎ round 2/8',
+      'sandbox danger-full-access',
+      'workspace-write',
+    ])
+    expect(groupText(layout.row2)).toEqual([
+      'mode code',
+      'model 45.2s · latency 0.6s · 20 tokens/s · tool 2m42s',
+      'cache 80%',
+      'context [▰▰▰▱▱▱▱▱▱▱] 25%',
+    ])
   })
 
   it('drops the hint and title before any figure or state', () => {
     const layout = layoutStatusBar(richFacts, richStats, 200)
-    expect(layout.hint).toBe(false)
+    expect(layout.row1.hint).toBe(false)
     const texts = keptTexts(layout)
+    const groups = keptGroups(layout)
     expect(texts).not.toContain('a'.repeat(40))
-    expect(texts).toContain('sandbox danger-full-access')
-    expect(texts).toContain('◎ r2/8')
-    expect(groupText(layout)).not.toContain('mode code')
-    expect(texts).toContain('T3 · S9')
-    expect(texts).toContain('workspace-write')
+    expect(groups).toContain('sandbox danger-full-access')
+    expect(groups).toContain('◎ round 2/8')
+    expect(groups).toContain('turns 3 · steps 9')
+    expect(groups).toContain('workspace-write')
+    expect(groups).toContain('mode code')
+    expect(groups).toContain('context [▰▰▰▱▱▱▱▱▱▱] 25%')
   })
 
-  it('sheds figures right-to-left while the state badges survive', () => {
+  it('sheds row-1 figures while row-2 meters and state badges survive', () => {
     const layout = layoutStatusBar(richFacts, richStats, 150)
     const texts = keptTexts(layout)
-    expect(texts).toContain('T3 · S9')
-    expect(texts).not.toContain('llm 45.2s')
-    expect(texts).toContain('◎ r2/8')
-    expect(texts).toContain('sandbox danger-full-access')
-    expect(texts).toContain('workspace-write')
+    const groups = keptGroups(layout)
+    expect(groups).toContain('turns 3 · steps 9')
+    expect(groups).not.toContain('in 12.2K')
+    expect(groups).toContain('◎ round 2/8')
+    expect(groups).toContain('sandbox danger-full-access')
+    expect(groups).toContain('workspace-write')
+    expect(groups).toContain('model 45.2s · latency 0.6s · 20 tokens/s · tool 2m42s')
     const countsGone = layoutStatusBar(richFacts, richStats, 120)
-    expect(keptTexts(countsGone)).not.toContain('T3 · S9')
-    expect(keptTexts(countsGone)).toContain('◎ r2/8')
+    const goneGroups = keptGroups(countsGone)
+    expect(goneGroups).not.toContain('turns 3 · steps 9')
+    expect(goneGroups).toContain('◎ round 2/8')
+    expect(goneGroups).toContain('workspace-write')
   })
 
   it('keeps the badge after every figure and state drops, then the identity alone', () => {
     const withGoal = layoutStatusBar(richFacts, richStats, 100)
-    expect(withGoal.left).toHaveLength(1)
-    expect(withGoal.right.map(span => span.text)).toEqual(['◎ r2/8', 'workspace-write'])
+    expect(withGoal.row1.left).toHaveLength(1)
+    expect(withGoal.row1.right.map(span => span.text)).toEqual(['◎ round 2/8', 'workspace-write'])
     const badgeOnly = layoutStatusBar(richFacts, richStats, 80)
-    expect(badgeOnly.left).toHaveLength(1)
-    expect(badgeOnly.right.map(span => span.text)).toEqual(['workspace-write'])
+    expect(badgeOnly.row1.left).toHaveLength(1)
+    expect(badgeOnly.row1.right.map(span => span.text)).toEqual(['workspace-write'])
     const identityAlone = layoutStatusBar(richFacts, richStats, 70)
-    expect(identityAlone.left).toHaveLength(1)
-    expect(identityAlone.right).toEqual([])
-    expect(visibleColumns(rowText(identityAlone))).toBeLessThanOrEqual(69)
+    expect(identityAlone.row1.left).toHaveLength(1)
+    expect(identityAlone.row1.right).toEqual([])
+    expect(visibleColumns(rowText(identityAlone.row1))).toBeLessThanOrEqual(69)
   })
 
   it('ellipsizes the identity cluster instead of wrapping at extreme widths', () => {
     const layout = layoutStatusBar(richFacts, richStats, 24)
-    expect(layout.left).toHaveLength(1)
-    expect(layout.right).toEqual([])
-    const text = rowText(layout)
+    expect(layout.row1.left).toHaveLength(1)
+    expect(layout.row1.right).toEqual([])
+    // Row 2 keeps only what fits its own budget — mode alone at this width.
+    expect(layout.row2.left.length).toBeLessThanOrEqual(1)
+    if (layout.row2.left.length > 0) {
+      expect(visibleColumns(rowText(layout.row2))).toBeLessThanOrEqual(23)
+    }
+    const text = rowText(layout.row1)
     expect(text.endsWith('…')).toBe(true)
     expect(visibleColumns(text)).toBeLessThanOrEqual(23)
   })
 
-  it('never exceeds the one-row budget at any width, degrading monotonically', () => {
-    let previous: string[] | undefined
+  it('never exceeds the two-row budget at any width, degrading monotonically', () => {
+    let previousRow1: string[] | undefined
+    let previousRow2: string[] | undefined
     for (let columns = 8; columns <= 340; columns += 4) {
       const layout = layoutStatusBar(richFacts, richStats, columns)
-      const text = rowText(layout)
-      expect(visibleColumns(text)).toBeLessThanOrEqual(columns - 1)
-      expect(layout.left.length).toBeGreaterThanOrEqual(1)
+      expect(visibleColumns(rowText(layout.row1))).toBeLessThanOrEqual(columns - 1)
+      if (layout.row2.left.length > 0) {
+        expect(visibleColumns(rowText(layout.row2))).toBeLessThanOrEqual(columns - 1)
+      }
+      expect(layout.row1.left.length).toBeGreaterThanOrEqual(1)
       // The ellipsized identity is width-dependent by design; every whole
       // span kept at a narrower width must survive a wider one.
-      const texts = keptTexts(layout).filter(candidate => !candidate.endsWith('…'))
-      if (previous !== undefined) {
-        for (const text of previous) {
-          expect(texts).toContain(text)
+      const texts1 = layout.row1.left.flatMap(group => group.spans.map(span => span.text))
+        .filter(candidate => !candidate.endsWith('…'))
+      const texts2 = layout.row2.left.flatMap(group => group.spans.map(span => span.text))
+      if (previousRow1 !== undefined) {
+        for (const text of previousRow1) {
+          expect(texts1).toContain(text)
         }
       }
-      previous = texts
+      if (previousRow2 !== undefined) {
+        for (const text of previousRow2) {
+          expect(texts2).toContain(text)
+        }
+      }
+      previousRow1 = texts1
+      previousRow2 = texts2
     }
   })
 })
