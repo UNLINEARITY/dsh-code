@@ -28,7 +28,7 @@ import type { TranscriptStore } from './store.ts'
 import { settledEntryCount, type TranscriptEntry } from './render/projection.ts'
 import { renderMarkdown, type MdSegment, visibleColumns } from './render/markdown.ts'
 import type { ToolDetail } from './render/tool-detail.ts'
-import { caretVisible, pulseFrame } from './render/animations.ts'
+import { busyChaseFrame, caretVisible, pulseFrame } from './render/animations.ts'
 import type { ApprovalSnapshot, ApprovalStore } from './approval.ts'
 import type { CommandsView } from './commands.ts'
 import type { ModelDirectory, ModelRow } from './models.ts'
@@ -189,6 +189,17 @@ function Pulse(): ReactElement {
   return createElement(Text, { color: inkColor(TUI_RGB.brandBright) }, pulseFrame(tick))
 }
 
+/**
+ * The web StateDot "ongoing" chase in terminal form: three cells of the 3×3
+ * ring trail clockwise around the eight outer positions (8 frames × 125ms =
+ * the web's 1s cycle). Replaces the plain busy ellipsis as the composer's
+ * prompt marker and leads the Deep-diving line.
+ */
+function BusyChase(): ReactElement {
+  const tick = useFrames(125)
+  return createElement(Text, { color: inkColor(TUI_RGB.brandBright) }, busyChaseFrame(tick) + ' ')
+}
+
 /** Blinking block caret appended to streaming text. */
 function Caret(): ReactElement {
   const tick = useFrames(530)
@@ -210,17 +221,23 @@ function runClock(ms: number): string {
 }
 
 /**
- * The busy line, web TurnStatus contract: the plain `Deep diving...` label,
- * with the elapsed clock appended only once the turn has clearly been running
- * (15s) — anchored to `turn/start` so a resumed mid-turn keeps the real time.
+ * The busy line, web TurnStatus contract: the StateDot chase leads the plain
+ * `Deep diving...` label, with the elapsed clock appended only once the turn
+ * has clearly been running (15s) — anchored to `turn/start` so a resumed
+ * mid-turn keeps the real time.
  */
 function DeepDivingLine({ since }: { since: number }): ReactElement {
   useFrames(1000)
   const elapsed = since === 0 ? 0 : Date.now() - since
   return createElement(
-    Text,
-    { dimColor: true },
-    elapsed >= 15_000 ? `Deep diving... ${runClock(elapsed)}` : 'Deep diving...',
+    Box,
+    { flexDirection: 'row' },
+    createElement(BusyChase),
+    createElement(
+      Text,
+      { dimColor: true },
+      elapsed >= 15_000 ? `Deep diving... ${runClock(elapsed)}` : 'Deep diving...',
+    ),
   )
 }
 
@@ -2015,7 +2032,9 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
       createElement(
         Text,
         { wrap: 'truncate-end' },
-        createElement(Text, { color: inkColor(TUI_RGB.brand) }, busy ? '… ' : '❯ '),
+        busy
+          ? createElement(BusyChase)
+          : createElement(Text, { color: inkColor(TUI_RGB.brand) }, '❯ '),
         value === '' ? undefined : editor.before,
         createElement(CursorBlock, { char: editor.caret }),
         value === '' && !busy
