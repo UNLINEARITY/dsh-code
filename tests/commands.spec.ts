@@ -78,6 +78,20 @@ describe('watchCommands', () => {
     const view = watchCommands(ctx)
     expect(view.descriptors).toEqual([])
   })
+
+  it('keeps the last catalog and reports a synchronous registry failure', () => {
+    const descriptors: readonly CommandDescriptor[] = [{ name: 'compact', description: 'shrink history' }]
+    const { ctx, fireChange } = harness(descriptors)
+    const registry = (ctx as unknown as { get(name: string): unknown }).get('commands') as {
+      list(agent: Agent): readonly CommandDescriptor[]
+    }
+    const view = watchCommands(ctx)
+    view.setAgent({ id: 'a' } as unknown as Agent)
+    registry.list = () => { throw new Error('registry offline') }
+    fireChange()
+    expect(view.descriptors).toEqual(descriptors)
+    expect(view.error).toBe('registry offline')
+  })
 })
 
 describe('loadModelDirectory', () => {

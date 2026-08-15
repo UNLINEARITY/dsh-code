@@ -116,7 +116,9 @@ describe('Ctrl+O history details', () => {
       expect(output).toContain('draft')
       expect(output.lastIndexOf('draft')).toBeLessThan(output.lastIndexOf('test/model'))
       expect(output).not.toContain('\x1b[2J')
-      expect(output.split('\n').length).toBeLessThanOrEqual(10)
+      // A roomy panel may spend two of its bounded rows on title/body/footer
+      // separation; newline splitting includes the final partial row.
+      expect(output.split('\n').length).toBeLessThanOrEqual(Math.floor(stdout.rows / 2) + 1)
 
       output = ''
       for (const columns of [96, 68, 120]) {

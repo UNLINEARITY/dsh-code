@@ -16,6 +16,8 @@ import type { CommandDescriptor } from '@deepseek-ai/dsh-commands'
 export interface CommandsView {
   /** Name-sorted descriptors after scoped shadowing. */
   readonly descriptors: readonly CommandDescriptor[]
+  /** Latest descriptor-read failure; the help panel exposes it in place. */
+  readonly error?: string
   /** Subscribe to list changes (`commands/change`); returns the unsubscribe function. */
   subscribe(listener: () => void): () => void
   /** Retarget the agent whose scoped view the list is read through. */
@@ -35,10 +37,19 @@ export function watchCommands(ctx: Context): CommandsView {
   const commands = ctx.get('commands')
   let agent: Agent | undefined
   let descriptors: readonly CommandDescriptor[] = []
+  let error: string | undefined
   const listeners = new Set<() => void>()
   const refresh = (): void => {
     if (commands === undefined || agent === undefined) return
-    descriptors = commands.list(agent)
+    try {
+      descriptors = commands.list(agent)
+      error = undefined
+    } catch (cause: unknown) {
+      // Keep the last good catalog, but change its identity so subscribers
+      // can render the recoverable failure in /help.
+      descriptors = [...descriptors]
+      error = cause instanceof Error ? cause.message : String(cause)
+    }
     for (const listener of listeners) listener()
   }
   if (commands !== undefined) {
@@ -47,6 +58,9 @@ export function watchCommands(ctx: Context): CommandsView {
   return {
     get descriptors(): readonly CommandDescriptor[] {
       return descriptors
+    },
+    get error(): string | undefined {
+      return error
     },
     subscribe(listener: () => void): () => void {
       listeners.add(listener)

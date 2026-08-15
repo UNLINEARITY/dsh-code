@@ -1,7 +1,7 @@
 /** Display-boundary sanitization: control characters become visible escapes. */
 
 import { describe, expect, it } from 'vitest'
-import { displayTail, displayText } from '../src/render/text.ts'
+import { displayTail, displayText, singleLineText, truncateColumns } from '../src/render/text.ts'
 
 describe('displayText', () => {
   it('keeps ordinary text, newlines, and tabs intact', () => {
@@ -23,6 +23,19 @@ describe('displayText', () => {
   it('uses two hex digits with lowercase', () => {
     expect(displayText('\x1b')).toBe('\\x1b')
     expect(displayText('\x00')).toBe('\\x00')
+  })
+})
+
+describe('single-line terminal text', () => {
+  it('collapses line breaks and tabs without allowing terminal controls through', () => {
+    expect(singleLineText('first\nsecond\t\x1b[31m')).toBe('first ↵ second  \\x1b[31m')
+  })
+
+  it('keeps the ellipsis inside the physical-column budget', () => {
+    expect(truncateColumns('abcdef', 5)).toBe('abcd…')
+    expect(truncateColumns('甲乙丙', 5)).toBe('甲乙…')
+    expect(truncateColumns('甲', 1)).toBe('…')
+    expect(truncateColumns('anything', 0)).toBe('')
   })
 })
 

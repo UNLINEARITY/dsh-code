@@ -42,11 +42,12 @@ const RESIZE_REFLOW_DELAY_MS = 75
 /** Reset region/style, clear the visible screen and scrollback, then home. */
 const RESIZE_REFLOW_CLEAR = '\x1b[r\x1b[0m\x1b[H\x1b[2J\x1b[3J\x1b[H'
 import { buildStatusGroups, formatTokens, type StatusFacts } from './render/status.ts'
-import { displayTail, displayText } from './render/text.ts'
+import { displayTail, displayText, singleLineText, truncateColumns } from './render/text.ts'
 import {
   clampScroll,
   followInspectorCursor,
   inspectorViewport,
+  layoutGutterRows,
   moveScroll,
   panelViewport,
   revealRow,
@@ -61,6 +62,9 @@ import {
   type LineStyle,
   type StyledLine,
 } from './render/lines.ts'
+
+/** Visual priority for one bounded local notice. */
+export type NoticeTone = 'info' | 'warning' | 'error'
 
 /** Props the runner hands the app; callbacks stay owned by the runner. */
 export interface AppProps {
@@ -105,7 +109,7 @@ export interface AppProps {
   /** Rename the session (/title <text>); returns the outcome line for the notice. */
   renameTitle(argument: string): string
   /** Registers the app's notice channel with the runner (called once on mount). */
-  onBridgeReady(bridge: { notify(text: string): void }): void
+  onBridgeReady(bridge: { notify(text: string, tone?: NoticeTone): void }): void
 }
 
 /** Ink `color` string for one palette triple. */
@@ -113,23 +117,10 @@ function inkColor(triple: readonly [number, number, number]): string {
   return `rgb(${triple[0]}, ${triple[1]}, ${triple[2]})`
 }
 
-/** Truncate text to a visible-column budget, appending … when cut. */
-function truncateColumns(text: string, max: number): string {
-  let columns = 0
-  let out = ''
-  for (const char of text) {
-    const code = char.codePointAt(0) ?? 0
-    const width = code > 0x2e7f ? 2 : 1
-    if (columns + width > max) return `${out}…`
-    out += char
-    columns += width
-  }
-  return out
-}
-
 /** Pad text with spaces to a visible-column target (menu name column). */
 function padColumns(text: string, width: number): string {
-  return text + ' '.repeat(Math.max(0, width - visibleColumns(text)))
+  const clipped = truncateColumns(singleLineText(text), width)
+  return clipped + ' '.repeat(Math.max(0, width - visibleColumns(clipped)))
 }
 
 /** Interval-driven frame counter for one self-contained animated leaf. */
@@ -290,6 +281,11 @@ function StyledRows({ lines }: { lines: readonly StyledLine[] }): ReactElement {
   )
 }
 
+/** Codex-style panel rhythm that still participates in the row budget. */
+function PanelGap({ visible }: { visible: boolean }): ReactElement | undefined {
+  return visible ? createElement(Text, null, ' ') : undefined
+}
+
 /** One settled markdown document rendered as styled lines at the terminal width. */
 function MarkdownBody({ text }: { text: string }): ReactElement {
   const columns = useStdout().stdout?.columns ?? 80
@@ -304,7 +300,9 @@ function MarkdownBody({ text }: { text: string }): ReactElement {
     ...lines.map((line, index) => createElement(
       Text,
       { key: index },
-      ...line.segments.map((segment, at) => createElement(Text, { key: at, ...segmentProps(segment.style) }, segment.text)),
+      line.segments.length === 0
+        ? ' '
+        : line.segments.map((segment, at) => createElement(Text, { key: at, ...segmentProps(segment.style) }, segment.text)),
     )),
   )
 }
@@ -574,6 +572,33 @@ function StatusLine({ facts, stats, busy }: {
   )
 }
 
+/**
+ * One fixed-height local feedback row. Errors remain visible while a slash
+ * subpage is open, but arbitrary exception text can never add physical rows
+ * above the composer.
+ */
+function NoticeLine({ text, tone, columns }: {
+  text: string
+  tone: NoticeTone
+  columns: number
+}): ReactElement {
+  const color = tone === 'error'
+    ? TUI_RGB.error
+    : tone === 'warning'
+      ? TUI_RGB.warn
+      : TUI_RGB.brandBright
+  const mark = tone === 'error' ? '⨯' : tone === 'warning' ? '!' : '•'
+  return createElement(
+    Box,
+    { paddingLeft: 2 },
+    createElement(
+      Text,
+      { color: inkColor(color), wrap: 'truncate-end' },
+      truncateColumns(`${mark} ${singleLineText(text)}`, Math.max(1, columns - 2)),
+    ),
+  )
+}
+
 /** The y/n approval bar rendered while an approval ask is pending. */
 function ApprovalBar({ approval, locked }: { approval: ApprovalStore; locked: boolean }): ReactElement | undefined {
   const snapshot = useSyncExternalStore(approval.subscribe, approval.getSnapshot)
@@ -635,7 +660,9 @@ function ApprovalBar({ approval, locked }: { approval: ApprovalStore; locked: bo
     Box,
     { flexDirection: 'column', paddingX: 1, borderStyle: 'round', borderColor: inkColor(TUI_RGB.warn) },
     createElement(Text, { color: inkColor(TUI_RGB.warn), bold: true, wrap: 'truncate-end' }, truncateColumns(`⏸ waiting for approval · lines ${content.length === 0 ? 0 : visibleScroll + 1}-${Math.min(content.length, visibleScroll + viewport.bodyRows)}/${content.length}`, viewport.contentColumns)),
+    createElement(PanelGap, { visible: viewport.gapRows > 0 }),
     createElement(StyledRows, { lines: content.slice(visibleScroll, visibleScroll + viewport.bodyRows) }),
+    createElement(PanelGap, { visible: viewport.gapRows > 0 }),
     createElement(Text, { dimColor: true, wrap: 'truncate-end' }, dim(truncateColumns(answered
       ? 'submitted…'
       : '↑↓/pgup/pgdn scroll · y allow once · n reject', viewport.contentColumns))),
@@ -857,16 +884,19 @@ function QuestionBar({ store, locked }: { store: QuestionStore; locked: boolean 
       { color: inkColor(isPlan ? TUI_RGB.brand : TUI_RGB.brandDeep), bold: true, wrap: 'truncate-end' },
       truncateColumns(`${isPlan ? '📋 plan review' : '❓ question'} ${index + 1}/${pending.request.questions.length} · lines ${rendered.lines.length === 0 ? 0 : visibleScroll + 1}-${Math.min(rendered.lines.length, visibleScroll + viewport.bodyRows)}/${rendered.lines.length}`, viewport.contentColumns),
     ),
+    createElement(PanelGap, { visible: viewport.gapRows > 0 }),
     createElement(StyledRows, { lines: rendered.lines.slice(visibleScroll, visibleScroll + viewport.bodyRows) }),
+    createElement(PanelGap, { visible: viewport.gapRows > 0 }),
     createElement(Text, { dimColor: true, wrap: 'truncate-end' }, dim(truncateColumns(footer, viewport.contentColumns))),
   )
 }
 
 /** The /model panel: a scrolling list over the advisory model directory. */
-function ModelPanel({ directory, error, onSelect, onClose }: {
+function ModelPanel({ directory, error, onSelect, onRetry, onClose }: {
   directory: ModelDirectory | undefined
   error: string | undefined
   onSelect(row: ModelRow): void
+  onRetry(): void
   onClose(): void
 }): ReactElement {
   const [cursor, setCursor] = useState(0)
@@ -885,6 +915,10 @@ function ModelPanel({ directory, error, onSelect, onClose }: {
   useInput((input, key) => {
     if (key.escape || input === 'q') {
       onClose()
+      return
+    }
+    if (input === 'r') {
+      onRetry()
       return
     }
     if (rows.length === 0) return
@@ -919,21 +953,41 @@ function ModelPanel({ directory, error, onSelect, onClose }: {
 
   if (viewport.maxHeight === 0) return createElement(Box, { display: 'none' })
   if (viewport.compact) {
-    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns('/model · esc/q close', viewport.contentColumns))
+    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns('/model · r retry · esc/q close', viewport.contentColumns))
   }
 
-  const first = selectionWindow(cursor, rows.length, viewport.bodyRows)
-  const visible = rows.slice(first, first + viewport.bodyRows)
+  const stateRows: ReactElement[] = directory === undefined && error === undefined
+    ? [createElement(Text, { key: 'loading', dimColor: true, wrap: 'truncate-end' }, '  loading models…')]
+    : error !== undefined
+      ? [createElement(
+        Text,
+        { key: 'error', color: inkColor(TUI_RGB.error), wrap: 'truncate-end' },
+        truncateColumns(`  ${singleLineText(error)}`, viewport.contentColumns),
+      )]
+      : [
+        ...(directory?.failures.length === 0
+          ? []
+          : [createElement(
+            Text,
+            { key: 'failures', color: inkColor(TUI_RGB.warn), wrap: 'truncate-end' },
+            truncateColumns(`  unavailable providers: ${directory?.failures.join(', ')}`, viewport.contentColumns),
+          )]),
+        ...(rows.length === 0
+          ? [createElement(Text, { key: 'empty', dimColor: true, wrap: 'truncate-end' }, '  no models available')]
+          : []),
+      ]
+  // Measurement and rendering share the same physical-row budget: state
+  // messages consume body rows before selectable entries, as in Codex's
+  // list-selection views.
+  const rowBudget = Math.max(0, viewport.bodyRows - stateRows.length)
+  const first = selectionWindow(cursor, rows.length, rowBudget)
+  const visible = rowBudget === 0 ? [] : rows.slice(first, first + rowBudget)
   return createElement(
     Box,
     { flexDirection: 'column', paddingX: 1, borderStyle: 'round', borderColor: inkColor(TUI_RGB.brand) },
     createElement(Text, { color: inkColor(TUI_RGB.brand), bold: true, wrap: 'truncate-end' }, truncateColumns(`/model — select model${rows.length === 0 ? '' : ` · ${cursor + 1}/${rows.length}`}`, viewport.contentColumns)),
-    directory === undefined && error === undefined
-      ? createElement(Text, { dimColor: true, wrap: 'truncate-end' }, '  loading models…')
-      : undefined,
-    error !== undefined
-      ? createElement(Text, { color: inkColor(TUI_RGB.error), wrap: 'truncate-end' }, truncateColumns(`  ${displayText(error)}`, viewport.contentColumns))
-      : undefined,
+    createElement(PanelGap, { visible: viewport.gapRows > 0 }),
+    ...stateRows,
     ...visible.map((row) => {
       const index = rows.indexOf(row)
       const label = displayText(`${row.providerName} · ${row.modelName}`)
@@ -947,7 +1001,8 @@ function ModelPanel({ directory, error, onSelect, onClose }: {
         truncateColumns(`${index === cursor ? '❯ ' : '  '}${label}`, viewport.contentColumns),
       )
     }),
-    createElement(Text, { dimColor: true, wrap: 'truncate-end' }, dim(truncateColumns('↑↓ move · pgup/pgdn page · g/G ends · enter select · esc/q close', viewport.contentColumns))),
+    createElement(PanelGap, { visible: viewport.gapRows > 0 }),
+    createElement(Text, { dimColor: true, wrap: 'truncate-end' }, dim(truncateColumns('↑↓ move · pgup/pgdn page · g/G ends · enter select · r retry · esc/q close', viewport.contentColumns))),
   )
 }
 
@@ -956,17 +1011,19 @@ function ModelPanel({ directory, error, onSelect, onClose }: {
  * commands, the live registry commands, and the user-invocable skills — the
  * real command surface, replacing the one-line notice.
  */
-function HelpPanel({ descriptors, skills, onClose }: {
+function HelpPanel({ descriptors, skills, commandError, skillError, onClose }: {
   descriptors: readonly CommandDescriptor[]
   skills: readonly SkillRow[]
+  commandError: string | undefined
+  skillError: string | undefined
   onClose(): void
 }): ReactElement {
   const stdout = useStdout().stdout
   const columns = stdout?.columns ?? 80
   const viewport = panelViewport(columns, stdout?.rows ?? 30)
   const [scroll, setScroll] = useState(0)
-  const nameWidth = 18
-  const descBudget = Math.max(1, viewport.contentColumns - nameWidth - 2)
+  const nameWidth = Math.min(18, Math.max(1, viewport.contentColumns - 2))
+  const descBudget = Math.max(0, viewport.contentColumns - nameWidth - 2)
   const row = (label: string, description: string): ReactElement => createElement(
     Text,
     { dimColor: true, wrap: 'truncate-end' },
@@ -979,7 +1036,15 @@ function HelpPanel({ descriptors, skills, onClose }: {
     createElement(Text, { key: 'key-inspector', dimColor: true, wrap: 'truncate-end' }, '  ctrl+o history details · ctrl+r thinking · shift+tab permission preset'),
     createElement(Text, { key: 'key-cancel', dimColor: true, wrap: 'truncate-end' }, '  esc interrupt the running turn · ctrl+c cancel / clear / quit · ctrl+d exit'),
     createElement(Text, { key: 'key-edit', dimColor: true, wrap: 'truncate-end' }, '  ctrl+k cut to end of line · ctrl+u clear line · ctrl+a / ctrl+e line ends'),
+    createElement(Text, { key: 'commands-gap' }, ' '),
     createElement(Text, { key: 'commands-title', bold: true, wrap: 'truncate-end' }, ' commands'),
+    ...(commandError === undefined
+      ? []
+      : [createElement(
+        Text,
+        { key: 'commands-error', color: inkColor(TUI_RGB.error), wrap: 'truncate-end' },
+        truncateColumns(`  command catalog unavailable: ${singleLineText(commandError)}`, viewport.contentColumns),
+      )]),
     createElement(Box, { key: 'local-help' }, row('/help', 'show this overlay')),
     createElement(Box, { key: 'local-model' }, row('/model', 'switch the model')),
     createElement(Box, { key: 'local-clear' }, row('/clear', 'clear the screen')),
@@ -991,7 +1056,19 @@ function HelpPanel({ descriptors, skills, onClose }: {
       { key: `command-${descriptor.name}`, dimColor: true, wrap: 'truncate-end' },
       `  ${padColumns(`/${descriptor.name}`, nameWidth)}${dim(truncateColumns(displayText(descriptor.description), descBudget))}`,
     )),
-    ...(skills.length === 0 ? [] : [createElement(Text, { key: 'skills-title', bold: true, wrap: 'truncate-end' }, ' skills')]),
+    ...(skills.length === 0 && skillError === undefined
+      ? []
+      : [
+          createElement(Text, { key: 'skills-gap' }, ' '),
+          createElement(Text, { key: 'skills-title', bold: true, wrap: 'truncate-end' }, ' skills'),
+        ]),
+    ...(skillError === undefined
+      ? []
+      : [createElement(
+        Text,
+        { key: 'skills-error', color: inkColor(TUI_RGB.error), wrap: 'truncate-end' },
+        truncateColumns(`  skill catalog unavailable: ${singleLineText(skillError)}`, viewport.contentColumns),
+      )]),
     ...skills.map(skill => createElement(
       Text,
       { key: `skill-${skill.name}`, dimColor: true, wrap: 'truncate-end' },
@@ -1029,7 +1106,9 @@ function HelpPanel({ descriptors, skills, onClose }: {
     Box,
     { flexDirection: 'column', paddingX: 1, borderStyle: 'round', borderColor: inkColor(TUI_RGB.brand) },
     createElement(Text, { color: inkColor(TUI_RGB.brand), bold: true, wrap: 'truncate-end' }, truncateColumns(`/help — keys and commands · rows ${content.length === 0 ? 0 : visibleScroll + 1}-${Math.min(content.length, visibleScroll + viewport.bodyRows)}/${content.length}`, viewport.contentColumns)),
+    createElement(PanelGap, { visible: viewport.gapRows > 0 }),
     ...content.slice(visibleScroll, visibleScroll + viewport.bodyRows),
+    createElement(PanelGap, { visible: viewport.gapRows > 0 }),
     createElement(Text, { dimColor: true, wrap: 'truncate-end' }, dim(truncateColumns('↑↓ scroll · pgup/pgdn page · g/G ends · esc/q close', viewport.contentColumns))),
   )
 }
@@ -1179,6 +1258,7 @@ function VerbosePanel({ entries, onClose }: { entries: readonly TranscriptEntry[
       { color: inkColor(TUI_RGB.brand), bold: true, wrap: 'truncate-end' },
       truncateColumns(title, viewport.contentColumns),
     ),
+    createElement(PanelGap, { visible: viewport.gapRows > 0 }),
     createElement(
       Box,
       { flexDirection: 'column' },
@@ -1186,6 +1266,7 @@ function VerbosePanel({ entries, onClose }: { entries: readonly TranscriptEntry[
         ? createElement(Text, { dimColor: true }, '  no durable entries yet')
         : createElement(StyledRows, { lines: visible }),
     ),
+    createElement(PanelGap, { visible: viewport.gapRows > 0 }),
     createElement(
       Text,
       { dimColor: true, wrap: 'truncate-end' },
@@ -1284,16 +1365,19 @@ function CompletionMenu({ active, mention, index, rows }: {
   const columns = stdout?.columns ?? 80
   const terminalRows = stdout?.rows ?? 30
   if (!active) return undefined
-  const nameWidth = Math.min(18, Math.max(0, ...rows.map(row => visibleColumns(row.label))) + 2)
-  const descBudget = Math.max(24, columns - nameWidth - 8)
+  const contentColumns = Math.max(1, columns - 4)
+  const nameWidth = Math.min(18, Math.max(1, contentColumns - 2), Math.max(0, ...rows.map(row => visibleColumns(row.label))) + 2)
+  const descBudget = Math.max(0, contentColumns - nameWidth - 2)
   const showFooter = terminalRows >= 12
-  const limit = Math.max(1, Math.min(6, terminalRows - (showFooter ? 11 : 10)))
+  const spacious = terminalRows >= 14
+  const verticalPadding = spacious ? 1 : 0
+  const limit = Math.max(1, Math.min(6, terminalRows - (showFooter ? 11 : 10) - verticalPadding * 2))
   const selected = rows.length === 0 ? 0 : index % rows.length
   const first = selectionWindow(selected, rows.length, limit)
   const visible = rows.slice(first, first + limit)
   return createElement(
     Box,
-    { flexDirection: 'column', marginLeft: 2 },
+    { flexDirection: 'column', marginLeft: 2, paddingY: verticalPadding },
     ...(rows.length === 0
       ? [createElement(Text, { key: 'loading', dimColor: true }, 'searching…')]
       : visible.map((candidate, at) => {
@@ -1318,7 +1402,7 @@ function CompletionMenu({ active, mention, index, rows }: {
  * While a modal (approval / question / model panel) owns the keys, the
  * box passes every key through untouched.
  */
-function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openHelp, notify, toggleReasoning, openVerbose, clearView, refresh, loadMentions, cyclePermission, exportTranscript, renameTitle }: {
+function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openHelp, notify, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, cyclePermission, exportTranscript, renameTitle }: {
   active: boolean
   frozen: boolean
   busy: boolean
@@ -1330,7 +1414,9 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   quit(): void
   openModel(): void
   openHelp(): void
-  notify(text: string): void
+  notify(text: string, tone?: NoticeTone): void
+  hasNotice: boolean
+  dismissNotice(): void
   toggleReasoning(): void
   openVerbose(): void
   clearView(): void
@@ -1347,6 +1433,7 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   const historyIndex = useRef<number | null>(null)
   const draft = useRef('')
   const [completionIndex, setCompletionIndex] = useState(0)
+  const [dismissedMenuValue, setDismissedMenuValue] = useState<string | undefined>(undefined)
   const candidates = completionCandidates(value, descriptors, skills)
   const slashActive = candidates.length > 0 && value.startsWith('/') && !value.includes(' ') && !value.includes('\n')
 
@@ -1405,7 +1492,10 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
     }
   }, [active, mentionActive, mentionToken?.query])
 
-  const menuActive = (slashActive || mentionActive || pathActive) && !busy
+  // Codex routes keys to the topmost surface first. Completion therefore
+  // remains available while a turn runs, and Esc dismisses it before the
+  // same key is allowed to interrupt the turn.
+  const menuActive = (slashActive || mentionActive || pathActive) && dismissedMenuValue !== value
   const menuRows: readonly CompletionCandidate[] = mentionActive
     ? mentionRows.map(row => ({
       label: row.label.startsWith('@')
@@ -1427,8 +1517,12 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
     if (!active) return
     // Shift+Tab cycles the permission preset (Claude-Code convention).
     if (key.tab && key.shift) {
-      const next = cyclePermission()
-      if (next !== '') notify(`permission → ${next}`)
+      try {
+        const next = cyclePermission()
+        if (next !== '') notify(`permission → ${next}`)
+      } catch (error: unknown) {
+        notify(`permission change failed: ${error instanceof Error ? error.message : String(error)}`, 'error')
+      }
       return
     }
     // Ctrl+R toggles the thinking display (Claude-Code reasoning fold).
@@ -1453,17 +1547,26 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
         setValue('')
         setCursor(0)
         setCompletionIndex(0)
+        setDismissedMenuValue(undefined)
       } else {
         quit()
       }
       return
     }
     if (key.ctrl && input === 'd') {
-      if (busy) notify('cancel the running turn before exiting (Esc or Ctrl+C)')
+      if (busy) notify('cancel the running turn before exiting (Esc or Ctrl+C)', 'warning')
       else quit()
       return
     }
     if (key.escape) {
+      if (menuActive) {
+        setDismissedMenuValue(value)
+        return
+      }
+      if (hasNotice) {
+        dismissNotice()
+        return
+      }
       if (busy) interrupt()
       return
     }
@@ -1474,13 +1577,16 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
       if (key.meta || (key.ctrl && input === 'j')) {
         setValue(value.slice(0, cursor) + '\n' + value.slice(cursor))
         setCursor(cursor + 1)
+        setDismissedMenuValue(undefined)
         return
       }
       const text = value.trim()
       setValue('')
       setCursor(0)
       setCompletionIndex(0)
+      setDismissedMenuValue(undefined)
       if (text === '') return
+      dismissNotice()
       history.current = [...history.current, text]
       historyIndex.current = null
       if (text === '/quit') {
@@ -1497,6 +1603,7 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
         // store resets so the rebuilt transcript starts empty.
         refresh()
         clearView()
+        dismissNotice()
         return
       }
       if (text === '/export' || text.startsWith('/export ')) {
@@ -1504,7 +1611,13 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
         return
       }
       if (text === '/title' || text.startsWith('/title ')) {
-        notify(renameTitle(text.slice(7)))
+        const outcome = renameTitle(text.slice(7))
+        const tone: NoticeTone = outcome.startsWith('rename failed:')
+          ? 'error'
+          : outcome.startsWith('usage:') || outcome.includes('unavailable')
+            ? 'warning'
+            : 'info'
+        notify(outcome, tone)
         return
       }
       if (text === '/model' || text.startsWith('/model ')) {
@@ -1537,6 +1650,7 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
       historyIndex.current = next
       setValue(entries[next] ?? '')
       setCursor((entries[next] ?? '').length)
+      setDismissedMenuValue(undefined)
       return
     }
     if (key.downArrow) {
@@ -1547,11 +1661,13 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
         historyIndex.current = null
         setValue(draft.current)
         setCursor(draft.current.length)
+        setDismissedMenuValue(undefined)
         return
       }
       historyIndex.current = next
       setValue(entries[next] ?? '')
       setCursor((entries[next] ?? '').length)
+      setDismissedMenuValue(undefined)
       return
     }
     if (key.tab && menuActive) {
@@ -1583,6 +1699,7 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
         }
       }
       setCompletionIndex(0)
+      setDismissedMenuValue(undefined)
       return
     }
     if (key.backspace || key.delete) {
@@ -1590,6 +1707,7 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
         setValue(value.slice(0, cursor - 1) + value.slice(cursor))
         setCursor(cursor - 1)
         setCompletionIndex(0)
+        setDismissedMenuValue(undefined)
       }
       return
     }
@@ -1604,11 +1722,13 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
     if (key.ctrl && input === 'u') {
       setValue('')
       setCursor(0)
+      setDismissedMenuValue(undefined)
       return
     }
     // Readline parity: Ctrl+K cuts from the cursor to the end of the line.
     if (key.ctrl && input === 'k') {
       setValue(value.slice(0, cursor))
+      setDismissedMenuValue(undefined)
       return
     }
     // Ctrl+L refreshes the screen (readline convention): raw ANSI clear
@@ -1630,6 +1750,7 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
       setValue(value.slice(0, cursor) + input + value.slice(cursor))
       setCursor(cursor + input.length)
       setCompletionIndex(0)
+      setDismissedMenuValue(undefined)
     }
   })
 
@@ -1694,19 +1815,24 @@ export function App(props: AppProps): ReactElement {
   const [modelOpen, setModelOpen] = useState(false)
   const [directory, setDirectory] = useState<ModelDirectory | undefined>(undefined)
   const [modelError, setModelError] = useState<string | undefined>(undefined)
-  const [notices, setNotices] = useState<readonly string[]>([])
-  const notify = (text: string): void => {
-    setNotices(current => [...current, text])
-  }
+  const [modelLoadEpoch, setModelLoadEpoch] = useState(0)
+  const [notice, setNotice] = useState<{ text: string; tone: NoticeTone } | undefined>(undefined)
+  const notify = useCallback((text: string, tone: NoticeTone = 'info'): void => {
+    setNotice({ text, tone })
+  }, [])
 
   useEffect(() => {
     props.onBridgeReady({ notify })
   }, [])
   useEffect(() => {
-    if (!modelOpen || directory !== undefined) return
+    if (!modelOpen) return
     let cancelled = false
+    setDirectory(undefined)
     setModelError(undefined)
-    props.loadModels().then((loaded) => {
+    // Enter the promise chain before invoking the loader so a provider that
+    // throws synchronously becomes an in-panel error instead of escaping the
+    // React effect and tearing down Ink.
+    Promise.resolve().then(() => props.loadModels()).then((loaded) => {
       if (!cancelled) setDirectory(loaded)
     }, (error: unknown) => {
       if (!cancelled) setModelError(error instanceof Error ? error.message : String(error))
@@ -1714,7 +1840,7 @@ export function App(props: AppProps): ReactElement {
     return () => {
       cancelled = true
     }
-  }, [modelOpen])
+  }, [modelOpen, modelLoadEpoch, props.loadModels])
 
   const busy = view.busy
   const [showReasoning, setShowReasoning] = useState(false)
@@ -1755,10 +1881,14 @@ export function App(props: AppProps): ReactElement {
     const rows: ReactElement[] = [createElement(Header, { key: 'header', resumed: props.resumed })]
     view.entries.slice(0, settled).forEach((entry, index) => {
       const row = createElement(EntryLine, { entry, showReasoning, verbose: false })
-      if (entry.kind === 'user' && index > 0) {
-        rows.push(createElement(Box, { key: `gap-${index}`, paddingX: 1 }, createElement(Text, null, ' ')))
+      const roomyPrompt = entry.kind === 'user' && !entry.notice
+      if (roomyPrompt) {
+        rows.push(createElement(Box, { key: `prompt-before-${index}`, paddingX: 1 }, createElement(Text, null, ' ')))
       }
       rows.push(createElement(Box, { key: index, paddingX: 1 }, row))
+      if (roomyPrompt) {
+        rows.push(createElement(Box, { key: `prompt-after-${index}`, paddingX: 1 }, createElement(Text, null, ' ')))
+      }
     })
     return rows
   }, [view.entries, settled, showReasoning, props.resumed])
@@ -1803,7 +1933,8 @@ export function App(props: AppProps): ReactElement {
   }, [appStdout])
   const terminalRows = terminalSize.rows
   const terminalColumns = terminalSize.columns
-  const dynamicRows = Math.max(1, terminalRows - 12)
+  const composerGutterRows = layoutGutterRows(terminalRows)
+  const dynamicRows = Math.max(1, terminalRows - 12 - composerGutterRows)
   const streamingActive = view.streaming !== '' || view.streamingReasoning !== ''
   const deepDivingVisible = busy && !streamingActive
   const allLiveLines = useMemo(
@@ -1880,9 +2011,16 @@ export function App(props: AppProps): ReactElement {
         directory,
         error: modelError,
         onSelect: (row: ModelRow) => {
-          setModelLabel(props.selectModel(row))
-          notify(`model → next step uses ${row.provider}/${row.model}`)
-          setModelOpen(false)
+          try {
+            setModelLabel(props.selectModel(row))
+            notify(`model → next step uses ${row.provider}/${row.model}`)
+            setModelOpen(false)
+          } catch (error: unknown) {
+            notify(`model switch failed: ${error instanceof Error ? error.message : String(error)}`, 'error')
+          }
+        },
+        onRetry: () => {
+          setModelLoadEpoch(epoch => epoch + 1)
         },
         onClose: () => {
           setModelOpen(false)
@@ -1893,6 +2031,8 @@ export function App(props: AppProps): ReactElement {
       ? createElement(HelpPanel, {
         descriptors,
         skills,
+        commandError: props.commands.error,
+        skillError: props.skills.error,
         onClose: () => {
           setHelpOpen(false)
         },
@@ -1904,19 +2044,19 @@ export function App(props: AppProps): ReactElement {
         onClose: closeInspector,
       })
       : undefined,
-    transcriptVisible
-      ? createElement(
-        Box,
-        { flexDirection: 'column' },
-        ...notices.slice(-1).map((notice, index) => createElement(Text, { key: index, dimColor: true, wrap: 'truncate-end' }, displayText(notice))),
-      )
-      : undefined,
+    notice === undefined
+      ? undefined
+      : createElement(NoticeLine, {
+        text: notice.text,
+        tone: notice.tone,
+        columns: terminalColumns,
+      }),
     // Persistent bottom chrome: every interface owns exactly the same
     // composer/status geometry. Panels may change above it, but can no longer
     // reorder the status or introduce mode-specific vertical margins.
     createElement(
       Box,
-      { flexDirection: 'column' },
+      { flexDirection: 'column', marginTop: composerGutterRows },
       createElement(Input, {
         active: inputActive,
         frozen: modalVisible,
@@ -1928,12 +2068,18 @@ export function App(props: AppProps): ReactElement {
         interrupt: props.interrupt,
         quit: props.quit,
         openModel: () => {
+          setDirectory(undefined)
+          setModelError(undefined)
           setModelOpen(true)
         },
         openHelp: () => {
           setHelpOpen(true)
         },
         notify,
+        hasNotice: notice !== undefined,
+        dismissNotice: () => {
+          setNotice(undefined)
+        },
         openVerbose: () => {
           setVerboseOpen(true)
         },

@@ -166,10 +166,17 @@ const ORDERED = /^\s*(\d+)[.)]\s+(.*)$/u
 /** Render markdown text into styled lines of at most `width` columns. */
 export function renderMarkdown(text: string, width: number): readonly MdLine[] {
   const lines: MdLine[] = []
+  let separatorPending = false
   const push = (segments: readonly MdSegment[]): void => {
     for (const wrapped of wrapSegments(segments, Math.max(10, width))) {
       lines.push({ segments: merge(wrapped) })
     }
+  }
+  const startBlock = (): void => {
+    if (separatorPending && lines.length > 0 && lines.at(-1)?.segments.length !== 0) {
+      lines.push({ segments: [] })
+    }
+    separatorPending = false
   }
   const raw = text.replaceAll('\r', '')
   const source = raw.split('\n')
@@ -177,6 +184,14 @@ export function renderMarkdown(text: string, width: number): readonly MdLine[] {
   while (index < source.length) {
     const line = source[index] ?? ''
     index += 1
+
+    // Preserve one deliberate row between source blocks. Repeated blank
+    // lines collapse, and leading/trailing whitespace never grows output.
+    if (line.trim() === '') {
+      separatorPending = lines.length > 0
+      continue
+    }
+    startBlock()
 
     // Fenced code block: verbatim lines in code style, language label first.
     const fence = FENCE.exec(line)
@@ -191,7 +206,6 @@ export function renderMarkdown(text: string, width: number): readonly MdLine[] {
       continue
     }
 
-    if (line.trim() === '') continue
     if (RULE.test(line.trim())) {
       push([seg(`  ${'─'.repeat(Math.max(1, Math.floor(width / 4)))}`, 'dim')])
       continue

@@ -24,6 +24,18 @@ describe('renderMarkdown', () => {
     expect(text(renderMarkdown('first\nsecond', 80))).toEqual(['first second'])
   })
 
+  it('preserves one breathing row between paragraphs', () => {
+    expect(text(renderMarkdown('first paragraph\n\n\nsecond paragraph', 80))).toEqual([
+      'first paragraph',
+      '',
+      'second paragraph',
+    ])
+  })
+
+  it('does not add leading or trailing spacer rows', () => {
+    expect(text(renderMarkdown('\n\nfirst paragraph\n\n', 80))).toEqual(['first paragraph'])
+  })
+
   it('styles headings as accent', () => {
     const [line] = renderMarkdown('## Release notes', 80)
     expect(text([line!])).toEqual(['Release notes'])
@@ -57,7 +69,7 @@ describe('renderMarkdown', () => {
 
   it('renders unordered and ordered lists with accent bullets', () => {
     const lines = renderMarkdown('- one\n- two\n\n1. first\n2. second', 80)
-    expect(text(lines)).toEqual(['  • one', '  • two', '  1. first', '  2. second'])
+    expect(text(lines)).toEqual(['  • one', '  • two', '', '  1. first', '  2. second'])
     expect(lines[0]?.segments[0]?.style).toBe('accent')
   })
 

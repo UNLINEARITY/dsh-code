@@ -8,6 +8,7 @@ import {
   moveScroll,
   revealRow,
   selectionWindow,
+  layoutGutterRows,
 } from '../src/render/inspector.ts'
 
 describe('inspectorViewport', () => {
@@ -21,10 +22,17 @@ describe('inspectorViewport', () => {
   it('reserves the border, title, and footer outside the entry body', () => {
     expect(inspectorViewport(100, 24)).toEqual({
       maxHeight: 12,
-      bodyRows: 8,
+      bodyRows: 6,
+      gapRows: 2,
       contentColumns: 96,
       compact: false,
     })
+  })
+
+  it('collapses decorative spacing before short terminals run out of rows', () => {
+    expect(layoutGutterRows(24)).toBe(1)
+    expect(layoutGutterRows(13)).toBe(0)
+    expect(inspectorViewport(80, 14).gapRows).toBe(0)
   })
 
   it('falls back to a one-line view before borders become invalid', () => {

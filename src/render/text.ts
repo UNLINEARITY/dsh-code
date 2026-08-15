@@ -23,12 +23,9 @@ export function displayText(text: string): string {
   return text.replace(CONTROL_ESCAPE, char => `\\x${char.charCodeAt(0).toString(16).padStart(2, '0')}`)
 }
 
-/** A display-safe suffix bounded by terminal rows and columns. */
-export interface DisplayTail {
-  /** Sanitized suffix suitable for direct terminal rendering. */
-  text: string
-  /** Whether content before the returned suffix was omitted. */
-  truncated: boolean
+/** Collapse external text to one terminal-safe logical row. */
+export function singleLineText(text: string): string {
+  return displayText(text).replace(/\r?\n/gu, ' ↵ ').replace(/\t/gu, '  ')
 }
 
 /** Terminal-cell width matching the TUI's existing CJK-aware wrapping rule. */
@@ -38,6 +35,37 @@ function cellWidth(text: string): number {
     columns += (char.codePointAt(0) ?? 0) > 0x2e7f ? 2 : 1
   }
   return columns
+}
+
+/**
+ * Truncate one display-safe row without ever exceeding its physical-column
+ * budget. The ellipsis is included inside the budget, matching Codex's popup
+ * truncation contract; the previous app-local helper appended it after the
+ * row was already full and could force an extra terminal wrap.
+ */
+export function truncateColumns(text: string, columns: number): string {
+  const limit = Math.max(0, Math.floor(columns))
+  if (limit === 0) return ''
+  if (cellWidth(text) <= limit) return text
+
+  const contentLimit = limit - 1
+  let used = 0
+  let result = ''
+  for (const char of text) {
+    const width = cellWidth(char)
+    if (used + width > contentLimit) break
+    result += char
+    used += width
+  }
+  return `${result}…`
+}
+
+/** A display-safe suffix bounded by terminal rows and columns. */
+export interface DisplayTail {
+  /** Sanitized suffix suitable for direct terminal rendering. */
+  text: string
+  /** Whether content before the returned suffix was omitted. */
+  truncated: boolean
 }
 
 /** Read one Unicode character immediately before `end`. */

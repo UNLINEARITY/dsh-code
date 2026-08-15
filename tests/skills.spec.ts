@@ -102,5 +102,21 @@ describe('watchSkills', () => {
     fireChange()
     await new Promise(resolve => setImmediate(resolve))
     expect(view.rows).toHaveLength(1)
+    expect(view.error).toBe('watcher offline')
+  })
+
+  it('contains a synchronous catalog failure', async () => {
+    const { ctx, fireChange } = harness([summary('alpha', true, true)])
+    const registry = (ctx as unknown as { get(name: string): unknown }).get('skills') as {
+      list: () => Promise<readonly SkillSummary[]>
+    }
+    const view = watchSkills(ctx)
+    view.setAgent(agent)
+    await new Promise(resolve => setImmediate(resolve))
+    registry.list = () => { throw new Error('watcher exploded') }
+    fireChange()
+    await new Promise(resolve => setImmediate(resolve))
+    expect(view.rows).toHaveLength(1)
+    expect(view.error).toBe('watcher exploded')
   })
 })

@@ -33,6 +33,13 @@ describe('styled terminal lines', () => {
     expect(text).toContain('answer-79')
   })
 
+  it('keeps markdown paragraph separators as one physical scroll row', () => {
+    const entry: TranscriptEntry = { kind: 'assistant', reasoning: '', text: 'first\n\nsecond' }
+    const lines = transcriptEntryLines(entry, 40)
+    expect(lines).toHaveLength(3)
+    expect(lines[1]?.segments).toEqual([])
+  })
+
   it('does not impose the old forty-row display cap on retained raw tool output', () => {
     const raw = Array.from({ length: 60 }, (_, index) => `tool-${index}`).join('\n')
     const entry: TranscriptEntry = {

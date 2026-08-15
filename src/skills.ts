@@ -28,6 +28,8 @@ export interface SkillRow {
 export interface SkillsView {
   /** Name-sorted user-invocable rows; empty until the first load lands. */
   readonly rows: readonly SkillRow[]
+  /** Latest catalog-read failure; the help panel exposes it in place. */
+  readonly error?: string
   /** Subscribe to catalog changes; returns the unsubscribe function. */
   subscribe(listener: () => void): () => void
   /** Retarget the agent whose workspace the catalog is read for. */
@@ -63,21 +65,29 @@ export function watchSkills(ctx: Context): SkillsWatch {
   const skills = ctx.get('skills')
   let agent: Agent | undefined
   let rows: readonly SkillRow[] = []
+  let error: string | undefined
   const listeners = new Set<() => void>()
 
   const reload = (): void => {
-    if (skills === undefined || agent === undefined) return
-    skills.list({
-      cwd: agent.session.header.cwd,
-      scope: agent,
-    }).then((summaries: readonly SkillSummary[]) => {
+    const currentAgent = agent
+    if (skills === undefined || currentAgent === undefined) return
+    Promise.resolve().then(() => skills.list({
+      cwd: currentAgent.session.header.cwd,
+      scope: currentAgent,
+    })).then((summaries: readonly SkillSummary[]) => {
       const next = toRows(summaries)
-      if (next.length === rows.length && next.every((row, index) => row.name === rows[index]?.name)) return
+      const unchanged = next.length === rows.length && next.every((row, index) => row.name === rows[index]?.name)
       rows = next
+      const recovered = error !== undefined
+      error = undefined
+      if (unchanged && !recovered) return
       for (const listener of listeners) listener()
-    }, () => {
+    }).catch((cause: unknown) => {
       // Discovery failure keeps the last good rows; the next skills/change
       // notification is the retry surface (mirrors the web directory).
+      rows = [...rows]
+      error = cause instanceof Error ? cause.message : String(cause)
+      for (const listener of listeners) listener()
     })
   }
 
@@ -88,6 +98,9 @@ export function watchSkills(ctx: Context): SkillsWatch {
   const view: SkillsWatch = {
     get rows(): readonly SkillRow[] {
       return rows
+    },
+    get error(): string | undefined {
+      return error
     },
     subscribe(listener: () => void): () => void {
       listeners.add(listener)

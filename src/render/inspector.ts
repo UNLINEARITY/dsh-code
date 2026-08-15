@@ -6,14 +6,21 @@ export interface InspectorViewport {
   maxHeight: number
   /** Rows available to the selected entry after border, title, and footer. */
   bodyRows: number
+  /** Optional blank rows separating title/body/footer on roomy terminals. */
+  gapRows: 0 | 2
   /** Columns available inside the horizontal border and padding. */
   contentColumns: number
   /** Tiny terminals use a borderless one-line close hint. */
   compact: boolean
 }
 
-/** The three-row read-only composer frame plus its one-row status footer. */
-const INSPECTOR_CHROME_ROWS = 4
+/** Composer/status chrome plus one optional, fixed-height local notice row. */
+const INSPECTOR_CHROME_ROWS = 5
+
+/** One transcript-to-composer gutter, collapsed on short terminals. */
+export function layoutGutterRows(rows: number): 0 | 1 {
+  return Math.max(1, Math.floor(rows)) >= 14 ? 1 : 0
+}
 
 /**
  * Keep the inspector plus its persistent status/composer chrome below
@@ -27,13 +34,15 @@ export function panelViewport(columns: number, rows: number): InspectorViewport 
   // scrollback into a tall dynamic panel. A one-row margin is insufficient:
   // the transition can still take the full-terminal rewrite path at rows - 1.
   const maxHeight = Math.max(0, Math.min(
-    safeRows - 2 - INSPECTOR_CHROME_ROWS,
+    safeRows - 2 - INSPECTOR_CHROME_ROWS - layoutGutterRows(safeRows),
     Math.floor(safeRows / 2),
   ))
   const compact = maxHeight < 5 || safeColumns < 8
+  const gapRows = !compact && maxHeight >= 7 ? 2 : 0
   return {
     maxHeight,
-    bodyRows: compact ? 0 : maxHeight - 4,
+    bodyRows: compact ? 0 : maxHeight - 4 - gapRows,
+    gapRows,
     contentColumns: compact ? Math.max(1, safeColumns - 1) : Math.max(1, safeColumns - 4),
     compact,
   }

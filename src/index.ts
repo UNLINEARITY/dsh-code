@@ -29,7 +29,7 @@ import type {} from '@deepseek-ai/dsh-session-title'
 // and the cmdline Context merge for the appExit host value.
 import type {} from '@deepseek-ai/cordis-plugin-loader'
 import type {} from '@deepseek-ai/dsh-cmdline'
-import { App } from './app.ts'
+import { App, type NoticeTone } from './app.ts'
 import { mountApprovalAnswerer, type ApprovalStore } from './approval.ts'
 import { isSlashLine, watchCommands, type CommandsView } from './commands.ts'
 import { internals, type TuiMount } from './internals.ts'
@@ -149,7 +149,7 @@ function approvalCommandPreview(events: readonly { kind: string }[], callId: str
 /** The runner's connection between the React app and the process side. */
 interface AppBridge {
   /** Post one local notice line (feedback the transcript does not carry). */
-  notify(text: string): void
+  notify(text: string, tone?: NoticeTone): void
 }
 
 /**
@@ -291,22 +291,26 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   const runSlash = (line: string): void => {
     const registry = ctx.get('commands')
     if (registry === undefined) {
-      bridge.notify('no command registry is mounted in this composition')
+      bridge.notify('no command registry is mounted in this composition', 'error')
       return
     }
     const controller = new AbortController()
-    void registry.execute(agent, line, controller.signal).then((execution) => {
+    void Promise.resolve().then(() => registry.execute(agent, line, controller.signal)).then((execution) => {
       if (execution === undefined) {
         // No command owns this line: send it verbatim so a user-invocable
         // skill gesture (`/skill-name`) reaches the host's tool-skill
         // pre-step injection — the web composer's same fall-through.
-        agent.followup(createUserMessage({
-          content: [{ type: 'text', text: line }],
-          source: { kind: 'user' },
-        }))
+        try {
+          agent.followup(createUserMessage({
+            content: [{ type: 'text', text: line }],
+            source: { kind: 'user' },
+          }))
+        } catch (error: unknown) {
+          bridge.notify(`command fallback failed: ${error instanceof Error ? error.message : String(error)}`, 'error')
+        }
       }
     }, (error: unknown) => {
-      bridge.notify(`command failed: ${error instanceof Error ? error.message : String(error)}`)
+      bridge.notify(`command failed: ${error instanceof Error ? error.message : String(error)}`, 'error')
     })
   }
 
@@ -325,23 +329,27 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     try {
       parsed = mentions.parse(line)
     } catch (error: unknown) {
-      bridge.notify(`invalid session reference: ${error instanceof Error ? error.message : String(error)}`)
+      bridge.notify(`invalid session reference: ${error instanceof Error ? error.message : String(error)}`, 'error')
       return
     }
     const deliver = (readable: string, context?: UserMessage): void => {
       // Session snapshots ride the inbox as model-facing context ahead of
       // the readable message (upstream README wiring: inject before the
       // followup/steer that wakes the driver).
-      if (context !== undefined) agent.inject(context)
-      const message = createUserMessage({
-        content: [{ type: 'text', text: readable }],
-        source: { kind: 'user' },
-      })
-      if (mode === 'steer') {
-        agent.steer(message)
-        bridge.notify('steering queued — the next step sees it')
-      } else {
-        agent.followup(message)
+      try {
+        if (context !== undefined) agent.inject(context)
+        const message = createUserMessage({
+          content: [{ type: 'text', text: readable }],
+          source: { kind: 'user' },
+        })
+        if (mode === 'steer') {
+          agent.steer(message)
+          bridge.notify('steering queued — the next step sees it')
+        } else {
+          agent.followup(message)
+        }
+      } catch (error: unknown) {
+        bridge.notify(`${mode === 'steer' ? 'steering' : 'message'} failed: ${error instanceof Error ? error.message : String(error)}`, 'error')
       }
     }
     if (parsed.references.length === 0) {
@@ -353,7 +361,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       deliver(prepared.text, prepared.additionalContext)
     }, (error: unknown) => {
       if (controller.signal.aborted) return
-      bridge.notify(`session reference failed: ${error instanceof Error ? error.message : String(error)}`)
+      bridge.notify(`session reference failed: ${error instanceof Error ? error.message : String(error)}`, 'error')
     })
   }
 
@@ -374,9 +382,14 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   /** Interrupt the running turn (Esc); true when a turn was actually cancelled. */
   const interrupt = (): boolean => {
     if (agent.status !== 'running') return false
-    agent.cancel({ kind: 'user' })
-    bridge.notify('turn cancelled — Ctrl+C or /quit to exit')
-    return true
+    try {
+      agent.cancel({ kind: 'user' })
+      bridge.notify('turn cancelled — Ctrl+C or /quit to exit')
+      return true
+    } catch (error: unknown) {
+      bridge.notify(`cancel failed: ${error instanceof Error ? error.message : String(error)}`, 'error')
+      return false
+    }
   }
 
   /**
@@ -393,14 +406,19 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       }
       | undefined
     if (service === undefined || service.names.length === 0) {
-      bridge.notify('permission presets are not mounted in this composition')
+      bridge.notify('permission presets are not mounted in this composition', 'warning')
       return ''
     }
     const at = service.names.indexOf(service.current(session.events))
     const next = service.names[(at + 1) % service.names.length] ?? ''
     if (next === '') return ''
-    service.set(session, next)
-    return next
+    try {
+      service.set(session, next)
+      return next
+    } catch (error: unknown) {
+      bridge.notify(`permission change failed: ${error instanceof Error ? error.message : String(error)}`, 'error')
+      return ''
+    }
   }
 
   /** Apply one /model selection: takes effect from the next assembled step. */
@@ -427,7 +445,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       await writeFileAsync(target, `${markdown}\n`, 'utf8')
       bridge.notify(`exported to ${target}`)
     } catch (error: unknown) {
-      bridge.notify(`export failed: ${error instanceof Error ? error.message : String(error)}`)
+      bridge.notify(`export failed: ${error instanceof Error ? error.message : String(error)}`, 'error')
     }
   }
 
