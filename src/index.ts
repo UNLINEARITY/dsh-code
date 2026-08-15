@@ -523,6 +523,11 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       mentions = next.mentions
       commands.setAgent(agent)
       skills.setAgent(agent)
+      // The App mounts with a placeholder key until the first input; the
+      // key-change remount below must start from a clean screen or the ghost
+      // static header stays visible above the new one (same source-backed
+      // clear the session-switch path performs).
+      process.stdout.write('\x1b[r\x1b[0m\x1b[H\x1b[2J\x1b[3J\x1b[H')
       renderCurrent()
       const queued = pendingInputs.splice(0)
       for (const item of queued) deliverLine(item.text, item.mode)

@@ -635,19 +635,23 @@ export function projectEvents(events: readonly SessionEvent[]): TranscriptView {
 }
 
 /**
- * How many leading transcript entries can never change again: only a
- * `running` tool or retry can still mutate in place — everything before the
- * first one (including a completed tail: later events only APPEND new rows)
- * is final. The renderer currently draws the whole transcript dynamically
- * (a `<Static>` flush proved unstable with CJK wrapping on real terminals);
- * this boundary stays as the append-only contract for when flushing is
- * reintroduced.
+ * The append-only flush boundary for a transcript view: the count of entries
+ * no later event can remove. Entries at or beyond this index are mutable and
+ * must stay in the live tree.
+ *
+ * `pending` rows are excluded even though they are not a running tool/retry:
+ * the inbox claims or cancels them durably (`agent/inbox/spliced` removals,
+ * `user/message` retirement), and an append-only `<Static>` flush cannot
+ * erase a row that vanishes from the view — the retired row would ghost on
+ * screen until the next source-backed replay. Everything else (including a
+ * completed tail) is final: later events only APPEND new rows.
  * @param entries - the view's transcript entries in order.
  * @returns the count of entries safe to flush (0 for an empty transcript).
  */
 export function settledEntryCount(entries: readonly TranscriptEntry[]): number {
   for (let index = 0; index < entries.length; index++) {
     const entry = entries[index]
+    if (entry.kind === 'pending') return index
     if (entry.kind === 'tool' && entry.state === 'running') return index
     if (entry.kind === 'retry' && entry.state === 'running') return index
   }

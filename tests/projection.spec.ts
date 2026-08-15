@@ -647,4 +647,23 @@ describe('queued inbox projection', () => {
       text: 'a\nb  c',
     })
   })
+
+  it('keeps queued rows live so retirement never ghosts an append-only flush', () => {
+    const first = pendingMessage('first')
+    const second = pendingMessage('second')
+    // Everything before a pending row is final; the pending row and anything
+    // after it (the agent is still mutating the queue) stay live.
+    const queued = projectEvents([
+      spliceEvent('next-turn', 0, undefined, [first]),
+    ])
+    expect(settledEntryCount(queued.entries)).toBe(0)
+    // A durable user message retires the pending row: once the row is gone
+    // from the view, everything is final again.
+    const landed = projectEvent(queued, userMessageEvent(first))
+    expect(landed.entries).toEqual([{ kind: 'user', text: 'first', notice: false }])
+    expect(settledEntryCount(landed.entries)).toBe(1)
+    // A later message behind a still-queued one cannot flush past the queue.
+    const mixed = projectEvent(landed, spliceEvent('next-turn', 0, undefined, [second]))
+    expect(settledEntryCount(mixed.entries)).toBe(1)
+  })
 })
