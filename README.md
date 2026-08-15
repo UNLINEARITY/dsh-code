@@ -11,7 +11,7 @@ English | [中文](README.zh.md)
   <a href="https://github.com/UNLINEARITY/dsh-code/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/github/license/UNLINEARITY/dsh-code?label=License&amp;style=for-the-badge&amp;logo=opensourceinitiative&amp;color=4176E6&amp;labelColor=1c1917"></a>
 </p>
 
-<p align="center"><img src="src/pictures/1.png" width="95%" alt="DSH-Code terminal with slash-command completion"></p>
+<p align="center"><img src="docs/pictures/1.png" width="95%" alt="DSH-Code terminal with slash-command completion"></p>
 
 **DSH-Code is a terminal coding interface for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`).** It runs as an out-of-tree bundle over the official `@deepseek-ai/dsh-base` and uses the same Agent, Session, tool, command, skill, permission, sandbox, compaction, and plugin services as the Harness Web UI.
 
@@ -39,20 +39,30 @@ Requires Node `^22.19 || >=24`, the preview `dsh` CLI, and `DEEPSEEK_API_KEY`.
 
 ```sh
 npm install -g @deepseek-ai/dsh@next
-dsh plugin --profile cli add github:unlinearity/dsh-code
+npm install -g pnpm
+dsh plugin --profile cli add dsh-code
 dsh --profile cli
 ```
 
-Other installation sources:
+### Source development
+
+For a local checkout:
 
 ```sh
-dsh plugin --profile cli add dsh-code                 # npm package, once published
-dsh plugin --profile cli add file:C:/path/to/dsh-code # local checkout
+dsh plugin --profile cli add file:C:/path/to/dsh-code
 ```
 
-Git-hosted plugins build during installation. If pnpm blocks an install script, add the key printed by pnpm to `allowBuilds` in `~/.dsh/profiles/cli/pnpm-workspace.yaml`, then run the add command again.
+GitHub installation is available for source development:
+
+```sh
+dsh plugin --profile cli add github:unlinearity/dsh-code
+```
+
+The Git package builds during installation. If pnpm asks for an `allowBuilds` entry, copy the complete entry it prints into `~/.dsh/profiles/cli/pnpm-workspace.yaml`, then run the command again. The key includes the Git URL and commit, so do not replace it with only `dsh-code`.
 
 > DeepSeek Harness is currently a developer preview and may introduce compatibility-breaking changes. DSH-Code tracks that evolving plugin surface.
+
+For installation, native-module, and plugin-loading issues, see the [troubleshooting guide](docs/problems.md).
 
 ## How it works with DSH
 
@@ -98,11 +108,11 @@ Dynamic content is deliberately bounded. Streaming output, thinking, approvals, 
 
 Use `/mode` before the first turn to inspect or select the session's Agent Preset.
 
-<p align="center"><img src="src/pictures/2.png" width="95%" alt="Per-session Agent Preset picker"></p>
+<p align="center"><img src="docs/pictures/2.png" width="95%" alt="Per-session Agent Preset picker"></p>
 
 Use `/resume` to search persisted sessions without replacing the TUI.
 
-<p align="center"><img src="src/pictures/3.png" width="95%" alt="Searchable session resume picker"></p>
+<p align="center"><img src="docs/pictures/3.png" width="95%" alt="Searchable session resume picker"></p>
 
 ## Common commands
 

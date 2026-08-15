@@ -52,6 +52,7 @@
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "gen:whale": "tsx scripts/gen-whale-glyph.ts",
+    "prepare": "pnpm build",
     "prepublishOnly": "pnpm typecheck && pnpm test && pnpm build"
   },
   "engines": {

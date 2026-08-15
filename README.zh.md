@@ -10,7 +10,7 @@
   <a href="https://github.com/UNLINEARITY/dsh-code/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/github/license/UNLINEARITY/dsh-code?label=License&amp;style=for-the-badge&amp;logo=opensourceinitiative&amp;color=4176E6&amp;labelColor=1c1917"></a>
 </p>
 
-<p align="center"><img src="src/pictures/1.png" width="95%" alt="带斜杠命令补全的 DSH-Code 终端"></p>
+<p align="center"><img src="docs/pictures/1.png" width="95%" alt="带斜杠命令补全的 DSH-Code 终端"></p>
 
 **DSH-Code 是 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）的终端编码界面。** 它以树外 bundle 的形式组合在官方 `@deepseek-ai/dsh-base` 之上，与 Harness Web UI 使用同一套 Agent、Session、工具、命令、技能、权限、sandbox、上下文压缩与插件服务。
 
@@ -38,20 +38,30 @@ DSH-Code 保留这套结构，并补充适合编码任务的终端工作流。
 
 ```sh
 npm install -g @deepseek-ai/dsh@next
-dsh plugin --profile cli add github:unlinearity/dsh-code
+npm install -g pnpm
+dsh plugin --profile cli add dsh-code
 dsh --profile cli
 ```
 
-也可以使用其他安装来源：
+### 源码开发安装
+
+本地 checkout 可使用：
 
 ```sh
-dsh plugin --profile cli add dsh-code                 # npm 包，发布后可用
-dsh plugin --profile cli add file:C:/path/to/dsh-code # 本地仓库
+dsh plugin --profile cli add file:C:/path/to/dsh-code
 ```
 
-Git 插件会在安装阶段构建。若 pnpm 拦截安装脚本，请把 pnpm 输出的键加入 `~/.dsh/profiles/cli/pnpm-workspace.yaml` 的 `allowBuilds`，然后重新执行添加命令。
+GitHub 安装可用于源码开发：
+
+```sh
+dsh plugin --profile cli add github:unlinearity/dsh-code
+```
+
+Git 包会在安装阶段构建。若 pnpm 要求添加 `allowBuilds`，请把它输出的完整条目复制到 `~/.dsh/profiles/cli/pnpm-workspace.yaml`，再重新执行命令。该键包含 Git URL 与 commit，不能只写 `dsh-code`。
 
 > DeepSeek Harness 目前仍处于 developer preview，可能出现破坏兼容性的变化；DSH-Code 会持续跟随其插件接口演进。
+
+安装、原生模块和插件加载问题，请查看[常见问题与排障](docs/problems.md)。
 
 ## DSH-Code 如何接入 DSH
 
@@ -97,11 +107,11 @@ DSH-Code 在整个进程中只保留一个 Ink owner。`/new` 和 `/resume` 替�
 
 在第一次 turn 之前使用 `/mode`，查看或选择当前会话的 Agent Preset。
 
-<p align="center"><img src="src/pictures/2.png" width="95%" alt="每会话 Agent Preset 选择器"></p>
+<p align="center"><img src="docs/pictures/2.png" width="95%" alt="每会话 Agent Preset 选择器"></p>
 
 使用 `/resume` 搜索持久会话，无需重新启动 TUI。
 
-<p align="center"><img src="src/pictures/3.png" width="95%" alt="可搜索的会话恢复选择器"></p>
+<p align="center"><img src="docs/pictures/3.png" width="95%" alt="可搜索的会话恢复选择器"></p>
 
 ## 常用命令
 
