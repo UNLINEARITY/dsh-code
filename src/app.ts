@@ -365,16 +365,18 @@ function PanelGap({ visible }: { visible: boolean }): ReactElement | undefined {
 }
 
 /** One settled markdown document rendered as styled lines at the terminal width. */
-function MarkdownBody({ text }: { text: string }): ReactElement {
+function MarkdownBody({ text, indent = 0 }: { text: string; indent?: number }): ReactElement {
   const columns = useStdout().stdout?.columns ?? 80
   // Cached by (text, width): settled replies re-layout only when either moves.
+  // The indent participates in the wrap budget so padded replies never
+  // double-wrap inside the padded box.
   const lines = useMemo(
-    () => renderMarkdown(displayText(text), Math.max(20, columns - 2)),
-    [text, columns],
+    () => renderMarkdown(displayText(text), Math.max(20, columns - 2 - indent)),
+    [text, columns, indent],
   )
   return createElement(
     Box,
-    { flexDirection: 'column' },
+    { flexDirection: 'column', paddingLeft: indent },
     ...lines.map((line, index) => createElement(
       Text,
       { key: index },
@@ -461,7 +463,9 @@ function EntryLine({ entry, showReasoning, verbose }: { entry: TranscriptEntry; 
       // Claude-Code-style thinking: a dim ✻ marker collapsed, the reasoning
       // text dim-italic expanded (Ctrl+R toggles globally). The collapsed
       // row is static — an animated counter inside the text would jitter the
-      // line width every frame.
+      // line width every frame. The reply body carries the same two-column
+      // gutter as the composer, so reply text aligns with the input cursor
+      // (Codex LIVE_PREFIX alignment).
       return createElement(
         Box,
         { flexDirection: 'column' },
@@ -470,7 +474,7 @@ function EntryLine({ entry, showReasoning, verbose }: { entry: TranscriptEntry; 
           : showReasoning
             ? createElement(Text, { dimColor: true, italic: true }, `  ✻ ${displayText(entry.reasoning)}`)
             : createElement(Text, { dimColor: true }, `  ✻ Thinking (${entry.reasoning.length} chars, Ctrl+R to expand)`),
-        createElement(MarkdownBody, { text: entry.text }),
+        createElement(MarkdownBody, { text: entry.text, indent: 2 }),
       )
     case 'tool': {
       // Claude-Code-style tool card: the invocation row plus a nested ⎿
@@ -2336,7 +2340,9 @@ export function App(props: AppProps): ReactElement {
     transcriptVisible
       ? createElement(
         Box,
-        { flexDirection: 'column', paddingX: 1 },
+        // The two-column gutter matches the composer's border + padding, so
+        // message text aligns with the input cursor (Codex LIVE_PREFIX).
+        { flexDirection: 'column', paddingX: 2 },
         visibleLiveLines.length === 0 ? undefined : createElement(StyledRows, { lines: visibleLiveLines }),
         view.streamingReasoning !== '' && reasoningRows > 0
           ? createElement(StreamTail, {
@@ -2349,7 +2355,9 @@ export function App(props: AppProps): ReactElement {
         view.streaming !== '' && answerRows > 0
           ? createElement(
             StreamTail,
-            { text: view.streaming, dim: false, maxRows: answerRows },
+            // The same two-column gutter as settled replies: streamed text
+            // lands exactly where the assembled message will render.
+            { text: view.streaming, dim: false, maxRows: answerRows, prefix: '  ' },
             busy ? createElement(Caret) : undefined,
           )
           : undefined,

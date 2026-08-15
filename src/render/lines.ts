@@ -150,16 +150,20 @@ export function transcriptEntryLines(entry: TranscriptEntry, columns: number): r
         lineSegment('❯ ', 'brand'),
         lineSegment(entry.text, 'plain'),
       ], width)
-    case 'assistant':
-      return [
-        ...(entry.reasoning === ''
-          ? []
-          : styledLines([
-            lineSegment('  ✻ ', 'dimItalic'),
-            lineSegment(entry.reasoning, 'dimItalic'),
-          ], width)),
-        ...markdownLines(entry.text, width),
-      ]
+    case 'assistant': {
+      const reasoning = entry.reasoning === ''
+        ? []
+        : styledLines([
+          lineSegment('  ✻ ', 'dimItalic'),
+          lineSegment(entry.reasoning, 'dimItalic'),
+        ], width)
+      // Every reply row carries the composer's two-column gutter, so reply
+      // text aligns with the input cursor (Codex LIVE_PREFIX alignment); the
+      // wrap budget shrinks by the same amount so no line double-wraps.
+      const body = markdownLines(entry.text, Math.max(10, width - 2))
+        .map(line => ({ segments: [{ text: '  ', style: 'plain' as const }, ...line.segments] }))
+      return [...reasoning, ...body]
+    }
     case 'tool': {
       const mark = entry.state === 'running' ? '●' : entry.state === 'error' ? '⨯' : '⏺'
       const markStyle: LineStyle = entry.state === 'running' ? 'brand' : entry.state === 'error' ? 'error' : 'success'

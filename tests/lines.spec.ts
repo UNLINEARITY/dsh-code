@@ -37,7 +37,16 @@ describe('styled terminal lines', () => {
     const entry: TranscriptEntry = { kind: 'assistant', reasoning: '', text: 'first\n\nsecond' }
     const lines = transcriptEntryLines(entry, 40)
     expect(lines).toHaveLength(3)
-    expect(lines[1]?.segments).toEqual([])
+    // The blank separator row keeps only the two-column reply gutter.
+    expect(lines[1]?.segments).toEqual([{ text: '  ', style: 'plain' }])
+  })
+
+  it('aligns every assistant reply row with the two-column composer gutter', () => {
+    const entry: TranscriptEntry = { kind: 'assistant', reasoning: '', text: 'first\nsecond' }
+    const lines = transcriptEntryLines(entry, 40)
+    for (const line of lines) {
+      expect(line.segments[0]).toEqual({ text: '  ', style: 'plain' })
+    }
   })
 
   it('does not impose the old forty-row display cap on retained raw tool output', () => {
