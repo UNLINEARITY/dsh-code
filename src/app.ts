@@ -35,7 +35,7 @@ import type { ModelDirectory, ModelRow } from './models.ts'
 import type { QuestionSnapshot, QuestionStore } from './questions.ts'
 import type { SkillsView, SkillRow } from './skills.ts'
 import type { MentionCandidate } from './mentions.ts'
-import { ModePanel, PluginPanel, ResumePanel } from './kernel-panels.ts'
+import { ModePanel, PluginPanel, ResumePanel, StatuslinePanel } from './kernel-panels.ts'
 import type { PresetRow } from './presets.ts'
 import type { PluginRow } from './plugin-inventory.ts'
 import type { SessionDirectoryOptions, SessionRow } from './session-directory.ts'
@@ -48,10 +48,12 @@ const RESIZE_REFLOW_CLEAR = '\x1b[r\x1b[0m\x1b[H\x1b[2J\x1b[3J\x1b[H'
 import {
   formatTokens,
   layoutStatusBar,
+  parseStatuslineItems,
   STATUS_CYCLE_HINT,
   STATUS_GROUP_SEPARATOR,
   STATUS_ITEM_SEPARATOR,
   type StatusFacts,
+  type StatusItemId,
   type StatusTone,
 } from './render/status.ts'
 import { displayTail, displayText, singleLineText, truncateColumns } from './render/text.ts'
@@ -135,6 +137,10 @@ export interface AppProps {
   loadPlugins(): readonly PluginRow[]
   /** Registers the app's notice channel with the runner (called once on mount). */
   onBridgeReady(bridge: { notify(text: string, tone?: NoticeTone): void }): void
+  /** Ordered enabled status items (/statusline config); the runner owns persistence. */
+  statusline: readonly string[]
+  /** Persist a new statusline item set; the runner surfaces IO failures as notices. */
+  saveStatusline(items: readonly string[]): void
 }
 
 /** Ink `color` string for one palette triple. */
@@ -613,13 +619,14 @@ function statusToneProps(tone: StatusTone): {
  * the pure reducer, so Ink only paints; truncation degrades groups, it never
  * wraps the row.
  */
-function StatusLine({ facts, stats, busy, columns }: {
+function StatusLine({ facts, stats, busy, columns, items }: {
   facts: StatusFacts
   stats: Parameters<typeof layoutStatusBar>[1]
   busy: boolean
   columns: number
+  items: readonly string[]
 }): ReactElement {
-  const layout = layoutStatusBar(facts, stats, Math.max(8, columns - 2), { busy })
+  const layout = layoutStatusBar(facts, stats, Math.max(8, columns - 2), { busy, items })
   const leftParts: ReactElement[] = []
   layout.left.forEach((group, groupIndex) => {
     if (groupIndex > 0) {
@@ -1138,6 +1145,7 @@ function HelpPanel({ descriptors, skills, commandError, skillError, onClose }: {
     createElement(Box, { key: 'local-new' }, row('/new', 'create and switch to a fresh session (/new [preset])')),
     createElement(Box, { key: 'local-resume' }, row('/resume', 'browse or switch root sessions (/resume [id|prefix])')),
     createElement(Box, { key: 'local-plugin' }, row('/plugin', 'inspect the live plugin composition')),
+    createElement(Box, { key: 'local-statusline' }, row('/statusline', 'customize the status line items')),
     createElement(Box, { key: 'local-clear' }, row('/clear', 'clear the screen')),
     createElement(Box, { key: 'local-export' }, row('/export', 'export the transcript to markdown (/export [path])')),
     createElement(Box, { key: 'local-title' }, row('/title', 'rename this session (/title <text>)')),
@@ -1410,6 +1418,7 @@ function completionCandidates(
     { label: '/new', description: 'start a fresh session', origin: 'command' },
     { label: '/resume', description: 'browse or switch sessions', origin: 'command' },
     { label: '/plugin', description: 'inspect the plugin composition', origin: 'command' },
+    { label: '/statusline', description: 'customize the status line', origin: 'command' },
     { label: '/clear', description: 'clear the screen', origin: 'command' },
     { label: '/export', description: 'export the transcript to markdown', origin: 'command' },
     { label: '/title', description: 'rename this session', origin: 'command' },
@@ -1435,8 +1444,11 @@ function completionCandidates(
       origin: 'skill',
     }))
   const all = [...local, ...registry, ...skillRows]
-  if (prefix === '') return all.slice(0, 10)
-  return all.filter(candidate => candidate.label.slice(1).startsWith(prefix)).slice(0, 10)
+  // The menu itself caps its visible rows behind a scroll window, so the
+  // candidate cap only bounds how many entries cycling can reach; 11 keeps
+  // every TUI-local command reachable with an empty prefix.
+  if (prefix === '') return all.slice(0, 11)
+  return all.filter(candidate => candidate.label.slice(1).startsWith(prefix)).slice(0, 11)
 }
 
 /**
@@ -1497,7 +1509,7 @@ function CompletionMenu({ active, mention, index, rows }: {
  * While a modal (approval / question / model panel) owns the keys, the
  * box passes every key through untouched.
  */
-function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openHelp, openMode, openResume, openPlugin, createSession, cancelSessionSwitch, notify, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, cyclePermission, exportTranscript, renameTitle }: {
+function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openHelp, openMode, openResume, openPlugin, openStatusline, createSession, cancelSessionSwitch, notify, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, cyclePermission, exportTranscript, renameTitle }: {
   active: boolean
   frozen: boolean
   busy: boolean
@@ -1512,6 +1524,7 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   openMode(): void
   openResume(): void
   openPlugin(query?: string): void
+  openStatusline(): void
   createSession(mode?: string): void
   cancelSessionSwitch(): boolean
   notify(text: string, tone?: NoticeTone): void
@@ -1748,6 +1761,10 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
         openPlugin(text.slice(7).trim())
         return
       }
+      if (text === '/statusline') {
+        openStatusline()
+        return
+      }
       if (busy && !text.startsWith('/')) {
         // A running turn is steered, not blocked: the inbox delivers this
         // text at the next step boundary (Esc/Ctrl+C still cancels outright).
@@ -1974,13 +1991,15 @@ export function App(props: AppProps): ReactElement {
   const [resumeOpen, setResumeOpen] = useState(false)
   const [pluginOpen, setPluginOpen] = useState(false)
   const [pluginQuery, setPluginQuery] = useState('')
+  const [statuslineOpen, setStatuslineOpen] = useState(false)
+  const [statuslineItems, setStatuslineItems] = useState<readonly StatusItemId[]>(() => parseStatuslineItems(props.statusline))
   const [refreshEpoch, setRefreshEpoch] = useState(0)
   const approvalSnapshot = useSyncExternalStore(props.approval.subscribe, props.approval.getSnapshot)
   const questionSnapshot = useSyncExternalStore(props.questions.subscribe, props.questions.getSnapshot)
   const approvalPending = approvalSnapshot.pending !== undefined
   const questionPending = questionSnapshot.pending !== undefined
   // While any modal owns the keys, the prompt box passes everything through.
-  const inputActive = !modelOpen && !helpOpen && !modeOpen && !resumeOpen && !pluginOpen && !verboseOpen && !approvalPending && !questionPending
+  const inputActive = !modelOpen && !helpOpen && !modeOpen && !resumeOpen && !pluginOpen && !statuslineOpen && !verboseOpen && !approvalPending && !questionPending
 
   // Human questions outrank local inspectors. Close the lower modal instead
   // of leaving an approval/question visible but keyboard-locked behind it.
@@ -1991,6 +2010,7 @@ export function App(props: AppProps): ReactElement {
     setModeOpen(false)
     setResumeOpen(false)
     setPluginOpen(false)
+    setStatuslineOpen(false)
     setVerboseOpen(false)
   }, [approvalPending, questionPending])
 
@@ -2093,9 +2113,9 @@ export function App(props: AppProps): ReactElement {
           ? Math.max(1, Math.floor(streamRows / 3))
           : 1
   const answerRows = view.streaming === '' ? 0 : Math.max(1, streamRows - reasoningRows)
-  const transcriptVisible = !modelOpen && !helpOpen && !modeOpen && !resumeOpen && !pluginOpen && !verboseOpen && !approvalPending && !questionPending
+  const transcriptVisible = !modelOpen && !helpOpen && !modeOpen && !resumeOpen && !pluginOpen && !statuslineOpen && !verboseOpen && !approvalPending && !questionPending
   const inspectorVisible = verboseOpen && !approvalPending && !questionPending
-  const modalVisible = modelOpen || helpOpen || modeOpen || resumeOpen || pluginOpen || inspectorVisible || approvalPending || questionPending
+  const modalVisible = modelOpen || helpOpen || modeOpen || resumeOpen || pluginOpen || statuslineOpen || inspectorVisible || approvalPending || questionPending
   const closeInspector = useCallback((): void => {
     setVerboseOpen(false)
   }, [])
@@ -2200,6 +2220,16 @@ export function App(props: AppProps): ReactElement {
     pluginOpen && !approvalPending && !questionPending
       ? createElement(PluginPanel, { load: props.loadPlugins, initialQuery: pluginQuery, close: () => setPluginOpen(false) })
       : undefined,
+    statuslineOpen && !approvalPending && !questionPending
+      ? createElement(StatuslinePanel, {
+        enabled: statuslineItems,
+        change: items => {
+          setStatuslineItems(items)
+          props.saveStatusline(items)
+        },
+        close: () => setStatuslineOpen(false),
+      })
+      : undefined,
     notice === undefined
       ? undefined
       : createElement(NoticeLine, {
@@ -2234,6 +2264,7 @@ export function App(props: AppProps): ReactElement {
         openMode: () => setModeOpen(true),
         openResume: () => setResumeOpen(true),
         openPlugin: (query = '') => { setPluginQuery(query); setPluginOpen(true) },
+        openStatusline: () => setStatuslineOpen(true),
         createSession: props.createSession,
         cancelSessionSwitch: props.cancelSessionSwitch,
         notify,
@@ -2248,8 +2279,13 @@ export function App(props: AppProps): ReactElement {
           props.store.reset()
         },
         refresh: refreshScreen,
+        // Ctrl+R must re-render already-settled history too: settled rows
+        // flush through <Static> once, so the toggle rides the same
+        // source-backed clear+replay the resize path uses — one clear, one
+        // authoritative re-flush at the new visibility.
         toggleReasoning: () => {
           setShowReasoning(current => !current)
+          refreshScreen()
         },
         loadMentions: props.loadMentions,
         cyclePermission: props.cyclePermission,
@@ -2272,6 +2308,7 @@ export function App(props: AppProps): ReactElement {
         stats: view.stats,
         busy,
         columns: terminalColumns,
+        items: statuslineItems,
       }),
     ),
   )

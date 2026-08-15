@@ -112,6 +112,83 @@ export const STATUS_ITEM_SEPARATOR = ' · '
 /** The Codex-style mode cycle hint appended to the permission badge. */
 export const STATUS_CYCLE_HINT = ' (shift+tab to cycle)'
 
+/**
+ * One customizable status item (the Codex /statusline picker contract).
+ * 'left' items render as pipe-separated clusters after the identity dot;
+ * 'right' items pin to the right edge as dot-separated state badges.
+ */
+export type StatusItemId =
+  | 'model'
+  | 'cwd'
+  | 'branch'
+  | 'plan'
+  | 'mode'
+  | 'turns'
+  | 'durations'
+  | 'cache'
+  | 'context'
+  | 'tokens'
+  | 'title'
+  | 'goal'
+  | 'sandbox'
+  | 'permission'
+
+/** Picker-facing metadata for one customizable item. */
+export interface StatusItemInfo {
+  id: StatusItemId
+  /** Short picker label. */
+  label: string
+  /** One-line picker description of what the item shows. */
+  description: string
+  /** Which side of the split row the item renders on. */
+  side: 'left' | 'right'
+}
+
+/** The full item catalog in canonical order (the /statusline default). */
+export const STATUS_ITEMS: readonly StatusItemInfo[] = [
+  { id: 'model', label: 'model', description: 'provider/model serving this session', side: 'left' },
+  { id: 'cwd', label: 'cwd', description: 'working-directory basename', side: 'left' },
+  { id: 'branch', label: 'branch', description: 'git branch inside a repository', side: 'left' },
+  { id: 'plan', label: 'plan', description: 'plan-mode state mark', side: 'left' },
+  { id: 'mode', label: 'mode', description: 'agent preset composing the session', side: 'left' },
+  { id: 'turns', label: 'turns', description: 'turn and step counters', side: 'left' },
+  { id: 'durations', label: 'durations', description: 'llm/ttft/decode/tool wall time', side: 'left' },
+  { id: 'cache', label: 'cache', description: 'cache-hit share of billed input', side: 'left' },
+  { id: 'context', label: 'context', description: 'context-window occupancy meter', side: 'left' },
+  { id: 'tokens', label: 'tokens', description: 'cumulative input/output tokens', side: 'left' },
+  { id: 'title', label: 'title', description: 'session title or short id', side: 'left' },
+  { id: 'goal', label: 'goal', description: 'live goal phase and round progress', side: 'right' },
+  { id: 'sandbox', label: 'sandbox', description: 'divergent sandbox-mode override', side: 'right' },
+  { id: 'permission', label: 'permission', description: 'permission preset badge with cycle hint', side: 'right' },
+]
+
+/**
+ * Default order: the whole catalog (matches the pre-customization bar).
+ * The busy dot is not an item — it always leads the identity cluster.
+ */
+export const DEFAULT_STATUSLINE_ITEMS: readonly StatusItemId[] = STATUS_ITEMS.map(item => item.id)
+
+/**
+ * Parse a persisted statusline item list. The stored value is the ordered
+ * set of ENABLED items (the Codex /statusline contract): unknown ids and
+ * duplicates drop out, and a non-array value (missing or corrupt file)
+ * falls back to the full default set. An explicitly empty array is valid —
+ * the bar degrades to its busy dot alone.
+ * @param value - the raw parsed JSON value (expected string[]).
+ * @returns the normalized ordered item list.
+ */
+export function parseStatuslineItems(value: unknown): readonly StatusItemId[] {
+  if (!Array.isArray(value)) return [...DEFAULT_STATUSLINE_ITEMS]
+  const known = new Set(STATUS_ITEMS.map(item => item.id))
+  const kept: StatusItemId[] = []
+  for (const entry of value) {
+    if (typeof entry === 'string' && known.has(entry as StatusItemId) && !kept.includes(entry as StatusItemId)) {
+      kept.push(entry as StatusItemId)
+    }
+  }
+  return kept
+}
+
 /** Minimum blank gap kept between the leading and trailing sides. */
 const LEFT_RIGHT_GAP = 2
 /** Column held back so Ink/yoga measurement drift can never force a wrap. */
@@ -201,14 +278,15 @@ function joinWidth(parts: readonly number[], separator: number): number {
   return width + separator * (parts.length - 1)
 }
 
-/** Build every candidate group/span with its drop rank. */
+/** Build every candidate group/span with its drop rank and item id. */
 function buildCandidates(
   facts: StatusFacts,
   stats: TranscriptStats,
   busy: boolean,
+  enabled: ReadonlySet<string>,
 ): {
-  left: { group: StatusGroup; rank: number }[]
-  right: { span: StatusSpan; rank: number }[]
+  left: { group: StatusGroup; rank: number; id: string }[]
+  right: { span: StatusSpan; rank: number; id: string }[]
   badge: number
 } {
   const identity: StatusSpan[] = [
@@ -221,65 +299,72 @@ function buildCandidates(
     identity.push(span)
   }
   const model = safe(facts.model)
-  if (model !== '') push({ text: model, tone: 'model' })
+  if (model !== '' && enabled.has('model')) push({ text: model, tone: 'model' })
   const cwd = safe(facts.cwd)
-  if (cwd !== '') push({ text: cwd, tone: 'path' })
+  if (cwd !== '' && enabled.has('cwd')) push({ text: cwd, tone: 'path' })
   const branch = safe(facts.branch)
-  if (branch !== '') push({ text: '⑂ ' + branch, tone: 'branch' })
-  if (facts.plan) push({ text: '⧉ plan', tone: 'accent' })
+  if (branch !== '' && enabled.has('branch')) push({ text: '⑂ ' + branch, tone: 'branch' })
+  if (facts.plan && enabled.has('plan')) push({ text: '⧉ plan', tone: 'accent' })
 
-  const left: { group: StatusGroup; rank: number }[] = [
-    { group: { spans: identity }, rank: RANK_IDENTITY },
+  const left: { group: StatusGroup; rank: number; id: string }[] = [
+    { group: { spans: identity }, rank: RANK_IDENTITY, id: 'identity' },
   ]
-  const right: { span: StatusSpan; rank: number }[] = []
+  const right: { span: StatusSpan; rank: number; id: string }[] = []
 
   const mode = safe(facts.mode ?? '')
-  if (mode !== '') {
+  if (mode !== '' && enabled.has('mode')) {
     left.push({
       group: { spans: [{ text: 'mode ', tone: 'label' }, { text: mode, tone: 'accent' }] },
       rank: RANK_MODE,
+      id: 'mode',
     })
   }
 
   if (stats.turns > 0 || stats.steps > 0) {
-    left.push({
-      group: { spans: [{ text: 'T' + stats.turns + ' · S' + stats.steps, tone: 'value' }] },
-      rank: RANK_COUNTS,
-    })
-    // Decode latency figures (the web StatsLine's TTFT and throughput):
-    // average first-token wait and tokens per second over timed steps.
-    // Pairs join through explicit dim separators; the label keeps its one
-    // trailing space so 'llm 45.2s' reads as one figure.
-    const durations: StatusSpan[] = []
-    const pair = (label: string, value: string): void => {
-      if (durations.length > 0) durations.push(sep())
-      durations.push({ text: label + ' ', tone: 'label' }, { text: value, tone: 'value' })
+    if (enabled.has('turns')) {
+      left.push({
+        group: { spans: [{ text: 'T' + stats.turns + ' · S' + stats.steps, tone: 'value' }] },
+        rank: RANK_COUNTS,
+        id: 'turns',
+      })
     }
-    if (stats.llmMs > 0) pair('llm', formatDuration(stats.llmMs))
-    if (stats.ttftSteps > 0) pair('ttft', formatDuration(stats.ttftMs / stats.ttftSteps))
-    if (stats.decodeMs > 0 && stats.decodeTokens > 0) {
-      if (durations.length > 0) durations.push(sep())
-      durations.push(
-        { text: formatRate(stats.decodeTokens / (stats.decodeMs / 1_000)), tone: 'value' },
-        { text: ' tok/s', tone: 'label' },
-      )
-    }
-    if (stats.toolMs > 0) pair('tool', formatDuration(stats.toolMs))
-    if (durations.length > 0) {
-      left.push({ group: { spans: durations }, rank: RANK_DURATIONS })
+    if (enabled.has('durations')) {
+      // Decode latency figures (the web StatsLine's TTFT and throughput):
+      // average first-token wait and tokens per second over timed steps.
+      // Pairs join through explicit dim separators; the label keeps its one
+      // trailing space so 'llm 45.2s' reads as one figure.
+      const durations: StatusSpan[] = []
+      const pair = (label: string, value: string): void => {
+        if (durations.length > 0) durations.push(sep())
+        durations.push({ text: label + ' ', tone: 'label' }, { text: value, tone: 'value' })
+      }
+      if (stats.llmMs > 0) pair('llm', formatDuration(stats.llmMs))
+      if (stats.ttftSteps > 0) pair('ttft', formatDuration(stats.ttftMs / stats.ttftSteps))
+      if (stats.decodeMs > 0 && stats.decodeTokens > 0) {
+        if (durations.length > 0) durations.push(sep())
+        durations.push(
+          { text: formatRate(stats.decodeTokens / (stats.decodeMs / 1_000)), tone: 'value' },
+          { text: ' tok/s', tone: 'label' },
+        )
+      }
+      if (stats.toolMs > 0) pair('tool', formatDuration(stats.toolMs))
+      if (durations.length > 0) {
+        left.push({ group: { spans: durations }, rank: RANK_DURATIONS, id: 'durations' })
+      }
     }
   }
 
   const cacheHit = cacheHitPercent(stats.usage)
-  if (cacheHit !== null) {
+  if (cacheHit !== null && enabled.has('cache')) {
     left.push({
       group: { spans: [{ text: 'cache ', tone: 'label' }, { text: cacheHit + '%', tone: 'value' }] },
       rank: RANK_CACHE,
+      id: 'cache',
     })
   }
   // Context occupancy (the web StatsLine's meter): the most recent reported
   // prompt size against the advertised route capacity.
-  if (stats.contextWindow > 0 && stats.lastPromptTokens > 0) {
+  if (stats.contextWindow > 0 && stats.lastPromptTokens > 0 && enabled.has('context')) {
     left.push({
       group: {
         spans: [
@@ -288,9 +373,10 @@ function buildCandidates(
         ],
       },
       rank: RANK_CONTEXT,
+      id: 'context',
     })
   }
-  if (stats.usage.inputTokens > 0 || stats.usage.outputTokens > 0) {
+  if ((stats.usage.inputTokens > 0 || stats.usage.outputTokens > 0) && enabled.has('tokens')) {
     left.push({
       group: {
         spans: [{
@@ -299,6 +385,7 @@ function buildCandidates(
         }],
       },
       rank: RANK_TOKENS,
+      id: 'tokens',
     })
   }
 
@@ -307,13 +394,13 @@ function buildCandidates(
   // CJK title cannot outgrow its budget.
   const rawLabel = facts.title !== undefined && facts.title !== '' ? facts.title : facts.sessionId
   const label = truncateColumns(safe(rawLabel), TITLE_BUDGET)
-  if (label !== '') {
-    left.push({ group: { spans: [{ text: label, tone: 'meta' }] }, rank: RANK_TITLE })
+  if (label !== '' && enabled.has('title')) {
+    left.push({ group: { spans: [{ text: label, tone: 'meta' }] }, rank: RANK_TITLE, id: 'title' })
   }
 
   // Goal badge on the right (Codex goal indicator): round progress while
   // active, the phase otherwise.
-  if (facts.goal !== undefined) {
+  if (facts.goal !== undefined && enabled.has('goal')) {
     right.push({
       span: {
         text: facts.goal.phase === 'active'
@@ -322,18 +409,19 @@ function buildCandidates(
         tone: 'accent',
       },
       rank: RANK_GOAL,
+      id: 'goal',
     })
   }
   // The sandbox override stays implicit when it merely echoes the preset —
   // the badge exists to surface a divergence, not to duplicate the label.
   const sandbox = safe(facts.sandbox ?? '')
-  if (sandbox !== '' && sandbox.toLowerCase() !== facts.permission.toLowerCase()) {
-    right.push({ span: { text: 'sandbox ' + sandbox, tone: 'warn' }, rank: RANK_SANDBOX })
+  if (sandbox !== '' && sandbox.toLowerCase() !== facts.permission.toLowerCase() && enabled.has('sandbox')) {
+    right.push({ span: { text: 'sandbox ' + sandbox, tone: 'warn' }, rank: RANK_SANDBOX, id: 'sandbox' })
   }
   const permission = safe(facts.permission)
   let badge = -1
-  if (permission !== '') {
-    right.push({ span: { text: permission, tone: permissionTone(permission) }, rank: RANK_BADGE })
+  if (permission !== '' && enabled.has('permission')) {
+    right.push({ span: { text: permission, tone: permissionTone(permission) }, rank: RANK_BADGE, id: 'permission' })
     badge = right.length - 1
   }
   return { left, right, badge }
@@ -348,24 +436,36 @@ function buildCandidates(
  * @param stats - session figures folded from the durable log.
  * @param columns - usable columns for the row (before its left padding).
  * @param options - 'busy' hides the cycle hint while a turn runs (Codex
- * keeps mode hints idle-only).
+ * keeps mode hints idle-only); 'items' is the ordered enabled-item config
+ * from /statusline (defaults to the full catalog). Display order follows the
+ * config per side while the drop ladder keeps its fixed ranks.
  * @returns the segments to render; left is never empty.
  */
 export function layoutStatusBar(
   facts: StatusFacts,
   stats: TranscriptStats,
   columns: number,
-  options: { busy?: boolean } = {},
+  options: { busy?: boolean; items?: readonly string[] } = {},
 ): StatusLayout {
   const busy = options.busy === true
+  const items = options.items ?? DEFAULT_STATUSLINE_ITEMS
+  const enabled = new Set(items)
   const budget = Math.max(1, Math.floor(columns) - WIDTH_SAFETY)
-  const { left, right, badge } = buildCandidates(facts, stats, busy)
+  const { left, right, badge } = buildCandidates(facts, stats, busy, enabled)
   const groupSeparator = visibleColumns(STATUS_GROUP_SEPARATOR)
   const itemSeparator = visibleColumns(STATUS_ITEM_SEPARATOR)
 
+  // Display order follows the config per side (Codex /statusline reorder).
+  // The identity cluster stays anchored first — it owns the busy dot.
+  const position = new Map(items.map((id, index) => [id, index]))
+  const byPosition = (a: { id: string }, b: { id: string }): number =>
+    (position.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (position.get(b.id) ?? Number.MAX_SAFE_INTEGER)
+  const orderedLeft = [left[0], ...left.slice(1).sort(byPosition)]
+  const orderedRight = right.slice().sort(byPosition)
+
   let hint = badge >= 0 && !busy
-  const leftKept = [...left]
-  const rightKept = [...right]
+  const leftKept = [...orderedLeft]
+  const rightKept = [...orderedRight]
 
   const width = (): number => {
     const leftWidth = joinWidth(
@@ -422,6 +522,7 @@ export function layoutStatusBar(
     leftKept[0] = {
       group: { spans: [{ text: truncateColumns(joined, budget), tone: 'model' }] },
       rank: RANK_IDENTITY,
+      id: 'identity',
     }
   }
 

@@ -7,6 +7,7 @@ import type { PluginRow } from './plugin-inventory.ts'
 import type { SessionDirectoryOptions, SessionRow } from './session-directory.ts'
 import { panelViewport, revealRow } from './render/inspector.ts'
 import { textLines } from './render/lines.ts'
+import { DEFAULT_STATUSLINE_ITEMS, STATUS_ITEMS, type StatusItemId } from './render/status.ts'
 import { singleLineText, truncateColumns } from './render/text.ts'
 import { TUI_RGB } from './theme.ts'
 
@@ -250,5 +251,94 @@ function DocumentPanel({ title, text, error, close }: {
     createElement(Text, { color: color(TUI_RGB.brandBright), wrap: 'truncate-end' }, truncateColumns(title, viewport.contentColumns)),
     ...body.map((line, index) => createElement(Text, { key: `${scroll}-${index}`, wrap: 'truncate-end' }, truncateColumns(line, viewport.contentColumns))),
     createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns(`lines ${lines.length === 0 ? 0 : scroll + 1}-${Math.min(lines.length, scroll + viewport.bodyRows)}/${lines.length} · ↑↓/pg/g/G · t/esc close`, viewport.contentColumns)),
+  )
+}
+
+/**
+ * The /statusline picker (the Codex setup-view contract): one bounded list
+ * of every status item with its enabled mark, arrow reordering, and a
+ * live preview — the real status line under the composer updates as you
+ * edit, so the panel itself carries no duplicate preview row.
+ */
+export function StatuslinePanel({ enabled, change, close }: {
+  enabled: readonly StatusItemId[]
+  change(items: readonly StatusItemId[]): void
+  close(): void
+}): ReactElement {
+  // Working state: the full catalog in display order (enabled entries in
+  // their configured positions, disabled ones trailing canonically) plus
+  // the enabled set. Persisted shape is the enabled subsequence only.
+  const [order, setOrder] = useState<readonly StatusItemId[]>(() => {
+    const seen = new Set(enabled)
+    return [...enabled, ...DEFAULT_STATUSLINE_ITEMS.filter(id => !seen.has(id))]
+  })
+  const [on, setOn] = useState<ReadonlySet<StatusItemId>>(() => new Set(enabled))
+  const [cursor, setCursor] = useState(0)
+  const commit = (nextOrder: readonly StatusItemId[], nextOn: ReadonlySet<StatusItemId>): void => {
+    setOrder(nextOrder)
+    setOn(nextOn)
+    change(nextOrder.filter(id => nextOn.has(id)))
+  }
+  const move = (offset: number): void => {
+    const target = cursor + offset
+    if (target < 0 || target >= order.length) return
+    const next = [...order]
+    const [item] = next.splice(cursor, 1)
+    next.splice(target, 0, item!)
+    commit(next, on)
+    setCursor(target)
+  }
+  useInput((input, key) => {
+    if (key.escape || input === 'q' || key.return) return close()
+    if (key.upArrow) return setCursor(value => Math.max(0, value - 1))
+    if (key.downArrow) return setCursor(value => Math.min(order.length - 1, value + 1))
+    if (key.leftArrow) return move(-1)
+    if (key.rightArrow) return move(1)
+    if (input === 'g') return setCursor(0)
+    if (input === 'G') return setCursor(order.length - 1)
+    if (input === 'd') {
+      commit([...DEFAULT_STATUSLINE_ITEMS], new Set(DEFAULT_STATUSLINE_ITEMS))
+      setCursor(0)
+      return
+    }
+    if (input === ' ') {
+      const item = order[cursor]
+      if (item === undefined) return
+      const next = new Set(on)
+      if (next.has(item)) next.delete(item)
+      else next.add(item)
+      commit(order, next)
+    }
+  })
+  const stdout = useStdout().stdout
+  const viewport = panelViewport(stdout?.columns ?? 80, stdout?.rows ?? 30)
+  if (viewport.compact) {
+    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns('/statusline · esc close', viewport.contentColumns))
+  }
+  if (viewport.maxHeight === 0) return createElement(Box, { display: 'none' })
+  const bodyRows = Math.max(1, viewport.bodyRows - 1)
+  const offset = revealRow(0, cursor, order.length, bodyRows)
+  const visible = order.slice(offset, offset + bodyRows)
+  const meta = new Map(STATUS_ITEMS.map(item => [item.id, item]))
+  return createElement(
+    Box,
+    { borderStyle: 'round', borderColor: color(TUI_RGB.dim), flexDirection: 'column', paddingX: 1 },
+    createElement(Text, { color: color(TUI_RGB.brandBright), wrap: 'truncate-end' }, truncateColumns('/statusline · items apply to the live status line below', viewport.contentColumns)),
+    ...visible.map((id, index) => {
+      const absolute = offset + index
+      const selected = absolute === cursor
+      const info = meta.get(id)
+      return createElement(
+        Text,
+        {
+          key: id,
+          color: selected ? color(TUI_RGB.brandBright) : undefined,
+          dimColor: !on.has(id) || undefined,
+          wrap: 'truncate-end',
+        },
+        truncateColumns((selected ? '› ' : '  ') + (on.has(id) ? '● ' : '○ ') + (info?.label ?? id) + (info === undefined ? '' : ' · ' + info.description + ' · ' + info.side), viewport.contentColumns),
+      )
+    }),
+    createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns('↑↓ move · space toggle · ←→ reorder · d default · esc close', viewport.contentColumns)),
   )
 }

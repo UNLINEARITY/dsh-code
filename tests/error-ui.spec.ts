@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { App, type AppProps } from '../src/app.ts'
 import { createTranscriptStore } from '../src/store.ts'
+import { DEFAULT_STATUSLINE_ITEMS } from '../src/render/status.ts'
 
 const wait = async (): Promise<void> => new Promise(resolve => setTimeout(resolve, 100))
 
@@ -77,6 +78,8 @@ function renderApp(overrides: Partial<AppProps> = {}): {
     switchSession: noop,
     cancelSessionSwitch: () => false,
     loadPlugins: () => [],
+    statusline: DEFAULT_STATUSLINE_ITEMS,
+    saveStatusline: noop,
     onBridgeReady: noop,
     ...overrides,
   }
@@ -121,6 +124,23 @@ describe('popup input priority', () => {
       app.stdin.push('/he')
       await wait()
       expect(app.output()).toContain('test command')
+
+      // TUI-local commands stay completable: /stat must surface the
+      // statusline picker, not an empty menu.
+      app.clearOutput()
+      app.stdin.push('\x15')
+      await wait()
+      app.stdin.push('/stat')
+      await wait()
+      expect(app.output()).toContain('/statusline')
+      expect(app.output()).toContain('customize the status line')
+      // Restore the /he draft so the esc-menu-interrupt ladder below still
+      // walks the same states.
+      app.clearOutput()
+      app.stdin.push('\x15')
+      await wait()
+      app.stdin.push('/he')
+      await wait()
 
       app.stdin.push('\x1b')
       await wait()

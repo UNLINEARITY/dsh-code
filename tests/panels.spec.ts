@@ -6,6 +6,7 @@ import { render } from 'ink'
 import { describe, expect, it } from 'vitest'
 import { App } from '../src/app.ts'
 import { createTranscriptStore } from '../src/store.ts'
+import { DEFAULT_STATUSLINE_ITEMS } from '../src/render/status.ts'
 import type { ApprovalSnapshot } from '../src/approval.ts'
 import type { PendingQuestion, QuestionSnapshot } from '../src/questions.ts'
 
@@ -87,6 +88,8 @@ describe('exclusive panel height budgets', () => {
       loadPlugins: () => Array.from({ length: 100 }, (_, index) => ({
         entryId: `plugin-${index}`, moduleName: `@test/plugin-${index}`, enabled: true, phase: 'active' as const,
       })),
+      statusline: DEFAULT_STATUSLINE_ITEMS,
+      saveStatusline: noop,
       onBridgeReady: noop,
     }), {
       stdin,
@@ -190,6 +193,139 @@ describe('exclusive panel height budgets', () => {
       expect(output).toContain('plan review')
       expect(output.lastIndexOf('type a message')).toBeLessThan(output.lastIndexOf('test/model'))
       expect(output).not.toContain('\x1b[2J')
+    } finally {
+      instance.unmount()
+      stdin.destroy()
+      stdout.destroy()
+    }
+  })
+
+  it('edits statusline items live from /statusline without clearing the terminal', async () => {
+    const stdin = Object.assign(new PassThrough(), {
+      isTTY: true,
+      isRaw: false,
+      setRawMode(value: boolean) {
+        this.isRaw = value
+        return this
+      },
+      ref() {},
+      unref() {},
+    }) as unknown as NodeJS.ReadStream
+    const stdout = Object.assign(new PassThrough(), {
+      isTTY: true,
+      columns: 100,
+      rows: 24,
+    }) as unknown as NodeJS.WriteStream
+    let output = ''
+    stdout.on('data', chunk => {
+      output += chunk.toString()
+    })
+    const approvalListeners = new Set<() => void>()
+    const questionListeners = new Set<() => void>()
+    let approvalSnapshot: ApprovalSnapshot = { pending: undefined, answered: false }
+    let questionSnapshot: QuestionSnapshot = { pending: undefined }
+    const noop = (): void => {}
+    const saved: readonly string[][] = []
+    let currentItems: readonly string[] = DEFAULT_STATUSLINE_ITEMS
+    const instance = render(createElement(App, {
+      store: createTranscriptStore(),
+      approval: {
+        subscribe: (listener: () => void) => {
+          approvalListeners.add(listener)
+          return () => approvalListeners.delete(listener)
+        },
+        getSnapshot: () => approvalSnapshot,
+      },
+      questions: {
+        subscribe: (listener: () => void) => {
+          questionListeners.add(listener)
+          return () => questionListeners.delete(listener)
+        },
+        getSnapshot: () => questionSnapshot,
+        submit: noop,
+        cancel: noop,
+      },
+      commands: { descriptors: [], subscribe: () => noop },
+      skills: { rows: [], subscribe: () => noop },
+      model: 'test/model',
+      cwd: 'dsh-cli',
+      workspaceRoot: 'C:\repo\dsh-cli',
+      branch: 'main',
+      sessionId: '12345678',
+      resumed: false,
+      mode: 'standard',
+      dispatch: noop,
+      steer: noop,
+      interrupt: () => false,
+      quit: noop,
+      loadModels: async () => ({ rows: [], failures: [] }),
+      loadMentions: async () => [],
+      selectModel: () => 'test/model',
+      cyclePermission: () => '',
+      exportTranscript: async () => {},
+      renameTitle: () => '',
+      loadPresets: async () => [],
+      switchMode: async id => id,
+      createSession: noop,
+      loadSessions: async () => [],
+      loadSessionTranscript: async () => '',
+      switchSession: noop,
+      cancelSessionSwitch: () => false,
+      loadPlugins: () => [],
+      statusline: currentItems,
+      saveStatusline: items => {
+        currentItems = items
+        saved.push([...items])
+      },
+      onBridgeReady: noop,
+    }), {
+      stdin,
+      stdout,
+      stderr: stdout,
+      exitOnCtrlC: false,
+      patchConsole: false,
+    })
+
+    try {
+      await wait()
+      expect(output).toContain('test/model')
+
+      output = ''
+      stdin.write('/statusline')
+      await wait()
+      stdin.write('\r')
+      await wait()
+      expect(output).toContain('/statusline')
+      expect(output).toContain('provider/model serving this session')
+      expect(output.lastIndexOf('type a message')).toBeLessThan(output.lastIndexOf('test/model'))
+      expect(output).not.toContain('\x1b[2J')
+      expect(output.split('\n').length).toBeLessThanOrEqual(stdout.rows)
+
+      // Space at the first row (model) disables it: the live footer loses
+      // the model fact and the runner-side save receives the exact set.
+      output = ''
+      stdin.write(' ')
+      await wait()
+      expect(saved).toHaveLength(1)
+      expect(saved[0]).not.toContain('model')
+      expect(saved[0]).toHaveLength(DEFAULT_STATUSLINE_ITEMS.length - 1)
+      expect(output).not.toContain('\x1b[2J')
+
+      // Down to cwd, disable it too; then reorder model-free expectations
+      // stay order-stable: cwd follows the disabled model slot.
+      stdin.write('\x1b[B')
+      await wait()
+      stdin.write(' ')
+      await wait()
+      expect(saved).toHaveLength(2)
+      expect(saved[1]).not.toContain('cwd')
+
+      // Esc closes the picker; the composer and status chrome remain.
+      output = ''
+      stdin.write('\x1b')
+      await wait()
+      expect(output).toContain('type a message')
+      expect(output).not.toContain('customize the status line')
     } finally {
       instance.unmount()
       stdin.destroy()

@@ -4,13 +4,19 @@ import { PassThrough } from 'node:stream'
 import { createElement } from 'react'
 import { render } from 'ink'
 import { describe, expect, it } from 'vitest'
-import { createToolResultMessage, type CallId } from '@deepseek-ai/dsh-llm'
+import { createAssistantMessage, createToolResultMessage, createUserMessage, type CallId } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { App } from '../src/app.ts'
 import { createTranscriptStore } from '../src/store.ts'
+import { DEFAULT_STATUSLINE_ITEMS } from '../src/render/status.ts'
 
 const wait = async (): Promise<void> => new Promise(resolve => setTimeout(resolve, 100))
 const resizeClear = '\x1b[r\x1b[0m\x1b[H\x1b[2J\x1b[3J\x1b[H'
+// useSyncExternalStore compares getSnapshot results by identity: these
+// doubles must return one frozen object forever, or React spins into an
+// infinite re-render loop (Maximum update depth exceeded).
+const approvalSnapshot = Object.freeze({ pending: undefined, answered: false })
+const questionSnapshot = Object.freeze({ pending: undefined })
 
 describe('Ctrl+O history details', () => {
   it('uses an exclusive bounded screen without clearing scrollback and preserves the draft', async () => {
@@ -34,8 +40,6 @@ describe('Ctrl+O history details', () => {
       output += chunk.toString()
     })
     const unsubscribe = (): void => {}
-    const approvalSnapshot = Object.freeze({ pending: undefined, answered: false })
-    const questionSnapshot = Object.freeze({ pending: undefined })
     const noop = (): void => {}
     let dispatched: string | undefined
     const store = createTranscriptStore()
@@ -92,6 +96,8 @@ describe('Ctrl+O history details', () => {
       switchSession: noop,
       cancelSessionSwitch: () => false,
       loadPlugins: () => [],
+      statusline: DEFAULT_STATUSLINE_ITEMS,
+      saveStatusline: noop,
       onBridgeReady: noop,
     }), {
       stdin,
@@ -239,6 +245,131 @@ describe('Ctrl+O history details', () => {
       await wait()
       expect(output).toContain('Model 99')
       expect(output).not.toContain('\x1b[2J')
+    } finally {
+      instance.unmount()
+      stdin.destroy()
+      stdout.destroy()
+    }
+  })
+})
+
+describe('Ctrl+R reasoning fold', () => {
+  it('re-renders settled history through one clear-and-replay on toggle', async () => {
+    const stdin = Object.assign(new PassThrough(), {
+      isTTY: true,
+      isRaw: false,
+      setRawMode(value: boolean) {
+        this.isRaw = value
+        return this
+      },
+      ref() {},
+      unref() {},
+    }) as unknown as NodeJS.ReadStream
+    const stdout = Object.assign(new PassThrough(), {
+      isTTY: true,
+      columns: 100,
+      rows: 24,
+    }) as unknown as NodeJS.WriteStream
+    let output = ''
+    stdout.on('data', chunk => {
+      output += chunk.toString()
+    })
+    const unsubscribe = (): void => {}
+    const noop = (): void => {}
+    const store = createTranscriptStore([
+      {
+        type: 'user/message',
+        seq: 1,
+        time: 1,
+        data: createUserMessage({ content: [{ type: 'text', text: 'go' }], source: { kind: 'user' } }),
+      } as SessionEvent,
+      {
+        type: 'assistant/message',
+        seq: 2,
+        time: 2,
+        data: {
+          turn: 1,
+          step: 1,
+          message: createAssistantMessage({
+            content: [
+              { type: 'reasoning', text: 'the hidden reasoning trace' },
+              { type: 'text', text: 'the visible answer' },
+            ],
+            source: { provider: 'p', model: 'm' },
+          }),
+        },
+      } as SessionEvent,
+    ])
+    const instance = render(createElement(App, {
+      store,
+      approval: { subscribe: () => unsubscribe, getSnapshot: () => approvalSnapshot },
+      questions: {
+        subscribe: () => unsubscribe,
+        getSnapshot: () => questionSnapshot,
+        submit: noop,
+        cancel: noop,
+      },
+      commands: { descriptors: [], subscribe: () => unsubscribe },
+      skills: { rows: [], subscribe: () => unsubscribe },
+      model: 'test/model',
+      cwd: 'dsh-cli',
+      workspaceRoot: 'C:\repo\dsh-cli',
+      branch: 'main',
+      sessionId: '12345678',
+      resumed: false,
+      mode: 'standard',
+      dispatch: noop,
+      steer: noop,
+      interrupt: () => false,
+      quit: noop,
+      loadModels: async () => ({ rows: [], failures: [] }),
+      loadMentions: async () => [],
+      selectModel: () => 'test/model',
+      cyclePermission: () => '',
+      exportTranscript: async () => {},
+      renameTitle: () => '',
+      loadPresets: async () => [],
+      switchMode: async id => id,
+      createSession: noop,
+      loadSessions: async () => [],
+      loadSessionTranscript: async () => '',
+      switchSession: noop,
+      cancelSessionSwitch: () => false,
+      loadPlugins: () => [],
+      statusline: DEFAULT_STATUSLINE_ITEMS,
+      saveStatusline: noop,
+      onBridgeReady: noop,
+    }), {
+      stdin,
+      stdout,
+      stderr: stdout,
+      exitOnCtrlC: false,
+      patchConsole: false,
+    })
+
+    try {
+      await wait()
+      // Settled reasoning collapses behind the fold marker.
+      expect(output).toContain('Ctrl+R to expand')
+      expect(output).not.toContain('the hidden reasoning trace')
+
+      output = ''
+      stdin.write('\x12')
+      await wait()
+      // One source-backed replay: a single clear sequence, then the settled
+      // history re-flushes with reasoning expanded.
+      expect(output.match(/\x1b\[2J/g)).toHaveLength(1)
+      expect(output).toContain('the hidden reasoning trace')
+      expect(output).toContain('the visible answer')
+
+      output = ''
+      stdin.write('\x12')
+      await wait()
+      expect(output.match(/\x1b\[2J/g)).toHaveLength(1)
+      expect(output).toContain('Ctrl+R to expand')
+      const clearAt = output.lastIndexOf('\x1b[2J')
+      expect(clearAt).toBeGreaterThanOrEqual(0)
+      expect(output.slice(clearAt).includes('the hidden reasoning trace')).toBe(false)
     } finally {
       instance.unmount()
       stdin.destroy()

@@ -11,8 +11,9 @@
 
 import { randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
-import { writeFile as writeFileAsync } from 'node:fs/promises'
-import { basename, join } from 'node:path'
+import { homedir } from 'node:os'
+import { mkdir, writeFile as writeFileAsync } from 'node:fs/promises'
+import { basename, dirname, join } from 'node:path'
 import { createElement } from 'react'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
@@ -36,6 +37,7 @@ import { loadModelDirectory, type ModelRow } from './models.ts'
 import { createMentions, type MentionsApi } from './mentions.ts'
 import { mountQuestionProvider, type QuestionStore } from './questions.ts'
 import { createTranscriptStore } from './store.ts'
+import { parseStatuslineItems } from './render/status.ts'
 import { watchSkills, type SkillsView } from './skills.ts'
 import { toolArgumentsPreview } from './render/tool-preview.ts'
 import { buildExportMarkdown } from './render/export.ts'
@@ -292,6 +294,31 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   // The bridge the React app registers on mount: local notices from the
   // process side (unknown commands, switch confirmations, cancels).
   const bridge: AppBridge = { notify: () => {} }
+
+  // /statusline persistence: one user-level JSON file under the DSH home.
+  // Missing file means defaults; a corrupt file degrades to defaults with a
+  // surfaced warning (the customization is user-authored, never silent).
+  const statuslinePath = join(homedir(), '.dsh', 'dsh-code', 'statusline.json')
+  let statuslineWarning: string | undefined
+  let statuslineItems: readonly string[] = []
+  try {
+    statuslineItems = parseStatuslineItems(JSON.parse(readFileSync(statuslinePath, 'utf8')).items)
+  } catch (error) {
+    statuslineItems = parseStatuslineItems(undefined)
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      statuslineWarning = error instanceof Error ? error.message : String(error)
+    }
+  }
+  const saveStatusline = (items: readonly string[]): void => {
+    statuslineItems = [...items]
+    // The config directory may not exist on a first save; create it before
+    // the write so a fresh install persists customizations.
+    void mkdir(dirname(statuslinePath), { recursive: true })
+      .then(() => writeFileAsync(statuslinePath, JSON.stringify({ items }, null, 2) + '\n', 'utf8'))
+      .catch((writeError: unknown) => {
+        bridge.notify('statusline save failed: ' + (writeError instanceof Error ? writeError.message : String(writeError)), 'error')
+      })
+  }
 
   // The mount handle lives in a box: quit closes over it, while the mount
   // itself is created after quit (the App element needs quit as a prop).
@@ -668,6 +695,8 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       switchSession,
       cancelSessionSwitch,
       loadPlugins: () => listPluginRows(ctx),
+      statusline: statuslineItems,
+      saveStatusline,
       onBridgeReady: (instance: AppBridge) => { bridge.notify = instance.notify },
     })
   }
@@ -677,6 +706,14 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   }
 
   mountRef.current = io.mount(appElement())
+
+  // A corrupt statusline config must not vanish silently: surface it once
+  // the notice channel is live, after the first frame settles.
+  if (statuslineWarning !== undefined) {
+    setTimeout(() => {
+      bridge.notify('statusline config unreadable, using defaults: ' + statuslineWarning, 'warning')
+    }, 50)
+  }
 }
 
 /**

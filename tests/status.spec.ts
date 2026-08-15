@@ -5,9 +5,11 @@ import type { TranscriptStats } from '../src/render/projection.ts'
 import { visibleColumns } from '../src/render/markdown.ts'
 import {
   cacheHitPercent,
+  DEFAULT_STATUSLINE_ITEMS,
   formatDuration,
   formatTokens,
   layoutStatusBar,
+  parseStatuslineItems,
   permissionTone,
   STATUS_CYCLE_HINT,
   STATUS_GROUP_SEPARATOR,
@@ -211,6 +213,44 @@ describe('status layout', () => {
     const titleSpan = cjk.left.at(-1).spans[0]
     expect(visibleColumns(titleSpan.text)).toBeLessThanOrEqual(48)
     expect(titleSpan.text.endsWith('…')).toBe(true)
+  })
+})
+
+describe('statusline item configuration', () => {
+  it('parses the enabled set exactly: unknown ids drop, duplicates dedupe, arrays only', () => {
+    expect(parseStatuslineItems(undefined)).toEqual(DEFAULT_STATUSLINE_ITEMS)
+    expect(parseStatuslineItems('nope')).toEqual(DEFAULT_STATUSLINE_ITEMS)
+    expect(parseStatuslineItems(['tokens', 'model', 'tokens', 'bogus'])).toEqual(['tokens', 'model'])
+    expect(parseStatuslineItems([])).toEqual([])
+  })
+
+  it('filters groups to the enabled items', () => {
+    const layout = layoutStatusBar(
+      { ...baseFacts, model: 'm', cwd: 'r', branch: 'main', permission: 'workspace-write' },
+      { ...emptyStats, turns: 1, steps: 1 },
+      120,
+      { items: ['model', 'permission'] },
+    )
+    expect(groupText(layout)).toEqual(['○ m'])
+    expect(layout.right.map(span => span.text)).toEqual(['workspace-write'])
+  })
+
+  it('degrades to the lone busy dot with an empty item set', () => {
+    const layout = layoutStatusBar(richFacts, richStats, 120, { items: [] })
+    expect(groupText(layout)).toEqual(['○ '])
+    expect(layout.right).toEqual([])
+    expect(layout.hint).toBe(false)
+  })
+
+  it('reorders left clusters and right badges per the configured order', () => {
+    const layout = layoutStatusBar(
+      { ...baseFacts, model: 'm', cwd: 'r', permission: 'workspace-write', goal: { phase: 'active', rounds: 1, max: 4 } },
+      { ...emptyStats, turns: 1, steps: 1 },
+      160,
+      { items: ['turns', 'cwd', 'model', 'permission', 'goal'] },
+    )
+    expect(groupText(layout)).toEqual(['○ m · r', 'T1 · S1'])
+    expect(layout.right.map(span => span.text)).toEqual(['workspace-write', '◎ r1/4'])
   })
 })
 
