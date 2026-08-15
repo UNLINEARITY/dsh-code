@@ -3,6 +3,10 @@
   "description": "Claude-Code-style interactive TUI bundle for DeepSeek Harness (dsh): DeepSeek-blue whale banner, live session transcript, and a blended status line",
   "version": "0.4.0",
   "type": "module",
+  "bin": {
+    "deepseek": "./bin/deepseek.mjs",
+    "dsh-code": "./bin/deepseek.mjs"
+  },
   "main": "lib/index.mjs",
   "types": "lib/types/index.d.ts",
   "exports": {

@@ -37,11 +37,19 @@ DSH-Code 保留这套结构，并补充适合编码任务的终端工作流。
 需要 Node `^22.19 || >=24`、预览版 `dsh` CLI，以及 `DEEPSEEK_API_KEY`。
 
 ```sh
-npm install -g @deepseek-ai/dsh@next
+npm install -g @deepseek-ai/dsh@next dsh-code
 npm install -g pnpm
 dsh plugin --profile cli add dsh-code
-dsh --profile cli
 ```
+
+可用的启动指令：
+```sh
+deepseek
+dsh --profile cli
+dsh-code
+```
+
+`dsh --profile cli`、`deepseek` 与 `dsh-code` 是并列的启动命令。`deepseek` 与 `dsh-code` 都是 `dsh --profile cli` 的全局别名，后续参数会原样转发，例如 `deepseek --resume abc123`。
 
 ### 源码开发安装
 
@@ -64,6 +72,19 @@ Git 包会在安装阶段构建。若 pnpm 要求添加 `allowBuilds`，请把�
 安装、原生模块和插件加载问题，请查看[常见问题与排障](docs/problems.md)。
 
 ## DSH-Code 如何接入 DSH
+## 终端交互
+
+DSH-Code 在整个进程中只保留一个 Ink owner。`/new` 和 `/resume` 替换的是活动 Agent，而不是终端本身。若 Agent 忙碌，切换会等待当前 turn 自然结束；最新请求优先，目标加载失败也不会破坏当前会话。
+
+所有动态内容都受到明确的视口约束。流式输出、思考过程、审批、问题、`/help`、`/model`、`/mode`、`/resume`、`/plugin` 与 Ctrl+O 使用统一的终端预算。输入框始终紧贴状态栏上方；终端宽度稳定后，界面会根据保存的会话记录重新绘制一次。
+
+在第一次 turn 之前使用 `/mode`，查看或选择当前会话的 Agent Preset。
+
+<p align="center"><img src="docs/pictures/2.png" width="95%" alt="每会话 Agent Preset 选择器"></p>
+
+使用 `/resume` 搜索持久会话，无需重新启动 TUI。
+
+<p align="center"><img src="docs/pictures/3.png" width="95%" alt="可搜索的会话恢复选择器"></p>
 
 ### 运行时组合
 
@@ -98,20 +119,6 @@ dsh profile
       持久事件 → 纯投影 → 只追加的历史转录
                          └→ 有界面板 → 输入框 → 状态栏
 ```
-
-## 终端交互
-
-DSH-Code 在整个进程中只保留一个 Ink owner。`/new` 和 `/resume` 替换的是活动 Agent，而不是终端本身。若 Agent 忙碌，切换会等待当前 turn 自然结束；最新请求优先，目标加载失败也不会破坏当前会话。
-
-所有动态内容都受到明确的视口约束。流式输出、思考过程、审批、问题、`/help`、`/model`、`/mode`、`/resume`、`/plugin` 与 Ctrl+O 使用统一的终端预算。输入框始终紧贴状态栏上方；终端宽度稳定后，界面会根据保存的会话记录重新绘制一次。
-
-在第一次 turn 之前使用 `/mode`，查看或选择当前会话的 Agent Preset。
-
-<p align="center"><img src="docs/pictures/2.png" width="95%" alt="每会话 Agent Preset 选择器"></p>
-
-使用 `/resume` 搜索持久会话，无需重新启动 TUI。
-
-<p align="center"><img src="docs/pictures/3.png" width="95%" alt="可搜索的会话恢复选择器"></p>
 
 ## 常用命令
 

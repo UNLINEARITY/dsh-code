@@ -38,11 +38,20 @@ The interface borrows familiar terminal conventions, while runtime behavior cont
 Requires Node `^22.19 || >=24`, the preview `dsh` CLI, and `DEEPSEEK_API_KEY`.
 
 ```sh
-npm install -g @deepseek-ai/dsh@next
+npm install -g @deepseek-ai/dsh@next dsh-code
 npm install -g pnpm
 dsh plugin --profile cli add dsh-code
-dsh --profile cli
 ```
+
+Available launch commands:
+
+```sh
+deepseek
+dsh --profile cli
+dsh-code
+```
+
+`dsh --profile cli`, `deepseek`, and `dsh-code` are parallel launch commands. `deepseek` and `dsh-code` are global aliases for `dsh --profile cli`; all following arguments are forwarded, for example `deepseek --resume abc123`.
 
 ### Source development
 
@@ -65,6 +74,20 @@ The Git package builds during installation. If pnpm asks for an `allowBuilds` en
 For installation, native-module, and plugin-loading issues, see the [troubleshooting guide](docs/problems.md).
 
 ## How it works with DSH
+
+## Terminal behavior
+
+DSH-Code keeps one Ink owner for the lifetime of the process. `/new` and `/resume` replace the active Agent, not the terminal itself. If a switch is requested while the Agent is busy, it waits for the turn to finish; the newest request wins, and a failed target leaves the current session untouched.
+
+Dynamic content is deliberately bounded. Streaming output, thinking, approvals, questions, `/help`, `/model`, `/mode`, `/resume`, `/plugin`, and Ctrl+O all share terminal-aware viewport rules. The composer remains immediately above the status line. After a resize, the screen is redrawn from the stored transcript once the new width settles.
+
+Use `/mode` before the first turn to inspect or select the session's Agent Preset.
+
+<p align="center"><img src="docs/pictures/2.png" width="95%" alt="Per-session Agent Preset picker"></p>
+
+Use `/resume` to search persisted sessions without replacing the TUI.
+
+<p align="center"><img src="docs/pictures/3.png" width="95%" alt="Searchable session resume picker"></p>
 
 ### Runtime composition
 
@@ -99,20 +122,6 @@ dsh profile
       durable events → pure projection → append-only transcript
                                   └→ bounded panels → composer → status
 ```
-
-## Terminal behavior
-
-DSH-Code keeps one Ink owner for the lifetime of the process. `/new` and `/resume` replace the active Agent, not the terminal itself. If a switch is requested while the Agent is busy, it waits for the turn to finish; the newest request wins, and a failed target leaves the current session untouched.
-
-Dynamic content is deliberately bounded. Streaming output, thinking, approvals, questions, `/help`, `/model`, `/mode`, `/resume`, `/plugin`, and Ctrl+O all share terminal-aware viewport rules. The composer remains immediately above the status line. After a resize, the screen is redrawn from the stored transcript once the new width settles.
-
-Use `/mode` before the first turn to inspect or select the session's Agent Preset.
-
-<p align="center"><img src="docs/pictures/2.png" width="95%" alt="Per-session Agent Preset picker"></p>
-
-Use `/resume` to search persisted sessions without replacing the TUI.
-
-<p align="center"><img src="docs/pictures/3.png" width="95%" alt="Searchable session resume picker"></p>
 
 ## Common commands
 
