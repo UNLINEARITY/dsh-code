@@ -37,10 +37,12 @@ The interface follows familiar terminal conventions, while runtime behavior cont
 Requires Node `^22.19 || >=24`, the preview `dsh` CLI, and `DEEPSEEK_API_KEY`.
 
 ```sh
-npm install -g @deepseek-ai/dsh@next dsh-code
+npm install -g @deepseek-ai/dsh dsh-code
 npm install -g pnpm
-dsh plugin --profile cli add dsh-code
+dsh plugin --profile cli add dsh-code@0.6.0
 ```
+
+> Note: pnpm ignores packages published less than 24 hours ago, so pin `dsh-code@0.6.0` on the release day; the version can be omitted afterwards. npm installs are not affected.
 
 Available launch commands:
 

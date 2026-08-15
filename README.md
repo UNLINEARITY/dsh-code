@@ -37,10 +37,12 @@ DSH-Code 保留这套结构，并补充适合编码任务的终端工作流。
 需要 Node `^22.19 || >=24`、预览版 `dsh` CLI，以及 `DEEPSEEK_API_KEY`。
 
 ```sh
-npm install -g @deepseek-ai/dsh@next dsh-code
+npm install -g @deepseek-ai/dsh dsh-code
 npm install -g pnpm
-dsh plugin --profile cli add dsh-code
+dsh plugin --profile cli add dsh-code@0.6.0
 ```
+
+> 提示：pnpm 会忽略发布不足 24 小时的包，因此发布首日请使用精确版本 `dsh-code@0.6.0`；24 小时后可省略版本号。npm 安装不受此限制。
 
 可用的启动指令：
 ```sh
