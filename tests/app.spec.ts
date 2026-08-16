@@ -12,6 +12,7 @@ import { createTranscriptStore } from '../src/store.ts'
 import type { TranscriptEntry } from '../src/render/projection.ts'
 import { DEFAULT_STATUSLINE_ITEMS } from '../src/render/status.ts'
 import { setTheme } from '../src/theme.ts'
+import { DSH_CODE_VERSION } from '../src/version.ts'
 
 const wait = async (): Promise<void> => new Promise(resolve => setTimeout(resolve, 100))
 const resizeClear = '\x1b[r\x1b[0m\x1b[H\x1b[2J\x1b[3J\x1b[H'
@@ -216,6 +217,8 @@ describe('Ctrl+O history details', () => {
       stdin.write('draft')
       await wait()
       expect(output).toContain('draft')
+      expect(output).toContain(`DeepSeek Harness · v${DSH_CODE_VERSION}`)
+      expect(output).toContain('Into the Unknown  探索未至之境')
 
       for (const columns of [72, 140, 84]) {
         output = ''

@@ -134,7 +134,7 @@ dsh --profile cli --session my-id    # 使用指定 id 新建会话
 - 思考折叠、终端 Markdown、紧凑工具摘要与完整结构化详情
 - 双行状态栏：mode 与 context 在第二行，context 为蓝色进度条，全蓝强调
 - 运行中提交即时显示为普通提示词行，Delete 取消排队消息，busy 使用 web StateDot 八点追逐动画
-- 回复与输入框光标对齐，欢迎头字标提亮
+- 回复与输入框光标对齐，欢迎头显示已安装版本与双语 slogan“Into the Unknown  探索未至之境”
 - Ctrl+O 独占历史检查，支持切换条目与完整纵向滚动
 - CJK/控制字符宽度安全、短终端主动降级、缩放防抖重放
 - 固定底部顺序：内容或面板 → notice → 输入框 → 状态栏

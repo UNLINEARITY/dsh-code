@@ -135,7 +135,7 @@ The `/model` provider panel reads only credential configuration, source, and wri
 - Folded thinking, terminal Markdown, compact tool summaries, and full structured details
 - Two-row status bar with mode and context on the second row, a blue context-occupancy meter, and all-blue accents
 - Submissions while a turn runs appear immediately as ordinary prompt rows; Delete cancels the newest queued message, and busy states use the web StateDot chase animation
-- Replies align with the input cursor, and the welcome wordmark is brighter
+- Replies align with the input cursor, and the welcome header shows the installed version with the bilingual slogan “Into the Unknown  探索未至之境”
 - Ctrl+O exclusive history inspection with entry navigation and complete vertical scrolling
 - Width-safe CJK/control-character handling, compact-terminal degradation, and debounced resize replay
 - Stable bottom order: content or panel → notice → composer → status

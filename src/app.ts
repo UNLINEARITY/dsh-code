@@ -35,6 +35,7 @@ import {
 } from './theme.ts'
 import { ThemePanel } from './theme-panel.ts'
 import { WHALE_GLYPH, WHALE_GLYPH_COLUMNS } from './whale-glyph.ts'
+import { DSH_CODE_VERSION } from './version.ts'
 import type { TranscriptStore } from './store.ts'
 import { settledEntryCount, type TranscriptEntry } from './render/projection.ts'
 import { renderMarkdown, type MdSegment, visibleColumns } from './render/markdown.ts'
@@ -631,28 +632,31 @@ function EntryLine({ entry, showReasoning, verbose }: { entry: TranscriptEntry; 
 }
 
 /**
- * The whale wordmark header in DeepSeek blue, hugging its content width.
- * The 8-row half-block glyph pairs adjacent lines, so on a terminal too
- * short to show it whole (or mid-resize) the clipped pairs garble the
- * screen — below the height floor the header collapses to a single-line
- * wordmark that stays correct at any size.
+ * The whale header with a compact three-line copy lockup. The title, bilingual
+ * slogan, and key hint stay centered inside the existing eight content rows,
+ * preserving the Static header's ten physical rows. Short or narrow terminals
+ * keep a one-line form.
  */
 function Header({ resumed }: { resumed: boolean }): ReactElement {
-  const rows = useStdout().stdout?.rows ?? 40
-  const hint = resumed ? 'resumed session · /help commands · Esc interrupt' : '/help commands · Esc interrupt · Ctrl+C quit'
-  if (rows < 20) {
+  const stdout = useStdout().stdout
+  const rows = stdout?.rows ?? 40
+  const columns = stdout?.columns ?? 80
+  const title = `DeepSeek Harness · v${DSH_CODE_VERSION}`
+  const slogan = 'Into the Unknown  探索未至之境'
+  const hint = resumed ? 'resumed · /help · Esc interrupt' : '/help · Esc interrupt · Ctrl+C quit'
+  const copyColumns = Math.max(visibleColumns(title), visibleColumns(slogan), visibleColumns(hint))
+  const compact = `${title} · ${hint}`
+  if (rows < 20 || columns < WHALE_GLYPH_COLUMNS + copyColumns + 8) {
     return createElement(
       Box,
-      { flexDirection: 'row', gap: 1, borderStyle: 'round', borderColor: inkColor(getPalette().brand), paddingX: 1, alignSelf: 'flex-start' },
-      createElement(Text, { color: inkColor(getPalette().brandBright), bold: true }, 'DeepSeek Harness'),
-      createElement(Text, { dimColor: true }, hint),
+      { width: Math.max(1, columns - 1), borderStyle: 'round', borderColor: inkColor(getPalette().brand), paddingX: 1 },
+      createElement(Text, { color: inkColor(getPalette().brandBright), bold: true, wrap: 'truncate-end' }, truncateColumns(compact, Math.max(1, columns - 5))),
     )
   }
   return createElement(
     Box,
-    // alignSelf shrinks the border to the whale-plus-wordmark content instead
-    // of stretching across the terminal and stranding empty space on the right
-    // (the compact-banner treatment the Claude Code welcome uses).
+    // alignSelf shrinks the border to the whale-plus-copy content instead of
+    // stretching across the terminal and stranding empty space on the right.
     { flexDirection: 'row', gap: 2, borderStyle: 'round', borderColor: inkColor(getPalette().brand), paddingX: 1, alignSelf: 'flex-start' },
     createElement(
       Box,
@@ -661,9 +665,15 @@ function Header({ resumed }: { resumed: boolean }): ReactElement {
     ),
     createElement(
       Box,
-      { flexDirection: 'column', justifyContent: 'center' },
-      createElement(Text, { color: inkColor(getPalette().brandBright), bold: true }, 'DeepSeek Harness'),
-      createElement(Text, { dimColor: true }, hint),
+      { flexDirection: 'column', width: copyColumns, justifyContent: 'center' },
+      createElement(Text, { color: inkColor(getPalette().brandBright), bold: true, wrap: 'truncate-end' }, title),
+      createElement(
+        Text,
+        { color: inkColor(getPalette().code), wrap: 'truncate-end' },
+        createElement(Text, { bold: true }, 'Into the Unknown'),
+        '  探索未至之境',
+      ),
+      createElement(Text, { color: inkColor(getPalette().dim), wrap: 'truncate-end' }, hint),
     ),
   )
 }
