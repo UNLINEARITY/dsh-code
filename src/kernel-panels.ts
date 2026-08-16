@@ -9,7 +9,7 @@ import type { SessionDirectoryOptions, SessionRow } from './session-directory.ts
 import { panelViewport, revealRow } from './render/inspector.ts'
 import { textLines } from './render/lines.ts'
 import { DEFAULT_STATUSLINE_ITEMS, STATUS_ITEMS, type StatusItemId } from './render/status.ts'
-import { displayText, singleLineText, truncateColumns } from './render/text.ts'
+import { singleLineText, truncateColumns } from './render/text.ts'
 import { getPalette, inkColor } from './theme.ts'
 
 interface ListFrameProps {
@@ -27,7 +27,7 @@ function ListFrame(props: ListFrameProps): ReactElement {
   const viewport = panelViewport(stdout?.columns ?? 80, stdout?.rows ?? 30)
   if (viewport.maxHeight === 0) return createElement(Box, { display: 'none' })
   if (viewport.compact) {
-    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(`${props.title} · esc close`, viewport.contentColumns))
+    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(singleLineText(`${props.title} · esc close`), viewport.contentColumns))
   }
   const stateRows = props.loading
     ? [{ key: 'loading', text: '  loading…' }]
@@ -42,8 +42,8 @@ function ListFrame(props: ListFrameProps): ReactElement {
   return createElement(
     Box,
     { width: viewport.outerColumns, borderStyle: 'round', borderColor: inkColor(getPalette().dim), flexDirection: 'column', paddingX: 1 },
-    createElement(Text, { color: inkColor(getPalette().brandBright), wrap: 'truncate-end' }, truncateColumns(props.title, viewport.contentColumns)),
-    createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns(`search: ${props.query === '' ? 'type to filter' : props.query}`, viewport.contentColumns)),
+    createElement(Text, { color: inkColor(getPalette().brandBright), wrap: 'truncate-end' }, truncateColumns(singleLineText(props.title), viewport.contentColumns)),
+    createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns(singleLineText(`search: ${props.query === '' ? 'type to filter' : props.query}`), viewport.contentColumns)),
     ...visible.map((row, index) => {
       const absolute = offset + index
       const selected = !props.loading && props.error === undefined && props.rows.length > 0 && absolute === props.cursor
@@ -52,9 +52,9 @@ function ListFrame(props: ListFrameProps): ReactElement {
         color: selected ? inkColor(getPalette().brandBright) : row.disabled ? inkColor(getPalette().dim) : undefined,
         dimColor: row.disabled,
         wrap: 'truncate-end',
-      }, truncateColumns(`${selected ? '› ' : '  '}${row.text}`, viewport.contentColumns))
+      }, truncateColumns(`${selected ? '› ' : '  '}${singleLineText(row.text)}`, viewport.contentColumns))
     }),
-    createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns(props.footer, viewport.contentColumns)),
+    createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns(singleLineText(props.footer), viewport.contentColumns)),
   )
 }
 
@@ -245,7 +245,7 @@ function DocumentPanel({ title, text, error, close }: {
   return createElement(
     Box,
     { width: viewport.outerColumns, borderStyle: 'round', borderColor: inkColor(getPalette().dim), flexDirection: 'column', paddingX: 1 },
-    createElement(Text, { color: inkColor(getPalette().brandBright), wrap: 'truncate-end' }, truncateColumns(title, viewport.contentColumns)),
+    createElement(Text, { color: inkColor(getPalette().brandBright), wrap: 'truncate-end' }, truncateColumns(singleLineText(title), viewport.contentColumns)),
     ...body.map((line, index) => createElement(Text, { key: `${scroll}-${index}`, wrap: 'truncate-end' }, truncateColumns(line, viewport.contentColumns))),
     createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns(`lines ${lines.length === 0 ? 0 : scroll + 1}-${Math.min(lines.length, scroll + viewport.bodyRows)}/${lines.length} · ↑↓/pg/g/G · t/esc close`, viewport.contentColumns)),
   )
@@ -319,7 +319,7 @@ export function HistoryPanel({ entries, fill, close }: {
             color: selected ? inkColor(getPalette().brandBright) : undefined,
             wrap: 'truncate-end',
           },
-          truncateColumns((selected ? '› ' : '  ') + displayText(entry), viewport.contentColumns),
+          truncateColumns((selected ? '› ' : '  ') + singleLineText(entry), viewport.contentColumns),
         )
       })),
     createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns('↑↓ move · g/G ends · enter fill · esc close', viewport.contentColumns)),

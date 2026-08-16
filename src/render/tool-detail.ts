@@ -17,6 +17,9 @@ const MAX_READ_LINES = 120
 const MAX_SOURCES = 10
 const MAX_RAW_CHARS = 6000
 const MAX_LINE_COLUMNS = 240
+/** Hard caps on adversarial `tool/result.meta` before any row is built. */
+const MAX_DIFFS = 8
+const MAX_DIFF_TEXT_CHARS = 24_000
 
 /** One rendered diff row: removed, added, or shared context. */
 export interface DiffLine {
@@ -77,15 +80,32 @@ function toLines(text: string): string[] {
  * Render one change as removed-then-added rows, hunked by common prefix and
  * suffix. A null before-image (file create) renders as pure additions. The
  * budget caps emitted rows and reports the cut, so a whole-file overwrite
- * never floods the transcript.
+ * never floods the transcript. Inputs are hard-capped before line splitting
+ * and the row list is built incrementally up to the budget — a crafted or
+ * replayed giant diff cannot force a full intermediate rows array.
  * @param oldText - prior content, or null for a create.
  * @param newText - content after the change.
  * @param budget - maximum rows to emit.
  * @returns the bounded rows and whether they were cut.
  */
 export function diffRows(oldText: string | null, newText: string, budget: number): { lines: readonly DiffLine[]; truncated: boolean } {
-  const oldLines = oldText === null ? [] : toLines(oldText)
-  const newLines = toLines(newText)
+  const oldRaw = oldText ?? ''
+  const newRaw = newText
+  let inputTruncated = false
+  let oldSource = oldRaw
+  let newSource = newRaw
+  // Bound the working arrays before `toLines` allocates them: keep a
+  // combined-characters share of each side proportional to its input size.
+  const combined = oldRaw.length + newRaw.length
+  if (combined > MAX_DIFF_TEXT_CHARS) {
+    inputTruncated = true
+    const oldShare = Math.min(oldRaw.length, Math.floor(MAX_DIFF_TEXT_CHARS * oldRaw.length / combined))
+    const newShare = Math.min(newRaw.length, MAX_DIFF_TEXT_CHARS - oldShare)
+    oldSource = oldRaw.slice(0, oldShare)
+    newSource = newRaw.slice(0, newShare)
+  }
+  const oldLines = oldText === null ? [] : toLines(oldSource)
+  const newLines = toLines(newSource)
   let prefix = 0
   while (prefix < oldLines.length && prefix < newLines.length && oldLines[prefix] === newLines[prefix]) prefix += 1
   let suffix = 0
@@ -93,14 +113,20 @@ export function diffRows(oldText: string | null, newText: string, budget: number
     suffix < oldLines.length - prefix && suffix < newLines.length - prefix
     && oldLines[oldLines.length - 1 - suffix] === newLines[newLines.length - 1 - suffix]
   ) suffix += 1
-  const removed = oldLines.slice(prefix, oldLines.length - suffix)
-  const added = newLines.slice(prefix, newLines.length - suffix)
-  const rows: DiffLine[] = [
-    ...removed.map((text): DiffLine => ({ mark: '-', text: clipLine(text) })),
-    ...added.map((text): DiffLine => ({ mark: '+', text: clipLine(text) })),
-  ]
-  if (rows.length <= budget) return { lines: rows, truncated: false }
-  return { lines: rows.slice(0, budget), truncated: true }
+  const removedCount = oldLines.length - prefix - suffix
+  const addedCount = newLines.length - prefix - suffix
+  const truncated = inputTruncated || removedCount + addedCount > budget
+  // Build at most `budget` rows directly; never materialize the full hunk.
+  const rows: DiffLine[] = []
+  const removedLimit = Math.min(removedCount, Math.max(0, budget))
+  for (let index = 0; index < removedLimit; index += 1) {
+    rows.push({ mark: '-', text: clipLine(oldLines[prefix + index] ?? '') })
+  }
+  const addedLimit = Math.min(addedCount, Math.max(0, budget - removedLimit))
+  for (let index = 0; index < addedLimit; index += 1) {
+    rows.push({ mark: '+', text: clipLine(newLines[prefix + index] ?? '') })
+  }
+  return { lines: rows, truncated }
 }
 
 /** Whether `value` is a valid upstream FileDiff (defensive narrowing). */
@@ -140,45 +166,60 @@ export function toolResultDetail(meta: unknown, rawText: string): ToolDetail | u
     const record = meta as Record<string, unknown>
 
     const diffs = record['diffs']
-    if (Array.isArray(diffs) && diffs.length > 0 && diffs.every(isFileDiff)) {
-      const budget = Math.max(8, Math.floor(MAX_DIFF_LINES / diffs.length))
-      return {
-        kind: 'diff',
-        diffs: diffs.map(diff => ({
-          path: diff.path,
-          ...diffRows(diff.oldText, diff.newText, budget),
-        })),
+    // Validate and process only the capped prefix: an adversarial meta with
+    // thousands of diffs never runs `.every` over the full array.
+    if (Array.isArray(diffs) && diffs.length > 0) {
+      const capped = diffs.slice(0, MAX_DIFFS)
+      if (capped.every(isFileDiff)) {
+        const budget = Math.max(8, Math.floor(MAX_DIFF_LINES / capped.length))
+        // Diffs dropped beyond the cap must not vanish silently: the last
+        // kept diff reports the cut exactly like a hunk cut does.
+        const dropped = diffs.length > capped.length
+        const rendered = capped.map((diff, index) => {
+          const rows = diffRows(diff.oldText, diff.newText, budget)
+          return dropped && index === capped.length - 1
+            ? { path: diff.path, ...rows, truncated: true }
+            : { path: diff.path, ...rows }
+        })
+        return { kind: 'diff', diffs: rendered }
       }
     }
 
     const { path, offset, lines, totalLines } = record
     if (typeof path === 'string' && Number.isInteger(offset) && (offset as number) >= 1
       && Number.isInteger(totalLines) && (totalLines as number) >= 0
-      && Array.isArray(lines) && lines.every(isReadLine)) {
-      const window = lines as { number: number; text: string }[]
-      const truncated = window.length > MAX_READ_LINES
-      return {
-        kind: 'read',
-        path,
-        offset: offset as number,
-        lines: (truncated ? window.slice(0, MAX_READ_LINES) : window)
-          .map(line => ({ number: line.number, text: clipLine(line.text) })),
-        totalLines: totalLines as number,
-        truncated,
+      && Array.isArray(lines)) {
+      // Validate the bounded window only: lines beyond the display cap are
+      // dropped anyway, so a giant persisted window cannot force a full-array
+      // validation pass before the slice.
+      const window = lines.slice(0, MAX_READ_LINES)
+      if (window.every(isReadLine)) {
+        const truncated = lines.length > MAX_READ_LINES
+        return {
+          kind: 'read',
+          path,
+          offset: offset as number,
+          lines: window.map(line => ({ number: line.number, text: clipLine(line.text) })),
+          totalLines: totalLines as number,
+          truncated,
+        }
       }
     }
 
     const sources = record['sources']
-    if (Array.isArray(sources) && sources.every(isWebSource)) {
-      const truncated = sources.length > MAX_SOURCES
-      return {
-        kind: 'web-search',
-        sources: (truncated ? sources.slice(0, MAX_SOURCES) : sources).map(source => ({
-          url: source.url,
-          title: typeof source.title === 'string' ? source.title : undefined,
-          snippet: typeof source.snippet === 'string' ? clipLine(source.snippet) : '',
-        })),
-        truncated,
+    if (Array.isArray(sources)) {
+      const capped = sources.slice(0, MAX_SOURCES)
+      if (capped.every(isWebSource)) {
+        const truncated = sources.length > MAX_SOURCES
+        return {
+          kind: 'web-search',
+          sources: capped.map(source => ({
+            url: source.url,
+            title: typeof source.title === 'string' ? source.title : undefined,
+            snippet: typeof source.snippet === 'string' ? clipLine(source.snippet) : '',
+          })),
+          truncated,
+        }
       }
     }
 

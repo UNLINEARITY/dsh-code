@@ -100,3 +100,22 @@ describe('renderMarkdown', () => {
     expect(() => renderMarkdown('**open and `code', 40)).not.toThrow()
   })
 })
+
+describe('renderMarkdown tab normalization', () => {
+  it('converts tabs to two visible spaces in paragraphs', () => {
+    expect(text(renderMarkdown('a\tb', 80))).toEqual(['a  b'])
+  })
+
+  it('converts tabs inside fenced code blocks', () => {
+    expect(text(renderMarkdown('```\n\tconst x = 1\n```', 80))).toEqual(['    const x = 1'])
+  })
+
+  it('keeps every wrapped row within the column budget when tabs are present', () => {
+    const lines = renderMarkdown('\t\t\t\tword\t\t', 12)
+    for (const line of lines) {
+      const width = line.segments.reduce((sum, segment) => sum + visibleColumns(segment.text), 0)
+      expect(width).toBeLessThanOrEqual(12)
+    }
+    expect(lines.flatMap(line => line.segments).join('')).not.toContain('\t')
+  })
+})

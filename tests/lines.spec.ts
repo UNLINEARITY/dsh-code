@@ -65,4 +65,30 @@ describe('styled terminal lines', () => {
     expect(text).toContain('tool-0')
     expect(text).toContain('tool-59')
   })
+
+  it('sanitizes live tool and command names before physical-row rendering', () => {
+    const tool: TranscriptEntry = {
+      kind: 'tool',
+      callId: 'call',
+      name: 'evil\x1b]0;pwned\x07fetch',
+      arguments: '{}',
+      preview: '',
+      state: 'running',
+      summary: '',
+      detail: undefined,
+    }
+    const command: TranscriptEntry = {
+      kind: 'command',
+      commandId: 'command',
+      name: 'wipe\x1b[2J',
+      args: '',
+      state: 'running',
+      summary: '',
+    }
+    const rendered = `${textOf(transcriptEntryLines(tool, 80))}\n${textOf(transcriptEntryLines(command, 80))}`
+    expect(rendered).toContain('evil\\x1b]0;pwned\\x07fetch')
+    expect(rendered).toContain('/wipe\\x1b[2J')
+    expect(rendered).not.toContain('\x1b]0;')
+    expect(rendered).not.toContain('\x1b[2J')
+  })
 })

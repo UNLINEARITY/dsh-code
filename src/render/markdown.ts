@@ -178,7 +178,10 @@ export function renderMarkdown(text: string, width: number): readonly MdLine[] {
     }
     separatorPending = false
   }
-  const raw = text.replaceAll('\r', '')
+  // Tabs become two visible spaces: terminal tab stops are contextual and
+  // cannot participate in a deterministic column budget (the same rule the
+  // styled-row path applies in lines.ts).
+  const raw = text.replaceAll('\r', '').replaceAll('\t', '  ')
   const source = raw.split('\n')
   let index = 0
   while (index < source.length) {

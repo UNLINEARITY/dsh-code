@@ -5,6 +5,7 @@ import { createElement } from 'react'
 import { render } from 'ink'
 import { describe, expect, it, vi } from 'vitest'
 import { App } from '../src/app.ts'
+import { HistoryPanel, ModePanel, ResumePanel } from '../src/kernel-panels.ts'
 import { createTranscriptStore } from '../src/store.ts'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { DEFAULT_STATUSLINE_ITEMS } from '../src/render/status.ts'
@@ -1099,6 +1100,136 @@ describe('/effort command', () => {
       expect(output).toContain('○ Off')
       expect(output).toContain('High · default')
       expect(output).toContain('Max')
+    } finally {
+      instance.unmount()
+      stdin.destroy()
+      stdout.destroy()
+    }
+  })
+})
+
+describe('panel row sanitization', () => {
+  const fakeStreams = (columns = 100, rows = 24): {
+    stdin: NodeJS.ReadStream
+    stdout: NodeJS.WriteStream
+    read: () => string
+  } => {
+    const stdin = Object.assign(new PassThrough(), {
+      isTTY: true,
+      isRaw: false,
+      setRawMode(value: boolean) {
+        this.isRaw = value
+        return this
+      },
+      ref() {},
+      unref() {},
+    }) as unknown as NodeJS.ReadStream
+    const stdout = Object.assign(new PassThrough(), {
+      isTTY: true,
+      columns,
+      rows,
+    }) as unknown as NodeJS.WriteStream
+    let output = ''
+    stdout.on('data', chunk => {
+      output += chunk.toString()
+    })
+    return { stdin, stdout, read: () => output }
+  }
+
+  it('sanitizes preset names and descriptions in the /mode list', async () => {
+    const { stdin, stdout, read } = fakeStreams()
+    const instance = render(createElement(ModePanel, {
+      current: 'standard',
+      load: async () => [{
+        id: 'evil',
+        trust: 'user' as const,
+        name: 'bad\x1b]0;pwned\x07name',
+        description: 'desc\u202eFlipped\nnewline',
+      }],
+      select: () => {},
+      close: () => {},
+    }), {
+      stdin,
+      stdout,
+      stderr: stdout,
+      exitOnCtrlC: false,
+      patchConsole: false,
+    })
+    try {
+      await wait()
+      const output = read()
+      expect(output).toContain('bad\\x1b]0;pwned\\x07name')
+      expect(output).toContain('desc\\u202eFlipped ↵ newline')
+      expect(output).not.toContain('\x1b]')
+      expect(output).not.toContain('\u202e')
+    } finally {
+      instance.unmount()
+      stdin.destroy()
+      stdout.destroy()
+    }
+  })
+
+  it('sanitizes session titles and workspaces in /resume rows', async () => {
+    const { stdin, stdout, read } = fakeStreams()
+    const instance = render(createElement(ResumePanel, {
+      currentCwd: 'C:\\repo',
+      load: async () => [{
+        id: 's-1',
+        createdAt: 1,
+        cwd: 'C:\\evil',
+        workspace: 'evil',
+        subagent: false,
+        resumable: true,
+        live: false,
+        persisted: true,
+        preset: 'standard',
+        title: 'T\x1b[31mred\u202eR',
+      }],
+      readTranscript: async () => '',
+      select: () => {},
+      close: () => {},
+    }), {
+      stdin,
+      stdout,
+      stderr: stdout,
+      exitOnCtrlC: false,
+      patchConsole: false,
+    })
+    try {
+      await wait()
+      const output = read()
+      expect(output).toContain('T\\x1b[31mred\\u202eR')
+      expect(output).not.toContain('\x1b[31m')
+      expect(output).not.toContain('\u202e')
+    } finally {
+      instance.unmount()
+      stdin.destroy()
+      stdout.destroy()
+    }
+  })
+
+  it('keeps multiline, tabbed, and OSC history entries on one physical row', async () => {
+    const { stdin, stdout, read } = fakeStreams()
+    const instance = render(createElement(HistoryPanel, {
+      entries: ['line one\nline two\t tabbed', 'bad\x1b]0;x\x07entry'],
+      fill: () => {},
+      close: () => {},
+    }), {
+      stdin,
+      stdout,
+      stderr: stdout,
+      exitOnCtrlC: false,
+      patchConsole: false,
+    })
+    try {
+      await wait()
+      const output = read()
+      // Newlines collapse to the ↵ marker and tabs to two spaces, so a
+      // persisted multi-line prompt never breaks the one-row budget; the
+      // OSC introducer is rendered as a visible \x1b escape.
+      expect(output).toContain('line one ↵ line two   tabbed')
+      expect(output).toContain('bad\\x1b]0;x\\x07entry')
+      expect(output).not.toContain('\x1b]')
     } finally {
       instance.unmount()
       stdin.destroy()

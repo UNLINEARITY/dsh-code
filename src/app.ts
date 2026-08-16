@@ -520,7 +520,7 @@ function EntryLine({ entry, showReasoning, verbose }: { entry: TranscriptEntry; 
           { wrap: verbose ? 'truncate-end' : undefined },
           mark,
           ' ',
-          brand(entry.name),
+          brand(displayText(entry.name)),
           entry.preview === '' ? '' : ` ${dim(displayText(entry.preview))}`,
         ),
         entry.summary === ''
@@ -549,7 +549,7 @@ function EntryLine({ entry, showReasoning, verbose }: { entry: TranscriptEntry; 
           { wrap: verbose ? 'truncate-end' : undefined },
           mark,
           ' ',
-          brand(`/${entry.name}`),
+          brand(displayText(`/${entry.name}`)),
           entry.args === '' ? '' : ` ${dim(displayText(entry.args))}`,
         ),
         entry.summary === ''
@@ -1777,7 +1777,7 @@ function CompletionMenu({ active, mention, index, rows }: {
  * While a modal (approval / question / model panel) owns the keys, the
  * box passes every key through untouched.
  */
-function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openEffort, openHelp, openMode, openResume, openPlugin, openStatusline, openTheme, openHistory, createSession, cancelSessionSwitch, notify, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, cyclePermission, exportTranscript, renameTitle, recallSpace, recordLocal, recordHistory, queued, cancelQueued, historyFill, historyConsumed, waveTick, waveTier, waveStyle }: {
+function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openEffort, openHelp, openMode, openResume, openPlugin, openStatusline, openTheme, openHistory, createSession, cancelSessionSwitch, notify, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, cyclePermission, exportTranscript, renameTitle, recallSpace, recordLocal, recordHistory, queued, cancelQueued, historyFill, historyConsumed, waveTier, waveStyle }: {
   active: boolean
   frozen: boolean
   busy: boolean
@@ -1823,11 +1823,9 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   historyFill: { text: string; index: number } | undefined
   /** Marks the accepted entry consumed (called after the fill is applied). */
   historyConsumed(): void
-  /** DeepSeek easter-egg wave frame (null when static): the composer's input
-   * row rides Codex's Wave sweep (33ms tick, 1.0s flash / 1.3s deepseek). */
-  waveTick: number | null
-  /** The wave tier of the applied official DeepSeek model (null otherwise):
-   * drives the persistent prompt glyph/accent and the sparkle tier. */
+  /** DeepSeek easter-egg wave tier of the applied official DeepSeek model
+   * (null otherwise): drives the persistent prompt glyph/accent and the
+   * sparkle tier. */
   waveTier: DeepseekWaveTier | null
   /** The ignition style running, if any: Wave / Aurora / Pulse. */
   waveStyle: DeepseekWaveStyle | null
@@ -2236,6 +2234,42 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
     }
   })
 
+  // The DeepSeek easter-egg wave owns its 33ms tick HERE instead of in App:
+  // the interval re-renders only the composer row at 30fps, never the whole
+  // tree. App drives the tier/style pair on a model switch; this local effect
+  // starts the sweep whenever that pair changes (App picks a NEW random style
+  // for every replay — including effort changes on the same route — so the
+  // pair always differs when a new wave should run) and stops it when the
+  // model leaves the official DeepSeek route (tier becomes null).
+  const [waveTick, setWaveTick] = useState<number | null>(null)
+  const wavePrevious = useRef<{ tier: DeepseekWaveTier | null; style: DeepseekWaveStyle | null }>({ tier: null, style: null })
+  useEffect(() => {
+    const previous = wavePrevious.current
+    wavePrevious.current = { tier: waveTier, style: waveStyle }
+    if (waveTier === null) {
+      setWaveTick(null)
+      return
+    }
+    if (previous.tier !== waveTier || previous.style !== waveStyle) {
+      setWaveTick(0)
+    }
+  }, [waveTier, waveStyle])
+  const waveActive = waveTick !== null && waveTier !== null && waveStyle !== null
+    && waveTick * DEEPSEEK_WAVE_TICK_MS < deepseekWaveDuration(waveTier, waveStyle)
+  useEffect(() => {
+    if (!waveActive) return
+    const id = setInterval(() => {
+      setWaveTick(current => (current === null ? 0 : current + 1))
+    }, DEEPSEEK_WAVE_TICK_MS)
+    return () => {
+      clearInterval(id)
+    }
+  }, [waveActive])
+  useEffect(() => {
+    if (waveTick !== null && waveTier !== null && waveStyle !== null
+      && waveTick * DEEPSEEK_WAVE_TICK_MS >= deepseekWaveDuration(waveTier, waveStyle)) setWaveTick(null)
+  }, [waveTick, waveTier, waveStyle])
+
   // Every exclusive panel keeps the composer as a stable visual anchor, but
   // freezes it to one row: no menu, multiline wrap, or animation.
   const tierActive = waveTier !== null
@@ -2371,6 +2405,167 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   )
 }
 
+/** One cached settled row: the row Box plus its roomy-prompt spacers. */
+interface SettledRowRecord {
+  /** The row Box element (keyed by the entry's settled index). */
+  box: ReactElement
+  /** The roomy-prompt spacer BEFORE the row, or undefined. */
+  before: ReactElement | undefined
+  /** The roomy-prompt spacer AFTER the row, or undefined. */
+  after: ReactElement | undefined
+  /** Whether the row's text depends on the reasoning toggle (Ctrl+R). */
+  reasonSensitive: boolean
+  /** The toggle state the row was built with. */
+  showReasoning: boolean
+}
+
+/** The incremental settled-history cache (see `computeSettledRows`). */
+interface SettledRowsCache {
+  /** The exact settled entries the cache covers (`view.entries[0..entries.length)`). */
+  entries: TranscriptEntry[]
+  /** Records keyed by entry identity; mutated in place so the append path
+   * never copies the whole map. */
+  records: Map<TranscriptEntry, SettledRowRecord>
+  /** The header element (depends only on `resumed`). */
+  header: ReactElement
+  /** The `resumed` the header was built with. */
+  resumed: boolean
+  /** The toggle state the rows were built with. */
+  showReasoning: boolean
+  /** The refreshEpoch the rows were built for; a bump forces a full rebuild. */
+  epoch: number
+  /** The flat row list (header + per-entry before/box/after). */
+  flat: ReactElement[]
+}
+
+/** One step of `computeSettledRows`. */
+interface SettledRowsResult {
+  cache: SettledRowsCache
+  /** How many rows had to be BUILT by this step (0 = pure reuse). */
+  built: number
+}
+
+/** Build one settled row (row Box plus its roomy-prompt spacers). */
+function buildSettledRow(entry: TranscriptEntry, index: number, showReasoning: boolean): SettledRowRecord {
+  const row = createElement(EntryLine, { entry, showReasoning, verbose: false })
+  const roomyPrompt = entry.kind === 'user' && !entry.notice
+  return {
+    box: createElement(Box, { key: index, paddingX: 1 }, row),
+    before: roomyPrompt
+      ? createElement(Box, { key: `prompt-before-${index}`, paddingX: 1 }, createElement(Text, null, ' '))
+      : undefined,
+    after: roomyPrompt
+      ? createElement(Box, { key: `prompt-after-${index}`, paddingX: 1 }, createElement(Text, null, ' '))
+      : undefined,
+    reasonSensitive: entry.kind === 'assistant' && entry.reasoning !== '',
+    showReasoning,
+  }
+}
+
+/**
+ * The settled `<Static>` row set as a PURE incremental state machine (App
+ * drives it from the memo; tests drive it directly and read `built`).
+ *
+ * The settled prefix is permanently final: the projection only APPENDS below
+ * the flush boundary, removes pending rows at or beyond it, and replaces
+ * running tool/retry/command rows there too. So extending the cache never
+ * rescans the old prefix — a grown boundary builds ONLY the newly settled
+ * suffix and reuses every cached element, letting React bail out of unchanged
+ * rows and keeping long histories out of the per-durable-event path (no O(N)
+ * rebuild of rows, Map, or MarkdownBody parses). `records` is mutated in place
+ * on the append/toggle paths to stay O(delta).
+ *
+ * Full rebuilds run only on the rare, deliberate paths: no cache yet, a
+ * source-backed replay (`epoch` bump: resize / Ctrl+L / Ctrl+R remounts
+ * `<Static>` and must re-flush the CURRENT rows), a `resumed` change, or a shrink
+ * (`store.reset`). A reasoning toggle rebuilds only the rows whose text
+ * depends on it, preserving the other rows' element identity.
+ */
+export function computeSettledRows(
+  previous: SettledRowsCache | undefined,
+  entries: readonly TranscriptEntry[],
+  settled: number,
+  showReasoning: boolean,
+  resumed: boolean,
+  epoch: number,
+): SettledRowsResult {
+  if (previous === undefined || previous.epoch !== epoch || previous.resumed !== resumed
+    || settled < previous.entries.length) {
+    // Full rebuild from the current settled prefix.
+    const records = new Map<TranscriptEntry, SettledRowRecord>()
+    const flat: ReactElement[] = [createElement(Header, { key: 'header', resumed })]
+    for (let index = 0; index < settled; index++) {
+      const entry = entries[index]
+      const record = buildSettledRow(entry, index, showReasoning)
+      records.set(entry, record)
+      if (record.before !== undefined) flat.push(record.before)
+      flat.push(record.box)
+      if (record.after !== undefined) flat.push(record.after)
+    }
+    return {
+      cache: { entries: entries.slice(0, settled), records, header: flat[0]!, resumed, showReasoning, epoch, flat },
+      built: settled,
+    }
+  }
+  if (previous.showReasoning !== showReasoning) {
+    // Reasoning toggle: only rows whose text depends on it rebuild; spacers
+    // and the other rows keep their element identity.
+    const records = previous.records
+    const flat: ReactElement[] = [previous.header]
+    let built = 0
+    for (let index = 0; index < previous.entries.length; index++) {
+      const entry = previous.entries[index]
+      const record = records.get(entry)!
+      const current = record.reasonSensitive
+        ? {
+          ...record,
+          box: createElement(Box, { key: index, paddingX: 1 }, createElement(EntryLine, { entry, showReasoning, verbose: false })),
+          showReasoning,
+        }
+        : record
+      if (current !== record) {
+        records.set(entry, current)
+        built += 1
+      }
+      if (current.before !== undefined) flat.push(current.before)
+      flat.push(current.box)
+      if (current.after !== undefined) flat.push(current.after)
+    }
+    return { cache: { ...previous, records, showReasoning, flat }, built }
+  }
+  if (settled === previous.entries.length) {
+    // Nothing below the boundary changed (a pending retirement above it, a
+    // tool/result at the boundary): keep the SAME flat identity so the
+    // memoized <Static> subtree does not re-render at all.
+    return { cache: previous, built: 0 }
+  }
+  // The boundary grew: build ONLY the newly settled suffix.
+  const records = previous.records
+  const suffix: TranscriptEntry[] = []
+  const added: ReactElement[] = []
+  for (let index = previous.entries.length; index < settled; index++) {
+    const entry = entries[index]
+    const record = buildSettledRow(entry, index, showReasoning)
+    records.set(entry, record)
+    suffix.push(entry)
+    if (record.before !== undefined) added.push(record.before)
+    added.push(record.box)
+    if (record.after !== undefined) added.push(record.after)
+  }
+  return {
+    cache: {
+      entries: previous.entries.concat(suffix),
+      records,
+      header: previous.header,
+      resumed: previous.resumed,
+      showReasoning,
+      epoch: previous.epoch,
+      flat: previous.flat.concat(added),
+    },
+    built: settled - previous.entries.length,
+  }
+}
+
 /** The whole terminal app; state arrives via the store, output via Ink. */
 export function App(props: AppProps): ReactElement {
   const view = useSyncExternalStore(props.store.subscribe, props.store.getView)
@@ -2388,8 +2583,10 @@ export function App(props: AppProps): ReactElement {
    * per-style durations), then the band returns to static while the prompt
    * marker keeps the tier accent. The trigger follows the applied model
    * label (what the status bar actually shows), never the initial paint,
-   * and the tier is derived from the label and cached at the switch. */
-  const [waveTick, setWaveTick] = useState<number | null>(null)
+   * and the tier is derived from the label and cached at the switch. The
+   * 33ms tick itself lives inside Input, so the sweep re-renders only the
+   * composer row, not the whole tree, at 30fps; App owns the rarely-changing
+   * tier/style and Input starts the sweep whenever that pair changes. */
   const [waveTier, setWaveTier] = useState<DeepseekWaveTier | null>(null)
   const [waveStyle, setWaveStyle] = useState<DeepseekWaveStyle | null>(null)
   const previousModel = useRef<string | undefined>(undefined)
@@ -2407,7 +2604,6 @@ export function App(props: AppProps): ReactElement {
     if (!isOfficialDeepSeekLabel(modelLabel)) {
       setWaveTier(null)
       setWaveStyle(null)
-      setWaveTick(null)
       return
     }
     if (modelChanged || effortChanged) {
@@ -2415,24 +2611,8 @@ export function App(props: AppProps): ReactElement {
       const nextStyle = deepseekWaveStyleRandom(previousStyle.current)
       previousStyle.current = nextStyle
       setWaveStyle(nextStyle)
-      setWaveTick(0)
     }
   }, [modelLabel, effortLabel])
-  const waveActive = waveTick !== null && waveTier !== null && waveStyle !== null
-    && waveTick * DEEPSEEK_WAVE_TICK_MS < deepseekWaveDuration(waveTier, waveStyle)
-  useEffect(() => {
-    if (!waveActive) return
-    const id = setInterval(() => {
-      setWaveTick(current => (current === null ? 0 : current + 1))
-    }, DEEPSEEK_WAVE_TICK_MS)
-    return () => {
-      clearInterval(id)
-    }
-  }, [waveActive])
-  useEffect(() => {
-    if (waveTick !== null && waveTier !== null && waveStyle !== null
-      && waveTick * DEEPSEEK_WAVE_TICK_MS >= deepseekWaveDuration(waveTier, waveStyle)) setWaveTick(null)
-  }, [waveTick, waveTier, waveStyle])
   const [directory, setDirectory] = useState<ModelDirectory | undefined>(undefined)
   const [modelError, setModelError] = useState<string | undefined>(undefined)
   const [modelLoadEpoch, setModelLoadEpoch] = useState(0)
@@ -2489,11 +2669,24 @@ export function App(props: AppProps): ReactElement {
   const historyConsumed = useCallback((): void => {
     setHistoryFill(undefined)
   }, [])
-  /** Live queued inbox rows (event-sourced from `agent/inbox/spliced`). */
-  const queuedRows = useMemo(
-    () => view.entries.filter((entry): entry is Extract<TranscriptEntry, { kind: 'pending' }> => entry.kind === 'pending'),
-    [view.entries],
-  )
+  /** The append-only flush boundary (see `settledEntryCount`): entries below
+   * this index are final and ride the `<Static>` scrollback; everything at or
+   * beyond stays in the live tree. Pending inbox rows always live at
+   * index >= settled, so the queued-inbox scan below only walks the mutable
+   * tail instead of the whole history. */
+  const settled = useMemo(() => settledEntryCount(view.entries), [view.entries])
+  /** Live queued inbox rows (event-sourced from `agent/inbox/spliced`). The
+   * projection only appends and removes pending rows at index >= settled, so
+   * a bounded tail scan replaces an unconditional O(history) filter on every
+   * event. */
+  const queuedRows = useMemo(() => {
+    const rows: Array<Extract<TranscriptEntry, { kind: 'pending' }>> = []
+    for (let index = settled; index < view.entries.length; index++) {
+      const entry = view.entries[index]
+      if (entry.kind === 'pending') rows.push(entry)
+    }
+    return rows
+  }, [view.entries, settled])
   const [refreshEpoch, setRefreshEpoch] = useState(0)
   const approvalSnapshot = useSyncExternalStore(props.approval.subscribe, props.approval.getSnapshot)
   const questionSnapshot = useSyncExternalStore(props.questions.subscribe, props.questions.getSnapshot)
@@ -2519,34 +2712,33 @@ export function App(props: AppProps): ReactElement {
   }, [approvalPending, questionPending])
 
   // Append-only transcript: everything up to the first still-mutable entry
-  // (a running tool/retry) flushes through Ink's `<Static>` into native
+  // (a running tool/retry/command) flushes through Ink's `<Static>` into native
   // scrollback and is normally never rewritten — the Claude-Code stability
-  // contract
-  // that lets arbitrarily long conversations scroll instead of freezing when
-  // the live tree exceeds the terminal height. The dynamic region below stays
-  // small: the streaming tail, modals, composer, and its status footer.
-  // `assistant/chunk` preserves `entries` identity. Memoizing on that identity
-  // keeps long settled histories out of the per-token render path.
-  const settled = useMemo(() => settledEntryCount(view.entries), [view.entries])
-  // Claude-Code spacing: one blank row before each user prompt (except the
-  // first) separates replies from the next turn. Settled rows flush once with
-  // the reasoning toggle as it is NOW (Ctrl+R affects subsequent flushes);
-  // Ctrl+O browses the frozen history through a bounded selected-entry view.
+  // contract that lets arbitrarily long conversations scroll instead of
+  // freezing when the live tree exceeds the terminal height. The dynamic
+  // region below stays small: the streaming tail, modals, composer, and its
+  // status footer. `assistant/chunk` preserves `entries` identity.
+  //
+  // `computeSettledRows` extends the cached row set incrementally: the
+  // settled prefix is permanently final, so a grown boundary builds ONLY the
+  // newly settled suffix and reuses every cached element — long histories
+  // stop re-creating rows (and re-parsing MarkdownBody) on every durable
+  // event. A source-backed replay (`refreshEpoch` bump: resize / Ctrl+L /
+  // Ctrl+R remounts `<Static>`) rebuilds the CURRENT row set from index 0,
+  // so the replay stays complete and never ghosts a pending/running tail.
+  const settledRowsCache = useRef<SettledRowsCache | undefined>(undefined)
   const settledRows = useMemo(() => {
-    const rows: ReactElement[] = [createElement(Header, { key: 'header', resumed: props.resumed })]
-    view.entries.slice(0, settled).forEach((entry, index) => {
-      const row = createElement(EntryLine, { entry, showReasoning, verbose: false })
-      const roomyPrompt = entry.kind === 'user' && !entry.notice
-      if (roomyPrompt) {
-        rows.push(createElement(Box, { key: `prompt-before-${index}`, paddingX: 1 }, createElement(Text, null, ' ')))
-      }
-      rows.push(createElement(Box, { key: index, paddingX: 1 }, row))
-      if (roomyPrompt) {
-        rows.push(createElement(Box, { key: `prompt-after-${index}`, paddingX: 1 }, createElement(Text, null, ' ')))
-      }
-    })
-    return rows
-  }, [view.entries, settled, showReasoning, props.resumed])
+    const result = computeSettledRows(
+      settledRowsCache.current,
+      view.entries,
+      settled,
+      showReasoning,
+      props.resumed,
+      refreshEpoch,
+    )
+    settledRowsCache.current = result.cache
+    return result.cache.flat
+  }, [view.entries, settled, showReasoning, props.resumed, refreshEpoch])
 
   // Hook order is unconditional. Its dimensions drive every live-region
   // budget before any dynamic rows are constructed.
@@ -2896,7 +3088,6 @@ export function App(props: AppProps): ReactElement {
         cancelQueued: props.cancelQueued,
         historyFill,
         historyConsumed,
-        waveTick,
         waveTier,
         waveStyle,
       }),

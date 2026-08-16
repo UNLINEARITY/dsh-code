@@ -7,8 +7,9 @@ import { render } from 'ink'
 import { describe, expect, it, vi } from 'vitest'
 import { createAssistantMessage, createToolResultMessage, createUserMessage, type CallId } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
-import { App } from '../src/app.ts'
+import { App, computeSettledRows, type AppProps } from '../src/app.ts'
 import { createTranscriptStore } from '../src/store.ts'
+import type { TranscriptEntry } from '../src/render/projection.ts'
 import { DEFAULT_STATUSLINE_ITEMS } from '../src/render/status.ts'
 import { setTheme } from '../src/theme.ts'
 
@@ -19,6 +20,104 @@ const resizeClear = '\x1b[r\x1b[0m\x1b[H\x1b[2J\x1b[3J\x1b[H'
 // infinite re-render loop (Maximum update depth exceeded).
 const approvalSnapshot = Object.freeze({ pending: undefined, answered: false })
 const questionSnapshot = Object.freeze({ pending: undefined })
+const unsubscribe = (): void => {}
+const noop = (): void => {}
+
+/** One TTY harness: the PassThrough streams Ink renders through plus the
+ * accumulated stdout bytes. */
+interface TtyHarness {
+  stdin: NodeJS.ReadStream
+  stdout: NodeJS.WriteStream
+  output: { text: string }
+}
+
+/** Build the real-ink TTY streams the App tests render through. */
+function createTty(columns = 100, rows = 24): TtyHarness {
+  const stdin = Object.assign(new PassThrough(), {
+    isTTY: true,
+    isRaw: false,
+    setRawMode(value: boolean) {
+      this.isRaw = value
+      return this
+    },
+    ref() {},
+    unref() {},
+  }) as unknown as NodeJS.ReadStream
+  const stdout = Object.assign(new PassThrough(), {
+    isTTY: true,
+    columns,
+    rows,
+  }) as unknown as NodeJS.WriteStream
+  const output = { text: '' }
+  stdout.on('data', chunk => {
+    output.text += chunk.toString()
+  })
+  return { stdin, stdout, output }
+}
+
+/** The shared App props with inert doubles; override per test. */
+function appProps(overrides: Partial<AppProps> = {}): AppProps {
+  return {
+    store: createTranscriptStore(),
+    approval: { subscribe: () => unsubscribe, getSnapshot: () => approvalSnapshot },
+    questions: {
+      subscribe: () => unsubscribe,
+      getSnapshot: () => questionSnapshot,
+      submit: noop,
+      cancel: noop,
+    },
+    commands: { descriptors: [], subscribe: () => unsubscribe },
+    skills: { rows: [], subscribe: () => unsubscribe },
+    model: 'test/model',
+    cwd: 'dsh-cli',
+    workspaceRoot: 'C:\\repo\\dsh-cli',
+    branch: 'main',
+    sessionId: '12345678',
+    resumed: false,
+    mode: 'standard',
+    dispatch: noop,
+    steer: noop,
+    interrupt: () => false,
+    quit: noop,
+    loadModels: async () => ({ rows: [], failures: [] }),
+    loadMentions: async () => [],
+    selectModel: () => 'test/model',
+    cyclePermission: () => '',
+    exportTranscript: async () => {},
+    renameTitle: () => '',
+    loadPresets: async () => [],
+    switchMode: async id => id,
+    createSession: noop,
+    loadSessions: async () => [],
+    loadSessionTranscript: async () => '',
+    switchSession: noop,
+    cancelSessionSwitch: () => false,
+    loadPlugins: () => [],
+    statusline: DEFAULT_STATUSLINE_ITEMS,
+    saveStatusline: noop,
+    history: [],
+    recordHistory: noop,
+    cancelQueued: noop,
+    onBridgeReady: noop,
+    ...overrides,
+  }
+}
+
+/** Render <App> through one TTY harness. */
+function renderApp(harness: TtyHarness, props: AppProps): ReturnType<typeof render> {
+  return render(createElement(App, props), {
+    stdin: harness.stdin,
+    stdout: harness.stdout,
+    stderr: harness.stdout,
+    exitOnCtrlC: false,
+    patchConsole: false,
+  })
+}
+
+/** One settled assistant entry (pure-cache fixture). */
+function assistantEntry(text: string, reasoning = ''): TranscriptEntry {
+  return { kind: 'assistant', text, reasoning }
+}
 
 describe('Ctrl+O history details', () => {
   it('uses an exclusive bounded screen without clearing scrollback and preserves the draft', async () => {
@@ -1041,6 +1140,311 @@ describe('light theme rendering', () => {
       stdout.destroy()
       chalk.level = originalChalkLevel
       setTheme('dark')
+    }
+  })
+})
+
+describe('settledRows incremental cache (pure)', () => {
+  it('appends only the new suffix after a long history, reuses elements, and rebuilds targeted rows on toggle/replay', () => {
+    // 120 settled assistant rows; every 10th carries reasoning (12 sensitive).
+    const base = Array.from({ length: 120 }, (_, index) => assistantEntry(`msg-${index}`, index % 10 === 0 ? 'trace' : ''))
+    let result = computeSettledRows(undefined, base, 120, false, false, 0)
+    expect(result.built).toBe(120)
+    const firstFlat = result.cache.flat
+
+    // Appending one settled row builds ONLY that row — the 120-row prefix is
+    // never rescanned or rebuilt, and every existing element keeps identity.
+    const grown = [...base, assistantEntry('msg-120')]
+    result = computeSettledRows(result.cache, grown, 121, false, false, 0)
+    expect(result.built).toBe(1)
+    expect(result.cache.flat).not.toBe(firstFlat)
+    for (let index = 0; index < firstFlat.length; index++) {
+      expect(result.cache.flat[index]).toBe(firstFlat[index])
+    }
+
+    // No boundary change: the same flat identity is returned (Static skips).
+    const flatBefore = result.cache.flat
+    result = computeSettledRows(result.cache, grown, 121, false, false, 0)
+    expect(result.built).toBe(0)
+    expect(result.cache.flat).toBe(flatBefore)
+
+    // Reasoning toggle: only the 12 sensitive rows rebuild.
+    result = computeSettledRows(result.cache, grown, 121, true, false, 0)
+    expect(result.built).toBe(12)
+
+    // Source-backed replay (epoch bump): full rebuild of the current rows.
+    result = computeSettledRows(result.cache, grown, 121, true, false, 1)
+    expect(result.built).toBe(121)
+
+    // Shrink (store.reset): the prefix truncates to empty.
+    result = computeSettledRows(result.cache, [], 0, true, false, 1)
+    expect(result.built).toBe(0)
+    expect(result.cache.flat).toHaveLength(1)
+  })
+})
+
+describe('settled tool/command name sanitization', () => {
+  it('never writes raw OSC/CSI control bytes from a malicious tool or command name; renders the escaped literal', async () => {
+    const harness = createTty()
+    const { stdin, stdout, output } = harness
+    // A tool name carrying an OSC-0 title hijack (+ BEL) and a command name
+    // carrying a CSI clear-screen. Everything is seeded BEFORE the first
+    // render, so the rows settle straight into <Static> and the only paint
+    // path is the settled EntryLine (the running live region is a separate
+    // surface).
+    const oscTool = 'evil\x1b]0;pwned\x07fetch'
+    const csiCommand = 'wipe\x1b[2Jfetch'
+    const toolCallId = 'evil-tool' as CallId
+    const store = createTranscriptStore([
+      {
+        type: 'user/message',
+        seq: 1,
+        time: 1,
+        data: createUserMessage({ content: [{ type: 'text', text: 'go' }], source: { kind: 'user' } }),
+      } as SessionEvent,
+      {
+        type: 'tool/call',
+        seq: 2,
+        time: 2,
+        data: { turn: 1, step: 1, callId: toolCallId, name: oscTool, arguments: '{}' },
+      } as SessionEvent,
+      {
+        type: 'tool/result',
+        seq: 3,
+        time: 3,
+        data: {
+          turn: 1,
+          step: 1,
+          message: createToolResultMessage({ callId: toolCallId, content: [{ type: 'text', text: 'ok' }], isError: false }),
+        },
+      } as SessionEvent,
+      {
+        type: 'command/run',
+        seq: 4,
+        time: 4,
+        data: { commandId: 'evil-command', name: csiCommand, args: '--x' },
+      } as SessionEvent,
+      {
+        type: 'command/done',
+        seq: 5,
+        time: 5,
+        data: { commandId: 'evil-command', kind: 'success', text: 'done' },
+      } as SessionEvent,
+    ])
+    const instance = renderApp(harness, appProps({ store }))
+    try {
+      await wait()
+      // The sanitized literals reach the terminal as visible `\xNN` text.
+      expect(output.text).toContain('evil\\x1b]0;pwned\\x07fetch')
+      expect(output.text).toContain('wipe\\x1b[2Jfetch')
+      // The raw control sequences (OSC title hijack, CSI clear-screen) never
+      // reach the terminal bytes.
+      expect(output.text).not.toContain('evil\x1b]0;pwned\x07fetch')
+      expect(output.text).not.toContain('wipe\x1b[2Jfetch')
+      expect(output.text).not.toContain('\x1b]0;')
+      // The safe remainder of the names still renders.
+      expect(output.text).toContain('evil')
+      expect(output.text).toContain('wipe')
+      expect(output.text).toContain('fetch')
+      expect(output.text).toContain('done')
+    } finally {
+      instance.unmount()
+      stdin.destroy()
+      stdout.destroy()
+    }
+  })
+})
+
+describe('incremental settled transcript cache', () => {
+  it('shows a command/done replacement and later appends inside one settled history without ghosting', async () => {
+    const harness = createTty()
+    const { stdin, stdout, output } = harness
+    const store = createTranscriptStore([
+      {
+        type: 'user/message',
+        seq: 1,
+        time: 1,
+        data: createUserMessage({ content: [{ type: 'text', text: 'go' }], source: { kind: 'user' } }),
+      } as SessionEvent,
+      {
+        type: 'command/run',
+        seq: 2,
+        time: 2,
+        data: { commandId: 'lint', name: 'lint', args: 'src' },
+      } as SessionEvent,
+    ])
+    const instance = renderApp(harness, appProps({ store }))
+    try {
+      await wait()
+      // While the command runs it stays in the LIVE mutable tail (a flush
+      // boundary), rendering exactly one row — it never flushes to <Static>.
+      expect(output.text.match(/\/lint/g)).toHaveLength(1)
+
+      // command/done resolves the entry: it now settles, and the summary
+      // appears IMMEDIATELY (the cache append path flushes the resolved
+      // row) — no resize needed — exactly once.
+      store.apply({
+        type: 'command/done',
+        seq: 3,
+        time: 3,
+        data: { commandId: 'lint', kind: 'success', text: 'lint passed' },
+      } as SessionEvent)
+      await wait()
+      expect(output.text.match(/lint passed/g)).toHaveLength(1)
+
+      // A later source-backed replay (resize) re-flushes the CURRENT row set:
+      // the resolved command still appears exactly once in the rebuilt slice
+      // — no ghost of the running copy.
+      stdout.columns = 80
+      stdout.emit('resize')
+      await wait()
+      expect(output.text.match(/\x1b\[2J/g)).toHaveLength(1)
+      const rebuilt = output.text.slice(output.text.lastIndexOf(resizeClear) + resizeClear.length)
+      expect(rebuilt).toContain('lint passed')
+      expect(rebuilt.match(/lint passed/g)).toHaveLength(1)
+      expect(rebuilt.match(/\/lint/g)).toHaveLength(1)
+
+      // Later appends settle after the existing prefix; the append path adds
+      // only the new rows and never re-emits the resolved command.
+      const lintBefore = output.text.match(/lint passed/g)!.length
+      store.apply({
+        type: 'user/message',
+        seq: 4,
+        time: 4,
+        data: createUserMessage({ content: [{ type: 'text', text: 'again' }], source: { kind: 'user' } }),
+      } as SessionEvent)
+      store.apply({
+        type: 'assistant/message',
+        seq: 5,
+        time: 5,
+        data: {
+          turn: 1,
+          step: 2,
+          message: createAssistantMessage({ content: [{ type: 'text', text: 'done again' }], source: { provider: 'p', model: 'm' } }),
+        },
+      } as SessionEvent)
+      await wait()
+      expect(output.text).toContain('done again')
+      expect(output.text.match(/done again/g)).toHaveLength(1)
+      expect(output.text.match(/lint passed/g)!.length).toBe(lintBefore)
+    } finally {
+      instance.unmount()
+      stdin.destroy()
+      stdout.destroy()
+    }
+  })
+
+  it('flushes a long settled history once and replays it exactly once per source-backed refresh', async () => {
+    const harness = createTty()
+    const { stdin, stdout, output } = harness
+    const store = createTranscriptStore([
+      {
+        type: 'user/message',
+        seq: 1,
+        time: 1,
+        data: createUserMessage({ content: [{ type: 'text', text: 'start' }], source: { kind: 'user' } }),
+      } as SessionEvent,
+      ...Array.from({ length: 120 }, (_, index) => ({
+        type: 'assistant/message',
+        seq: index + 2,
+        time: index + 2,
+        data: {
+          turn: 1,
+          step: index + 1,
+          message: createAssistantMessage({ content: [{ type: 'text', text: `msg-${index}` }], source: { provider: 'p', model: 'm' } }),
+        },
+      }) as SessionEvent),
+    ])
+    const instance = renderApp(harness, appProps({ store }))
+    try {
+      await wait()
+      // Every settled row flushed through <Static> exactly once.
+      expect(output.text.match(/msg-\d+/g)).toHaveLength(120)
+
+      // A resize triggers one source-backed replay: one clear, then the FULL
+      // history re-flushes once (no ghosts, no duplicates, no lost rows).
+      output.text = ''
+      stdout.columns = 80
+      stdout.emit('resize')
+      await wait()
+      expect(output.text.match(/\x1b\[2J/g)).toHaveLength(1)
+      const rebuilt = output.text.slice(output.text.lastIndexOf(resizeClear) + resizeClear.length)
+      expect(rebuilt.match(/msg-\d+/g)).toHaveLength(120)
+    } finally {
+      instance.unmount()
+      stdin.destroy()
+      stdout.destroy()
+    }
+  })
+})
+
+describe('queued inbox rows in a mixed mutable tail', () => {
+  it('collects pending rows across a running tool and cancels newest-first', async () => {
+    const harness = createTty()
+    const { stdin, stdout, output } = harness
+    const cancelled: string[] = []
+    const store = createTranscriptStore()
+    const first = createUserMessage({ content: [{ type: 'text', text: 'one' }], source: { kind: 'user' } })
+    const second = createUserMessage({ content: [{ type: 'text', text: 'two' }], source: { kind: 'user' } })
+    const third = createUserMessage({ content: [{ type: 'text', text: 'three' }], source: { kind: 'user' } })
+    // Mirror the runner's cancel path: the durable splice retires the pending
+    // row, so the next Delete sees a shrunken queue (newest-first).
+    const retire = (id: string): void => {
+      cancelled.push(id)
+      const index = [first.id, second.id, third.id].indexOf(id)
+      store.apply({
+        type: 'agent/inbox/spliced',
+        seq: 100,
+        time: 100,
+        data: { target: 'next-turn', start: index, removedCount: 1, inserted: [] },
+      } as SessionEvent)
+    }
+    const callId = 'live-tool' as CallId
+    // Pending rows are NOT a contiguous tail: a running tool row sits between
+    // the first pending row and the rest, so a naive "scan from the end until
+    // the first non-pending" would lose `one`.
+    store.apply({
+      type: 'agent/inbox/spliced',
+      seq: 1,
+      time: 1,
+      data: { target: 'next-turn', start: 0, inserted: [first] },
+    } as SessionEvent)
+    store.apply({
+      type: 'tool/call',
+      seq: 2,
+      time: 2,
+      data: { turn: 1, step: 1, callId, name: 'live', arguments: '{}' },
+    } as SessionEvent)
+    store.apply({
+      type: 'agent/inbox/spliced',
+      seq: 3,
+      time: 3,
+      data: { target: 'next-turn', start: 1, inserted: [second] },
+    } as SessionEvent)
+    store.apply({
+      type: 'agent/inbox/spliced',
+      seq: 4,
+      time: 4,
+      data: { target: 'next-turn', start: 2, inserted: [third] },
+    } as SessionEvent)
+    const instance = renderApp(harness, appProps({ store, cancelQueued: retire }))
+    try {
+      await wait()
+      // Delete on the empty composer cancels the NEWEST queued message each
+      // time; all three pending rows must be collected even though a running
+      // tool row splits the mutable tail.
+      stdin.write('\x1b[3~')
+      await wait()
+      stdin.write('\x1b[3~')
+      await wait()
+      stdin.write('\x1b[3~')
+      await wait()
+      expect(cancelled).toEqual([third.id, second.id, first.id])
+      expect(output.text).not.toContain('\x1b[2J')
+    } finally {
+      instance.unmount()
+      stdin.destroy()
+      stdout.destroy()
     }
   })
 })

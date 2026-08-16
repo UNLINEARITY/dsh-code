@@ -58,3 +58,52 @@ describe('displayTail', () => {
     expect(displayTail('ab😀', 2, 1)).toEqual({ text: '😀', truncated: true })
   })
 })
+
+describe('displayText invisible and bidi controls', () => {
+  it('escapes bidi overrides as visible \\uXXXX escapes', () => {
+    expect(displayText('A\u202EB\u202C')).toBe('A\\u202eB\\u202c')
+    expect(displayText('\u202a\u202b\u202d')).toBe('\\u202a\\u202b\\u202d')
+  })
+
+  it('escapes isolates, directional marks, and zero-width format characters', () => {
+    expect(displayText('\u2066x\u2069')).toBe('\\u2066x\\u2069')
+    expect(displayText('\u200e\u200f\u200b\ufeff')).toBe('\\u200e\\u200f\\u200b\\ufeff')
+  })
+
+  it('escapes the Arabic Letter Mark bidi control', () => {
+    expect(displayText('a\u061cb')).toBe('a\\u061cb')
+    expect(displayText('\u061c\u202e')).toBe('\\u061c\\u202e')
+  })
+
+  it('escapes Unicode line and paragraph separators', () => {
+    expect(displayText('a\u2028b\u2029c')).toBe('a\\u2028b\\u2029c')
+  })
+
+  it('keeps C0/C1 escaping in the existing \\xNN form', () => {
+    expect(displayText('\x1b[31m\x07')).toBe('\\x1b[31m\\x07')
+  })
+
+  it('singleLineText also renders bidi controls visible', () => {
+    expect(singleLineText('ok\u202eNO')).toBe('ok\\u202eNO')
+  })
+})
+
+describe('displayTail tab normalization', () => {
+  it('converts tabs to two spaces inside the column budget', () => {
+    expect(displayTail('a\tb', 4, 1)).toEqual({ text: 'a  b', truncated: false })
+  })
+
+  it('budgets the tab-expanded width instead of the raw tab cell', () => {
+    const tail = displayTail('\t\t', 3, 1)
+    expect(tail.text).toBe('  ')
+    expect(tail.truncated).toBe(true)
+  })
+
+  it('never emits a raw tab byte', () => {
+    expect(displayTail('\t'.repeat(50), 20, 2).text).not.toContain('\t')
+  })
+
+  it('counts tab-expanded rows like wrapped text', () => {
+    expect(displayTail('x\t\ty', 5, 2).text).toBe('x\n    y')
+  })
+})

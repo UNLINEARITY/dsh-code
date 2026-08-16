@@ -3,8 +3,11 @@
  * tool payloads, skill descriptions). Control characters — including ANSI
  * CSI/OSC escape sequences — would otherwise pass through Ink into the
  * terminal, letting output rewrite the screen or inject prompts. Newlines
- * and tabs survive; everything else in C0/C1 plus DEL becomes a visible
- * `\xNN` escape.
+ * survive; everything else in C0/C1 plus DEL becomes a visible `\xNN`
+ * escape, and bidi overrides / invisible format controls / Unicode line and
+ * paragraph separators become a visible `\uXXXX` escape (terminal emulators
+ * that render bidirectional text would otherwise reorder the displayed
+ * glyphs and let a command read as something it is not).
  *
  * @module @deepseek-ai/dsh-code/render/text
  */
@@ -13,14 +16,27 @@
 const CONTROL_ESCAPE = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/gu
 
 /**
- * Escape control characters so externally sourced text cannot drive the
- * terminal.
+ * Bidi overrides and isolates (U+202A-202E, U+2066-2069), the Arabic Letter
+ * Mark (U+061C), directional and zero-width format characters (U+200B,
+ * U+200E/200F, U+2060-2064, U+FEFF), and Unicode line/paragraph separators
+ * (U+2028/2029). Terminal emulators with bidi support (Windows Terminal,
+ * iTerm2, kitty, WezTerm) reorder or hide these, so they must never reach
+ * the terminal raw.
+ */
+const INVISIBLE_ESCAPE = /[\u061c\u200b\u200e\u200f\u2028\u2029\u202a-\u202e\u2060-\u2064\u2066-\u206f\ufeff]/gu
+
+/**
+ * Escape control and deceptive characters so externally sourced text cannot
+ * drive the terminal. C0/C1/DEL render as a literal `\xNN` escape; bidi,
+ * invisible-format, and separator controls render as a literal `\uXXXX`
+ * escape. Newlines and tabs survive (budgeted callers normalize tabs).
  * @param text - raw text from a session event, tool payload, or catalog.
- * @returns text with every control character (except `\n`, `\t`) rendered
- * as a literal `\xNN` escape.
+ * @returns display-safe text with every injectable character made visible.
  */
 export function displayText(text: string): string {
-  return text.replace(CONTROL_ESCAPE, char => `\\x${char.charCodeAt(0).toString(16).padStart(2, '0')}`)
+  return text
+    .replace(CONTROL_ESCAPE, char => `\\x${char.charCodeAt(0).toString(16).padStart(2, '0')}`)
+    .replace(INVISIBLE_ESCAPE, char => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`)
 }
 
 /** Collapse external text to one terminal-safe logical row. */
@@ -84,7 +100,10 @@ function previousCharacter(text: string, end: number): { char: string; start: nu
  * Keep only the newest display-safe text that fits a terminal rectangle.
  * The scan walks backward and stops as soon as the suffix is full, so a long
  * reasoning stream does not rescan its entire accumulated prefix per chunk.
- * Explicit newlines and terminal wrapping both consume rows.
+ * Explicit newlines and terminal wrapping both consume rows; tabs expand to
+ * two spaces so terminal tab stops (which render at contextual column 8
+ * boundaries, not at the budgeted cell count) cannot inflate the physical
+ * row count of the live region.
  * @param text - raw externally sourced text.
  * @param columns - available terminal columns.
  * @param rows - available terminal rows.
@@ -109,7 +128,7 @@ export function displayTail(text: string, columns: number, rows: number): Displa
       continue
     }
 
-    const safe = displayText(previous.char)
+    const safe = previous.char === '\t' ? '  ' : displayText(previous.char)
     const width = cellWidth(safe)
     if (used > 0 && used + width > columnLimit) {
       if (row >= rowLimit) break
