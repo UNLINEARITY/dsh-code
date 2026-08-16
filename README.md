@@ -137,6 +137,18 @@ dsh --profile cli --session my-id    # 使用指定 id 新建会话
 - CJK/控制字符宽度安全、短终端主动降级、缩放防抖重放
 - 固定底部顺序：内容或面板 → notice → 输入框 → 状态栏
 
+#### DeepSeek 模型切换动画
+
+切换到 DeepSeek 路由，或在同一路由切换 reasoning effort 时，输入框会随机播放 Wave、Aurora 或 Pulse；相邻两次不会重复同一种样式。Flash 模型使用单波段档位，其他 DeepSeek 模型使用更丰富的多波段档位。
+
+| 样式 | Flash | DeepSeek |
+| --- | --- | --- |
+| Wave | 单个蓝色波峰从左向右扫过，1.2s | 两个错开的波峰，1.5s |
+| Aurora | 两条蓝色光带正弦漂移，1.5s | 三条不同色调光带，1.8s |
+| Pulse | 一个圆环从输入框中心扩散，1.1s | 两个先后扩散的圆环，1.45s |
+
+动画以约 30 FPS 在输入框局部运行；结束后背景和边框恢复静态，DeepSeek 档位提示符继续保留。
+
 ## 五、DSH-Code 如何接入 DSH
 
 ### 1. 运行时组合

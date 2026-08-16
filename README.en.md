@@ -138,6 +138,18 @@ Inside the TUI:
 - Width-safe CJK/control-character handling, compact-terminal degradation, and debounced resize replay
 - Stable bottom order: content or panel → notice → composer → status
 
+#### DeepSeek model-switch animations
+
+Switching to a DeepSeek route, or changing reasoning effort on the same route, randomly plays Wave, Aurora, or Pulse across the composer without repeating the previous style. Flash models use the single-band tier; other DeepSeek models use the richer multi-band tier.
+
+| Style | Flash | DeepSeek |
+| --- | --- | --- |
+| Wave | One blue crest sweeps left to right, 1.2s | Two offset crests, 1.5s |
+| Aurora | Two blue light bands drift sinusoidally, 1.5s | Three differently hued bands, 1.8s |
+| Pulse | One ring expands from the composer center, 1.1s | Two sequential expanding rings, 1.45s |
+
+The animation runs locally in the composer at about 30 FPS. Its background and border return to rest afterward while the DeepSeek-tier prompt marker remains.
+
 ## 5. How DSH-Code integrates with DSH
 
 ### 1. Runtime composition

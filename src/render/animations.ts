@@ -115,19 +115,33 @@ export const DEEPSEEK_WAVE_BANDS: Readonly<Record<DeepseekWaveStyle, Readonly<Re
   },
 }
 
-/**
- * Total animation duration — Codex `IgnitionStyle::total_duration`: three
- * styles × two tiers.
- * @param tier - the active wave tier.
- * @param style - the active ignition style.
- * @returns the duration in milliseconds.
- */
-export function deepseekWaveDuration(tier: DeepseekWaveTier, style: DeepseekWaveStyle = 'wave'): number {
+/** Extra display time applied to every Codex ignition style. */
+export const DEEPSEEK_WAVE_DURATION_EXTENSION_MS = 200
+
+/** Original Codex duration used as the animation's sampling timeline. */
+function deepseekWaveBaseDuration(tier: DeepseekWaveTier, style: DeepseekWaveStyle): number {
   switch (style) {
     case 'aurora': return tier === 'flash' ? 1300 : 1600
     case 'pulse': return tier === 'flash' ? 900 : 1250
     case 'wave': return tier === 'flash' ? 1000 : 1300
   }
+}
+
+/**
+ * Total visible duration: the Codex ignition duration plus 200ms so its motion
+ * remains readable in a busy terminal.
+ * @param tier - the active wave tier.
+ * @param style - the active ignition style.
+ * @returns the duration in milliseconds.
+ */
+export function deepseekWaveDuration(tier: DeepseekWaveTier, style: DeepseekWaveStyle = 'wave'): number {
+  return deepseekWaveBaseDuration(tier, style) + DEEPSEEK_WAVE_DURATION_EXTENSION_MS
+}
+
+/** Map the extended display timeline back onto the original Codex samples. */
+function deepseekWaveSampleElapsedMs(tick: number, tier: DeepseekWaveTier, style: DeepseekWaveStyle): number {
+  const base = deepseekWaveBaseDuration(tier, style)
+  return tick * DEEPSEEK_WAVE_TICK_MS * base / deepseekWaveDuration(tier, style)
 }
 
 /**
@@ -282,8 +296,8 @@ export function deepseekWaveColumnBg(
   hues: readonly [RgbTriple, RgbTriple, RgbTriple],
   base: RgbTriple,
 ): RgbTriple | null {
-  const total = deepseekWaveDuration(tier, style) / 1000
-  const elapsed = (tick * DEEPSEEK_WAVE_TICK_MS) / 1000
+  const total = deepseekWaveBaseDuration(tier, style) / 1000
+  const elapsed = deepseekWaveSampleElapsedMs(tick, tier, style) / 1000
   const fade = style === 'aurora' ? envelope(elapsed, total, 0.25, 0.40) : 1
   const weights = [0, 0, 0]
   for (const band of DEEPSEEK_WAVE_BANDS[style][tier]) {
@@ -311,14 +325,14 @@ export function deepseekWaveColumnBg(
 }
 
 /**
- * The sparkle glyph for a tick — Codex `spark_frame`: from 900ms on, one
- * glyph every 100ms through `· ✦ ✧`, then silent. The deepseek (Ultra) tier
- * only; the Ink layer still must skip occupied cells.
+ * The sparkle glyph for a tick — Codex `spark_frame`, sampled on the same
+ * proportionally slowed DeepSeek Wave timeline as the composer background.
+ * The Ink layer still must skip occupied cells.
  * @param tick - wave frame at DEEPSEEK_WAVE_TICK_MS.
- * @returns the sparkle glyph, or null outside the 900..1200ms window.
+ * @returns the sparkle glyph, or null outside the stretched tail window.
  */
 export function deepseekWaveSpark(tick: number): string | null {
-  const elapsed = tick * DEEPSEEK_WAVE_TICK_MS
+  const elapsed = deepseekWaveSampleElapsedMs(tick, 'deepseek', 'wave')
   if (elapsed < SPARK_START_MS) return null
   const frame = Math.floor((elapsed - SPARK_START_MS) / SPARK_FRAME_MS)
   return SPARK_GLYPHS[frame] ?? null
@@ -342,8 +356,8 @@ export function deepseekWaveBorderColor(
   hues: readonly [RgbTriple, RgbTriple, RgbTriple],
   dim: RgbTriple,
 ): RgbTriple {
-  const total = deepseekWaveDuration(tier, style) / 1000
-  const elapsed = (tick * DEEPSEEK_WAVE_TICK_MS) / 1000
+  const total = deepseekWaveBaseDuration(tier, style) / 1000
+  const elapsed = deepseekWaveSampleElapsedMs(tick, tier, style) / 1000
   // The border stays visibly on the tier accent for the whole sweep (a
   // floor keeps it glowing, not just cresting mid-wave): it ramps in as the
   // first band launches and relaxes after the last crest passes.
@@ -361,8 +375,8 @@ export function deepseekWaveBorderColor(
  * @returns true while the wordmark should be visible.
  */
 export function deepseekWaveWordVisible(tick: number, tier: DeepseekWaveTier, style: DeepseekWaveStyle = 'wave'): boolean {
-  const total = deepseekWaveDuration(tier, style) / 1000
-  const elapsed = (tick * DEEPSEEK_WAVE_TICK_MS) / 1000
+  const total = deepseekWaveBaseDuration(tier, style) / 1000
+  const elapsed = deepseekWaveSampleElapsedMs(tick, tier, style) / 1000
   return envelope(elapsed, total, total * 0.2, total * 0.35) > 0.25
 }
 

@@ -457,7 +457,7 @@ describe('DeepSeek model-switch easter egg', () => {
       expect(output).not.toContain('deepseek-reasoner')
 
       // /model → jump to the bottom (the DeepSeek row) → select it. The
-      // deepseek tier runs the 1.3s Wave-Ultra sweep plus the tail sparkles.
+      // deepseek tier runs the readability-extended 1.5s Wave-Ultra sweep.
       output = ''
       stdin.write('/model')
       await wait()
@@ -482,13 +482,13 @@ describe('DeepSeek model-switch easter egg', () => {
       const distinctBg = (): number => new Set((output.match(/48;2;\d{1,3};\d{1,3};\d{1,3}/g) ?? [])).size
       expect(distinctBg()).toBeGreaterThanOrEqual(5)
 
-      // ~1.5s in: the deepseek tier has dropped the `· ✦ ✧` sparkle sequence
-      // (900ms..1200ms of the wave) into the rightmost blank cell.
-      await sleep(800)
+      // The nominal `· ✦ ✧` tail spans about 1.04s..1.38s. Ink intervals
+      // stretch under parallel test load, so wait generously for all frames.
+      await sleep(1600)
       expect(output).toContain('✦')
       expect(output).toContain('✧')
 
-      // Past the 1.3s duration: fresh frames carry no wave backgrounds and no
+      // Past the 1.5s duration: fresh frames carry no wave backgrounds and no
       // sparkles — the row returns to transparent (no `backgroundColor`).
       await sleep(900)
       const settled = output.length
