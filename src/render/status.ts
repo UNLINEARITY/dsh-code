@@ -114,11 +114,9 @@ export interface StatusRow {
 }
 
 /**
- * The footer layout: two stacked physical rows. Row 1 is the identity/state
- * row (busy dot, model, cwd, branch, plan, turns, tokens, title; goal,
- * sandbox, and permission badges). Row 2 is the run-meters row (mode, the
- * context progress bar, cache, and duration figures) and degrades to empty
- * before any row-1 content is touched.
+ * The footer layout: two stacked physical rows. Row 1 keeps the primary
+ * controls in model, cwd, mode, branch, context, permission order. Row 2
+ * carries every secondary session/run figure and degrades independently.
  */
 export interface StatusLayout {
   row1: StatusRow
@@ -315,18 +313,18 @@ export interface StatusItemInfo {
 export const STATUS_ITEMS: readonly StatusItemInfo[] = [
   { id: 'model', label: 'model', description: 'provider/model serving this session', side: 'left' },
   { id: 'cwd', label: 'cwd', description: 'working-directory basename', side: 'left' },
-  { id: 'branch', label: 'branch', description: 'git branch inside a repository', side: 'left' },
-  { id: 'plan', label: 'plan', description: 'plan-mode state mark', side: 'left' },
   { id: 'mode', label: 'mode', description: 'agent preset composing the session', side: 'left' },
+  { id: 'branch', label: 'branch', description: 'git branch inside a repository', side: 'left' },
+  { id: 'context', label: 'context', description: 'context-window occupancy meter', side: 'left' },
+  { id: 'permission', label: 'permission', description: 'permission preset badge with cycle hint', side: 'right' },
+  { id: 'plan', label: 'plan', description: 'plan-mode state mark', side: 'left' },
   { id: 'turns', label: 'turns', description: 'turn and step counters', side: 'left' },
   { id: 'durations', label: 'durations', description: 'llm/ttft/decode/tool wall time', side: 'left' },
   { id: 'cache', label: 'cache', description: 'cache-hit share of billed input', side: 'left' },
-  { id: 'context', label: 'context', description: 'context-window occupancy meter', side: 'left' },
   { id: 'tokens', label: 'tokens', description: 'cumulative input/output tokens', side: 'left' },
   { id: 'title', label: 'title', description: 'session title or short id', side: 'left' },
-  { id: 'goal', label: 'goal', description: 'live goal phase and round progress', side: 'right' },
-  { id: 'sandbox', label: 'sandbox', description: 'divergent sandbox-mode override', side: 'right' },
-  { id: 'permission', label: 'permission', description: 'permission preset badge with cycle hint', side: 'right' },
+  { id: 'goal', label: 'goal', description: 'live goal phase and round progress', side: 'left' },
+  { id: 'sandbox', label: 'sandbox', description: 'divergent sandbox-mode override', side: 'left' },
 ]
 
 /**
@@ -364,24 +362,23 @@ const WIDTH_SAFETY = 1
 const TITLE_BUDGET = 48
 
 /**
- * Row 1 drop ranks (lowest drops first): the session title, then the token
- * figures, then turn/step counts, then the goal and divergent-sandbox badges,
- * with the permission badge last. The identity cluster never drops — it
- * ellipsizes instead.
+ * Primary-row drop ranks: context drops before permission; the identity
+ * cluster never drops and ellipsizes only after the right badge is gone.
+ * Secondary-row groups reuse the remaining ranks independently.
  */
 const RANK_TITLE = 10
 const RANK_TOKENS = 50
 const RANK_COUNTS = 90
+const RANK_CONTEXT = 90
 const RANK_SANDBOX = 92
 const RANK_GOAL = 95
 const RANK_BADGE = 100
 const RANK_IDENTITY = Number.POSITIVE_INFINITY
 
-/** Row 2 drop ranks: duration figures go first, then cache, then the context bar, and mode survives longest. */
+/** Row 2 drop ranks: title and durations go first; state and counts survive longest. */
 const RANK2_DURATIONS = 40
 const RANK2_CACHE = 50
-const RANK2_CONTEXT = 60
-const RANK2_MODE = 70
+const RANK2_PLAN = 70
 
 /** Identity facts the runner resolves once at mount; empty strings drop out. */
 export interface StatusFacts {
@@ -403,7 +400,7 @@ export interface StatusFacts {
   goal: { phase: string; rounds: number; max: number } | undefined
   /** Whether plan mode is active (folded from 'plan/mode'). */
   plan: boolean
-  /** Active permission preset (folded from 'permission/preset'), empty when unknown. */
+  /** Active or pending permission preset; empty only when the service is unavailable. */
   permission: string
 }
 
@@ -479,9 +476,13 @@ function buildCandidates(
   }
   const cwd = safe(facts.cwd)
   if (cwd !== '' && enabled.has('cwd')) push({ text: cwd, tone: 'path' })
+  const mode = safe(facts.mode ?? '')
+  if (mode !== '' && enabled.has('mode')) {
+    push({ text: '/mode ', tone: 'label' })
+    identity.push({ text: mode, tone: 'accent' })
+  }
   const branch = safe(facts.branch)
   if (branch !== '' && enabled.has('branch')) push({ text: '⑂ ' + branch, tone: 'branch' })
-  if (facts.plan && enabled.has('plan')) push({ text: '⧉ plan', tone: 'accent' })
 
   const left: { group: StatusGroup; rank: number; id: string }[] = [
     { group: { spans: identity }, rank: RANK_IDENTITY, id: 'identity' },
@@ -489,14 +490,8 @@ function buildCandidates(
   const right: { span: StatusSpan; rank: number; id: string }[] = []
   const row2: { group: StatusGroup; rank: number; id: string }[] = []
 
-  // Row 2 anchor: the agent preset composing the session.
-  const mode = safe(facts.mode ?? '')
-  if (mode !== '' && enabled.has('mode')) {
-    row2.push({
-      group: { spans: [{ text: 'mode ', tone: 'label' }, { text: mode, tone: 'accent' }] },
-      rank: RANK2_MODE,
-      id: 'mode',
-    })
+  if (facts.plan && enabled.has('plan')) {
+    row2.push({ group: { spans: [{ text: '⧉ plan', tone: 'accent' }] }, rank: RANK2_PLAN, id: 'plan' })
   }
 
   if (stats.turns > 0 || stats.steps > 0) {
@@ -509,7 +504,7 @@ function buildCandidates(
       }
       pair('turns', String(stats.turns))
       pair('steps', String(stats.steps))
-      left.push({ group: { spans: counts }, rank: RANK_COUNTS, id: 'turns' })
+      row2.push({ group: { spans: counts }, rank: RANK_COUNTS, id: 'turns' })
     }
     if (enabled.has('durations')) {
       // Model round-trip, first-token latency, decode rate, and tool wall
@@ -549,14 +544,14 @@ function buildCandidates(
   // is the most recent reported prompt size against the advertised route
   // capacity (the same figures the old bracket bar showed).
   if (stats.contextWindow > 0 && stats.lastPromptTokens > 0 && enabled.has('context')) {
-    row2.push({
+    left.push({
       group: {
         spans: [
           { text: 'context ', tone: 'label' },
           ...contextBar(stats.contextSegments, stats.lastPromptTokens, stats.contextWindow, CONTEXT_BAR_WIDTH),
         ],
       },
-      rank: RANK2_CONTEXT,
+      rank: RANK_CONTEXT,
       id: 'context',
     })
   }
@@ -568,7 +563,7 @@ function buildCandidates(
     }
     pair('in', formatTokens(stats.usage.inputTokens))
     pair('out', formatTokens(stats.usage.outputTokens))
-    left.push({ group: { spans: tokens }, rank: RANK_TOKENS, id: 'tokens' })
+    row2.push({ group: { spans: tokens }, rank: RANK_TOKENS, id: 'tokens' })
   }
 
   // The session title replaces the bare short id whenever one has landed
@@ -577,45 +572,43 @@ function buildCandidates(
   const rawLabel = facts.title !== undefined && facts.title !== '' ? facts.title : facts.sessionId
   const label = truncateColumns(safe(rawLabel), TITLE_BUDGET)
   if (label !== '' && enabled.has('title')) {
-    left.push({ group: { spans: [{ text: label, tone: 'meta' }] }, rank: RANK_TITLE, id: 'title' })
+    row2.push({ group: { spans: [{ text: label, tone: 'meta' }] }, rank: RANK_TITLE, id: 'title' })
   }
 
-  // Goal badge on the right (Codex goal indicator): round progress while
-  // active, the phase otherwise.
+  // Secondary state rides row 2; permission alone remains right-pinned on row 1.
   if (facts.goal !== undefined && enabled.has('goal')) {
-    right.push({
-      span: {
-        text: facts.goal.phase === 'active'
-          ? '◎ round ' + facts.goal.rounds + '/' + facts.goal.max
-          : '◎ ' + safe(facts.goal.phase),
-        tone: 'accent',
+    row2.push({
+      group: {
+        spans: [{
+          text: facts.goal.phase === 'active'
+            ? '◎ round ' + facts.goal.rounds + '/' + facts.goal.max
+            : '◎ ' + safe(facts.goal.phase),
+          tone: 'accent',
+        }],
       },
       rank: RANK_GOAL,
       id: 'goal',
     })
   }
-  // The sandbox override stays implicit when it merely echoes the preset —
-  // the badge exists to surface a divergence, not to duplicate the label.
+  // The sandbox override stays implicit when it merely echoes the preset.
   const sandbox = safe(facts.sandbox ?? '')
   if (sandbox !== '' && sandbox.toLowerCase() !== facts.permission.toLowerCase() && enabled.has('sandbox')) {
-    right.push({ span: { text: 'sandbox ' + sandbox, tone: 'warn' }, rank: RANK_SANDBOX, id: 'sandbox' })
+    row2.push({ group: { spans: [{ text: 'sandbox ' + sandbox, tone: 'warn' }] }, rank: RANK_SANDBOX, id: 'sandbox' })
   }
   const permission = safe(facts.permission)
   let badge = -1
   if (permission !== '' && enabled.has('permission')) {
-    right.push({ span: { text: permission, tone: permissionTone(permission) }, rank: RANK_BADGE, id: 'permission' })
+    right.push({ span: { text: `/permission ${permission}`, tone: permissionTone(permission) }, rank: RANK_BADGE, id: 'permission' })
     badge = right.length - 1
   }
   return { left, right, badge, row2 }
 }
 
 /**
- * Compose the two-row footer layout under a column budget. Row 1 (identity
- * and state badges) degrades in a fixed order — cycle hint, then title, token
- * figures, turn/step counts, goal, divergent sandbox, permission badge — and
- * only then ellipsizes the identity cluster, so the row never wraps. Row 2
- * (mode, context bar, cache, duration figures) fits its own budget and
- * degrades to empty before any row-1 content is touched.
+ * Compose the two-row footer layout under a column budget. Row 1 keeps model,
+ * cwd, mode, branch, context, then the right-pinned permission badge and cycle
+ * hint. It drops hint, context, and permission before ellipsizing identity.
+ * Row 2 fits all secondary figures and state within its own budget.
  * @param facts - identity facts resolved by the runner.
  * @param stats - session figures folded from the durable log.
  * @param columns - usable columns for each row (before their left padding).

@@ -190,13 +190,12 @@ describe('status layout', () => {
       emptyStats,
       120,
     )
-    expect(layout.row1.left).toHaveLength(2)
-    expect(groupText(layout.row1)).toEqual(['○ deepseek/chat · deepseek-harness · ⑂ dsh-cli', 'ab12cd34'])
+    expect(layout.row1.left).toHaveLength(1)
+    expect(groupText(layout.row1)).toEqual(['○ deepseek/chat · deepseek-harness · ⑂ dsh-cli'])
     expect(layout.row1.left[0].spans.map(span => span.tone)).toEqual(['meta', 'model', 'label', 'path', 'label', 'branch'])
-    expect(layout.row1.left[1].spans).toEqual([{ text: 'ab12cd34', tone: 'meta' }])
     expect(layout.row1.right).toEqual([])
     expect(layout.row1.hint).toBe(false)
-    expect(layout.row2.left).toEqual([])
+    expect(groupText(layout.row2)).toEqual(['ab12cd34'])
   })
 
   it('appends the effective reasoning effort to the model segment', () => {
@@ -220,7 +219,28 @@ describe('status layout', () => {
     const layout = layoutStatusBar({ ...baseFacts, plan: true }, emptyStats, 120, { busy: true })
     const identity = layout.row1.left[0].spans
     expect(identity[0]).toEqual({ text: '● ', tone: 'live' })
-    expect(identity.at(-1)).toEqual({ text: '⧉ plan', tone: 'accent' })
+    expect(groupText(layout.row2)).toContain('⧉ plan')
+  })
+
+  it('keeps primary controls on row 1 in model, cwd, mode, branch, context, permission order', () => {
+    const layout = layoutStatusBar(
+      { ...baseFacts, mode: 'standard', model: 'm', cwd: 'r', branch: 'main', permission: 'workspace-write' },
+      {
+        ...emptyStats,
+        usage: { inputTokens: 32_000, outputTokens: 800, cacheReadTokens: 0 },
+        lastPromptTokens: 32_000,
+        contextWindow: 128_000,
+        contextSegments: { system: 2_000, prompt: 12_000, assistant: 6_000, thinking: 8_000, tools: 4_000 },
+      },
+      160,
+    )
+    expect(groupText(layout.row1)).toEqual([
+      '○ m · r · /mode standard · ⑂ main',
+      'context spratx▱▱▱▱▱▱32K/128K 25%',
+    ])
+    expect(layout.row1.right).toEqual([{ text: '/permission workspace-write', tone: 'warn' }])
+    expect(layout.row1.hint).toBe(true)
+    expect(groupText(layout.row2)).toEqual(['cache 0%', 'in 32K · out 800', 's'])
   })
 
   it('splits identity/state to row 1 and run meters to row 2', () => {
@@ -236,20 +256,17 @@ describe('status layout', () => {
       },
       160,
     )
-    expect(groupText(layout.row1)).toEqual([
-      '○ m · r · ⑂ main',
+    expect(groupText(layout.row1)).toEqual(['○ m · r · /mode code · ⑂ main'])
+    expect(groupText(layout.row2)).toEqual([
       'turns 2 · steps 5',
+      'model 45.2s · tool 2m42s',
+      'cache 80%',
       'in 12.2K · out 2.4K',
       's',
     ])
-    expect(groupText(layout.row2)).toEqual([
-      'mode code',
-      'model 45.2s · tool 2m42s',
-      'cache 80%',
-    ])
     expect(layout.row1.left[0].spans[1]).toEqual({ text: 'm', tone: 'model' })
-    expect(layout.row1.left[1].spans[0]).toEqual({ text: 'turns ', tone: 'label' })
-    expect(layout.row1.left[1].spans[1]).toEqual({ text: '2', tone: 'value' })
+    expect(layout.row2.left[0].spans[0]).toEqual({ text: 'turns ', tone: 'label' })
+    expect(layout.row2.left[0].spans[1]).toEqual({ text: '2', tone: 'value' })
     expect(layout.row2.left[1].spans[0]).toEqual({ text: 'model ', tone: 'label' })
     expect(layout.row2.left[1].spans[1]).toEqual({ text: '45.2s', tone: 'value' })
   })
@@ -270,10 +287,11 @@ describe('status layout', () => {
       },
       160,
     )
-    expect(groupText(layout.row1)).toEqual(['○ m · r', 'turns 1 · steps 2', 's'])
+    expect(groupText(layout.row1)).toEqual(['○ m · r · /mode code'])
     expect(groupText(layout.row2)).toEqual([
-      'mode code',
+      'turns 1 · steps 2',
       'model 45.2s · latency 0.6s · 20 tokens/s · tool 2m42s',
+      's',
     ])
   })
 
@@ -289,27 +307,27 @@ describe('status layout', () => {
       },
       120,
     )
-    expect(groupText(layout.row1)).toEqual(['○ m · r', 'in 32K · out 800'])
-    expect(groupText(layout.row2)).toEqual([
-      'cache 0%',
+    expect(groupText(layout.row1)).toEqual([
+      '○ m · r',
       'context spratx▱▱▱▱▱▱32K/128K 25%',
     ])
+    expect(groupText(layout.row2)).toEqual(['cache 0%', 'in 32K · out 800'])
   })
 
   it('shows the session title in place of the short id once one lands', () => {
     const titled = layoutStatusBar({ ...baseFacts, sessionId: 'ab12cd34', title: 'fix the login bug' }, emptyStats, 120)
-    expect(titled.row1.left.at(-1).spans).toEqual([{ text: 'fix the login bug', tone: 'meta' }])
+    expect(titled.row2.left.at(-1).spans).toEqual([{ text: 'fix the login bug', tone: 'meta' }])
     const untitled = layoutStatusBar({ ...baseFacts, sessionId: 'ab12cd34', title: '' }, emptyStats, 120)
-    expect(untitled.row1.left.at(-1).spans).toEqual([{ text: 'ab12cd34', tone: 'meta' }])
+    expect(untitled.row2.left.at(-1).spans).toEqual([{ text: 'ab12cd34', tone: 'meta' }])
   })
 
   it('pins the permission badge right with the idle cycle hint', () => {
     const layout = layoutStatusBar({ ...baseFacts, permission: 'workspace-write' }, emptyStats, 120)
-    expect(layout.row1.right).toEqual([{ text: 'workspace-write', tone: 'warn' }])
+    expect(layout.row1.right).toEqual([{ text: '/permission workspace-write', tone: 'warn' }])
     expect(layout.row1.hint).toBe(true)
     const busy = layoutStatusBar({ ...baseFacts, permission: 'workspace-write' }, emptyStats, 120, { busy: true })
     expect(busy.row1.hint).toBe(false)
-    expect(busy.row1.right).toEqual([{ text: 'workspace-write', tone: 'warn' }])
+    expect(busy.row1.right).toEqual([{ text: '/permission workspace-write', tone: 'warn' }])
   })
 
   it('traffic-lights presets, surfaces divergent sandbox, and spells the goal round', () => {
@@ -326,10 +344,11 @@ describe('status layout', () => {
       emptyStats,
       160,
     )
-    expect(layout.row1.right).toEqual([
-      { text: '◎ round 2/8', tone: 'accent' },
-      { text: 'sandbox danger-full-access', tone: 'warn' },
-      { text: 'workspace-write', tone: 'warn' },
+    expect(layout.row1.right).toEqual([{ text: '/permission workspace-write', tone: 'warn' }])
+    expect(groupText(layout.row2)).toEqual([
+      's',
+      '◎ round 2/8',
+      'sandbox danger-full-access',
     ])
     const echo = layoutStatusBar(
       {
@@ -341,17 +360,15 @@ describe('status layout', () => {
       emptyStats,
       160,
     )
-    expect(echo.row1.right).toEqual([
-      { text: '◎ blocked', tone: 'accent' },
-      { text: 'workspace-write', tone: 'warn' },
-    ])
+    expect(echo.row1.right).toEqual([{ text: '/permission workspace-write', tone: 'warn' }])
+    expect(groupText(echo.row2)).toEqual(['s', '◎ blocked'])
   })
 
   it('sanitizes external text and bounds the title by columns, not characters', () => {
     const layout = layoutStatusBar({ ...baseFacts, title: 'a\u0007b\nc' }, emptyStats, 120)
-    expect(layout.row1.left.at(-1).spans[0].text).toBe('a\\x07b ↵ c')
+    expect(layout.row2.left.at(-1).spans[0].text).toBe('a\\x07b ↵ c')
     const cjk = layoutStatusBar({ ...baseFacts, title: '深'.repeat(30) }, emptyStats, 320)
-    const titleSpan = cjk.row1.left.at(-1).spans[0]
+    const titleSpan = cjk.row2.left.at(-1).spans[0]
     expect(visibleColumns(titleSpan.text)).toBeLessThanOrEqual(48)
     expect(titleSpan.text.endsWith('…')).toBe(true)
   })
@@ -373,7 +390,7 @@ describe('statusline item configuration', () => {
       { items: ['model', 'permission'] },
     )
     expect(groupText(layout.row1)).toEqual(['○ m'])
-    expect(layout.row1.right.map(span => span.text)).toEqual(['workspace-write'])
+    expect(layout.row1.right.map(span => span.text)).toEqual(['/permission workspace-write'])
     expect(layout.row2.left).toEqual([])
   })
 
@@ -392,8 +409,9 @@ describe('statusline item configuration', () => {
       160,
       { items: ['turns', 'cwd', 'model', 'permission', 'goal'] },
     )
-    expect(groupText(layout.row1)).toEqual(['○ m · r', 'turns 1 · steps 1'])
-    expect(layout.row1.right.map(span => span.text)).toEqual(['workspace-write', '◎ round 1/4'])
+    expect(groupText(layout.row1)).toEqual(['○ m · r'])
+    expect(layout.row1.right.map(span => span.text)).toEqual(['/permission workspace-write'])
+    expect(groupText(layout.row2)).toEqual(['turns 1 · steps 1', '◎ round 1/4'])
   })
 })
 
@@ -431,69 +449,64 @@ describe('status width degradation', () => {
   it('keeps every group on both rows and the cycle hint on a roomy terminal', () => {
     const layout = layoutStatusBar(richFacts, richStats, 320)
     expect(layout.row1.hint).toBe(true)
-    expect(layout.row1.left).toHaveLength(4)
-    expect(layout.row1.right.map(span => span.text)).toEqual([
-      '◎ round 2/8',
-      'sandbox danger-full-access',
-      'workspace-write',
+    expect(groupText(layout.row1)).toEqual([
+      '○ provider/model-name · repository · /mode code · ⑂ feature-branch',
+      'context spratx▱▱▱▱▱▱32K/128K 25%',
     ])
+    expect(layout.row1.right.map(span => span.text)).toEqual(['/permission workspace-write'])
     expect(groupText(layout.row2)).toEqual([
-      'mode code',
+      '⧉ plan',
+      'turns 3 · steps 9',
       'model 45.2s · latency 0.6s · 20 tokens/s · tool 2m42s',
       'cache 80%',
-      'context spratx▱▱▱▱▱▱32K/128K 25%',
+      'in 12.2K · out 2.4K',
+      'a'.repeat(40),
+      '◎ round 2/8',
+      'sandbox danger-full-access',
     ])
   })
 
-  it('drops the hint and title before any figure or state', () => {
+  it('drops secondary title independently while preserving the primary row', () => {
     const layout = layoutStatusBar(richFacts, richStats, 200)
-    expect(layout.row1.hint).toBe(false)
+    expect(layout.row1.hint).toBe(true)
     const texts = keptTexts(layout)
     const groups = keptGroups(layout)
     expect(texts).not.toContain('a'.repeat(40))
-    expect(groups).toContain('sandbox danger-full-access')
-    expect(groups).toContain('◎ round 2/8')
-    expect(groups).toContain('turns 3 · steps 9')
-    expect(groups).toContain('workspace-write')
-    expect(groups).toContain('mode code')
     expect(groups).toContain('context spratx▱▱▱▱▱▱32K/128K 25%')
-  })
-
-  it('sheds row-1 figures while row-2 meters and state badges survive', () => {
-    const layout = layoutStatusBar(richFacts, richStats, 150)
-    const texts = keptTexts(layout)
-    const groups = keptGroups(layout)
+    expect(groups).toContain('/permission workspace-write')
     expect(groups).toContain('turns 3 · steps 9')
-    expect(groups).not.toContain('in 12.2K')
     expect(groups).toContain('◎ round 2/8')
     expect(groups).toContain('sandbox danger-full-access')
-    expect(groups).toContain('workspace-write')
-    expect(groups).toContain('model 45.2s · latency 0.6s · 20 tokens/s · tool 2m42s')
-    const countsGone = layoutStatusBar(richFacts, richStats, 120)
-    const goneGroups = keptGroups(countsGone)
-    expect(goneGroups).not.toContain('turns 3 · steps 9')
-    expect(goneGroups).toContain('◎ round 2/8')
-    expect(goneGroups).toContain('workspace-write')
   })
 
-  it('keeps the badge after every figure and state drops, then the identity alone', () => {
-    const withGoal = layoutStatusBar(richFacts, richStats, 100)
-    expect(withGoal.row1.left).toHaveLength(1)
-    expect(withGoal.row1.right.map(span => span.text)).toEqual(['◎ round 2/8', 'workspace-write'])
-    const badgeOnly = layoutStatusBar(richFacts, richStats, 80)
-    expect(badgeOnly.row1.left).toHaveLength(1)
-    expect(badgeOnly.row1.right.map(span => span.text)).toEqual(['workspace-write'])
-    const identityAlone = layoutStatusBar(richFacts, richStats, 70)
+  it('degrades row 2 without moving secondary figures onto row 1', () => {
+    const layout = layoutStatusBar(richFacts, richStats, 150)
+    const groups = keptGroups(layout)
+    expect(groupText(layout.row1)).toContain('context spratx▱▱▱▱▱▱32K/128K 25%')
+    expect(groups).toContain('/permission workspace-write')
+    expect(groups).toContain('turns 3 · steps 9')
+    expect(groups).toContain('in 12.2K · out 2.4K')
+    expect(groups).toContain('◎ round 2/8')
+    expect(groups).toContain('sandbox danger-full-access')
+    expect(groups).not.toContain('model 45.2s · latency 0.6s · 20 tokens/s · tool 2m42s')
+    expect(groups).not.toContain('a'.repeat(40))
+  })
+
+  it('keeps permission rightmost before the identity must ellipsize', () => {
+    const withBadge = layoutStatusBar(richFacts, richStats, 100)
+    expect(withBadge.row1.left).toHaveLength(1)
+    expect(withBadge.row1.right.map(span => span.text)).toEqual(['/permission workspace-write'])
+    const identityAlone = layoutStatusBar(richFacts, richStats, 80)
     expect(identityAlone.row1.left).toHaveLength(1)
     expect(identityAlone.row1.right).toEqual([])
-    expect(visibleColumns(rowText(identityAlone.row1))).toBeLessThanOrEqual(69)
+    expect(visibleColumns(rowText(identityAlone.row1))).toBeLessThanOrEqual(79)
   })
 
   it('ellipsizes the identity cluster instead of wrapping at extreme widths', () => {
     const layout = layoutStatusBar(richFacts, richStats, 24)
     expect(layout.row1.left).toHaveLength(1)
     expect(layout.row1.right).toEqual([])
-    // Row 2 keeps only what fits its own budget — mode alone at this width.
+    // Row 2 independently keeps at most one secondary group at this width.
     expect(layout.row2.left.length).toBeLessThanOrEqual(1)
     if (layout.row2.left.length > 0) {
       expect(visibleColumns(rowText(layout.row2))).toBeLessThanOrEqual(23)
