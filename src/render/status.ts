@@ -468,7 +468,15 @@ function buildCandidates(
     identity.push(span)
   }
   const model = safe(facts.model)
-  if (model !== '' && enabled.has('model')) push({ text: model, tone: 'model' })
+  if (model !== '' && enabled.has('model')) {
+    // The effective reasoning effort rides the model identity as
+    // `provider/model@effort` (Codex's model-with-reasoning status item): the
+    // projection folds the latest request header's effort, so a resumed
+    // session and every request after a /effort pick show what the session
+    // actually uses. An empty effort keeps the bare pair.
+    const effort = safe(stats.reasoningEffort)
+    push({ text: effort === '' ? model : `${model}@${effort}`, tone: 'model' })
+  }
   const cwd = safe(facts.cwd)
   if (cwd !== '' && enabled.has('cwd')) push({ text: cwd, tone: 'path' })
   const branch = safe(facts.branch)

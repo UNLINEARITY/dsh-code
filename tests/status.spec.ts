@@ -34,6 +34,7 @@ const emptyStats: TranscriptStats = {
   ttftSteps: 0,
   decodeMs: 0,
   decodeTokens: 0,
+  reasoningEffort: '',
 }
 
 const baseFacts: StatusFacts = {
@@ -196,6 +197,23 @@ describe('status layout', () => {
     expect(layout.row1.right).toEqual([])
     expect(layout.row1.hint).toBe(false)
     expect(layout.row2.left).toEqual([])
+  })
+
+  it('appends the effective reasoning effort to the model segment', () => {
+    const withEffort = layoutStatusBar(
+      { ...baseFacts, model: 'deepseek-official/deepseek-v4-flash' },
+      { ...emptyStats, reasoningEffort: 'high' },
+      120,
+    )
+    expect(groupText(withEffort.row1)[0]).toBe('○ deepseek-official/deepseek-v4-flash@high · r')
+    expect(withEffort.row1.left[0].spans[1]).toEqual({ text: 'deepseek-official/deepseek-v4-flash@high', tone: 'model' })
+    // Provider-default behavior (no header effort) keeps the bare pair.
+    const withoutEffort = layoutStatusBar(
+      { ...baseFacts, model: 'deepseek-official/deepseek-v4-flash' },
+      emptyStats,
+      120,
+    )
+    expect(groupText(withoutEffort.row1)[0]).toBe('○ deepseek-official/deepseek-v4-flash · r')
   })
 
   it('marks the busy dot live and the plan state accented', () => {

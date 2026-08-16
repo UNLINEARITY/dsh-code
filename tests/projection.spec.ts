@@ -259,6 +259,21 @@ describe('transcript projection', () => {
     expect(view.model).toBe('deepseek-official/deepseek-v4')
   })
 
+  it('folds the effective reasoning effort from the latest request header', () => {
+    const header = (config: Record<string, string>, seq: number) => ({
+      type: 'request/header', seq, time: 0,
+      data: { header: { config }, reason: 'change' },
+    }) as unknown as SessionEvent
+    let view = projectEvent(createTranscriptView(), header({ provider: 'deepseek-official', model: 'deepseek-v4-flash', reasoningEffort: 'high' }, 1))
+    expect(view.stats.reasoningEffort).toBe('high')
+    // An adapter-materialized default is still the effective effort.
+    view = projectEvent(view, header({ provider: 'deepseek-official', model: 'deepseek-v4-flash', reasoningEffort: 'max' }, 2))
+    expect(view.stats.reasoningEffort).toBe('max')
+    // A header without an effort means provider-default behavior.
+    view = projectEvent(view, header({ provider: 'deepseek-official', model: 'deepseek-v4-pro' }, 3))
+    expect(view.stats.reasoningEffort).toBe('')
+  })
+
   it('folds plan mode from the last plan/mode event', () => {
     const flip = (active: boolean, seq: number) => ({
       type: 'plan/mode', seq, time: seq, data: { active },
@@ -543,6 +558,7 @@ describe('transcript projection', () => {
       ttftSteps: 0,
       decodeMs: 0,
       decodeTokens: 0,
+      reasoningEffort: '',
     })
   })
 })

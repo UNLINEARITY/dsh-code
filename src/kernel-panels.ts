@@ -419,47 +419,59 @@ export function StatuslinePanel({ enabled, change, close }: {
  * The `/model` reasoning-effort stage (the Codex model → reasoning popup
  * contract): one bounded list over the selected model's adapter-advertised
  * effort levels, with the effective effort and the model default marked.
- * Enter applies one level; Esc returns to the model list without applying.
+ * A model WITHOUT an adapter-declared default leads with a "Default"
+ * (provider-default) row — the web effort pane's first entry — so the user
+ * can clear a picked level back to provider behavior instead of being forced
+ * to choose an advertised one. Enter applies one level; Esc returns to the
+ * model list without applying.
  */
 export function EffortPanel({ row, current, select, back }: {
   /** The model row whose advertised levels this stage lists. */
   row: ModelRow
   /** Effective effort currently in force ('' when none), for the ● mark. */
   current: string | undefined
-  /** Accept one advertised effort id. */
+  /** Accept one advertised effort id, or '' for the provider default. */
   select(effortId: string): void
   /** Return to the model list without applying. */
   back(): void
 }): ReactElement {
   const [cursor, setCursor] = useState(0)
   const efforts = row.reasoning?.efforts ?? []
+  // The provider-default row only exists when the adapter declares no default
+  // effort: with one, the default is an advertised level already in the list.
+  const hasDefaultRow = row.reasoning !== undefined && row.reasoning.defaultEffort === undefined
+  const rows = hasDefaultRow
+    ? [{ id: '', name: 'Default' }, ...efforts]
+    : efforts
+  // An absent or cleared effort is the Default row's current state.
+  const effective = current === undefined || current === '' ? '' : current
   useEffect(() => {
-    if (efforts.length === 0) {
+    if (rows.length === 0) {
       if (cursor !== 0) setCursor(0)
       return
     }
-    if (cursor >= efforts.length) setCursor(efforts.length - 1)
-  }, [efforts.length, cursor])
+    if (cursor >= rows.length) setCursor(rows.length - 1)
+  }, [rows.length, cursor])
   useInput((input, key) => {
     if (key.escape || input === 'q') return back()
-    if (efforts.length === 0) return
+    if (rows.length === 0) return
     if (key.upArrow) {
-      setCursor(cursor > 0 ? cursor - 1 : efforts.length - 1)
+      setCursor(cursor > 0 ? cursor - 1 : rows.length - 1)
       return
     }
     if (key.downArrow) {
-      setCursor(cursor < efforts.length - 1 ? cursor + 1 : 0)
+      setCursor(cursor < rows.length - 1 ? cursor + 1 : 0)
       return
     }
-    if (key.return && efforts[cursor] !== undefined) {
-      select(efforts[cursor]!.id)
+    if (key.return && rows[cursor] !== undefined) {
+      select(rows[cursor]!.id)
     }
   })
   return createElement(ListFrame, {
     title: `/model — effort for ${row.providerName} · ${row.modelName}`,
-    rows: efforts.map(effort => ({
+    rows: rows.map(effort => ({
       key: effort.id,
-      text: `${effort.id === current ? '●' : '○'} ${effort.name}${effort.id === row.reasoning?.defaultEffort ? ' · default' : ''}${effort.description === undefined ? '' : ` · ${effort.description}`}`,
+      text: `${effort.id === effective ? '●' : '○'} ${effort.name}${effort.id === row.reasoning?.defaultEffort ? ' · default' : ''}${effort.description === undefined ? '' : ` · ${effort.description}`}`,
     })),
     cursor,
     loading: false,

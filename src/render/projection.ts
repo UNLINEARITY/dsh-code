@@ -221,6 +221,14 @@ export interface TranscriptStats {
   decodeMs: number
   /** Completion tokens over timed decode spans (the tok/s numerator). */
   decodeTokens: number
+  /**
+   * Adapter-owned reasoning effort of the latest `request/header` config —
+   * the EFFECTIVE effort the session actually uses (a materialized model
+   * default is included, exactly as the adapter resolved it). Empty when the
+   * header carried none (provider-default behavior). The status line appends
+   * it to the model segment as `provider/model@effort`.
+   */
+  reasoningEffort: string
 }
 
 /** The complete TUI transcript view for one session. */
@@ -314,7 +322,7 @@ export function createTranscriptView(): TranscriptView {
     sandbox: '',
     goal: undefined,
     pending: { 'next-turn': [], 'next-step': [] },
-    stats: { turns: 0, steps: 0, llmMs: 0, toolMs: 0, usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 }, lastPromptTokens: 0, contextWindow: 0, contextSegments: { system: 0, prompt: 0, assistant: 0, thinking: 0, tools: 0 }, ttftMs: 0, ttftSteps: 0, decodeMs: 0, decodeTokens: 0 },
+    stats: { turns: 0, steps: 0, llmMs: 0, toolMs: 0, usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 }, lastPromptTokens: 0, contextWindow: 0, contextSegments: { system: 0, prompt: 0, assistant: 0, thinking: 0, tools: 0 }, ttftMs: 0, ttftSteps: 0, decodeMs: 0, decodeTokens: 0, reasoningEffort: '' },
     anchors: { stepStart: new Map(), toolStart: new Map(), firstChunkAt: new Map(), compactionTokens: new Map(), lastPruneTokens: 0, turnFiles: new Map() },
   }
 }
@@ -667,7 +675,9 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
       }
     case 'request/header': {
       // The session's own model record: the latest snapshot's provider/model
-      // pair, exactly what a resumed TUI restores as the selection.
+      // pair, exactly what a resumed TUI restores as the selection, plus the
+      // effective reasoning effort that snapshot carried (the adapter may
+      // materialize the model default, which is what the status line shows).
       // The snapshot's rendered system prompt is the current system slot, so
       // it REPLACES the estimate (an older system prompt is not re-sent).
       const config = event.data.header.config
@@ -676,6 +686,7 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
         model: `${config.provider}/${config.model}`,
         stats: {
           ...view.stats,
+          reasoningEffort: config.reasoningEffort === undefined ? '' : String(config.reasoningEffort),
           contextSegments: {
             ...view.stats.contextSegments,
             system: estimateTokens(event.data.header.system ?? ''),

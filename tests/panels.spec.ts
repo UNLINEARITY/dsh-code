@@ -809,6 +809,19 @@ describe('/model effort stage', () => {
         reasoning: { efforts: [{ id: 'high', name: 'High' }] },
       },
       { provider: 'acme', providerName: 'Acme', model: 'plain', modelName: 'Plain' },
+      {
+        provider: 'acme',
+        providerName: 'Acme',
+        model: 'think',
+        modelName: 'Think',
+        reasoning: {
+          efforts: [
+            { id: 'off', name: 'Off' },
+            { id: 'high', name: 'High' },
+            { id: 'max', name: 'Max' },
+          ],
+        },
+      },
     ]
     const instance = render(createElement(App, {
       store: createTranscriptStore(),
@@ -945,6 +958,34 @@ describe('/model effort stage', () => {
         { row: rows[0], effortId: 'max' },
       ])
       expect(output).toContain('model → next step uses deepseek-official/deepseek-v4@max')
+      expect(output).toContain('type a message')
+
+      // A model WITHOUT an adapter-declared default leads the effort stage
+      // with a provider-default row: picking it clears the effort back to
+      // provider behavior instead of forcing an advertised level.
+      output = ''
+      stdin.write('/model')
+      await wait()
+      stdin.write('\r')
+      await wait()
+      stdin.write('\x1b[B')
+      await wait()
+      stdin.write('\x1b[B')
+      await wait()
+      stdin.write('\x1b[B')
+      await wait()
+      stdin.write('\r')
+      await wait()
+      expect(output).toContain('effort for Acme · Think')
+      expect(output).toContain('Default')
+      stdin.write('\r')
+      await wait()
+      expect(picked).toEqual([
+        { row: rows[1], effortId: 'high' },
+        { row: rows[2] },
+        { row: rows[0], effortId: 'max' },
+        { row: rows[3], effortId: '' },
+      ])
       expect(output).toContain('type a message')
     } finally {
       instance.unmount()
