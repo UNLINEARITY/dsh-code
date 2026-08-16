@@ -45,6 +45,18 @@ export function resolvePreset(session: Pick<Session, 'header' | 'events'>): stri
   return session.header.agentPreset ?? 'standard'
 }
 
+/** Resolve a pre-session choice, or recompose an active blank Agent. */
+export async function selectPreset(
+  service: AgentPresetsService,
+  agent: Agent | undefined,
+  presetId: string,
+): Promise<PresetRow> {
+  if (agent !== undefined) return switchPreset(service, agent, presetId)
+  const preset = await service.resolve(presetId)
+  if (preset.broken !== undefined) throw new Error(preset.broken)
+  return preset
+}
+
 /** Recompose atomically from the caller's perspective, logging only success. */
 export async function switchPreset(
   service: AgentPresetsService,

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
-import { isBlankSession, resolvePreset, switchPreset, type AgentPresetsService } from '../src/presets.ts'
+import { isBlankSession, resolvePreset, selectPreset, switchPreset, type AgentPresetsService } from '../src/presets.ts'
 
 describe('agent preset policy', () => {
   it('treats only turn/start as the mode lock', () => {
@@ -20,6 +20,16 @@ describe('agent preset policy', () => {
         { type: 'agent-preset/selected', data: { agentPreset: 'cordis' } },
       ] as SessionEvent[],
     })).toBe('cordis')
+  })
+
+  it('resolves a pending choice without an Agent and recomposes only an active blank session', async () => {
+    const resolve = vi.fn().mockResolvedValue({ id: 'minimal' })
+    const recompose = vi.fn()
+    const service = { resolve, recompose } as unknown as AgentPresetsService
+
+    await expect(selectPreset(service, undefined, 'minimal')).resolves.toMatchObject({ id: 'minimal' })
+    expect(resolve).toHaveBeenCalledWith('minimal')
+    expect(recompose).not.toHaveBeenCalled()
   })
 
   it('logs a switch only after recompose succeeds', async () => {

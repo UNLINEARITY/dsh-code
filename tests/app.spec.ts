@@ -76,6 +76,7 @@ function appProps(overrides: Partial<AppProps> = {}): AppProps {
     sessionId: '12345678',
     resumed: false,
     mode: 'standard',
+    permission: 'workspace-write',
     dispatch: noop,
     steer: noop,
     interrupt: () => false,
@@ -84,6 +85,7 @@ function appProps(overrides: Partial<AppProps> = {}): AppProps {
     loadMentions: async () => [],
     selectModel: () => 'test/model',
     cyclePermission: () => '',
+    setPermission: id => id,
     exportTranscript: async () => {},
     renameTitle: () => '',
     loadPresets: async () => [],
@@ -119,6 +121,53 @@ function renderApp(harness: TtyHarness, props: AppProps): ReturnType<typeof rend
 function assistantEntry(text: string, reasoning = ''): TranscriptEntry {
   return { kind: 'assistant', text, reasoning }
 }
+
+describe('pre-session controls', () => {
+  it('shows defaults and handles mode/permission choices before a session exists', async () => {
+    const harness = createTty(140, 24)
+    const dispatch = vi.fn()
+    const switchMode = vi.fn(async (id: string) => id)
+    const setPermission = vi.fn((id: string) => id)
+    const cyclePermission = vi.fn(() => 'danger-full-access')
+    const instance = renderApp(harness, appProps({
+      sessionId: '',
+      mode: 'standard',
+      permission: 'workspace-write',
+      dispatch,
+      switchMode,
+      setPermission,
+      cyclePermission,
+      loadPresets: async () => [{ id: 'minimal', trust: 'system' }],
+    }))
+
+    try {
+      await wait()
+      expect(harness.output.text).toContain('/mode standard')
+      expect(harness.output.text).toContain('/permission workspace-write')
+
+      harness.stdin.write('/permission read-only')
+      await wait()
+      harness.stdin.write('\r')
+      await wait()
+      expect(setPermission).toHaveBeenCalledWith('read-only')
+      expect(dispatch).not.toHaveBeenCalled()
+
+      harness.stdin.write('\x1b[Z')
+      await wait()
+      expect(cyclePermission).toHaveBeenCalledOnce()
+
+      harness.stdin.write('/mode')
+      await wait()
+      harness.stdin.write('\r')
+      await wait()
+      harness.stdin.write('\r')
+      await wait()
+      expect(switchMode).toHaveBeenCalledWith('minimal')
+    } finally {
+      instance.unmount()
+    }
+  })
+})
 
 describe('Ctrl+O history details', () => {
   it('uses an exclusive bounded screen without clearing scrollback and preserves the draft', async () => {
@@ -178,6 +227,7 @@ describe('Ctrl+O history details', () => {
       sessionId: '12345678',
       resumed: false,
       mode: 'standard',
+      permission: 'workspace-write',
       dispatch: (text: string) => {
         dispatched = text
       },
@@ -188,6 +238,7 @@ describe('Ctrl+O history details', () => {
       loadMentions: async () => [],
       selectModel: () => 'test/model',
       cyclePermission: () => '',
+      setPermission: id => id,
       exportTranscript: async () => {},
       renameTitle: () => '',
       loadPresets: async () => [],
@@ -423,6 +474,7 @@ describe('DeepSeek model-switch easter egg', () => {
       sessionId: '12345678',
       resumed: false,
       mode: 'standard',
+      permission: 'workspace-write',
       dispatch: noop,
       steer: noop,
       interrupt: () => false,
@@ -431,6 +483,7 @@ describe('DeepSeek model-switch easter egg', () => {
       loadMentions: async () => [],
       selectModel: row => `${row.provider}/${row.model}`,
       cyclePermission: () => '',
+      setPermission: id => id,
       exportTranscript: async () => {},
       renameTitle: () => '',
       loadPresets: async () => [],
@@ -590,6 +643,7 @@ describe('Ctrl+R reasoning fold', () => {
       sessionId: '12345678',
       resumed: false,
       mode: 'standard',
+      permission: 'workspace-write',
       dispatch: noop,
       steer: noop,
       interrupt: () => false,
@@ -598,6 +652,7 @@ describe('Ctrl+R reasoning fold', () => {
       loadMentions: async () => [],
       selectModel: () => 'test/model',
       cyclePermission: () => '',
+      setPermission: id => id,
       exportTranscript: async () => {},
       renameTitle: () => '',
       loadPresets: async () => [],
@@ -717,6 +772,7 @@ describe('deferred session remount', () => {
       sessionId: '12345678',
       resumed: false,
       mode: 'standard',
+      permission: 'workspace-write',
       dispatch: noop,
       steer: noop,
       interrupt: () => false,
@@ -725,6 +781,7 @@ describe('deferred session remount', () => {
       loadMentions: async () => [],
       selectModel: () => 'test/model',
       cyclePermission: () => '',
+      setPermission: id => id,
       exportTranscript: async () => {},
       renameTitle: () => '',
       loadPresets: async () => [],
@@ -835,6 +892,7 @@ describe('deferred session remount', () => {
       sessionId: '12345678',
       resumed: false,
       mode: 'standard',
+      permission: 'workspace-write',
       dispatch: noop,
       steer: noop,
       interrupt: () => false,
@@ -843,6 +901,7 @@ describe('deferred session remount', () => {
       loadMentions: async () => [],
       selectModel: () => 'test/model',
       cyclePermission: () => '',
+      setPermission: id => id,
       exportTranscript: async () => {},
       renameTitle: () => '',
       loadPresets: async () => [],
@@ -931,7 +990,7 @@ describe('context segmented bar', () => {
     }) as unknown as NodeJS.ReadStream
     const stdout = Object.assign(new PassThrough(), {
       isTTY: true,
-      columns: 100,
+      columns: 140,
       rows: 24,
     }) as unknown as NodeJS.WriteStream
     let output = ''
@@ -994,6 +1053,7 @@ describe('context segmented bar', () => {
       sessionId: '12345678',
       resumed: false,
       mode: 'standard',
+      permission: 'workspace-write',
       dispatch: noop,
       steer: noop,
       interrupt: () => false,
@@ -1002,6 +1062,7 @@ describe('context segmented bar', () => {
       loadMentions: async () => [],
       selectModel: () => 'test/model',
       cyclePermission: () => '',
+      setPermission: id => id,
       exportTranscript: async () => {},
       renameTitle: () => '',
       loadPresets: async () => [],
@@ -1029,7 +1090,7 @@ describe('context segmented bar', () => {
     try {
       await wait()
       // The segmented bar: centered per-type labels, dim free track, and the
-      // right-aligned readout, all on one row-2 budget.
+      // right-aligned readout, all on one primary-row budget.
       const stripAnsi = (text: string): string => text.replace(/\x1b\[[0-9;]*m/g, '')
       expect(stripAnsi(output)).toContain('sys pr  ast th  tl ▱▱78%')
       // Each segment tone paints its own blue run around its label (the
@@ -1096,6 +1157,7 @@ describe('light theme rendering', () => {
       sessionId: '12345678',
       resumed: false,
       mode: 'standard',
+      permission: 'workspace-write',
       dispatch: noop,
       steer: noop,
       interrupt: () => false,
@@ -1104,6 +1166,7 @@ describe('light theme rendering', () => {
       loadMentions: async () => [],
       selectModel: () => 'test/model',
       cyclePermission: () => '',
+      setPermission: id => id,
       exportTranscript: async () => {},
       renameTitle: () => '',
       loadPresets: async () => [],

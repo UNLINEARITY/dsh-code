@@ -21,9 +21,9 @@ describe('completionCandidates', () => {
       skill('agentic-workflow'),
     ]
     const rows = completionCandidates('/', descriptors, skills)
-    // 14 local commands + 1 registry command + 2 skills, all present.
-    expect(rows).toHaveLength(17)
-    expect(rows.filter(row => row.origin === 'command')).toHaveLength(15)
+    // 15 local commands + 1 registry command + 2 skills, all present.
+    expect(rows).toHaveLength(18)
+    expect(rows.filter(row => row.origin === 'command')).toHaveLength(16)
     expect(rows.filter(row => row.origin === 'skill').map(row => row.label))
       .toEqual(['/review', '/agentic-workflow'])
     expect(rows[0]).toMatchObject({ label: '/help', origin: 'command' })
@@ -44,9 +44,19 @@ describe('completionCandidates', () => {
   it('keeps every local command reachable with an empty prefix', () => {
     const localNames = completionCandidates('/', [], [])
       .map(row => row.label)
-    for (const name of ['/help', '/quit', '/export', '/title', '/theme']) {
+    for (const name of ['/help', '/quit', '/export', '/title', '/theme', '/mode', '/permission']) {
       expect(localNames).toContain(name)
     }
+  })
+
+  it('offers /permission before any session exists and shadows the registry child', () => {
+    const rows = completionCandidates('/per', [], [])
+    expect(rows.map(row => row.label)).toEqual(['/permission'])
+    const registry = completionCandidates('/', [{ name: 'permission', description: 'registry child' }], [])
+    const permission = registry.filter(row => row.label === '/permission')
+    expect(permission).toEqual([
+      { label: '/permission', description: 'inspect or select the permission preset', origin: 'command' },
+    ])
   })
 
   it('local commands shadow registry descriptors, which shadow skills', () => {

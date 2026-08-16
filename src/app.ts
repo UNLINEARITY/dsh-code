@@ -147,8 +147,10 @@ export interface AppProps {
   sessionId: string
   /** Whether this session was resumed from persistence. */
   resumed: boolean
-  /** Agent preset currently composing the session. */
+  /** Agent preset selected for the current or pending first session. */
   mode: string
+  /** Permission preset selected for the current or pending first session. */
+  permission: string
   /** Submit one line: slash commands to the registry, other text to the agent. */
   dispatch(text: string): void
   /** Submit steering: consumed at the running turn's next step boundary. */
@@ -175,6 +177,8 @@ export interface AppProps {
   removeModelProvider?(target: ProviderTargetView): Promise<void>
   /** Cycle to the next permission preset (Shift+Tab); returns the new label. */
   cyclePermission(): string
+  /** Select or inspect a permission preset without requiring a pre-existing session. */
+  setPermission(id: string): string
   /** Export the transcript to a markdown file (/export [path]); reports via notices. */
   exportTranscript(argument: string): Promise<void>
   /** Rename the session (/title <text>); returns the outcome line for the notice. */
@@ -1678,6 +1682,7 @@ function HelpPanel({ descriptors, skills, commandError, skillError, onClose }: {
     createElement(Box, { key: 'local-model' }, row('/model', 'switch the model')),
     createElement(Box, { key: 'local-effort' }, row('/effort', 'adjust reasoning effort for the current model')),
     createElement(Box, { key: 'local-mode' }, row('/mode', 'inspect or select the agent preset (/mode [preset])')),
+    createElement(Box, { key: 'local-permission' }, row('/permission', 'inspect or select the permission preset (/permission [preset])')),
     createElement(Box, { key: 'local-new' }, row('/new', 'create and switch to a fresh session (/new [preset])')),
     createElement(Box, { key: 'local-resume' }, row('/resume', 'browse or switch root sessions (/resume [id|prefix])')),
     createElement(Box, { key: 'local-plugin' }, row('/plugin', 'inspect the live plugin composition')),
@@ -2013,6 +2018,7 @@ export function completionCandidates(
     { label: '/model', description: 'switch the model', origin: 'command' },
     { label: '/effort', description: 'adjust reasoning effort for the current model', origin: 'command' },
     { label: '/mode', description: 'select the agent preset', origin: 'command' },
+    { label: '/permission', description: 'inspect or select the permission preset', origin: 'command' },
     { label: '/new', description: 'start a fresh session', origin: 'command' },
     { label: '/resume', description: 'browse or switch sessions', origin: 'command' },
     { label: '/plugin', description: 'inspect the plugin composition', origin: 'command' },
@@ -2024,9 +2030,9 @@ export function completionCandidates(
     { label: '/title', description: 'rename this session', origin: 'command' },
     { label: '/quit', description: 'exit', origin: 'command' },
   ]
-  // Local commands shadow registry names (e.g. the plugin-registered
-  // /permission is served by the registry itself, never duplicated here),
-  // so collisions cannot render two rows with the same key.
+  // Local commands shadow registry names (e.g. the TUI-local /permission works
+  // before any session exists, while the registry child needs one), so
+  // collisions cannot render two rows with the same key.
   const localNames = new Set(local.map(candidate => candidate.label.slice(1)))
   const registry = descriptors
     .filter(descriptor => !localNames.has(descriptor.name))
@@ -2121,7 +2127,7 @@ function CompletionMenu({ active, mention, index, rows }: {
  * While a modal (approval / question / model panel) owns the keys, the
  * box passes every key through untouched.
  */
-function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openEffort, openHelp, openMode, openResume, openPlugin, openStatusline, openTheme, openHistory, createSession, cancelSessionSwitch, notify, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, cyclePermission, exportTranscript, renameTitle, recallSpace, recordLocal, recordHistory, queued, cancelQueued, historyFill, historyConsumed, waveTier, waveStyle }: {
+function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openEffort, openHelp, openMode, openResume, openPlugin, openStatusline, openTheme, openHistory, createSession, cancelSessionSwitch, notify, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, cyclePermission, setPermission, exportTranscript, renameTitle, recallSpace, recordLocal, recordHistory, queued, cancelQueued, historyFill, historyConsumed, waveTier, waveStyle }: {
   active: boolean
   frozen: boolean
   busy: boolean
@@ -2151,6 +2157,7 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   refresh(): void
   loadMentions(query: string, signal?: AbortSignal): Promise<readonly MentionCandidate[]>
   cyclePermission(): string
+  setPermission(id: string): string
   exportTranscript(argument: string): Promise<void>
   renameTitle(argument: string): string
   /** Newest-first recall space (persistent + in-session, deduped). */
@@ -2412,6 +2419,16 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
       }
       if (text === '/effort' || text.startsWith('/effort ')) {
         openEffort()
+        return
+      }
+      if (text === '/permission' || text.startsWith('/permission ')) {
+        const wanted = text.slice(11).trim()
+        try {
+          const selected = setPermission(wanted)
+          notify(wanted === '' ? `permission ${selected}` : `permission → ${selected}`)
+        } catch (error: unknown) {
+          notify(`permission change failed: ${error instanceof Error ? error.message : String(error)}`, 'error')
+        }
         return
       }
       if (text === '/mode' || text.startsWith('/mode ')) {
@@ -3543,6 +3560,7 @@ export function App(props: AppProps): ReactElement {
         },
         loadMentions: props.loadMentions,
         cyclePermission: props.cyclePermission,
+        setPermission: props.setPermission,
         exportTranscript: props.exportTranscript,
         renameTitle: props.renameTitle,
         recallSpace,
@@ -3564,7 +3582,7 @@ export function App(props: AppProps): ReactElement {
           sessionId: props.sessionId,
           title: view.title,
           plan: view.plan,
-          permission: view.permission,
+          permission: view.permission !== '' ? view.permission : props.permission,
           sandbox: view.sandbox,
           goal: view.goal === undefined ? undefined : { phase: view.goal.phase, rounds: view.goal.rounds, max: view.goal.max },
         },

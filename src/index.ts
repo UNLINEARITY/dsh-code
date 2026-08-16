@@ -51,7 +51,14 @@ import { toolArgumentsPreview } from './render/tool-preview.ts'
 import { buildExportMarkdown } from './render/export.ts'
 import type { TuiStartup } from './startup.ts'
 import { SessionSwitchQueue } from './session-switch.ts'
-import { agentPresetsFrom, resolvePreset, switchPreset } from './presets.ts'
+import { agentPresetsFrom, resolvePreset, selectPreset } from './presets.ts'
+import {
+  applyPendingPermission,
+  cyclePermission as cyclePermissionPreset,
+  effectivePermission,
+  permissionPresetsFrom,
+  selectPermission,
+} from './permissions.ts'
 import { listPluginRows } from './plugin-inventory.ts'
 import { parseThemeName, setTheme, type ThemeName } from './theme.ts'
 import {
@@ -269,6 +276,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   const defaults = defaultModel.currentSelection()
   const presets = agentPresetsFrom(ctx)
   if (presets === undefined) throw new Error('agent preset service is unavailable; check the dsh-code bundle patch')
+  const permissionPresets = permissionPresetsFrom(ctx)
 
   // A bare fresh launch stays transient: no Agent or session is composed, and
   // nothing is persisted, until the user's first real input. Explicit flags
@@ -295,7 +303,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     const selectionState: { picked?: ModelSelection } = pendingSelection === undefined
       ? {}
       : { picked: pendingSelection }
-    let mode = next.mode
+    let mode = next.resume ? next.mode : next.mode ?? pendingMode
     if (!next.resume) mode = (await presets.resolve(mode)).id
     const setup = async (agentCtx: Context): Promise<void> => {
       const sessionPreset = next.resume
@@ -329,6 +337,9 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
         setup,
       })
     const session = handle.agent.session
+    if (!next.resume && permissionPresets !== undefined) {
+      applyPendingPermission(permissionPresets, session, pendingPermission)
+    }
     const sessionCwd = session.header.cwd ?? nextCwd
     return {
       handle,
@@ -352,6 +363,12 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   let mentions: MentionsApi = createMentions(ctx, undefined, cwd)
   /** Explicit model pick made before any session exists (a bare launch). */
   let pendingSelection: ModelSelection | undefined
+  /** Agent preset selected before the first session exists. */
+  let pendingMode: string | undefined
+  /** Ordered pre-session preset resolutions; first composition awaits them. */
+  let pendingModeWork: Promise<void> = Promise.resolve()
+  /** Permission preset selected before the first session exists. */
+  let pendingPermission: string | undefined
   /**
    * Monotonic session epoch: bumped on every successful activation, on every
    * first-session creation, and on quit. Async callbacks (mention prepares,
@@ -563,10 +580,6 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   const runSlash = (line: string): void => {
     const currentAgent = agent
     if (currentAgent === undefined) return
-    if (line.startsWith('/mode ')) {
-      void switchModeAction(line.slice(6).trim())
-      return
-    }
     if (line.startsWith('/resume ')) {
       requestResume(line.slice(8).trim())
       return
@@ -680,6 +693,9 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     creating = true
     void compose(async () => {
       try {
+        // A direct `/mode <preset>` resolves asynchronously. Preserve submit
+        // order so the first composition cannot race ahead with the old mode.
+        await pendingModeWork
         // Another composition (e.g. a /resume activated while this creation
         // waited its turn) may have published a session already: deliver the
         // queued lines there instead of minting a competing fresh session
@@ -703,6 +719,8 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
         session = next.session
         store = next.store
         mentions = next.mentions
+        pendingMode = undefined
+        pendingPermission = undefined
         commands.setAgent(agent)
         skills.setAgent(agent)
         // The App mounts with a placeholder key until the first input; the
@@ -728,6 +746,23 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   const send = (text: string, mode: 'followup' | 'steer'): void => {
     const line = text.trim()
     if (line === '') return
+    if (line.startsWith('/mode ')) {
+      void switchModeAction(line.slice(6).trim()).then(
+        selected => bridge.notify(`mode → ${selected}`),
+        error => bridge.notify(`mode switch failed: ${error instanceof Error ? error.message : String(error)}`, 'error'),
+      )
+      return
+    }
+    if (line === '/permission' || line.startsWith('/permission ')) {
+      const wanted = line.slice(11).trim()
+      try {
+        const selected = setPermissionAction(wanted)
+        bridge.notify(wanted === '' ? `permission ${selected}` : `permission → ${selected}`)
+      } catch (error: unknown) {
+        bridge.notify(`permission change failed: ${error instanceof Error ? error.message : String(error)}`, 'error')
+      }
+      return
+    }
     if (session === undefined) {
       pendingInputs.push({ text: line, mode })
       ensureSession()
@@ -763,29 +798,38 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     }
   }
 
+  /** Select one permission preset before the first session or on the active one. */
+  const setPermissionAction = (id: string): string => {
+    if (permissionPresets === undefined || permissionPresets.names.length === 0) {
+      throw new Error('permission presets are not mounted in this composition')
+    }
+    if (id === '') {
+      return `${effectivePermission(permissionPresets, session, pendingPermission)} · ${permissionPresets.names.join(' | ')}`
+    }
+    const selected = selectPermission(permissionPresets, session, id)
+    if (session === undefined) {
+      pendingPermission = selected
+      renderCurrent()
+    }
+    return selected
+  }
+
   /**
-   * Cycle to the next permission preset (Shift+Tab, the Claude-Code
-   * permission-mode convention mapped onto dsh presets). A session in a
-   * custom knob state wraps to the first declared preset.
+   * Cycle to the next permission preset (Shift+Tab). Before the first session,
+   * the choice remains process-local and is materialized when Harness creates
+   * that session; afterwards the canonical service writes durable events.
    */
   const cyclePermission = (): string => {
-    if (session === undefined) throw new Error('no session yet — submit a message to start')
-    const service = ctx.get('permissionPresets') as
-      | {
-        names: readonly string[]
-        current(events: readonly SessionEvent[]): string
-        set(target: Session, preset: string): void
-      }
-      | undefined
-    if (service === undefined || service.names.length === 0) {
+    if (permissionPresets === undefined || permissionPresets.names.length === 0) {
       bridge.notify('permission presets are not mounted in this composition', 'warning')
       return ''
     }
-    const at = service.names.indexOf(service.current(session.events))
-    const next = service.names[(at + 1) % service.names.length] ?? ''
-    if (next === '') return ''
     try {
-      service.set(session, next)
+      const next = cyclePermissionPreset(permissionPresets, session, pendingPermission)
+      if (session === undefined && next !== '') {
+        pendingPermission = next
+        renderCurrent()
+      }
       return next
     } catch (error: unknown) {
       bridge.notify(`permission change failed: ${error instanceof Error ? error.message : String(error)}`, 'error')
@@ -880,12 +924,24 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   const switchModeAction = async (id: string): Promise<string> => {
     if (id === '') throw new Error('usage: /mode <preset>')
     const currentAgent = agent
-    const currentActive = active
-    if (currentAgent === undefined || currentActive === undefined) {
-      throw new Error('no session yet — submit a message to start')
+    if (currentAgent === undefined) {
+      const choice = pendingModeWork.then(async () => {
+        const preset = await selectPreset(presets, undefined, id)
+        // A resume may have won while this roster read was in flight; never
+        // leak the old pending choice into a later /new session.
+        if (agent === undefined) {
+          pendingMode = preset.id
+          renderCurrent()
+        }
+        return preset.id
+      })
+      pendingModeWork = choice.then(() => {}, () => {})
+      return choice
     }
-    const preset = await switchPreset(presets, currentAgent, id)
-    currentActive.mode = preset.id
+
+    const preset = await selectPreset(presets, currentAgent, id)
+    if (active === undefined) throw new Error('active Agent has no session state')
+    active.mode = preset.id
     commands.setAgent(currentAgent)
     skills.setAgent(currentAgent)
     renderCurrent()
@@ -912,6 +968,8 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       session = next.session
       store = next.store
       mentions = next.mentions
+      pendingMode = undefined
+      pendingPermission = undefined
       commands.setAgent(agent)
       skills.setAgent(agent)
       try {
@@ -1031,13 +1089,13 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   }
 
   const appElement = (): ReturnType<typeof createElement> => {
-    // A bare launch mounts with placeholder facts until the first input
-    // composes a real session: empty session id/mode, the deployment default
-    // model, and the working directory's basename. `status.ts` drops empty
-    // mode/sessionId, so the bar renders only the identity it actually has.
+    // A bare launch mounts with pending/default model, mode, and permission
+    // facts until the first input composes the real session. These choices stay
+    // process-local and create no durable state before that composition.
     const sessionCwd = session?.header.cwd ?? cwd
-    const model = store.getView().model !== ''
-      ? store.getView().model
+    const currentView = store.getView()
+    const model = currentView.model !== ''
+      ? currentView.model
       : pendingSelection !== undefined
         ? `${pendingSelection.provider}/${pendingSelection.model}`
         : `${defaults.provider}/${defaults.model}`
@@ -1046,6 +1104,9 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       session?.requestHeader()?.config,
       defaults,
     ).reasoningEffort
+    const permission = permissionPresets === undefined
+      ? currentView.permission
+      : effectivePermission(permissionPresets, session, pendingPermission)
     return createElement(App, {
       key: session?.id ?? 'pending',
       store,
@@ -1060,7 +1121,8 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       branch: gitBranch(sessionCwd),
       sessionId: session === undefined ? '' : session.id.slice(-8),
       resumed: active?.resumed ?? false,
-      mode: active?.mode ?? '',
+      mode: active?.mode ?? pendingMode ?? presets.defaultId,
+      permission,
       dispatch,
       steer,
       interrupt,
@@ -1073,6 +1135,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       removeModelProvider: target => removeProviderSettings(ctx, target),
       loadMentions: (query: string, signal?: AbortSignal) => mentions.candidates(query, signal),
       cyclePermission,
+      setPermission: setPermissionAction,
       selectModel,
       exportTranscript,
       renameTitle,
