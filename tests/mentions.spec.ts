@@ -1,10 +1,12 @@
-/** Workspace file scan and mention candidate ranking. */
+/** Workspace file scan, mention candidate ranking, and the detached-callback contract. */
 
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { scanWorkspaceFiles } from '../src/mentions.ts'
+import type { Context } from '@deepseek-ai/cordis'
+import type { Agent } from '@deepseek-ai/dsh-agent'
+import { createMentions, scanWorkspaceFiles } from '../src/mentions.ts'
 
 /** One temporary workspace tree; auto-removed. */
 function fixture(entries: readonly string[]): string {
@@ -13,7 +15,8 @@ function fixture(entries: readonly string[]): string {
     if (entry.endsWith('/')) {
       mkdirSync(join(root, entry.slice(0, -1)), { recursive: true })
     } else {
-      mkdirSync(join(root, entry.slice(0, entry.lastIndexOf('/'))), { recursive: true })
+      const slash = entry.lastIndexOf('/')
+      if (slash >= 0) mkdirSync(join(root, entry.slice(0, slash)), { recursive: true })
       writeFileSync(join(root, entry), '')
     }
   }
@@ -21,13 +24,15 @@ function fixture(entries: readonly string[]): string {
 }
 
 describe('scanWorkspaceFiles', () => {
-  it('lists files as forward-slash relative paths, sorted', async () => {
+  it('lists files and directories as forward-slash relative paths, sorted', async () => {
     const root = fixture(['src/a.ts', 'src/deep/b.ts', 'README.md'])
     try {
       const files = await scanWorkspaceFiles(root)
       expect(files).toEqual([
         { path: 'README.md', kind: 'file' },
+        { path: 'src', kind: 'directory' },
         { path: 'src/a.ts', kind: 'file' },
+        { path: 'src/deep', kind: 'directory' },
         { path: 'src/deep/b.ts', kind: 'file' },
       ])
     } finally {
@@ -60,5 +65,71 @@ describe('scanWorkspaceFiles', () => {
 
   it('never throws on unreadable entries', async () => {
     await expect(scanWorkspaceFiles(join(tmpdir(), 'dsh-code-no-such-dir-9f8e'))).resolves.toEqual([])
+  })
+})
+
+/** Context double without any optional service: file mentions only. */
+function bareContext(): Context {
+  return { get: (): undefined => undefined } as unknown as Context
+}
+
+const agent = { id: 'a' } as unknown as Agent
+
+describe('createMentions.candidates', () => {
+  it('works when the callback is detached from the API object', async () => {
+    // The runner hands `mentions.candidates` to the input editor as a bare
+    // function; a `this`-bound implementation threw on every @ keystroke and
+    // the menu sat at "searching…" forever.
+    const root = fixture(['alpha.ts', 'beta.md'])
+    try {
+      const api = createMentions(bareContext(), agent, root)
+      const detached = api.candidates
+      await expect(detached('')).resolves.toEqual([
+        { label: 'alpha.ts', description: 'File', kind: 'file' },
+        { label: 'beta.md', description: 'File', kind: 'file' },
+      ])
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('lists the first path-sorted entries for a bare @ (empty query)', async () => {
+    const root = fixture(['zeta.txt', 'alpha.txt', 'mid/beta.txt'])
+    try {
+      const api = createMentions(bareContext(), agent, root)
+      const rows = await api.candidates('')
+      expect(rows.map(row => row.label)).toEqual(['alpha.txt', 'mid', 'mid/beta.txt', 'zeta.txt'])
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('ranks by name-exact, then prefix, then path, then subsequence', async () => {
+    const root = fixture(['app.ts', 'apps/web.ts', 'src/app/util.ts', 'wrap.ts'])
+    try {
+      const api = createMentions(bareContext(), agent, root)
+      const rows = await api.candidates('app')
+      // `src/app` matches the name exactly, `app.ts`/`apps` by name prefix,
+      // then paths containing the query; `wrap.ts` matches nothing.
+      expect(rows.map(row => row.label)).toEqual([
+        'src/app',
+        'app.ts',
+        'apps',
+        'apps/web.ts',
+        'src/app/util.ts',
+      ])
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('returns no file rows when nothing matches', async () => {
+    const root = fixture(['alpha.ts'])
+    try {
+      const api = createMentions(bareContext(), agent, root)
+      await expect(api.candidates('zzz')).resolves.toEqual([])
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 })

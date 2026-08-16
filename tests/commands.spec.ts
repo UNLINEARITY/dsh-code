@@ -120,6 +120,6 @@ describe('loadModelDirectory', () => {
 
   it('returns an empty directory without an llm service', async () => {
     const ctx = { get: (): undefined => undefined } as unknown as Context
-    await expect(loadModelDirectory(ctx)).resolves.toEqual({ rows: [], failures: [] })
+    await expect(loadModelDirectory(ctx)).resolves.toEqual({ rows: [], failures: [], reasoningFailures: [] })
   })
 })

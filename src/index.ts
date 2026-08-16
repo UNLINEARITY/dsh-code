@@ -34,7 +34,7 @@ import { mountApprovalAnswerer, type ApprovalStore } from './approval.ts'
 import { isSlashLine, watchCommands, type CommandsView } from './commands.ts'
 import { internals, type TuiMount } from './internals.ts'
 import { buildModelSelection, loadModelDirectory, resolveEffectiveSelection, type ModelRow } from './models.ts'
-import { createMentions, type MentionCandidate, type MentionsApi } from './mentions.ts'
+import { createMentions, type MentionsApi } from './mentions.ts'
 import { mountQuestionProvider, type QuestionStore } from './questions.ts'
 import { createTranscriptStore, type TranscriptStore } from './store.ts'
 import { parseStatuslineItems } from './render/status.ts'
@@ -266,7 +266,10 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   let agent: Agent | undefined
   let session: Session | undefined
   let store: TranscriptStore = createTranscriptStore()
-  let mentions: MentionsApi | undefined
+  // File-only mentions from the start: `@` completion works on a bare launch
+  // (no session yet); the prepare/activate paths replace this with the full
+  // agent-scoped instance that also resolves session references.
+  let mentions: MentionsApi = createMentions(ctx, undefined, cwd)
   /** Explicit model pick made before any session exists (a bare launch). */
   let pendingSelection: ModelSelection | undefined
 
@@ -752,7 +755,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       agent = previous?.agent
       session = previous?.session
       store = previous === undefined ? createTranscriptStore() : previous.store
-      mentions = previous?.mentions
+      mentions = previous === undefined ? createMentions(ctx, undefined, cwd) : previous.mentions
       if (agent !== undefined) commands.setAgent(agent)
       if (agent !== undefined) skills.setAgent(agent)
       await next.handle.dispose()
@@ -889,9 +892,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       interrupt,
       quit,
       loadModels: () => loadModelDirectory(ctx),
-      loadMentions: mentions === undefined
-        ? () => Promise.resolve<readonly MentionCandidate[]>([])
-        : mentions.candidates,
+      loadMentions: (query: string, signal?: AbortSignal) => mentions.candidates(query, signal),
       cyclePermission,
       selectModel,
       exportTranscript,

@@ -42,8 +42,12 @@ import {
   busyChaseFrame,
   caretVisible,
   DEEPSEEK_WAVE_FRAMES,
+  DEEPSEEK_WAVE_INTERVAL_MS,
+  deepseekWaveColor,
+  deepseekWavePromptColor,
   isOfficialDeepSeekLabel,
   pulseFrame,
+  type DeepseekWaveColors,
 } from './render/animations.ts'
 import type { ApprovalSnapshot, ApprovalStore } from './approval.ts'
 import type { CommandsView } from './commands.ts'
@@ -717,20 +721,24 @@ function statusToneProps(tone: StatusTone): {
  * truncation degrades groups, it never wraps a row.
  *
  * The DeepSeek easter egg: when the model label *switches* to an official
- * DeepSeek route, the model name plays a one-shot blue gradient wave
- * (12 × 125ms = 1.5s) and returns to static. The wave only recolors the
- * existing model span — same characters, same width — so the row budget is
- * untouched and every other status figure stays visible throughout.
+ * DeepSeek route, the composer frame plays a one-shot eased blue swell
+ * (32 × 60ms ≈ 1.9s) and returns to static. The wave only recolors the
+ * existing border and prompt — same characters, same width — so the row
+ * budget is untouched and every other status figure stays visible throughout.
  */
 
-/** Frame interval of the DeepSeek model-switch wave (matches the busy chase cadence). */
-const DEEPSEEK_WAVE_INTERVAL_MS = 125
-
-/** Wave shade palette, indexed by frame: deep → bright brand blues. The
- * composer frame cycles through these on the one-shot easter-egg wave. */
-function deepseekWavePalette(): readonly (readonly [number, number, number])[] {
+/** Theme anchors for the one-shot composer wave, read from the active palette
+ * so the eased swell stays coordinated in both themes. The pure interpolation
+ * lives in animations.ts; this module only supplies the colors and the timer. */
+function deepseekWaveColors(): DeepseekWaveColors {
   const palette = getPalette()
-  return [palette.brandDeep, palette.brand, palette.brandMid, palette.brandBright]
+  return {
+    calm: palette.dim,
+    deep: palette.brandDeep,
+    brand: palette.brand,
+    mid: palette.brandMid,
+    bright: palette.brandBright,
+  }
 }
 
 function StatusLine({ facts, stats, busy, columns, items }: {
@@ -1580,9 +1588,14 @@ interface CompletionCandidate {
  * Resolve completion candidates for the current input: TUI-local commands,
  * the live registry descriptors, and user-invocable skills, filtered by the
  * typed prefix. Command names win collisions (the dispatch tries the
- * registry first and only then falls through to the skill gesture).
+ * registry first and only then falls through to the skill gesture), and a
+ * later duplicate name never renders twice.
+ *
+ * A bare `/` returns the FULL merged list — Codex's command popup shows every
+ * command inside a scroll window on an empty filter, and the menu's own
+ * selection window bounds the visible rows, so no slice cap is needed.
  */
-function completionCandidates(
+export function completionCandidates(
   value: string,
   descriptors: readonly CommandDescriptor[],
   skills: readonly SkillRow[],
@@ -1624,12 +1637,19 @@ function completionCandidates(
       description: skill.modelInvocable ? `skill · ${skill.description}` : `skill (user only) · ${skill.description}`,
       origin: 'skill',
     }))
-  const all = [...local, ...registry, ...skillRows]
-  // The menu itself caps its visible rows behind a scroll window, so the
-  // candidate cap only bounds how many entries cycling can reach; 11 keeps
-  // every TUI-local command reachable with an empty prefix.
-  if (prefix === '') return all.slice(0, 11)
-  return all.filter(candidate => candidate.label.slice(1).startsWith(prefix)).slice(0, 11)
+  // One row per name, first occurrence wins: local before registry before
+  // skills, which is exactly the shadowing precedence above (defensive
+  // against duplicate registry names across scopes).
+  const seen = new Set<string>()
+  const all: CompletionCandidate[] = []
+  for (const candidate of [...local, ...registry, ...skillRows]) {
+    const name = candidate.label.slice(1)
+    if (seen.has(name)) continue
+    seen.add(name)
+    all.push(candidate)
+  }
+  if (prefix === '') return all
+  return all.filter(candidate => candidate.label.slice(1).startsWith(prefix))
 }
 
 /**
@@ -1663,6 +1683,7 @@ function CompletionMenu({ active, mention, index, rows }: {
   const selected = rows.length === 0 ? 0 : index % rows.length
   const first = selectionWindow(selected, rows.length, limit)
   const visible = rows.slice(first, first + limit)
+  const hidden = rows.length - visible.length
   return createElement(
     Box,
     { flexDirection: 'column', marginLeft: 2, paddingY: verticalPadding },
@@ -1680,7 +1701,11 @@ function CompletionMenu({ active, mention, index, rows }: {
         `${absolute === selected ? '❯ ' : '  '}${padColumns(candidate.label, nameWidth)}${dim(truncateColumns(displayText(candidate.description), descBudget))}`,
         )
       })),
-    showFooter ? createElement(Text, { dimColor: true, wrap: 'truncate-end' }, dim(mention ? '↑↓ choose · tab insert' : '↑↓ choose · tab complete')) : undefined,
+    // Scroll affordance: with the full merged catalog (commands + registry +
+    // skills) the six-row window rarely shows the tail — count and hint keep
+    // the rest discoverable without inflating the menu budget.
+    hidden > 0 ? createElement(Text, { key: 'more', color: inkColor(getPalette().dim), wrap: 'truncate-end' }, dim(`  … +${hidden} more`)) : undefined,
+    showFooter ? createElement(Text, { color: inkColor(getPalette().dim), wrap: 'truncate-end' }, dim(mention ? `↑↓ choose · ${rows.length} items · tab insert` : `↑↓ choose · ${rows.length} items · tab complete`)) : undefined,
   )
 }
 
@@ -1736,8 +1761,8 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   historyFill: { text: string; index: number } | undefined
   /** Marks the accepted entry consumed (called after the fill is applied). */
   historyConsumed(): void
-  /** DeepSeek easter-egg wave frame (null when static): the composer frame
-   * cycles the brand-blue shades for the one-shot 1.5s wave. */
+  /** DeepSeek easter-egg wave frame (null when static): the composer border
+   * and prompt ride the one-shot eased blue swell (~1.9s). */
   waveTick: number | null
 }): ReactElement {
   const columns = useStdout().stdout?.columns ?? 80
@@ -2146,18 +2171,18 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
 
   // Every exclusive panel keeps the composer as a stable visual anchor, but
   // freezes it to one row: no menu, multiline wrap, or animation.
-  const wavePalette = deepseekWavePalette()
-  const waveFrame = waveTick === null ? null : wavePalette[waveTick % wavePalette.length]
-  const promptColor = waveFrame === null
+  const waveColors = deepseekWaveColors()
+  const waveFrame = waveTick === null ? null : inkColor(deepseekWaveColor(waveTick, waveColors))
+  const promptColor = waveTick === null
     ? inkColor(getPalette().brand)
-    : inkColor(wavePalette[(waveTick! + 1) % wavePalette.length])
+    : inkColor(deepseekWavePromptColor(waveTick, waveColors))
   if (frozen) {
     const frozen = value === ''
       ? 'type a message'
       : verboseLine(value, Math.max(1, columns - 6))
     return createElement(
       Box,
-      { width: Math.max(1, columns - 1), borderStyle: 'round', borderColor: waveFrame === null ? inkColor(getPalette().dim) : inkColor(waveFrame), paddingX: 1 },
+      { width: Math.max(1, columns - 1), borderStyle: 'round', borderColor: waveFrame === null ? inkColor(getPalette().dim) : waveFrame, paddingX: 1 },
       createElement(
         Text,
         { wrap: 'truncate-end' },
@@ -2186,7 +2211,7 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
     // no extra space, so the empty state reads `❯ ▮type a message…`.
     createElement(
       Box,
-      { width: Math.max(1, columns - 1), borderStyle: 'round', borderColor: waveFrame === null ? inkColor(getPalette().dim) : inkColor(waveFrame), paddingX: 1 },
+      { width: Math.max(1, columns - 1), borderStyle: 'round', borderColor: waveFrame === null ? inkColor(getPalette().dim) : waveFrame, paddingX: 1 },
       createElement(
         Text,
         { wrap: 'truncate-end' },
@@ -2442,7 +2467,7 @@ export function App(props: AppProps): ReactElement {
       const label = props.selectModel(row, effortId)
       setModelLabel(label)
       setEffortLabel(effortId)
-      notify(`model → next step uses ${label}${effortId === undefined ? '' : `@${effortId}`}`)
+      notify(`model → next step uses ${label}${effortId === undefined || effortId === '' ? '' : `@${effortId}`}`)
       setModelOpen(false)
       setEffortFor(undefined)
     } catch (error: unknown) {
@@ -2630,17 +2655,27 @@ export function App(props: AppProps): ReactElement {
           // the live catalog, then open the same effort stage the /model
           // picker would. Match on the applied label (what the status bar
           // shows) — `props.model` may still carry the deployment default
-          // until the next request header lands. A model without advertised
-          // efforts gets a bounded notice instead of an empty picker.
+          // until the next request header lands. The model-id fallback
+          // prefers a reasoning-capable row (several routes may serve the
+          // same id), and a capability-lookup failure reads as "retry",
+          // never as "the model has no efforts" — the adapter advertises
+          // levels for every deepseek model, so "no efforts" is almost
+          // always a failed resolveModelInfo, not a fact.
           void props.loadModels().then((loaded) => {
             const [provider, model] = modelLabel.split('/')
-            // Exact route match first; then fall back to the model id alone —
-            // the deployment default may name a provider route differently
-            // from the adapter's registered id (e.g. `deepseek` vs
-            // `deepseek-official`) while still serving the same model.
             const row = loaded.rows.find(candidate => candidate.provider === provider && candidate.model === model)
+              ?? loaded.rows.find(candidate => candidate.model === model && candidate.reasoning !== undefined)
               ?? loaded.rows.find(candidate => candidate.model === model)
-            if (row?.reasoning === undefined || row.reasoning.efforts.length === 0) {
+            if (row === undefined) {
+              notify('current model is not in the catalog', 'warning')
+              return
+            }
+            const rowTag = `${row.provider}/${row.model}`
+            if (loaded.reasoningFailures?.includes(rowTag) === true) {
+              notify('reasoning levels temporarily unavailable (capability lookup failed) — try again', 'warning')
+              return
+            }
+            if (row.reasoning === undefined || row.reasoning.efforts.length === 0) {
               notify('current model does not expose reasoning efforts', 'warning')
               return
             }

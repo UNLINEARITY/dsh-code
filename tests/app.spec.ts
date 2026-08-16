@@ -260,7 +260,7 @@ describe('Ctrl+O history details', () => {
 })
 
 describe('DeepSeek model-switch easter egg', () => {
-  it('plays the one-shot blue wave on the model name after /model selects DeepSeek, then restores static modelBright', async () => {
+  it('plays the one-shot eased blue swell on the composer after /model selects DeepSeek, then restores static dim', async () => {
     // The color assertions need truecolor ANSI output; the default test
     // environment disables colors (chalk level 0), so force level 3 here and
     // restore the baseline in the finally block.
@@ -365,19 +365,23 @@ describe('DeepSeek model-switch easter egg', () => {
 
       const label = 'deepseek-official/deepseek-v4-flash'
       // The easter egg paints the COMPOSER frame (Codex-style wave): the
-      // round-border and prompt marker cycle the four brand-blue shades for
-      // 1.5s. brandMid appears nowhere in the static empty session (the mode
-      // item uses accent brandDeep, the notice brandBright), so it counts
-      // wave frames only: the count must grow while the wave runs and stay
-      // frozen after it finishes — proving the one-shot return to static.
+      // round border and prompt marker ride the eased 32-frame swell (~1.9s),
+      // interpolating a smooth stream of brand-blue shades rather than
+      // stepping between four palette tokens. The accumulated truecolor set
+      // therefore grows far beyond the handful of static palette colors while
+      // the wave runs, then freezes once the swell returns the composer to
+      // its static dim frame — proving the one-shot restore.
       expect(output).toContain(label)
-      const brandMidCount = (): number => (output.match(/38;2;86;134;254/g) ?? []).length
-      await new Promise(resolve => setTimeout(resolve, 300))
-      expect(brandMidCount()).toBeGreaterThan(0) // wave frame 2 paints brandMid
-      await new Promise(resolve => setTimeout(resolve, 2_000)) // wave over (~1.5s)
-      const settled = brandMidCount()
+      const distinctColors = (): number => new Set((output.match(/38;2;\d{1,3};\d{1,3};\d{1,3}/g) ?? [])).size
+      const baseline = distinctColors()
       await new Promise(resolve => setTimeout(resolve, 1_000))
-      expect(brandMidCount()).toBe(settled) // no new wave frames
+      const mid = distinctColors()
+      expect(mid - baseline).toBeGreaterThanOrEqual(12) // smooth multi-shade gradient
+      await new Promise(resolve => setTimeout(resolve, 1_600)) // wave over (~1.9s)
+      const settled = distinctColors()
+      expect(settled).toBeGreaterThanOrEqual(mid)
+      await new Promise(resolve => setTimeout(resolve, 1_000))
+      expect(distinctColors()).toBe(settled) // no new wave frames
       // The static frame shows the dim composer border and the code-blue
       // model name throughout.
       expect(output).toContain('38;2;129;133;140') // dim border

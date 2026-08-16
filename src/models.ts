@@ -55,6 +55,16 @@ export interface ModelDirectory {
   rows: readonly ModelRow[]
   /** Provider ids whose model listing failed; those providers contribute no rows. */
   failures: readonly string[]
+  /**
+   * `provider/model` labels whose per-model capability lookup failed. Those
+   * rows still appear (advisory degrade, mirroring the web catalog), but
+   * without an effort picker — a picker caller must not misread the absence
+   * as "this model exposes no reasoning" (e.g. deepseek-v4-flash always
+   * advertises off/high/max unless thinking is disabled). Optional for
+   * callers that shape a directory by hand; {@link loadModelDirectory}
+   * always populates it (empty when nothing failed).
+   */
+  reasoningFailures?: readonly string[]
 }
 
 /** Map an adapter's reasoning capability onto the panel's plain-id shape. */
@@ -100,20 +110,24 @@ export function resolveEffectiveSelection(
  * Build the selection one `/model` pick applies, rejecting an effort the
  * row does not advertise. The row is the picker's source of truth, so a
  * stale directory cannot smuggle an unsupported effort into the next step
- * (the request pipeline would reject it before network I/O regardless).
+ * (the request pipeline would reject it before network I/O regardless). The
+ * empty string is the picker's "provider default" sentinel — an explicit
+ * choice to leave the effort to the model's own default, exactly like an
+ * absent effort.
  * @param row - the picked model row.
- * @param effortId - the chosen advertised effort, or undefined for the model default.
+ * @param effortId - the chosen advertised effort, '' or undefined for the model default.
  * @returns the selection the runner records for the next assembled step.
  */
 export function buildModelSelection(row: ModelRow, effortId?: string): ModelSelection {
-  if (effortId !== undefined && row.reasoning !== undefined
-    && !row.reasoning.efforts.some(effort => effort.id === effortId)) {
-    throw new Error(`model ${row.provider}/${row.model} does not support reasoning effort "${effortId}"`)
+  const selected = effortId === undefined || effortId === '' ? undefined : effortId
+  if (selected !== undefined
+    && (row.reasoning === undefined || !row.reasoning.efforts.some(effort => effort.id === selected))) {
+    throw new Error(`model ${row.provider}/${row.model} does not support reasoning effort "${selected}"`)
   }
   return {
     provider: row.provider,
     model: row.model,
-    ...effortId === undefined ? {} : { reasoningEffort: ReasoningEffortId(effortId) },
+    ...selected === undefined ? {} : { reasoningEffort: ReasoningEffortId(selected) },
   }
 }
 
@@ -131,18 +145,26 @@ export function modelSelectionLabel(selection: ModelSelection): string {
  * contributing no rows (mirrors the web catalog's per-provider failures).
  * Each row's reasoning levels are resolved per exact model like the web
  * catalog (`buildModelCatalog`); a single model's capability lookup failure
- * degrades to that row having no effort picker rather than hiding the model.
+ * degrades to that row having no effort picker rather than hiding the model,
+ * and the failure rides `reasoningFailures` so the caller can tell "no
+ * advertised reasoning" from "capability lookup failed".
  * @param ctx - context carrying the `llm` service.
  * @returns the resolved directory; empty rows when `llm` is unavailable.
  */
 export async function loadModelDirectory(ctx: Context): Promise<ModelDirectory> {
   const llm = ctx.get('llm')
-  if (llm === undefined) return { rows: [], failures: [] }
-  const resolveModelInfo = (llm as { resolveModelInfo?: (provider: string, model: string) => Promise<LlmResolvedModelInfo> }).resolveModelInfo
+  if (llm === undefined) return { rows: [], failures: [], reasoningFailures: [] }
+  // Call resolveModelInfo AS A METHOD (llm.resolveModelInfo(...)): destructured
+  // off the service it loses `this` — this.registration() then throws on the
+  // first provider, the catch swallows it, and every row lands in
+  // reasoningFailures ("capability lookup failed") even though the adapter
+  // itself never fails.
+  const llmResolve = llm as { resolveModelInfo?: (provider: string, model: string) => Promise<LlmResolvedModelInfo> }
   const providers = llm.listProviders()
   const listed = await Promise.all(providers.map(async (provider) => {
     try {
       const models: readonly LlmModelInfo[] = await llm.listModels(provider.id)
+      const reasoningFailures: string[] = []
       const rows = await Promise.all(models.map(async (model): Promise<ModelRow> => {
         const row: ModelRow = {
           provider: provider.id,
@@ -150,13 +172,14 @@ export async function loadModelDirectory(ctx: Context): Promise<ModelDirectory> 
           model: model.id,
           modelName: model.name,
         }
-        if (resolveModelInfo === undefined) return row
+        if (llmResolve.resolveModelInfo === undefined) return row
         try {
-          const resolved = await resolveModelInfo(provider.id, model.id)
+          const resolved = await llmResolve.resolveModelInfo(provider.id, model.id)
           return resolved.reasoning === undefined
             ? row
             : { ...row, reasoning: mapReasoning(resolved.reasoning) }
         } catch {
+          reasoningFailures.push(`${provider.id}/${model.id}`)
           return row
         }
       }))
@@ -164,6 +187,7 @@ export async function loadModelDirectory(ctx: Context): Promise<ModelDirectory> 
         provider: provider.id,
         providerName: provider.name,
         models: rows,
+        reasoningFailures,
       }
     } catch {
       return { provider: provider.id, providerName: provider.name, models: [] as ModelRow[], failed: true }
@@ -171,5 +195,6 @@ export async function loadModelDirectory(ctx: Context): Promise<ModelDirectory> 
   }))
   const rows = listed.flatMap(entry => entry.models)
   const failures = listed.filter(entry => 'failed' in entry && entry.failed === true).map(entry => entry.provider)
-  return { rows, failures }
+  const reasoningFailures = listed.flatMap(entry => 'failed' in entry ? [] : entry.reasoningFailures)
+  return { rows, failures, reasoningFailures }
 }

@@ -87,8 +87,18 @@ describe('buildModelSelection', () => {
     expect(buildModelSelection(row)).toEqual({ provider: 'deepseek-official', model: 'deepseek-v4' })
   })
 
+  it('treats the picker\'s empty-string provider default as no effort', () => {
+    expect(buildModelSelection(row, '')).toEqual({ provider: 'deepseek-official', model: 'deepseek-v4' })
+  })
+
   it('rejects an effort the row does not advertise', () => {
     expect(() => buildModelSelection(row, 'low')).toThrow('does not support reasoning effort "low"')
+  })
+
+  it('rejects any effort for a row without advertised reasoning', () => {
+    const plain: ModelRow = { provider: 'acme', providerName: 'Acme', model: 'plain', modelName: 'Plain' }
+    expect(() => buildModelSelection(plain, 'max')).toThrow('does not support reasoning effort "max"')
+    expect(buildModelSelection(plain, '')).toEqual({ provider: 'acme', model: 'plain' })
   })
 })
 
@@ -128,9 +138,10 @@ describe('loadModelDirectory reasoning', () => {
       },
     ])
     expect(directory.failures).toEqual([])
+    expect(directory.reasoningFailures).toEqual([])
   })
 
-  it('degrades one model capability failure to a row without reasoning', async () => {
+  it('degrades one model capability failure to a row without reasoning, recording the label', async () => {
     const llm = {
       listProviders: () => [{ id: 'route', name: 'Route' }],
       listModels: async () => [{ id: 'a', name: 'A' }, { id: 'b', name: 'B' }],
@@ -157,6 +168,9 @@ describe('loadModelDirectory reasoning', () => {
       { provider: 'route', providerName: 'Route', model: 'b', modelName: 'B' },
     ])
     expect(directory.failures).toEqual([])
+    // The row still appears, but the caller can tell "no advertised reasoning"
+    // from "capability lookup failed" instead of misreading the absence.
+    expect(directory.reasoningFailures).toEqual(['route/b'])
   })
 
   it('keeps rows unadorned when the service exposes no capability lookup', async () => {
@@ -170,5 +184,6 @@ describe('loadModelDirectory reasoning', () => {
       { provider: 'route', providerName: 'Route', model: 'a', modelName: 'A' },
     ])
     expect(directory.failures).toEqual([])
+    expect(directory.reasoningFailures).toEqual([])
   })
 })
