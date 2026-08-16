@@ -79,16 +79,24 @@ export function mountApprovalAnswerer(
 
     let resolved = false
     let settle!: (outcome: ApprovalOutcome) => void
+    const signal = request.signal
+    const onAbort = (): void => withdraw()
+    // Detach on every settle so an answered ask never retains a listener on
+    // the tool call's signal (long turns ask many times; each ask must let go).
+    const detachAbort = (): void => {
+      if (signal !== undefined) signal.removeEventListener('abort', onAbort)
+    }
     const withdraw = (): void => {
       if (resolved) return
       resolved = true
+      detachAbort()
       set({ pending: undefined, answered: false })
       // The service's signal race would conclude 'cancelled' anyway; settle
       // the same way so this listener never dangles a pending promise.
       settle('cancelled')
     }
-    if (request.signal !== undefined) {
-      request.signal.addEventListener('abort', withdraw, { once: true })
+    if (signal !== undefined) {
+      signal.addEventListener('abort', onAbort, { once: true })
     }
     const pending: PendingApproval = {
       headline: request.reason ?? `tool ${request.toolName} asks for your approval`,
@@ -98,6 +106,7 @@ export function mountApprovalAnswerer(
         // One-shot latch: a second keypress after submission is inert.
         if (resolved) return
         resolved = true
+        detachAbort()
         set({ pending, answered: true })
         settle(outcome)
       },

@@ -32,6 +32,24 @@ function request(questions: AskUserQuestionRequest['questions'], signal?: AbortS
   return { questions, signal }
 }
 
+/** Fake AbortSignal that records whether the provider still listens to it (once:true semantics). */
+function fakeSignal(): { signal: AbortSignal; attached(): boolean; fireAbort(): void } {
+  let listener: (() => void) | undefined
+  return {
+    signal: {
+      aborted: false,
+      addEventListener: (_type: string, handler: () => void): void => { listener = handler },
+      removeEventListener: (): void => { listener = undefined },
+    } as unknown as AbortSignal,
+    attached: (): boolean => listener !== undefined,
+    fireAbort: (): void => {
+      const handler = listener
+      listener = undefined
+      handler?.()
+    },
+  }
+}
+
 const settle = (): Promise<void> => new Promise(resolve => setImmediate(resolve))
 
 describe('mountQuestionProvider', () => {
@@ -100,5 +118,54 @@ describe('mountQuestionProvider', () => {
     const ctx = { get: (): undefined => undefined } as unknown as Context
     const store = mountQuestionProvider(ctx)
     expect(store.getSnapshot().pending).toBeUndefined()
+  })
+
+  it('detaches the request abort listener on submit', async () => {
+    const { ctx, provider } = harness()
+    const store = mountQuestionProvider(ctx)
+    const controller = fakeSignal()
+    const asked = provider()?.ask(request([
+      { id: 'q', question: 'q', options: [{ label: 'A' }] },
+    ], controller.signal)) as Promise<AskUserQuestionAnswer>
+    await settle()
+    const pending = store.getSnapshot().pending!
+    expect(controller.attached()).toBe(true)
+    store.submit(pending, { answers: [{ id: 'q', selected: ['A'] }] })
+    expect(controller.attached()).toBe(false)
+    // A late abort after the answer must not disturb the settled promise.
+    controller.fireAbort()
+    await expect(asked).resolves.toEqual({ answers: [{ id: 'q', selected: ['A'] }] })
+  })
+
+  it('detaches the request abort listener on cancel', async () => {
+    const { ctx, provider } = harness()
+    const store = mountQuestionProvider(ctx)
+    const controller = fakeSignal()
+    const asked = provider()?.ask(request([
+      { id: 'q', question: 'q', options: [{ label: 'A' }] },
+    ], controller.signal)) as Promise<AskUserQuestionAnswer>
+    await settle()
+    const pending = store.getSnapshot().pending!
+    expect(controller.attached()).toBe(true)
+    store.cancel(pending)
+    expect(controller.attached()).toBe(false)
+    controller.fireAbort()
+    await expect(asked).rejects.toMatchObject({ code: 'ASK_ABORTED' })
+  })
+
+  it('detaches the request abort listener when the abort fires', async () => {
+    const { ctx, provider } = harness()
+    const store = mountQuestionProvider(ctx)
+    const controller = fakeSignal()
+    const asked = provider()?.ask(request([
+      { id: 'q', question: 'q', options: [{ label: 'A' }] },
+    ], controller.signal)) as Promise<AskUserQuestionAnswer>
+    await settle()
+    expect(store.getSnapshot().pending).toBeDefined()
+    expect(controller.attached()).toBe(true)
+    controller.fireAbort()
+    expect(controller.attached()).toBe(false)
+    expect(store.getSnapshot().pending).toBeUndefined()
+    await expect(asked).rejects.toMatchObject({ code: 'ASK_ABORTED' })
   })
 })

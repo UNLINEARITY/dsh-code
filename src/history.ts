@@ -8,8 +8,8 @@
  * @module @deepseek-ai/dsh-tui/history
  */
 
-/** Maximum entries retained in the persistent history file. */
-export const HISTORY_MAX_ENTRIES = 500
+/** Maximum entries retained in the persistent history file and the local recall pool. */
+export const HISTORY_MAX_ENTRIES = 100
 
 /** Encode one entry for the history file (JSON keeps multi-line drafts intact). */
 export function serializeHistoryEntry(text: string): string {
@@ -56,15 +56,30 @@ export function appendHistoryContent(current: string, text: string, max = HISTOR
 
 /**
  * Record one in-session submission: empty text is ignored and an adjacent
- * duplicate collapses (Codex `record_local_submission` semantics).
+ * duplicate collapses (Codex `record_local_submission` semantics). The local
+ * pool shares the persistent pool's cap so the recall space stays bounded.
  * @param local - current in-session entries, oldest first.
  * @param text - the submitted prompt.
+ * @param max - the local pool cap.
  * @returns the updated local list.
  */
-export function recordLocalEntry(local: readonly string[], text: string): readonly string[] {
+export function recordLocalEntry(local: readonly string[], text: string, max = HISTORY_MAX_ENTRIES): readonly string[] {
   if (text === '') return local
   if (local.length > 0 && local[local.length - 1] === text) return local
-  return [...local, text]
+  return [...local, text].slice(-max)
+}
+
+/**
+ * Serialize a capped entry list to the history file format (one JSON line per
+ * entry, trailing newline). The runner writes the in-memory list as the whole
+ * file, so rapid same-process submissions cannot lose entries to a
+ * read-modify-write race (the file is never read back before writing).
+ * @param entries - the entries to persist, oldest first.
+ * @returns the file content, '' for an empty list.
+ */
+export function serializeHistoryList(entries: readonly string[]): string {
+  if (entries.length === 0) return ''
+  return entries.map(serializeHistoryEntry).join('\n') + '\n'
 }
 
 /**

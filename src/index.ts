@@ -38,7 +38,7 @@ import { createMentions, type MentionsApi } from './mentions.ts'
 import { mountQuestionProvider, type QuestionStore } from './questions.ts'
 import { createTranscriptStore, type TranscriptStore } from './store.ts'
 import { parseStatuslineItems } from './render/status.ts'
-import { appendHistoryContent, HISTORY_MAX_ENTRIES, parseHistoryFile } from './history.ts'
+import { HISTORY_MAX_ENTRIES, parseHistoryFile, serializeHistoryList } from './history.ts'
 import { watchSkills, type SkillsView } from './skills.ts'
 import { toolArgumentsPreview } from './render/tool-preview.ts'
 import { buildExportMarkdown } from './render/export.ts'
@@ -48,7 +48,10 @@ import { agentPresetsFrom, resolvePreset, switchPreset } from './presets.ts'
 import { listPluginRows } from './plugin-inventory.ts'
 import { parseThemeName, setTheme, type ThemeName } from './theme.ts'
 import {
+  isSubagentSession,
+  matchSessionId,
   mergeSessionTitles,
+  newestRootForCwd,
   projectSessionRows,
   type SessionDirectoryOptions,
   type SessionQueryService,
@@ -113,6 +116,64 @@ interface Target {
 }
 
 /**
+ * Reduce a session id to a filename-safe /export default-name suffix. Session
+ * ids are normally minted `session-<uuid>`, but `--session` accepts arbitrary
+ * user text: path separators must never leak into the default export filename
+ * (which would escape the session cwd).
+ * @param id - the session id.
+ * @returns at most the last 8 filename-safe characters.
+ */
+export function exportSessionIdSuffix(id: string): string {
+  return id.replace(/[^a-zA-Z0-9._-]/gu, '_').slice(-8)
+}
+
+/** One ordered step of the terminal quit cleanup. */
+export interface QuitCleanupStep {
+  /** Step label used in diagnostics and tests. */
+  readonly name: string
+  /** The step's async work; a rejection is contained by the sequence. */
+  readonly run: () => Promise<void>
+}
+
+/**
+ * Run the ordered quit cleanup, then request exit. Every step rejection is
+ * contained (reported through `onError`) so a failed flush or dispose never
+ * skips the remaining cleanup; the exit request is always reached exactly
+ * once.
+ * @param steps - the cleanup steps in dependency order (settle the visible
+ * session, await the final in-flight composition, await durable recall).
+ * @param exit - the terminal exit request (code 0).
+ * @param onError - optional failure sink; called once per failing step and
+ * itself contained, so a throwing sink cannot abort the sequence.
+ * @returns the names of the steps that started, in order (for tests).
+ */
+export async function runQuitSequence(
+  steps: readonly QuitCleanupStep[],
+  exit: (code: number) => void,
+  onError?: (name: string, error: unknown) => void,
+): Promise<readonly string[]> {
+  const started: string[] = []
+  for (const step of steps) {
+    started.push(step.name)
+    try {
+      await step.run()
+    } catch (error) {
+      try {
+        onError?.(step.name, error)
+      } catch {
+        // The failure sink must never abort the cleanup sequence.
+      }
+    }
+  }
+  try {
+    exit(0)
+  } catch {
+    // The exit request itself must not become an unhandled rejection.
+  }
+  return started
+}
+
+/**
  * Resolve the invocation's target session against the persisted headers.
  * @param startup - the parsed startup flags.
  * @param persistence - the persistence service; required for resume/latest.
@@ -120,29 +181,37 @@ interface Target {
  * @returns the target identity.
  * @throws with a user-facing message when the flags name nothing resolvable.
  */
-async function resolveTarget(startup: TuiStartup, persistence: SessionPersistence | undefined, cwd: string): Promise<Target> {
+export async function resolveTarget(startup: TuiStartup, persistence: SessionPersistence | undefined, cwd: string): Promise<Target> {
   if (startup.kind === 'fresh') return { sessionId: `session-${randomUUID()}`, resume: false, mode: startup.mode }
-  if (startup.kind === 'named') return { sessionId: startup.sessionId, resume: false, mode: startup.mode }
+  if (startup.kind === 'named') {
+    // The id must not exist yet: reject before any Agent composition when the
+    // backend can tell us (a live collision is still caught by the session
+    // store at create time).
+    if (persistence !== undefined) {
+      const headers: readonly SessionHeader[] = await persistence.list()
+      if (headers.some(header => header.id === startup.sessionId)) {
+        throw new Error(`session "${startup.sessionId}" already exists; use --resume to continue it`)
+      }
+    }
+    return { sessionId: startup.sessionId, resume: false, mode: startup.mode }
+  }
   if (persistence === undefined) {
     throw new Error('cannot resolve the requested session: session persistence is not configured')
   }
   const headers: readonly SessionHeader[] = await persistence.list()
   if (startup.kind === 'resume') {
-    const wanted = startup.sessionId
-    const exact = headers.filter(header => header.id === wanted)
-    const matches = exact.length > 0 ? exact : headers.filter(header => header.id.startsWith(wanted))
-    if (matches.length === 0) throw new Error(`no persisted session matches "${wanted}"`)
-    if (matches.length > 1) {
-      throw new Error(`session prefix "${wanted}" is ambiguous (${matches.length} matches): use more of the id`)
+    const matched = matchSessionId(headers, startup.sessionId)
+    // Subagent conversations are read-only everywhere else; the CLI must not
+    // be a back door into appending root turns to a child's durable log.
+    if (isSubagentSession(matched)) {
+      throw new Error('subagent conversations are read-only; resume a root session')
     }
-    return { sessionId: matches[0]!.id, resume: true }
+    return { sessionId: matched.id, resume: true }
   }
-  // --continue: the newest persisted session whose header pins this cwd.
-  const local = headers
-    .filter(header => header.cwd === cwd)
-    .sort((left, right) => right.createdAt - left.createdAt)
-  if (local.length === 0) throw new Error(`no persisted session for this directory (${cwd}); start one without --continue`)
-  return { sessionId: local[0]!.id, resume: true }
+  // --continue: the newest persisted ROOT session whose header pins this cwd.
+  const newest = newestRootForCwd(headers, cwd)
+  if (newest === undefined) throw new Error(`no persisted session for this directory (${cwd}); start one without --continue`)
+  return { sessionId: newest.id, resume: true }
 }
 
 /**
@@ -240,12 +309,16 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       ? await agents.resume({
         resumeSessionId: SessionId(next.sessionId),
         agentOptions: { provider: defaults.provider, model: defaults.model },
+        // Quit aborts an in-flight composition so the exit wait never hangs
+        // on a prepare that cannot settle; upstream rolls the creation back.
+        signal: quitAbort.signal,
         setup,
       })
       : await agents.create({
         sessionId: SessionId(next.sessionId),
         meta: { cwd: nextCwd, agentPreset: mode },
         agentOptions: { provider: defaults.provider, model: defaults.model },
+        signal: quitAbort.signal,
         setup,
       })
     const session = handle.agent.session
@@ -272,6 +345,38 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   let mentions: MentionsApi = createMentions(ctx, undefined, cwd)
   /** Explicit model pick made before any session exists (a bare launch). */
   let pendingSelection: ModelSelection | undefined
+  /**
+   * Monotonic session epoch: bumped on every successful activation, on every
+   * first-session creation, and on quit. Async callbacks (mention prepares,
+   * command executions) capture it at call time and drop their result when it
+   * changed, so a stale callback can never deliver to an agent that is no
+   * longer on screen.
+   */
+  let epoch = 0
+  /** Aborted on quit: an in-flight agent composition (create/resume) races this signal. */
+  const quitAbort = new AbortController()
+  /** In-flight mention-prepare / command-execute controllers, aborted on any session transition. */
+  const pendingControllers = new Set<AbortController>()
+  const abortPendingControllers = (): void => {
+    for (const controller of [...pendingControllers]) {
+      pendingControllers.delete(controller)
+      controller.abort()
+    }
+  }
+  /** The in-flight session-composition turn (create/resume/activate), if any. */
+  let composing: Promise<void> | undefined
+  /**
+   * Run one session composition exclusively: concurrent compositions wait
+   * their turn, so a bare-launch first-session creation and a /resume
+   * activation can never compose agents in parallel (the loser would leak its
+   * agent or mis-deliver). Errors propagate to the caller; the shared slot
+   * always continues.
+   */
+  const compose = (work: () => Promise<void>): Promise<void> => {
+    const turn = (composing ?? Promise.resolve()).catch(() => {}).then(work)
+    composing = turn.catch(() => {})
+    return turn
+  }
 
   if (!lazy) {
     const target = await resolveTarget(startup, persistence, cwd)
@@ -378,18 +483,17 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   } catch {
     inputHistory = []
   }
+  /** Serialized history writes: each submission rewrites the latest in-memory snapshot. */
+  let historyWriteChain: Promise<void> = Promise.resolve()
   const recordHistory = (text: string): void => {
     if (text === '') return
     inputHistory = [...inputHistory, text].slice(-HISTORY_MAX_ENTRIES)
-    // A missing file on the first save is not an error: start from empty.
-    let current = ''
-    try {
-      current = readFileSync(historyPath, 'utf8')
-    } catch {
-      current = ''
-    }
-    void mkdir(dirname(historyPath), { recursive: true })
-      .then(() => writeFileAsync(historyPath, appendHistoryContent(current, text), 'utf8'))
+    // Write the whole current list, serialized per submission: the file is
+    // never read back on the submit path, so rapid same-process submissions
+    // cannot lose entries to a read-modify-write race.
+    historyWriteChain = historyWriteChain
+      .then(() => mkdir(dirname(historyPath), { recursive: true }))
+      .then(() => writeFileAsync(historyPath, serializeHistoryList(inputHistory), 'utf8'))
       .catch((writeError: unknown) => {
         bridge.notify('history save failed: ' + (writeError instanceof Error ? writeError.message : String(writeError)), 'error')
       })
@@ -415,27 +519,37 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     if (quitting) return
     quitting = true
     switchQueue.cancel()
+    // Stale prepares/commands die with the session they were for. Aborting
+    // the composition signal lets a never-settling prepare reject, so the
+    // exit wait below cannot hang (upstream rolls the creation back).
+    abortPendingControllers()
+    quitAbort.abort()
+    epoch += 1
     off()
     mountRef.current?.unmount()
-    // A bare launch that exits before the first input has no session: exit
-    // cleanly without flushing or disposing anything.
     const currentSession = session
     const currentActive = active
-    if (currentSession === undefined || currentActive === undefined) {
-      io.exit(0)
-      return
+    const report = (name: string, error: unknown): void => {
+      internals.stderr.write(`dsh: quit ${name} failed: ${error instanceof Error ? error.message : String(error)}\n`)
     }
-    void sessions.flush(currentSession)
-      .catch((flushError: unknown) => {
-        // The session log already carries every durable event; a failed flush
-        // must not trap the user in a dead terminal, so report and still exit.
-        internals.stderr.write(`dsh: session flush failed: ${flushError instanceof Error ? flushError.message : String(flushError)}\n`)
-      })
-      .then(() => currentActive.handle.dispose())
-      .catch((disposeError: unknown) => {
-        internals.stderr.write(`dsh: agent disposal failed: ${disposeError instanceof Error ? disposeError.message : String(disposeError)}\n`)
-      })
-      .then(() => { io.exit(0) })
+    // One ordered cleanup: settle the visible session (if any — a bare launch
+    // that never composed one resolves immediately), then wait for the final
+    // in-flight composition (its work swallows errors and the quitting guard
+    // disposes any half-prepared agent), then flush the durable recall, then
+    // request exit. `composing` and `historyWriteChain` are read at step run
+    // time, so a turn that was still being queued when quit ran is included.
+    // A failing step must never skip the remaining cleanup.
+    const steps: QuitCleanupStep[] = [
+      ...(currentSession === undefined || currentActive === undefined
+        ? []
+        : [
+          { name: 'flush', run: async () => { await sessions.flush(currentSession) } },
+          { name: 'dispose', run: () => currentActive.handle.dispose() },
+        ]),
+      { name: 'composing', run: () => composing ?? Promise.resolve() },
+      { name: 'history', run: () => historyWriteChain },
+    ]
+    void runQuitSequence(steps, io.exit, report)
   }
 
   /** Run one slash line through the command registry (closed namespace). */
@@ -456,7 +570,16 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       return
     }
     const controller = new AbortController()
+    const atEpoch = epoch
+    pendingControllers.add(controller)
+    const finish = (): void => {
+      pendingControllers.delete(controller)
+    }
     void Promise.resolve().then(() => registry.execute(currentAgent, line, controller.signal)).then((execution) => {
+      finish()
+      // A switch/quit landed while the command ran: its fall-through must not
+      // reach an agent that is no longer on screen.
+      if (epoch !== atEpoch || agent !== currentAgent) return
       if (execution === undefined) {
         // No command owns this line: send it verbatim so a user-invocable
         // skill gesture (`/skill-name`) reaches the host's tool-skill
@@ -471,6 +594,8 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
         }
       }
     }, (error: unknown) => {
+      finish()
+      if (epoch !== atEpoch || agent !== currentAgent) return
       bridge.notify(`command failed: ${error instanceof Error ? error.message : String(error)}`, 'error')
     })
   }
@@ -493,7 +618,11 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       bridge.notify(`invalid session reference: ${error instanceof Error ? error.message : String(error)}`, 'error')
       return
     }
+    const atEpoch = epoch
     const deliver = (readable: string, context?: UserMessage): void => {
+      // A switch/quit landed while the snapshot was being prepared: never
+      // deliver to an agent that is no longer on screen.
+      if (epoch !== atEpoch || agent !== currentAgent) return
       // Session snapshots ride the inbox as model-facing context ahead of
       // the readable message (upstream README wiring: inject before the
       // followup/steer that wakes the driver).
@@ -519,10 +648,13 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       return
     }
     const controller = new AbortController()
+    pendingControllers.add(controller)
     void currentMentions.prepare(parsed, controller.signal).then((prepared) => {
+      pendingControllers.delete(controller)
       deliver(prepared.text, prepared.additionalContext)
     }, (error: unknown) => {
-      if (controller.signal.aborted) return
+      pendingControllers.delete(controller)
+      if (controller.signal.aborted || epoch !== atEpoch) return
       bridge.notify(`session reference failed: ${error instanceof Error ? error.message : String(error)}`, 'error')
     })
   }
@@ -533,41 +665,56 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   // failure reports and clears the queue, leaving the transient state ready
   // for the next attempt.
   const pendingInputs: Array<{ text: string; mode: 'followup' | 'steer' }> = []
-  let creating: Promise<void> | undefined
+  // A creation is queued/running: further submissions must not mint more
+  // fresh sessions (their lines queue into pendingInputs instead).
+  let creating = false
   const ensureSession = (mode?: string): void => {
-    if (creating !== undefined) return
-    const attempt = (async () => {
-      const next = await prepare({
-        sessionId: `session-${randomUUID()}`,
-        resume: false,
-        ...(mode === undefined ? {} : { mode }),
-      })
-      if (quitting) {
-        void next.handle.dispose().catch(() => {})
-        return
+    if (creating) return
+    creating = true
+    void compose(async () => {
+      try {
+        // Another composition (e.g. a /resume activated while this creation
+        // waited its turn) may have published a session already: deliver the
+        // queued lines there instead of minting a competing fresh session
+        // (which would orphan the live one without a dispose).
+        if (session !== undefined) {
+          const queued = pendingInputs.splice(0)
+          for (const item of queued) deliverLine(item.text, item.mode)
+          return
+        }
+        const next = await prepare({
+          sessionId: `session-${randomUUID()}`,
+          resume: false,
+          ...(mode === undefined ? {} : { mode }),
+        })
+        if (quitting) {
+          void next.handle.dispose().catch(() => {})
+          return
+        }
+        active = next
+        agent = next.agent
+        session = next.session
+        store = next.store
+        mentions = next.mentions
+        commands.setAgent(agent)
+        skills.setAgent(agent)
+        // The App mounts with a placeholder key until the first input; the
+        // key-change remount below must start from a clean screen or the ghost
+        // static header stays visible above the new one (same source-backed
+        // clear the session-switch path performs).
+        process.stdout.write('\x1b[r\x1b[0m\x1b[H\x1b[2J\x1b[3J\x1b[H')
+        renderCurrent()
+        abortPendingControllers()
+        epoch += 1
+        const queued = pendingInputs.splice(0)
+        for (const item of queued) deliverLine(item.text, item.mode)
+      } finally {
+        creating = false
       }
-      active = next
-      agent = next.agent
-      session = next.session
-      store = next.store
-      mentions = next.mentions
-      commands.setAgent(agent)
-      skills.setAgent(agent)
-      // The App mounts with a placeholder key until the first input; the
-      // key-change remount below must start from a clean screen or the ghost
-      // static header stays visible above the new one (same source-backed
-      // clear the session-switch path performs).
-      process.stdout.write('\x1b[r\x1b[0m\x1b[H\x1b[2J\x1b[3J\x1b[H')
-      renderCurrent()
-      const queued = pendingInputs.splice(0)
-      for (const item of queued) deliverLine(item.text, item.mode)
-    })().catch((error: unknown) => {
+    }).catch((error: unknown) => {
       pendingInputs.length = 0
       bridge.notify(`session creation failed: ${error instanceof Error ? error.message : String(error)}`, 'error')
-    }).finally(() => {
-      creating = undefined
     })
-    creating = attempt
   }
 
   /** Deliver one readable line to the agent, expanding session mentions first. */
@@ -669,7 +816,10 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     }
     const wanted = argument.trim()
     const sessionCwd = session.header.cwd ?? cwd
-    const defaultName = `dsh-session-${session.id.slice(-8)}.md`
+    // The default name derives from the session id, which `--session` lets the
+    // user spell freely: reduce it to filename-safe characters first so the
+    // default target can never escape the session cwd.
+    const defaultName = `dsh-session-${exportSessionIdSuffix(session.id)}.md`
     const target = wanted === ''
       ? join(sessionCwd, defaultName)
       : /^[a-zA-Z]:[\\/]/u.test(wanted) || wanted.startsWith('/')
@@ -737,52 +887,67 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
 
   interface PendingSwitch { readonly target: Target; readonly label: string }
 
-  const activate = async (nextTarget: Target): Promise<void> => {
-    const previous = active
-    const next = await prepare(nextTarget)
-    active = next
-    agent = next.agent
-    session = next.session
-    store = next.store
-    mentions = next.mentions
-    commands.setAgent(agent)
-    skills.setAgent(agent)
-    try {
-      process.stdout.write('\x1b[r\x1b[0m\x1b[H\x1b[2J\x1b[3J\x1b[H')
-      renderCurrent()
-    } catch (error: unknown) {
-      active = previous
-      agent = previous?.agent
-      session = previous?.session
-      store = previous === undefined ? createTranscriptStore() : previous.store
-      mentions = previous === undefined ? createMentions(ctx, undefined, cwd) : previous.mentions
-      if (agent !== undefined) commands.setAgent(agent)
-      if (agent !== undefined) skills.setAgent(agent)
-      await next.handle.dispose()
-      renderCurrent()
-      throw error
-    }
-    // No previous session (a bare launch switched straight into a resume):
-    // nothing to flush or dispose, so just confirm the activation.
-    if (previous === undefined) {
-      bridge.notify(`${next.resumed ? 'resumed' : 'created'} ${next.session.id.slice(-12)} · mode ${next.mode}`)
-      return
-    }
-    let cleanupWarning: string | undefined
-    try {
-      await sessions.flush(previous.session)
-    } catch (error: unknown) {
-      cleanupWarning = `previous session flush failed: ${error instanceof Error ? error.message : String(error)}`
-    }
-    try {
-      await previous.handle.dispose()
-    } catch (error: unknown) {
-      cleanupWarning = `${cleanupWarning === undefined ? '' : `${cleanupWarning}; `}previous agent release failed: ${error instanceof Error ? error.message : String(error)}`
-    }
-    bridge.notify(cleanupWarning === undefined
-      ? `${next.resumed ? 'resumed' : 'created'} ${next.session.id.slice(-12)} · mode ${next.mode}`
-      : `switched to ${next.session.id.slice(-12)}, but ${cleanupWarning}`,
-    cleanupWarning === undefined ? 'info' : 'warning')
+  const activate = (nextTarget: Target): Promise<void> => {
+    if (quitting) return Promise.resolve()
+    // Serialized with every other composition (bare-launch creation, queued
+    // switches): at most one agent is composed at a time.
+    return compose(async () => {
+      const previous = active
+      const next = await prepare(nextTarget)
+      // Quit landed while the next session was being composed: dispose the
+      // half-ready agent and leave the current session untouched.
+      if (quitting) {
+        await next.handle.dispose().catch(() => {})
+        return
+      }
+      active = next
+      agent = next.agent
+      session = next.session
+      store = next.store
+      mentions = next.mentions
+      commands.setAgent(agent)
+      skills.setAgent(agent)
+      try {
+        process.stdout.write('\x1b[r\x1b[0m\x1b[H\x1b[2J\x1b[3J\x1b[H')
+        renderCurrent()
+      } catch (error: unknown) {
+        active = previous
+        agent = previous?.agent
+        session = previous?.session
+        store = previous === undefined ? createTranscriptStore() : previous.store
+        mentions = previous === undefined ? createMentions(ctx, undefined, cwd) : previous.mentions
+        if (agent !== undefined) commands.setAgent(agent)
+        if (agent !== undefined) skills.setAgent(agent)
+        await next.handle.dispose()
+        if (!quitting) renderCurrent()
+        throw error
+      }
+      // From here the new session is live: in-flight prepares/commands for
+      // the previous agent are stale and must be aborted and ignored.
+      abortPendingControllers()
+      epoch += 1
+      // No previous session (a bare launch switched straight into a resume):
+      // nothing to flush or dispose, so just confirm the activation.
+      if (previous === undefined) {
+        bridge.notify(`${next.resumed ? 'resumed' : 'created'} ${next.session.id.slice(-12)} · mode ${next.mode}`)
+        return
+      }
+      let cleanupWarning: string | undefined
+      try {
+        await sessions.flush(previous.session)
+      } catch (error: unknown) {
+        cleanupWarning = `previous session flush failed: ${error instanceof Error ? error.message : String(error)}`
+      }
+      try {
+        await previous.handle.dispose()
+      } catch (error: unknown) {
+        cleanupWarning = `${cleanupWarning === undefined ? '' : `${cleanupWarning}; `}previous agent release failed: ${error instanceof Error ? error.message : String(error)}`
+      }
+      bridge.notify(cleanupWarning === undefined
+        ? `${next.resumed ? 'resumed' : 'created'} ${next.session.id.slice(-12)} · mode ${next.mode}`
+        : `switched to ${next.session.id.slice(-12)}, but ${cleanupWarning}`,
+      cleanupWarning === undefined ? 'info' : 'warning')
+    })
   }
 
   const switchQueue = new SessionSwitchQueue<PendingSwitch>(
@@ -818,13 +983,15 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     const matches = exact.length > 0 ? exact : records.filter(record => record.header.id.startsWith(wanted))
     if (matches.length === 0) throw new Error(`no session matches "${wanted}"`)
     if (matches.length > 1) throw new Error(`session prefix "${wanted}" is ambiguous (${matches.length} matches)`)
-    if (matches[0]!.header.parentSession !== undefined || matches[0]!.header.origin === 'subagent') {
-      throw new Error('subagent conversations are read-only in /resume; resume a root session')
+    const matched = matches[0]!
+    // Same lineage gate as the CLI --resume path and the picker.
+    if (isSubagentSession(matched.header)) {
+      throw new Error('subagent conversations are read-only; resume a root session')
     }
-    if (session !== undefined && agents.get(SessionId(matches[0]!.header.id)) !== undefined && matches[0]!.header.id !== session.id) {
+    if (session !== undefined && agents.get(SessionId(matched.header.id)) !== undefined && matched.header.id !== session.id) {
       throw new Error('that session is already live in another owner')
     }
-    return matches[0]!.header.id
+    return matched.header.id
   }
 
   const requestResume = (wanted: string): void => {

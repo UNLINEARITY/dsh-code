@@ -28,6 +28,8 @@ export interface PendingQuestion {
   resolve(answers: AskUserQuestionAnswer): void
   /** Reject the provider promise as aborted (also used for Esc cancel). */
   reject(error: Error): void
+  /** Detach the request's abort listener once the question settles (internal). */
+  detachAbort?(): void
 }
 
 /** The pending-question snapshot the renderer subscribes to. */
@@ -81,11 +83,6 @@ export function mountQuestionProvider(ctx: Context): QuestionStore {
     service.registerProvider({
       ask(request: AskUserQuestionRequest): Promise<AskUserQuestionAnswer> {
         return new Promise((resolve, reject) => {
-          const pending: PendingQuestion = {
-            request,
-            resolve,
-            reject,
-          }
           // Abort settles through the same channel as an Esc cancel: the
           // owning tool/step died, so the answer must not linger.
           const onAbort = (): void => {
@@ -98,6 +95,17 @@ export function mountQuestionProvider(ctx: Context): QuestionStore {
               if (at >= 0) queue.splice(at, 1)
             }
             reject(ABORT_ERROR)
+          }
+          // Detach on every settle so an answered/cancelled question never
+          // retains a listener on the owning tool call's signal.
+          const detachAbort = (): void => {
+            if (request.signal !== undefined) request.signal.removeEventListener('abort', onAbort)
+          }
+          const pending: PendingQuestion = {
+            request,
+            resolve,
+            reject,
+            detachAbort,
           }
           if (request.signal?.aborted === true) {
             reject(ABORT_ERROR)
@@ -129,6 +137,7 @@ export function mountQuestionProvider(ctx: Context): QuestionStore {
       if (active !== pending) return
       active = undefined
       set({ pending: undefined })
+      pending.detachAbort?.()
       pending.resolve(answers)
       advance()
     },
@@ -136,6 +145,7 @@ export function mountQuestionProvider(ctx: Context): QuestionStore {
       if (active !== pending) return
       active = undefined
       set({ pending: undefined })
+      pending.detachAbort?.()
       pending.reject(ABORT_ERROR)
       advance()
     },

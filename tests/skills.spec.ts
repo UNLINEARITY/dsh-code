@@ -119,4 +119,34 @@ describe('watchSkills', () => {
     expect(view.rows).toHaveLength(1)
     expect(view.error).toBe('watcher exploded')
   })
+
+  it('never lets an older agent’s catalog overwrite the current agent', async () => {
+    const deferred: Array<{ resolve(rows: readonly SkillSummary[]): void }> = []
+    const registry = {
+      list: (): Promise<readonly SkillSummary[]> => new Promise(resolve => {
+        deferred.push({ resolve })
+      }),
+    }
+    const ctx = {
+      get: (name: string): unknown => (name === 'skills' ? registry : undefined),
+      on: (): (() => void) => () => {},
+    } as unknown as Context
+    const view = watchSkills(ctx)
+    const agentA = { session: { header: { cwd: 'C:/a' } } } as unknown as Agent
+    const agentB = { session: { header: { cwd: 'C:/b' } } } as unknown as Agent
+    view.setAgent(agentA)
+    view.setAgent(agentB)
+    // Let both reloads reach the registry: deferred[0] is agent A's load,
+    // deferred[1] is agent B's.
+    await new Promise(resolve => setImmediate(resolve))
+    expect(deferred).toHaveLength(2)
+    // The newer agent's catalog lands first, then the older one's — the stale
+    // result must be dropped.
+    deferred[1]?.resolve([summary('beta', true, true)])
+    await new Promise(resolve => setImmediate(resolve))
+    expect(view.rows.map(row => row.name)).toEqual(['beta'])
+    deferred[0]?.resolve([summary('alpha', true, true)])
+    await new Promise(resolve => setImmediate(resolve))
+    expect(view.rows.map(row => row.name)).toEqual(['beta'])
+  })
 })

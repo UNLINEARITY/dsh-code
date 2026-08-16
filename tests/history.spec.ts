@@ -4,12 +4,14 @@ import { describe, expect, it } from 'vitest'
 import {
   appendHistoryContent,
   beginRecall,
+  HISTORY_MAX_ENTRIES,
   parseHistoryFile,
   recallEntries,
   recallNewer,
   recallOlder,
   recordLocalEntry,
   serializeHistoryEntry,
+  serializeHistoryList,
 } from '../src/history.ts'
 
 describe('history persistence', () => {
@@ -31,6 +33,22 @@ describe('history persistence', () => {
     expect(appendHistoryContent('', 'hi')).toBe('"hi"\n')
     expect(appendHistoryContent('"a"\n', 'b')).toBe('"a"\n"b"\n')
     expect(appendHistoryContent('"1"\n"2"\n', '3', 2)).toBe('"2"\n"3"\n')
+  })
+
+  it('caps both persistent and local pools at HISTORY_MAX_ENTRIES (100)', () => {
+    expect(HISTORY_MAX_ENTRIES).toBe(100)
+    const many = Array.from({ length: 120 }, (_, index) => `e${index}`)
+    expect(recordLocalEntry(many, 'new')).toHaveLength(100)
+    expect(recordLocalEntry(many, 'new')[99]).toBe('new')
+    expect(recordLocalEntry(many, 'new')[0]).toBe('e21')
+    expect(parseHistoryFile(serializeHistoryList(many))).toHaveLength(100)
+  })
+
+  it('serializes a whole snapshot to one JSON line per entry and round-trips', () => {
+    const entries = ['a', 'line1\nline2', 'c']
+    expect(serializeHistoryList(entries)).toBe('"a"\n"line1\\nline2"\n"c"\n')
+    expect(parseHistoryFile(serializeHistoryList(entries))).toEqual(entries)
+    expect(serializeHistoryList([])).toBe('')
   })
 })
 

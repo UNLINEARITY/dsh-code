@@ -69,12 +69,15 @@ export function watchSkills(ctx: Context): SkillsWatch {
   const listeners = new Set<() => void>()
 
   const reload = (): void => {
-    const currentAgent = agent
-    if (skills === undefined || currentAgent === undefined) return
+    const target = agent
+    if (skills === undefined || target === undefined) return
     Promise.resolve().then(() => skills.list({
-      cwd: currentAgent.session.header.cwd,
-      scope: currentAgent,
+      cwd: target.session.header.cwd,
+      scope: target,
     })).then((summaries: readonly SkillSummary[]) => {
+      // A retarget landed while this catalog was loading: the rows belong to
+      // another agent's workspace and must never overwrite the current view.
+      if (agent !== target) return
       const next = toRows(summaries)
       const unchanged = next.length === rows.length && next.every((row, index) => row.name === rows[index]?.name)
       rows = next
@@ -83,6 +86,7 @@ export function watchSkills(ctx: Context): SkillsWatch {
       if (unchanged && !recovered) return
       for (const listener of listeners) listener()
     }).catch((cause: unknown) => {
+      if (agent !== target) return
       // Discovery failure keeps the last good rows; the next skills/change
       // notification is the retry surface (mirrors the web directory).
       rows = [...rows]

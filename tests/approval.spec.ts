@@ -38,6 +38,24 @@ function request(overrides: Partial<ApprovalRequest> = {}): ApprovalRequest {
   } as ApprovalRequest
 }
 
+/** Fake AbortSignal that records whether the answerer still listens to it (once:true semantics). */
+function fakeSignal(): { signal: AbortSignal; attached(): boolean; fireAbort(): void } {
+  let listener: (() => void) | undefined
+  return {
+    signal: {
+      aborted: false,
+      addEventListener: (_type: string, handler: () => void): void => { listener = handler },
+      removeEventListener: (): void => { listener = undefined },
+    } as unknown as AbortSignal,
+    attached: (): boolean => listener !== undefined,
+    fireAbort: (): void => {
+      const handler = listener
+      listener = undefined
+      handler?.()
+    },
+  }
+}
+
 describe('approval answerer', () => {
   it('claims its own agent and resolves the answered outcome', async () => {
     const harness = fakeContext()
@@ -113,6 +131,37 @@ describe('approval answerer', () => {
     controller.abort()
     expect(store.getSnapshot().pending).toBeUndefined()
     // A late answer is discarded by construction; settle through the service race.
+    await expect(settled).resolves.toBe('cancelled')
+  })
+
+  it('detaches the abort listener when the ask settles normally', async () => {
+    const harness = fakeContext()
+    const store = mountApprovalAnswerer(harness.ctx, () => true, () => '')
+    const controller = fakeSignal()
+    const settled = harness.listener()(
+      request({ signal: controller.signal }),
+      () => Promise.resolve<ApprovalOutcome>('unavailable'),
+    )
+    expect(controller.attached()).toBe(true)
+    store.getSnapshot().pending?.answer('allowed-once')
+    expect(controller.attached()).toBe(false)
+    // A late abort after the answer must not disturb anything.
+    controller.fireAbort()
+    await expect(settled).resolves.toBe('allowed-once')
+    expect(store.getSnapshot().pending).toBeUndefined()
+  })
+
+  it('detaches the abort listener when the ask is withdrawn', async () => {
+    const harness = fakeContext()
+    const store = mountApprovalAnswerer(harness.ctx, () => true, () => '')
+    const controller = fakeSignal()
+    const settled = harness.listener()(
+      request({ signal: controller.signal }),
+      () => Promise.resolve<ApprovalOutcome>('unavailable'),
+    )
+    expect(controller.attached()).toBe(true)
+    controller.fireAbort()
+    expect(controller.attached()).toBe(false)
     await expect(settled).resolves.toBe('cancelled')
   })
 })

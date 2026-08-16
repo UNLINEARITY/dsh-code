@@ -53,21 +53,60 @@ export interface SessionRow {
   readonly title?: string
 }
 
-function samePath(left: string | undefined, right: string): boolean {
+/** Case-insensitive filesystems (Windows, macOS) compare paths by lowercased form. */
+const CASE_INSENSITIVE_FS = process.platform === 'win32' || process.platform === 'darwin'
+
+/** True when the header describes a subagent conversation (durable lineage). */
+export function isSubagentSession(header: SessionHeader): boolean {
+  return header.origin === 'subagent' || header.parentSession !== undefined
+}
+
+function comparablePath(value: string): string {
+  const resolved = resolve(value)
+  return CASE_INSENSITIVE_FS ? resolved.toLowerCase() : resolved
+}
+
+/** Platform-consistent path equality for session cwd comparisons. */
+export function samePath(left: string | undefined, right: string): boolean {
   if (left === undefined) return false
-  return resolve(left).toLowerCase() === resolve(right).toLowerCase()
+  return comparablePath(left) === comparablePath(right)
+}
+
+/**
+ * Unique header match by exact id or unique id prefix (root and subagent
+ * headers alike); the caller applies any lineage gate.
+ * @param headers - the persisted headers.
+ * @param wanted - the id or id prefix.
+ * @returns the uniquely matched header.
+ * @throws when nothing matches or the prefix is ambiguous.
+ */
+export function matchSessionId(headers: readonly SessionHeader[], wanted: string): SessionHeader {
+  const exact = headers.filter(header => header.id === wanted)
+  const matches = exact.length > 0 ? exact : headers.filter(header => header.id.startsWith(wanted))
+  if (matches.length === 0) throw new Error(`no persisted session matches "${wanted}"`)
+  if (matches.length > 1) {
+    throw new Error(`session prefix "${wanted}" is ambiguous (${matches.length} matches): use more of the id`)
+  }
+  return matches[0]!
+}
+
+/** The newest persisted ROOT session pinned to this cwd, or undefined. */
+export function newestRootForCwd(headers: readonly SessionHeader[], cwd: string): SessionHeader | undefined {
+  const local = headers
+    .filter(header => !isSubagentSession(header) && samePath(header.cwd, cwd))
+    .sort((left, right) => right.createdAt - left.createdAt)
+  return local[0]
 }
 
 /** Filter/sort header-only records. No session log is loaded here. */
 export function projectSessionRows(records: readonly SessionRecord[], options: SessionDirectoryOptions): SessionRow[] {
   const needle = options.query.trim().toLowerCase()
   return records
-    .filter(record => options.sessions === 'all'
-      || (record.header.parentSession === undefined && record.header.origin !== 'subagent'))
+    .filter(record => options.sessions === 'all' || !isSubagentSession(record.header))
     .filter(record => options.cwd === 'all' || samePath(record.header.cwd, options.currentCwd))
     .map(record => {
       const cwd = record.header.cwd ?? ''
-      const subagent = record.header.origin === 'subagent' || record.header.parentSession !== undefined
+      const subagent = isSubagentSession(record.header)
       return {
         id: record.header.id,
         createdAt: record.header.createdAt,
