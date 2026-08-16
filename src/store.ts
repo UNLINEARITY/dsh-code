@@ -1,8 +1,17 @@
 /**
  * Observable transcript store: folds session events into the projection view
  * and notifies subscribers. The renderer subscribes through
- * `useSyncExternalStore`; the runner owns event feeding. The store owns no
- * timing — listeners fire synchronously after each applied event.
+ * `useSyncExternalStore`; the runner owns event feeding.
+ *
+ * Notifications stay synchronous per applied event on purpose: the view is
+ * always current when `apply` returns, and the listener side owns burst
+ * coalescing — React 18 (react-reconciler 0.29, used by Ink 5) reuses an
+ * already-scheduled sync callback in `ensureRootIsScheduled`, so N `apply`s
+ * inside one synchronous burst already render once with the final snapshot,
+ * while events delivered across macrotasks (streaming chunks) each render
+ * once for live UI. Deferring the notify here would either break the
+ * documented synchronous contract or add streaming latency, without fixing
+ * anything the scheduler does not already handle.
  *
  * @module @deepseek-ai/dsh-tui/store
  */

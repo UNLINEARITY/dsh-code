@@ -8,7 +8,15 @@ import {
   type CallId,
 } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
-import { createTranscriptView, projectEvent, projectEvents, settledEntryCount } from '../src/render/projection.ts'
+import {
+  createReplayAccumulator,
+  createTranscriptView,
+  finishReplay,
+  projectEvent,
+  projectEvents,
+  replayProjectEvent,
+  settledEntryCount,
+} from '../src/render/projection.ts'
 
 const callId = { current: 'c1' as CallId }
 
@@ -773,5 +781,477 @@ describe('queued inbox projection', () => {
     // A later message behind a still-queued one cannot flush past the queue.
     const mixed = projectEvent(landed, spliceEvent('next-turn', 0, undefined, [second]))
     expect(settledEntryCount(mixed.entries)).toBe(1)
+  })
+})
+
+describe('replay accumulator', () => {
+  /** Deterministic PRNG so the complexity guards are reproducible across runs. */
+  function mulberry32(seed: number): () => number {
+    let a = seed >>> 0
+    return () => {
+      a = (a + 0x6d2b79f5) >>> 0
+      let t = a
+      t = Math.imul(t ^ (t >>> 15), t | 1)
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+    }
+  }
+
+  /**
+   * A varied, interruption-rich but deterministic log exercising every event
+   * family: turns with steps that sometimes never assemble a message, tool
+   * calls that sometimes never pair with a result, retry/command/compaction
+   * pairs with orphans, inbox queues with retirements and removals, and
+   * latest-wins snapshots (header, title, plan, permission, sandbox, goal).
+   */
+  function generateFuzzLog(seed: number, targetEvents: number): SessionEvent[] {
+    const rand = mulberry32(seed)
+    const events: SessionEvent[] = []
+    let seq = 1
+    let turn = 0
+    const time = (): number => Math.floor(rand() * 10_000)
+    const pick = <T,>(list: readonly T[]): T => list[Math.floor(rand() * list.length)]!
+    const push = (type: string, data: unknown): void => {
+      events.push({ type, seq: seq++, time: time(), data } as unknown as SessionEvent)
+    }
+    const queuedIds: Record<'next-turn' | 'next-step', string[]> = { 'next-turn': [], 'next-step': [] }
+    const queuedMessages: Record<string, ReturnType<typeof createUserMessage>> = {}
+
+    const goalChange = (): void => {
+      const op = pick(['create', 'block', 'pause', 'resume', 'complete', 'clear'])
+      if (op === 'clear') {
+        push('goal/change', { kind: 'goal/change', version: 1, operation: 'clear', cleared: { id: 'g', revision: 2 }, clearedAt: 0 })
+        return
+      }
+      push('goal/change', {
+        kind: 'goal/change',
+        version: 1,
+        operation: op,
+        goal: {
+          id: 'g',
+          revision: 1,
+          objective: 'objective',
+          phase: op === 'block' ? 'blocked' : 'active',
+          maxGoalRounds: 6,
+          ...(op === 'block' ? { blockedReason: { code: 'dep', message: 'down' } } : {}),
+        },
+        roundsStarted: 2,
+        createdAt: 0,
+        updatedAt: 0,
+      })
+    }
+
+    const interlude = (): void => {
+      switch (Math.floor(rand() * 11)) {
+        case 0:
+          push('request/header', { header: { config: { provider: 'deepseek-official', model: pick(['deepseek-v4-flash', 'deepseek-v4', 'deepseek-v4-pro']) }, ...(rand() < 0.5 ? { system: 'you are helpful' } : {}) }, reason: 'change' })
+          return
+        case 1:
+          push('request/context', { provider: 'p', model: 'm', ...(rand() < 0.8 ? { contextWindow: pick([64_000, 128_000]) } : {}) })
+          return
+        case 2:
+          push('plan/mode', { active: rand() < 0.5 })
+          return
+        case 3:
+          push('permission/preset', { preset: pick(['read-only', 'workspace-write']) })
+          return
+        case 4:
+          push('session/title', { title: 'session ' + seq, messageSeqs: [seq], source: { kind: 'user' } })
+          return
+        case 5:
+          push('sandbox/mode', { mode: 'danger-full-access' })
+          return
+        case 6:
+          push('todo/write', { todos: [{ content: 'ship', status: 'completed' }] })
+          return
+        case 7:
+          goalChange()
+          return
+        case 8: {
+          const message = createUserMessage({ content: [{ type: 'text', text: 'prompt ' + seq }], source: { kind: 'user' } })
+          push('user/message', message)
+          return
+        }
+        case 9: {
+          const target = pick(['next-turn', 'next-step'] as const)
+          const message = createUserMessage({ content: [{ type: 'text', text: 'queued ' + seq }], source: { kind: 'user' } })
+          push('agent/inbox/spliced', { target, start: 0, removedCount: 0, inserted: [message] })
+          queuedIds[target].push(message.id)
+          queuedMessages[message.id] = message
+          return
+        }
+        default: {
+          // Orphan updates: results/retries/commands whose partner never
+          // arrived — exercises the replay's index-miss fallback scans.
+          switch (Math.floor(rand() * 4)) {
+            case 0:
+              push('tool/result', { turn: 1, step: 1, message: createToolResultMessage({ callId: ('orphan-' + seq) as CallId, content: [{ type: 'text', text: 'orphan result' }], isError: false }) })
+              return
+            case 1:
+              push('llm/retry-started', { retryId: 'orphan-retry-' + seq, turn: 1, step: 1, retry: 1 })
+              return
+            case 2:
+              push('command/done', { commandId: 'orphan-cmd-' + seq, kind: 'success', text: 'orphan done' })
+              return
+            default:
+              push('step/end', { turn: 1, step: 1 }) // unhandled: must leave the view untouched
+              return
+          }
+        }
+      }
+    }
+
+    const consumeQueue = (): void => {
+      const target = pick(['next-turn', 'next-step'] as const)
+      const list = queuedIds[target]
+      if (list.length === 0) return
+      const id = list.shift()!
+      if (rand() < 0.6) {
+        push('user/message', queuedMessages[id]!)
+      } else {
+        push('agent/inbox/spliced', { target, start: 0, removedCount: 1, inserted: [] })
+      }
+    }
+
+    const runTurn = (): void => {
+      turn += 1
+      const current = turn
+      push('turn/start', { turn: current })
+      if (rand() < 0.3) consumeQueue()
+      const steps = 1 + Math.floor(rand() * 3)
+      for (let step = 1; step <= steps; step += 1) {
+        push('step/start', { turn: current, step })
+        const chunks = Math.floor(rand() * 3)
+        for (let c = 0; c < chunks; c += 1) {
+          push('assistant/chunk', { turn: current, step, chunk: { type: rand() < 0.4 ? 'reasoning-delta' : 'text-delta', index: 0, text: rand() < 0.1 ? '' : `chunk ${current}.${step}.${c} ` } })
+        }
+        const toolCount = Math.floor(rand() * 3)
+        const stepCalls: CallId[] = []
+        for (let t = 0; t < toolCount; t += 1) {
+          // Occasionally reuse the previous callId so the replay's multi-index
+          // path (duplicate ids update every matching row) is fuzzed too.
+          const id = rand() < 0.05 && stepCalls.length > 0
+            ? stepCalls[stepCalls.length - 1]!
+            : (`call-${current}-${step}-${t}` as CallId)
+          stepCalls.push(id)
+          push('tool/call', { turn: current, step, callId: id, name: pick(['read_file', 'bash', 'edit']), arguments: '{"path":"a.ts"}' })
+        }
+        for (const id of stepCalls) {
+          if (rand() < 0.7) {
+            push('tool/result', { turn: current, step, message: createToolResultMessage({ callId: id, content: [{ type: 'text', text: 'result of ' + id }], isError: rand() < 0.2 }) })
+          }
+          // 30% of calls never pair: their start anchor must be swept at turn end.
+        }
+        // 20% of steps never assemble a message (interrupted): the next
+        // step/start or the turn end must reclaim their timing anchors.
+        if (rand() < 0.2) continue
+        const usage = rand() < 0.7
+          ? { inputTokens: Math.floor(rand() * 10_000), outputTokens: Math.floor(rand() * 1_000), cacheReadTokens: Math.floor(rand() * 5_000), cacheWriteTokens: 0 }
+          : undefined
+        push('assistant/message', {
+          turn: current,
+          step,
+          message: createAssistantMessage({
+            content: [
+              ...(rand() < 0.5 ? [{ type: 'reasoning' as const, text: 'let me think' }] : []),
+              { type: 'text' as const, text: `answer ${current}.${step}` },
+            ],
+          }),
+          ...(usage === undefined ? {} : { usage }),
+        })
+      }
+      if (rand() < 0.3) {
+        const id = 'retry-' + current
+        push('llm/retry', { retryId: id, turn: current, step: 1, provider: 'p', mode: 'normal', policyKey: 'k', retry: 1, maxRetries: 3, delayMs: 500, failure: { code: 'SERVER', message: 'down' } })
+        if (rand() < 0.8) push('llm/retry-started', { retryId: id, turn: current, step: 1, retry: 1 })
+      }
+      if (rand() < 0.3) {
+        const id = 'cmd-' + current
+        push('command/run', { commandId: id, name: 'compact', args: ' now', source: { kind: 'user' } })
+        if (rand() < 0.8) push('command/done', { commandId: id, kind: rand() < 0.8 ? 'success' : 'error', text: 'compacted' })
+      }
+      if (rand() < 0.2) {
+        const id = 'compaction-' + current
+        push('compaction/start', { compactionId: id, turn: current })
+        if (rand() < 0.7) {
+          push('compaction/summary', { compactionId: id, turn: current, summary: [], shadowedRange: { start: 1, end: 9 }, shadowedSeqs: [], shadowedTokenCount: 5_000 + Math.floor(rand() * 10_000), provider: 'p', model: 'm', llmStreamCall: true, rawOutput: [] })
+          if (rand() < 0.8) push('compaction/end', { compactionId: id, turn: current })
+          // else: summary without end — capped residue must stay bounded.
+        } else {
+          push('compaction/end', { compactionId: id, turn: current, error: 'summary failed' })
+        }
+      }
+      if (rand() < 0.1) push('compaction/prune', { shadowedRange: { start: 2, end: 5 }, shadowedSeqs: [], shadowedTokenCount: 7_000 })
+      const outcome = pick(['completed', 'completed', 'completed', 'aborted', 'max-tokens', 'interrupted', 'blocked', 'error'])
+      push('turn/end', {
+        turn: current,
+        reason: outcome === 'error'
+          ? { kind: 'error', error: { code: 'SERVER', message: 'down' } }
+          : outcome === 'aborted'
+            ? { kind: 'aborted', reason: { kind: pick(['user', 'timeout']) } }
+            : { kind: outcome },
+      })
+    }
+
+    while (events.length < targetEvents) {
+      if (rand() < 0.15) interlude()
+      else runTurn()
+    }
+    return events
+  }
+
+  it('folds an empty log to a fresh view', () => {
+    expect(projectEvents([])).toEqual(createTranscriptView())
+  })
+
+  it('replays a full log identically to a sequential projectEvent fold', () => {
+    const cases = [[1, 700], [7, 900], [42, 1_100], [2024, 600], [99, 800], [1234, 1_000]] as const
+    for (const [seed, size] of cases) {
+      const events = generateFuzzLog(seed, size)
+      const replay = projectEvents(events)
+      const sequential = events.reduce(projectEvent, createTranscriptView())
+      expect(replay, `seed ${seed}`).toEqual(sequential)
+    }
+  })
+
+  it('folds a large log in near-linear time (entry ops stay O(N))', () => {
+    const events = generateFuzzLog(42, 24_000)
+    const acc = createReplayAccumulator()
+    for (const event of events) replayProjectEvent(acc, event)
+    const view = finishReplay(acc)
+    // Correct at scale: the whole transcript folded and pending retired.
+    expect(view.entries.length).toBeGreaterThan(1_000)
+
+    // Linear bound: container work stays proportional to the log size. A
+    // copy-on-write rewrite would push `ops` toward Σ(current length), i.e.
+    // quadratic, and blow this bound by orders of magnitude.
+    expect(acc.ops).toBeLessThan(events.length * 8)
+
+    // Contrast with the naive COW lower bound: every append event copies the
+    // whole array so far, so a sequential fold costs Σ(length at each append),
+    // which is quadratic. The replay must stay far below it — deterministic,
+    // no wall-clock thresholds.
+    let naiveOps = 0
+    let naiveLength = 0
+    for (const event of events) {
+      switch (event.type) {
+        case 'user/message':
+        case 'assistant/message':
+        case 'tool/call':
+        case 'turn/end':
+        case 'llm/retry':
+        case 'command/run':
+        case 'compaction/end':
+        case 'goal/change':
+        case 'agent/inbox/spliced':
+          naiveOps += naiveLength
+          naiveLength += 1
+          break
+        default:
+          break
+      }
+    }
+    expect(acc.ops * 50).toBeLessThan(naiveOps)
+  })
+
+  it('replay wall time scales near-linearly (ratio guard, not an absolute budget)', () => {
+    const small = generateFuzzLog(11, 8_000)
+    const large = generateFuzzLog(22, 32_000)
+    const measure = (log: SessionEvent[]): number => {
+      let best = Number.POSITIVE_INFINITY
+      for (let run = 0; run < 3; run += 1) {
+        const started = performance.now()
+        projectEvents(log)
+        best = Math.min(best, performance.now() - started)
+      }
+      return best
+    }
+    const smallMs = measure(small)
+    const largeMs = measure(large)
+    // Linear scaling is ~4x for a 4x input; quadratic is ~16x. The 8x band
+    // separates the two with room for scheduler noise. If the small sample is
+    // too fast to measure, fall back to a generous absolute ceiling instead.
+    if (smallMs > 3) {
+      expect(largeMs).toBeLessThan(smallMs * 8)
+    } else {
+      expect(largeMs).toBeLessThan(2_000)
+    }
+  }, 60_000)
+
+  it('updates every duplicate-id row exactly like the copy-on-write reducer', () => {
+    // The reducer's id-keyed updates map over ALL entries, so two rows sharing
+    // one id both flip. The replay must mirror that through its multi-index
+    // lists instead of only touching the last registration.
+    const events = [
+      { type: 'turn/start', seq: 1, time: 0, data: { turn: 1 } },
+      toolCallEvent('read', 'dup' as CallId, 2),
+      toolCallEvent('edit', 'dup' as CallId, 3), // duplicate callId: two rows share it
+      toolResultEvent('dup' as CallId, 'done', false, 4),
+      { type: 'command/run', seq: 5, time: 0, data: { commandId: 'dup-cmd', name: 'compact', args: '', source: { kind: 'user' } } },
+      { type: 'command/run', seq: 6, time: 0, data: { commandId: 'dup-cmd', name: 'compact', args: '', source: { kind: 'user' } } },
+      { type: 'command/done', seq: 7, time: 0, data: { commandId: 'dup-cmd', kind: 'success', text: 'ok' } },
+    ] as unknown as readonly SessionEvent[]
+    const replay = projectEvents(events)
+    const sequential = events.reduce(projectEvent, createTranscriptView())
+    expect(replay).toEqual(sequential)
+    const toolStates = replay.entries
+      .filter(entry => entry.kind === 'tool')
+      .map(entry => (entry as { state: string }).state)
+    expect(toolStates).toEqual(['done', 'done'])
+    const commandStates = replay.entries
+      .filter(entry => entry.kind === 'command')
+      .map(entry => (entry as { state: string }).state)
+    expect(commandStates).toEqual(['done', 'done'])
+  })
+
+  it('folds an orphan-heavy log in linear time and identically to the sequential fold', () => {
+    // A malicious/corrupt log can pair every append with an orphan update that
+    // matches nothing. The naive reducer scans the whole entries array per
+    // orphan (quadratic); the replay's index maps never delete, so a miss is
+    // a provable O(1) no-op.
+    const events: SessionEvent[] = []
+    let seq = 1
+    const orphanKinds = ['tool/result', 'command/done', 'llm/retry-started'] as const
+    for (let i = 0; i < 24_000; i += 1) {
+      if (i % 2 === 0) {
+        events.push({ type: 'user/message', seq: seq++, time: 0, data: createUserMessage({ content: [{ type: 'text', text: 'prompt ' + i }], source: { kind: 'user' } }) } as unknown as SessionEvent)
+        continue
+      }
+      const kind = orphanKinds[i % orphanKinds.length]
+      if (kind === 'tool/result') {
+        events.push({ type: 'tool/result', seq: seq++, time: 0, data: { turn: 1, step: 1, message: createToolResultMessage({ callId: ('orphan-' + i) as CallId, content: [{ type: 'text', text: 'x' }], isError: false }) } } as unknown as SessionEvent)
+      } else if (kind === 'command/done') {
+        events.push({ type: 'command/done', seq: seq++, time: 0, data: { commandId: 'orphan-cmd-' + i, kind: 'success', text: 'x' } } as unknown as SessionEvent)
+      } else {
+        events.push({ type: 'llm/retry-started', seq: seq++, time: 0, data: { retryId: 'orphan-retry-' + i, turn: 1, step: 1, retry: 1 } } as unknown as SessionEvent)
+      }
+    }
+
+    const acc = createReplayAccumulator()
+    for (const event of events) replayProjectEvent(acc, event)
+    const view = finishReplay(acc)
+    // Linear bound: one container op per event (append push or orphan miss).
+    expect(acc.ops).toBeLessThan(events.length * 8)
+    // Contrast with the naive cost: each orphan maps over every appended row
+    // (a full-array scan), so the naive fold is quadratic on this input.
+    let naiveOps = 0
+    let naiveLength = 0
+    for (const event of events) {
+      if (event.type === 'user/message') {
+        naiveOps += naiveLength
+        naiveLength += 1
+      } else {
+        naiveOps += naiveLength // orphan update scans the whole array
+      }
+    }
+    expect(acc.ops * 50).toBeLessThan(naiveOps)
+
+    // Equivalence at scale: the whole orphan-heavy log folds identically.
+    expect(view).toEqual(events.reduce(projectEvent, createTranscriptView()))
+  }, 60_000)
+})
+
+describe('anchor cleanup at derivable boundaries', () => {
+  it('sweeps an interrupted step at turn end', () => {
+    const view = projectEvents([
+      { type: 'turn/start', seq: 1, time: 0, data: { turn: 1 } },
+      { type: 'step/start', seq: 2, time: 100, data: { turn: 1, step: 1 } },
+      { ...chunkEvent('thinking', 3), time: 200 },
+      { type: 'turn/end', seq: 4, time: 500, data: { turn: 1, reason: { kind: 'aborted', reason: { kind: 'user' } } } },
+    ] as unknown as readonly SessionEvent[])
+    expect(view.anchors.stepStart.size).toBe(0)
+    expect(view.anchors.firstChunkAt.size).toBe(0)
+    expect(view.anchors.turnSteps.size).toBe(0)
+  })
+
+  it('sweeps interrupted tool starts at turn end', () => {
+    const view = projectEvents([
+      { type: 'turn/start', seq: 1, time: 0, data: { turn: 1 } },
+      toolCallEvent('bash', callId.current, 2),
+      { type: 'turn/end', seq: 3, time: 500, data: { turn: 1, reason: { kind: 'aborted', reason: { kind: 'user' } } } },
+    ] as unknown as readonly SessionEvent[])
+    expect(view.anchors.toolStart.size).toBe(0)
+    expect(view.anchors.turnTools.size).toBe(0)
+  })
+
+  it('keeps open-turn anchors until their boundary resolves them', () => {
+    const view = projectEvents([
+      { type: 'turn/start', seq: 1, time: 0, data: { turn: 1 } },
+      toolCallEvent('bash', callId.current, 2),
+    ] as unknown as readonly SessionEvent[])
+    expect(view.anchors.toolStart.size).toBe(1)
+    expect(view.anchors.turnTools.get(1)?.has(callId.current)).toBe(true)
+  })
+
+  it('a superseding step start reclaims the interrupted step anchors', () => {
+    const view = projectEvents([
+      { type: 'turn/start', seq: 1, time: 0, data: { turn: 1 } },
+      { type: 'step/start', seq: 2, time: 100, data: { turn: 1, step: 1 } },
+      { ...chunkEvent('stale', 3), time: 200 }, // step 1 interrupted right here
+      { type: 'step/start', seq: 4, time: 300, data: { turn: 1, step: 2 } },
+      { ...assistantEvent('fresh', 5), time: 600 },
+      { type: 'turn/end', seq: 6, time: 700, data: { turn: 1, reason: { kind: 'completed' } } },
+    ] as unknown as readonly SessionEvent[])
+    expect(view.anchors.stepStart.size).toBe(0)
+    expect(view.anchors.firstChunkAt.size).toBe(0)
+    expect(view.anchors.turnSteps.size).toBe(0)
+  })
+
+  it('caps compaction summary residue and falls back to the prune price', () => {
+    const events: SessionEvent[] = []
+    for (let i = 0; i < 20; i += 1) {
+      events.push({ type: 'compaction/summary', seq: i + 1, time: 0, data: { compactionId: 'k' + i, turn: null, shadowedTokenCount: 1_000 + i } } as unknown as SessionEvent)
+    }
+    events.push({ type: 'compaction/prune', seq: 21, time: 0, data: { shadowedRange: { start: 1, end: 2 }, shadowedSeqs: [], shadowedTokenCount: 7_000 } } as unknown as SessionEvent)
+    events.push({ type: 'compaction/start', seq: 22, time: 0, data: { compactionId: 'fresh' as never, turn: null } } as unknown as SessionEvent)
+    events.push({ type: 'compaction/end', seq: 23, time: 0, data: { compactionId: 'fresh' as never, turn: null } } as unknown as SessionEvent)
+    const view = projectEvents(events)
+    // Oldest summaries are evicted first (Map insertion order).
+    expect(view.anchors.compactionTokens.size).toBe(16)
+    expect([...view.anchors.compactionTokens.keys()][0]).toBe('k4')
+    // The fresh end has no summary of its own; the evicted price falls back
+    // to the documented `lastPruneTokens` price.
+    expect(view.entries[view.entries.length - 1]).toEqual({ kind: 'compaction', ok: true, tokens: 7_000, error: '' })
+  })
+})
+
+describe('settledEntryCount tail invariant', () => {
+  it('does not let a settled row between running rows advance the flush boundary', () => {
+    // The live suffix can contain done rows (a parallel tool completed while
+    // earlier siblings still run): only the FIRST mutable entry defines the
+    // flush boundary. A tail-scan shortcut returning the LAST mutable index
+    // would flush a still-running tool into the append-only <Static> and
+    // ghost its state change — which is exactly why a pure tail scan is not a
+    // safe optimization for this function.
+    const view = projectEvents([
+      { type: 'turn/start', seq: 1, time: 0, data: { turn: 1 } },
+      toolCallEvent('read', 'a' as CallId, 2),
+      toolCallEvent('bash', 'b' as CallId, 3),
+      toolCallEvent('edit', 'c' as CallId, 4),
+      toolResultEvent('b' as CallId, 'done', false, 5), // b completes between running a and c
+    ] as unknown as readonly SessionEvent[])
+    expect(view.entries.map(entry => entry.kind)).toEqual(['tool', 'tool', 'tool'])
+    expect(view.entries[1]).toMatchObject({ callId: 'b', state: 'done' })
+    // a (index 0) is still running: nothing before it may flush.
+    expect(settledEntryCount(view.entries)).toBe(0)
+  })
+
+  it('treats a running command as a mutable boundary until command/done settles it', () => {
+    // A running command's row is still mutable: command/done rewrites its
+    // state/summary, so flushing it into the append-only <Static> would leave
+    // the stale running mark visible until the next resize-triggered replay.
+    const view = projectEvents([
+      { type: 'turn/start', seq: 1, time: 0, data: { turn: 1 } },
+      { type: 'command/run', seq: 2, time: 0, data: { commandId: 'c1', name: 'compact', args: '', source: { kind: 'user' } } },
+      userEvent('after', 3), // appended behind the still-running command
+    ] as unknown as readonly SessionEvent[])
+    expect(settledEntryCount(view.entries)).toBe(0)
+    const done = projectEvent(view, {
+      type: 'command/done', seq: 4, time: 0,
+      data: { commandId: 'c1', kind: 'success', text: 'compacted 2 turns' },
+    } as unknown as SessionEvent)
+    // Once the command settles, everything up to the next mutable row flushes.
+    expect(done.entries[0]).toMatchObject({ kind: 'command', state: 'done', summary: 'compacted 2 turns' })
+    expect(settledEntryCount(done.entries)).toBe(2)
   })
 })
