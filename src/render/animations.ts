@@ -3,10 +3,16 @@
  * the StateDot "ongoing" pixel chase (3×3 ring, 125ms flat-hold brightness
  * steps, 1s cycle) becomes the single-cell stepped pulse below and the
  * full-ring clockwise braille chase in {@link BUSY_CHASE_FRAMES}, and the
- * streaming caret blink is the Claude-Code convention. The DeepSeek
- * model-switch easter egg adds a one-shot eased blue swell over the composer
- * frame (pure interpolation path plus the official-route predicate below).
- * Pure functions only — the Ink layer owns timers and colors.
+ * streaming caret blink is the Claude-Code convention.
+ *
+ * The DeepSeek model-switch easter egg ports Codex's effort-ignition "Wave"
+ * style (`codex-rs/tui/src/bottom_pane/effort_ignition_styles.rs`): switching
+ * INTO an official DeepSeek route sweeps a blue wave across the composer's
+ * input row — one column per cell, `backgroundColor` = the sampled wave
+ * color — then, on the deepseek (Ultra-equivalent) tier, drops the `· ✦ ✧`
+ * sparkle sequence into the rightmost blank cell before fading. The prompt
+ * marker keeps the tier accent afterwards (persistent, like Codex's prompt
+ * charge). Pure functions only — the Ink layer owns timers and colors.
  *
  * @module @deepseek-ai/dsh-code/render/animations
  */
@@ -40,113 +46,335 @@ export function caretVisible(tick: number): boolean {
 
 /**
  * The one-shot DeepSeek model-switch easter egg: when the status bar model
- * label switches to an official DeepSeek route, the composer frame plays a
- * short eased blue swell and then returns to static. The Ink layer owns the
- * timer and reads the ACTIVE palette anchors (getPalette); everything below
- * is pure interpolation over the colors it is given, so the same path stays
- * coordinated in both themes without the module touching the palette state.
+ * label switches to an official DeepSeek route, the composer's input row
+ * plays Codex's effort-ignition "Wave" — a blue crest sweeping the content
+ * row column by column (background tint ≤ 0.55 under the draft), plus the
+ * Ultra-style `· ✦ ✧` sparkles on the deepseek tier — and the prompt marker
+ * keeps the tier accent afterwards. The Ink layer owns the timer and reads
+ * the ACTIVE palette anchors (`getPalette`); everything below is pure
+ * interpolation over the colors it is given.
  */
 
-/** Total frames of the one-shot composer wave (32 × 60ms ≈ 1.9s of smooth
- * swell: one eased rise through the brand blues and a symmetric fall back to
- * the static border tone). */
-export const DEEPSEEK_WAVE_FRAMES = 32
+/** Frame cadence of the DeepSeek wave: Codex's IGNITION_FRAME_TICK (33ms ≈ 30fps). */
+export const DEEPSEEK_WAVE_TICK_MS = 33
 
-/** Frame cadence of the DeepSeek wave: 60ms interpolates the gradient so the
- * border and prompt read as flowing color rather than discrete shade steps. */
-export const DEEPSEEK_WAVE_INTERVAL_MS = 60
+/**
+ * The two DeepSeek wave tiers. The concept maps Codex's reasoning tiers to
+ * model ids: `flash` runs the Max parameters, `deepseek` (pro models) runs
+ * the Ultra parameters (dual band + tail sparkles on the Wave style).
+ */
+export type DeepseekWaveTier = 'flash' | 'deepseek'
 
-/** The five color anchors the wave travels through, filled by the Ink layer
- * from the ACTIVE palette (`getPalette`) so the swell stays theme-coordinated.
- * `calm` is the static border tone the wave rises from and settles back to;
- * the four brand tokens order the path deep → brand → mid → bright so the hue
- * flows continuously. */
-export interface DeepseekWaveColors {
-  /** Static composer border tone — the wave's calm start and end. */
-  calm: RgbTriple
-  /** Deep brand blue — first brand stop of the path. */
-  deep: RgbTriple
-  /** Primary brand blue — second stop. */
-  brand: RgbTriple
-  /** Intermediate brand blue — third stop. */
-  mid: RgbTriple
-  /** Bright brand blue — the wave crest at the middle frames. */
-  bright: RgbTriple
+/**
+ * The three ignition styles — Codex `IgnitionStyle`: a traveling crest
+ * (Wave), a drifting multi-hue band (Aurora), and an expanding ring (Pulse).
+ * One style is picked at random per trigger and never repeats the previous.
+ */
+export type DeepseekWaveStyle = 'wave' | 'aurora' | 'pulse'
+
+/** All styles in canonical order, for random selection and tests. */
+export const DEEPSEEK_WAVE_STYLES: readonly DeepseekWaveStyle[] = ['wave', 'aurora', 'pulse']
+
+/** Wave half-width in columns — Codex WAVE_HALF_WIDTH (9). */
+export const WAVE_HALF_WIDTH = 9
+
+/** Pulse ring half-width in columns — Codex PULSE_HALF_WIDTH (4.5). */
+export const PULSE_HALF_WIDTH = 4.5
+
+/** Sparkle start and frame cadence — Codex SPARK_START / SPARK_FRAME. */
+export const SPARK_START_MS = 900
+export const SPARK_FRAME_MS = 100
+
+/** Sparkle glyphs in frame order — Codex SPARK_GLYPHS (`· ✦ ✧`). */
+export const SPARK_GLYPHS = ['·', '✦', '✧'] as const
+
+/**
+ * Band tables — Codex `bands(style, tier)`. Each entry is a triple whose
+ * meaning depends on the style: Wave/Pulse use `(launch, travel, strength)`;
+ * Aurora uses `(speed, phase, hueIndex)`.
+ */
+export type DeepseekWaveBand = readonly [number, number, number]
+export const DEEPSEEK_WAVE_BANDS: Readonly<Record<DeepseekWaveStyle, Readonly<Record<DeepseekWaveTier, readonly DeepseekWaveBand[]>>>> = {
+  wave: {
+    // Wave-Max: one band sweeping 0.10s..0.85s.
+    flash: [[0.10, 0.75, 1.0]],
+    // Wave-Ultra: two offset bands for a richer crest.
+    deepseek: [[0.10, 0.70, 1.0], [0.35, 0.55, 1.0]],
+  },
+  aurora: {
+    // Aurora-Max: two drifting bands (hues 0 and 1).
+    flash: [[0.35, 0.15, 0.0], [-0.50, 0.60, 1.0]],
+    // Aurora-Ultra: a third band adds hue 2.
+    deepseek: [[0.35, 0.15, 0.0], [-0.50, 0.60, 1.0], [0.75, 0.35, 2.0]],
+  },
+  pulse: {
+    // Pulse-Max: one expanding ring.
+    flash: [[0.10, 0.60, 1.0]],
+    // Pulse-Ultra: two rings (inner weaker, outer stronger).
+    deepseek: [[0.10, 0.55, 0.8], [0.45, 0.55, 1.1]],
+  },
 }
 
-/** Ease-in-out (smoothstep) envelope: the swell accelerates through the
- * middle and eases into the calm ends instead of stepping shade to shade. */
-function smoothstep(t: number): number {
-  const x = Math.min(1, Math.max(0, t))
-  return x * x * (3 - 2 * x)
+/**
+ * Total animation duration — Codex `IgnitionStyle::total_duration`: three
+ * styles × two tiers.
+ * @param tier - the active wave tier.
+ * @param style - the active ignition style.
+ * @returns the duration in milliseconds.
+ */
+export function deepseekWaveDuration(tier: DeepseekWaveTier, style: DeepseekWaveStyle = 'wave'): number {
+  switch (style) {
+    case 'aurora': return tier === 'flash' ? 1300 : 1600
+    case 'pulse': return tier === 'flash' ? 900 : 1250
+    case 'wave': return tier === 'flash' ? 1000 : 1300
+  }
 }
 
-/** Linear interpolation between two RGB triples, rounded to integer channels. */
-function lerpRgb(a: RgbTriple, b: RgbTriple, t: number): RgbTriple {
+/**
+ * Pick one ignition style at random, never repeating the previous one —
+ * Codex `IgnitionStyle::random`. Falls back to the remaining styles.
+ * @param previous - the style of the last trigger, if any.
+ * @returns a style different from `previous`.
+ */
+export function deepseekWaveStyleRandom(previous: DeepseekWaveStyle | undefined): DeepseekWaveStyle {
+  const candidates = DEEPSEEK_WAVE_STYLES.filter(style => style !== previous)
+  return candidates[Math.floor(Math.random() * candidates.length)] ?? 'wave'
+}
+
+/**
+ * Blank-cell background the wave tint blends toward — fixed approximations
+ * of the terminal's default background, mirroring Codex's
+ * `user_message_bg_rgb` (which derives a near-black / near-white bubble tint
+ * from the terminal background). The Ink layer picks the active theme's one.
+ */
+export const WAVE_BASE_DARK: RgbTriple = [16, 18, 24]
+export const WAVE_BASE_LIGHT: RgbTriple = [242, 244, 248]
+
+/**
+ * Tier for a `provider/model` label: a model id containing `flash` runs the
+ * single-band flash tier; everything else (pro/reasoner/chat) runs the
+ * dual-band deepseek tier. Mirrors Codex's Max→Ultra mapping.
+ * @param model - the `provider/model` label of the applied model.
+ * @returns the wave tier for that model.
+ */
+export function deepseekWaveTier(model: string): DeepseekWaveTier {
+  return model.toLowerCase().includes('flash') ? 'flash' : 'deepseek'
+}
+
+/**
+ * Cosine window — Codex `crest`: 1 exactly under the wave center, 0 from
+ * one half-width away.
+ * @param distance - distance from the crest center in half-widths.
+ * @returns the crest strength in 0..1.
+ */
+export function crest(distance: number): number {
+  if (distance >= 1) return 0
+  return 0.5 * (1 + Math.cos(Math.PI * distance))
+}
+
+/**
+ * Cubic ease-in-out — Codex `ease_in_out`: flat at both ends, steepest in
+ * the middle, so the crest accelerates and eases instead of sliding linearly.
+ * @param progress - raw progress (clamped to 0..1).
+ * @returns the eased progress in 0..1.
+ */
+export function easeInOut(progress: number): number {
+  const p = Math.min(1, Math.max(0, progress))
+  if (p < 0.5) return 4 * p * p * p
+  const inverse = -2 * p + 2
+  return 1 - (inverse * inverse * inverse) / 2
+}
+
+/**
+ * Fade-in/fade-out envelope — Codex `envelope`: linear ramp over `fadeIn`
+ * at the start and `fadeOut` at the end, plateau at 1 between, 0 outside the
+ * total. The Wave style keeps the envelope at 1 (Codex paints Wave without
+ * an envelope); exported for the Aurora-style fades and for tests.
+ * @param elapsed - seconds since the animation started.
+ * @param total - total duration in seconds.
+ * @param fadeIn - seconds of fade-in.
+ * @param fadeOut - seconds of fade-out.
+ * @returns the envelope value in 0..1.
+ */
+export function envelope(elapsed: number, total: number, fadeIn: number, fadeOut: number): number {
+  if (elapsed <= 0 || elapsed >= total) return 0
+  const rise = elapsed / Math.max(fadeIn, Number.EPSILON)
+  const fall = (total - elapsed) / Math.max(fadeOut, Number.EPSILON)
+  return Math.min(Math.max(Math.min(rise, fall), 0), 1)
+}
+
+/**
+ * One band's contribution at a column — Codex `band_sample`, all three
+ * branches: Wave sweeps an eased crest across the row; Aurora drifts a
+ * sinusoidal center carrying a hue index; Pulse expands a ring from the row
+ * center with cubic ease and decaying strength.
+ * @param style - the ignition style.
+ * @param band - the band triple (meaning depends on the style).
+ * @param elapsed - seconds since the animation started.
+ * @param column - column index in the content row (0..width-1).
+ * @param width - content-row width in columns.
+ * @returns `[hueIndex, strength]`.
+ */
+function bandSample(
+  style: DeepseekWaveStyle,
+  band: DeepseekWaveBand,
+  elapsed: number,
+  column: number,
+  width: number,
+): [number, number] {
+  const [first, second, third] = band
+  switch (style) {
+    case 'wave': {
+      const progress = (elapsed - first) / second
+      if (progress < 0 || progress > 1) return [0, 0]
+      const center = easeInOut(progress) * (width + 2 * WAVE_HALF_WIDTH) - WAVE_HALF_WIDTH
+      return [0, crest(Math.abs(column - center) / WAVE_HALF_WIDTH)]
+    }
+    case 'aurora': {
+      const center = (0.5 + 0.38 * Math.sin(Math.PI * 2 * (first * elapsed + second))) * width
+      const halfWidth = Math.max(width * 0.22, 4)
+      return [Math.trunc(third), crest(Math.abs(column - center) / halfWidth)]
+    }
+    case 'pulse': {
+      const progress = (elapsed - first) / second
+      if (progress < 0 || progress > 1) return [0, 0]
+      const inverse = 1 - progress
+      const radius = (1 - inverse * inverse * inverse) * (width / 2 + 2 * PULSE_HALF_WIDTH)
+      const distance = Math.abs(column - width / 2)
+      return [0, crest(Math.abs(distance - radius) / PULSE_HALF_WIDTH) * third * (1 - 0.6 * progress)]
+    }
+  }
+}
+
+/** Linear RGB blend — Codex `blend`: `fg * alpha + bg * (1 - alpha)`. */
+function blendRgb(fg: RgbTriple, bg: RgbTriple, alpha: number): RgbTriple {
   return [
-    Math.round(a[0] + (b[0] - a[0]) * t),
-    Math.round(a[1] + (b[1] - a[1]) * t),
-    Math.round(a[2] + (b[2] - a[2]) * t),
+    Math.round(fg[0] * alpha + bg[0] * (1 - alpha)),
+    Math.round(fg[1] * alpha + bg[1] * (1 - alpha)),
+    Math.round(fg[2] * alpha + bg[2] * (1 - alpha)),
   ]
 }
 
-/** Progress of a wave frame along the full swell (0..1, clamped so the prompt
- * lag can overshoot the ends harmlessly). */
-function waveProgress(tick: number): number {
-  const last = DEEPSEEK_WAVE_FRAMES - 1
-  if (tick <= 0) return 0
-  if (tick >= last) return 1
-  return tick / last
-}
-
-/** Round-trip position of the wave for a progress value: 0 at both ends, 1 at
- * the exact middle — the eased crest of the swell. */
-function wavePosition(progress: number): number {
-  return 1 - Math.abs(2 * smoothstep(progress) - 1)
+/**
+ * The background color for one composer-row column at a tick — Codex
+ * `paint_bands` + `Canvas::tint` for all three styles. Bands overlap with a
+ * max for Wave/Pulse and a SUM for Aurora (Codex differs by style), the
+ * weighted hues mix per column (Wave/Pulse always end on hue 0), the tint
+ * blends the mixed hue toward the blank-cell base at the style's alpha cap,
+ * and Aurora applies its own fade envelope. Returns `null` when the column
+ * should stay transparent, so the row returns to no `backgroundColor` on
+ * both ends.
+ * @param tick - wave frame (0, 1, … at DEEPSEEK_WAVE_TICK_MS).
+ * @param column - column index in the content row (0..width-1).
+ * @param width - content-row width in columns.
+ * @param tier - the wave tier (flash = Max, deepseek = Ultra parameters).
+ * @param style - the ignition style.
+ * @param hues - the tier's three hues.
+ * @param base - the blank-cell base color the tint blends toward.
+ * @returns the blended RGB background, or null for transparent.
+ */
+export function deepseekWaveColumnBg(
+  tick: number,
+  column: number,
+  width: number,
+  tier: DeepseekWaveTier,
+  style: DeepseekWaveStyle,
+  hues: readonly [RgbTriple, RgbTriple, RgbTriple],
+  base: RgbTriple,
+): RgbTriple | null {
+  const total = deepseekWaveDuration(tier, style) / 1000
+  const elapsed = (tick * DEEPSEEK_WAVE_TICK_MS) / 1000
+  const fade = style === 'aurora' ? envelope(elapsed, total, 0.25, 0.40) : 1
+  const weights = [0, 0, 0]
+  for (const band of DEEPSEEK_WAVE_BANDS[style][tier]) {
+    const [hue, strength] = bandSample(style, band, elapsed, column, width)
+    weights[hue] = style === 'aurora' ? weights[hue]! + strength : Math.max(weights[hue]!, strength)
+  }
+  const weight = weights[0]! + weights[1]! + weights[2]!
+  if (weight <= 0.01) return null
+  let red = 0
+  let green = 0
+  let blue = 0
+  for (let index = 0; index < 3; index += 1) {
+    red += weights[index]! * hues[index]![0]
+    green += weights[index]! * hues[index]![1]
+    blue += weights[index]! * hues[index]![2]
+  }
+  const mixed: RgbTriple = [
+    Math.round(red / weight),
+    Math.round(green / weight),
+    Math.round(blue / weight),
+  ]
+  const alpha = style === 'aurora' ? Math.min(weight * 0.40, 0.50) * fade : weight * 0.55
+  if (alpha < 0.02) return null
+  return blendRgb(mixed, base, alpha)
 }
 
 /**
- * Color of the wave path at a round-trip position (0 = calm, 1 = bright
- * crest, back to 0): piecewise RGB interpolation through the five anchors —
- * calm → deep → brand → mid → bright — so the hue flows continuously.
+ * The sparkle glyph for a tick — Codex `spark_frame`: from 900ms on, one
+ * glyph every 100ms through `· ✦ ✧`, then silent. The deepseek (Ultra) tier
+ * only; the Ink layer still must skip occupied cells.
+ * @param tick - wave frame at DEEPSEEK_WAVE_TICK_MS.
+ * @returns the sparkle glyph, or null outside the 900..1200ms window.
  */
-function wavePathColor(position: number, colors: DeepseekWaveColors): RgbTriple {
-  const { calm, deep, brand, mid, bright } = colors
-  if (position < 0.12) return lerpRgb(calm, deep, position / 0.12)
-  if (position < 0.38) return lerpRgb(deep, brand, (position - 0.12) / 0.26)
-  if (position < 0.68) return lerpRgb(brand, mid, (position - 0.38) / 0.3)
-  return lerpRgb(mid, bright, (position - 0.68) / 0.32)
+export function deepseekWaveSpark(tick: number): string | null {
+  const elapsed = tick * DEEPSEEK_WAVE_TICK_MS
+  if (elapsed < SPARK_START_MS) return null
+  const frame = Math.floor((elapsed - SPARK_START_MS) / SPARK_FRAME_MS)
+  return SPARK_GLYPHS[frame] ?? null
 }
 
 /**
- * The composer border color at frame `tick` of the one-shot DeepSeek wave:
- * starts exactly at the static border tone (`calm`), swells through the brand
- * path to the bright crest at the middle frames, and eases back to calm —
- * seamless with the static frame at both ends.
- * @param tick - wave frame (0..DEEPSEEK_WAVE_FRAMES-1).
- * @param colors - theme anchors from the active palette.
- * @returns the RGB triple for the border at that frame.
+ * The composer BORDER color at a tick: the frame breathes with the wave —
+ * the palette's static dim blends toward the tier accent as the crest is
+ * alive and back, so the frame glows up while the wave sweeps and settles to
+ * dim on both ends (first==last frame==dim, no hard jump).
+ * @param tick - wave frame at DEEPSEEK_WAVE_TICK_MS.
+ * @param tier - the wave tier.
+ * @param hues - the tier's three hues; the border blends toward hues[0].
+ * @param dim - the palette's static dim RGB (the resting border color).
+ * @returns the blended border RGB.
  */
-export function deepseekWaveColor(tick: number, colors: DeepseekWaveColors): RgbTriple {
-  return wavePathColor(wavePosition(waveProgress(tick)), colors)
+export function deepseekWaveBorderColor(
+  tick: number,
+  tier: DeepseekWaveTier,
+  style: DeepseekWaveStyle,
+  hues: readonly [RgbTriple, RgbTriple, RgbTriple],
+  dim: RgbTriple,
+): RgbTriple {
+  const total = deepseekWaveDuration(tier, style) / 1000
+  const elapsed = (tick * DEEPSEEK_WAVE_TICK_MS) / 1000
+  // The border stays visibly on the tier accent for the whole sweep (a
+  // floor keeps it glowing, not just cresting mid-wave): it ramps in as the
+  // first band launches and relaxes after the last crest passes.
+  const glow = envelope(elapsed, total, total * 0.25, total * 0.4)
+  return blendRgb(hues[0], dim, 0.25 + glow * 0.6)
 }
 
-/** Frames by which the ❯ prompt marker trails the border: the brightness
- * visibly travels from the frame ring into the prompt before both fade. */
-export const DEEPSEEK_WAVE_PROMPT_LAG = 4
+/**
+ * Whether the `deepseek` wordmark rides the wave at this tick: it fades in
+ * shortly after the first crest launches and out before the wave settles,
+ * so the brand name surfaces through the sweep's middle. The Ink layer
+ * places it in the row's blank mid-section (never over real draft text).
+ * @param tick - wave frame at DEEPSEEK_WAVE_TICK_MS.
+ * @param tier - the wave tier.
+ * @returns true while the wordmark should be visible.
+ */
+export function deepseekWaveWordVisible(tick: number, tier: DeepseekWaveTier, style: DeepseekWaveStyle = 'wave'): boolean {
+  const total = deepseekWaveDuration(tier, style) / 1000
+  const elapsed = (tick * DEEPSEEK_WAVE_TICK_MS) / 1000
+  return envelope(elapsed, total, total * 0.2, total * 0.35) > 0.25
+}
 
 /**
- * The ❯ prompt marker color at frame `tick`: the border wave sampled
- * {@link DEEPSEEK_WAVE_PROMPT_LAG} frames late and blended toward the static
- * brand prompt tone, so the marker starts and ends exactly at its static
- * brand color — a glowing echo of the border wave with no end-of-wave snap.
- * @param tick - wave frame (0..DEEPSEEK_WAVE_FRAMES-1).
- * @param colors - theme anchors from the active palette.
- * @returns the RGB triple for the prompt marker at that frame.
+ * The per-character color for the `deepseek` wordmark: the tier's hues
+ * cycled per character (d→hue0, e→hue1, e→hue2, …), a brand-gradient text.
+ * @param index - character index in the wordmark.
+ * @param hues - the tier's three hues.
+ * @returns the hue for that character.
  */
-export function deepseekWavePromptColor(tick: number, colors: DeepseekWaveColors): RgbTriple {
-  const position = wavePosition(waveProgress(tick - DEEPSEEK_WAVE_PROMPT_LAG))
-  return lerpRgb(colors.brand, wavePathColor(position, colors), position)
+export function deepseekWaveWordHue(index: number, hues: readonly [RgbTriple, RgbTriple, RgbTriple]): RgbTriple {
+  return hues[index % hues.length]!
 }
 
 /**

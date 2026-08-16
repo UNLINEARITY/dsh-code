@@ -371,8 +371,9 @@ describe('exclusive panel height budgets', () => {
       expect(output.lastIndexOf('type a message')).toBeLessThan(output.lastIndexOf('test/model'))
       expect(output).not.toContain('\x1b[2J')
       // Accumulated frames (input echo + open panel) each carry the two-row
-      // status chrome, so the newline total may exceed the row count by the
-      // second status row per frame; the single-frame height stays bounded.
+      // status chrome and the padded composer band (two blank rows), so the
+      // newline total may exceed the row count by that per-frame surplus;
+      // the single-frame height stays bounded.
       expect(output.split('\n').length).toBeLessThanOrEqual(stdout.rows + 2)
 
       // Space at the first row (model) disables it: the live footer loses

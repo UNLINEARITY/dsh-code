@@ -30,6 +30,7 @@ import {
   getTheme,
   inkColor,
   setTheme,
+  type RgbTriple,
   type ThemeName,
 } from './theme.ts'
 import { ThemePanel } from './theme-panel.ts'
@@ -41,13 +42,21 @@ import type { ToolDetail } from './render/tool-detail.ts'
 import {
   busyChaseFrame,
   caretVisible,
-  DEEPSEEK_WAVE_FRAMES,
-  DEEPSEEK_WAVE_INTERVAL_MS,
-  deepseekWaveColor,
-  deepseekWavePromptColor,
+  DEEPSEEK_WAVE_TICK_MS,
+  deepseekWaveBorderColor,
+  deepseekWaveColumnBg,
+  deepseekWaveDuration,
+  deepseekWaveSpark,
+  deepseekWaveStyleRandom,
+  deepseekWaveTier,
+  deepseekWaveWordHue,
+  deepseekWaveWordVisible,
   isOfficialDeepSeekLabel,
   pulseFrame,
-  type DeepseekWaveColors,
+  WAVE_BASE_DARK,
+  WAVE_BASE_LIGHT,
+  type DeepseekWaveStyle,
+  type DeepseekWaveTier,
 } from './render/animations.ts'
 import type { ApprovalSnapshot, ApprovalStore } from './approval.ts'
 import type { CommandsView } from './commands.ts'
@@ -721,24 +730,24 @@ function statusToneProps(tone: StatusTone): {
  * truncation degrades groups, it never wraps a row.
  *
  * The DeepSeek easter egg: when the model label *switches* to an official
- * DeepSeek route, the composer frame plays a one-shot eased blue swell
- * (32 × 60ms ≈ 1.9s) and returns to static. The wave only recolors the
- * existing border and prompt — same characters, same width — so the row
- * budget is untouched and every other status figure stays visible throughout.
+ * DeepSeek route, the composer's INPUT ROW (not the frame) plays Codex's
+ * effort-ignition "Wave" — a blue crest sweeping the content row column by
+ * column, with the `· ✦ ✧` sparkles on the deepseek tier — and the prompt
+ * marker keeps the tier accent afterwards. The border stays a constant
+ * static dim; only the row's per-column background tints during the wave,
+ * so the row and column budget is untouched throughout.
  */
 
 /** Theme anchors for the one-shot composer wave, read from the active palette
- * so the eased swell stays coordinated in both themes. The pure interpolation
- * lives in animations.ts; this module only supplies the colors and the timer. */
-function deepseekWaveColors(): DeepseekWaveColors {
+ * so the wave stays coordinated in both themes. The flash tier runs the
+ * brand blues; the deepseek tier swaps in the code sky-blue for a brighter,
+ * richer mix. Codex's Wave bands carry no hue index (only hues[0] tints the
+ * row), so the accent the prompt keeps is always hues[0]. */
+function deepseekWaveHues(tier: DeepseekWaveTier): readonly [RgbTriple, RgbTriple, RgbTriple] {
   const palette = getPalette()
-  return {
-    calm: palette.dim,
-    deep: palette.brandDeep,
-    brand: palette.brand,
-    mid: palette.brandMid,
-    bright: palette.brandBright,
-  }
+  return tier === 'flash'
+    ? [palette.brandBright, palette.brand, palette.brandMid]
+    : [palette.brandBright, palette.code, palette.brandMid]
 }
 
 function StatusLine({ facts, stats, busy, columns, items }: {
@@ -1420,6 +1429,59 @@ function editorWindow(value: string, cursor: number, columns: number): { before:
   return { before, caret, after }
 }
 
+/** The empty-composer placeholder text (shared by the static and wave paths). */
+const COMPOSER_PLACEHOLDER = 'type a message · / commands · @ mentions'
+
+/** One physical cell of the wave-painted composer row: a char plus styles. */
+interface ComposerCell {
+  char: string
+  color?: string
+  backgroundColor?: string
+  bold?: boolean
+  inverse?: boolean
+  dim?: boolean
+}
+
+/** Adjacent cells with identical styling merge into one styled Text span. */
+function sameCellStyle(a: ComposerCell, b: ComposerCell): boolean {
+  return a.color === b.color
+    && a.backgroundColor === b.backgroundColor
+    && a.bold === b.bold
+    && a.inverse === b.inverse
+    && a.dim === b.dim
+}
+
+/**
+ * Render the wave row as one Text whose cells carry per-column
+ * `backgroundColor` runs: the Codex Wave crest paints a smooth gradient
+ * (one SGR run per sampled column) over the prompt, draft, cursor,
+ * placeholder, and the trailing blank fill — the draft stays readable
+ * because the tint blends at ≤ 0.55 toward the theme's blank-cell base.
+ */
+function waveRowSpans(cells: readonly ComposerCell[]): ReactElement[] {
+  const spans: ReactElement[] = []
+  let start = 0
+  while (start < cells.length) {
+    const cell = cells[start]!
+    let end = start + 1
+    while (end < cells.length && sameCellStyle(cells[end]!, cell)) end += 1
+    spans.push(createElement(
+      Text,
+      {
+        key: start,
+        color: cell.color,
+        backgroundColor: cell.backgroundColor,
+        bold: cell.bold,
+        inverse: cell.inverse,
+        dimColor: cell.dim,
+      },
+      cells.slice(start, end).map(c => c.char).join(''),
+    ))
+    start = end
+  }
+  return spans
+}
+
 /**
  * The Ctrl+O transcript inspector: one selected durable entry at a time,
  * with independent history selection and content scrolling. The complete
@@ -1715,7 +1777,7 @@ function CompletionMenu({ active, mention, index, rows }: {
  * While a modal (approval / question / model panel) owns the keys, the
  * box passes every key through untouched.
  */
-function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openEffort, openHelp, openMode, openResume, openPlugin, openStatusline, openTheme, openHistory, createSession, cancelSessionSwitch, notify, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, cyclePermission, exportTranscript, renameTitle, recallSpace, recordLocal, recordHistory, queued, cancelQueued, historyFill, historyConsumed, waveTick }: {
+function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openEffort, openHelp, openMode, openResume, openPlugin, openStatusline, openTheme, openHistory, createSession, cancelSessionSwitch, notify, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, cyclePermission, exportTranscript, renameTitle, recallSpace, recordLocal, recordHistory, queued, cancelQueued, historyFill, historyConsumed, waveTick, waveTier, waveStyle }: {
   active: boolean
   frozen: boolean
   busy: boolean
@@ -1761,9 +1823,14 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   historyFill: { text: string; index: number } | undefined
   /** Marks the accepted entry consumed (called after the fill is applied). */
   historyConsumed(): void
-  /** DeepSeek easter-egg wave frame (null when static): the composer border
-   * and prompt ride the one-shot eased blue swell (~1.9s). */
+  /** DeepSeek easter-egg wave frame (null when static): the composer's input
+   * row rides Codex's Wave sweep (33ms tick, 1.0s flash / 1.3s deepseek). */
   waveTick: number | null
+  /** The wave tier of the applied official DeepSeek model (null otherwise):
+   * drives the persistent prompt glyph/accent and the sparkle tier. */
+  waveTier: DeepseekWaveTier | null
+  /** The ignition style running, if any: Wave / Aurora / Pulse. */
+  waveStyle: DeepseekWaveStyle | null
 }): ReactElement {
   const columns = useStdout().stdout?.columns ?? 80
   const [value, setValue] = useState('')
@@ -2171,60 +2238,136 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
 
   // Every exclusive panel keeps the composer as a stable visual anchor, but
   // freezes it to one row: no menu, multiline wrap, or animation.
-  const waveColors = deepseekWaveColors()
-  const waveFrame = waveTick === null ? null : inkColor(deepseekWaveColor(waveTick, waveColors))
-  const promptColor = waveTick === null
-    ? inkColor(getPalette().brand)
-    : inkColor(deepseekWavePromptColor(waveTick, waveColors))
+  const tierActive = waveTier !== null
+  const tierHues = waveTier === null ? null : deepseekWaveHues(waveTier)
+  const promptColor = tierHues === null ? inkColor(getPalette().brand) : inkColor(tierHues[0])
+  const promptGlyph = waveTier === 'flash' ? '›' : waveTier === 'deepseek' ? '»' : '❯'
   if (frozen) {
     const frozen = value === ''
       ? 'type a message'
       : verboseLine(value, Math.max(1, columns - 6))
     return createElement(
       Box,
-      { width: Math.max(1, columns - 1), borderStyle: 'round', borderColor: waveFrame === null ? inkColor(getPalette().dim) : waveFrame, paddingX: 1 },
+      { width: Math.max(1, columns - 1), borderStyle: 'round', borderColor: inkColor(getPalette().dim), paddingX: 1 },
       createElement(
         Text,
         { wrap: 'truncate-end' },
-        createElement(Text, { color: promptColor }, busy ? '… ' : '❯ '),
+        createElement(Text, { color: promptColor, bold: tierActive ? true : undefined }, busy ? '… ' : `${promptGlyph} `),
         frozen,
       ),
     )
   }
 
+  // The bordered frame: static dim at rest; while the wave runs the border
+  // breathes with the sweep (dim blends toward the tier accent and back), so
+  // the frame glows up while the crest crosses the row.
+  const frame = (row: ReactElement, borderRgb?: RgbTriple): ReactElement => createElement(
+    Box,
+    { width: Math.max(1, columns - 1), borderStyle: 'round', borderColor: inkColor(borderRgb ?? getPalette().dim), paddingX: 1 },
+    row,
+  )
+  const menu = createElement(CompletionMenu, {
+    active: menuActive,
+    mention: mentionActive,
+    index: completionIndex,
+    rows: menuRows,
+  })
+
+  // Static row (idle, busy, or after the wave): prompt + editor window. The
+  // prompt marker keeps the tier accent while an official DeepSeek model is
+  // applied, restoring the static brand ❯ on any other route.
   const editor = editorWindow(value, cursor, Math.max(1, columns - 6))
+  const staticRow = createElement(
+    Text,
+    { wrap: 'truncate-end' },
+    busy
+      ? createElement(BusyChase)
+      : createElement(Text, { color: promptColor, bold: tierActive ? true : undefined }, `${promptGlyph} `),
+    value === '' ? undefined : editor.before,
+    createElement(CursorBlock, { char: editor.caret }),
+    value === '' && !busy
+      ? createElement(Text, { dimColor: true }, COMPOSER_PLACEHOLDER)
+      : editor.after,
+  )
+
+  // Wave row: the input row assembled column by column, each cell carrying
+  // the sampled wave `backgroundColor` (null outside the crest → transparent),
+  // so the crest sweeps the FULL content row — prompt, draft, cursor,
+  // placeholder, and the trailing blank fill. The deepseek tier drops the
+  // `· ✦ ✧` sparkles into the rightmost blank cell from 900ms on.
+  const waveRow = (): ReactElement => {
+    const contentWidth = Math.max(1, columns - 5)
+    const waveEditor = editorWindow(value, cursor, Math.max(1, contentWidth - 2))
+    const hues = deepseekWaveHues(waveTier!)
+    const style = waveStyle!
+    const base = getTheme() === 'light' ? WAVE_BASE_LIGHT : WAVE_BASE_DARK
+    const waveBg = (column: number): string | undefined => {
+      const rgb = deepseekWaveColumnBg(waveTick!, column, contentWidth, waveTier!, style, hues, base)
+      return rgb === null ? undefined : inkColor(rgb)
+    }
+    const cells: ComposerCell[] = []
+    cells.push({ char: promptGlyph, color: promptColor, bold: true, backgroundColor: waveBg(0) })
+    cells.push({ char: ' ', color: promptColor, backgroundColor: waveBg(1) })
+    for (const char of waveEditor.before) {
+      cells.push({ char, backgroundColor: waveBg(cells.length) })
+    }
+    cells.push({ char: waveEditor.caret, inverse: true, backgroundColor: waveBg(cells.length) })
+    if (value === '' && !busy) {
+      for (let at = 0; at < COMPOSER_PLACEHOLDER.length; at += 1) {
+        cells.push({ char: COMPOSER_PLACEHOLDER[at]!, dim: true, backgroundColor: waveBg(cells.length) })
+      }
+    } else {
+      for (const char of waveEditor.after) {
+        cells.push({ char, backgroundColor: waveBg(cells.length) })
+      }
+    }
+    while (cells.length < contentWidth) {
+      cells.push({ char: ' ', backgroundColor: waveBg(cells.length) })
+    }
+    // The brand wordmark rides the wave's middle: `deepseek` in the tier's
+    // cycled hues, placed in the row's mid-section and only over blank or
+    // placeholder cells — real draft text is never covered.
+    if (deepseekWaveWordVisible(waveTick!, waveTier!, style)) {
+      const word = 'deepseek'
+      const start = Math.max(2, Math.floor((contentWidth - word.length) / 2))
+      let clear = true
+      for (let at = 0; at < word.length; at += 1) {
+        const cell = cells[start + at]
+        if (cell === undefined || (cell.char !== ' ' && cell.dim !== true)) { clear = false; break }
+      }
+      if (clear) {
+        for (let at = 0; at < word.length; at += 1) {
+          const cell = cells[start + at]!
+          cell.char = word[at]!
+          cell.color = inkColor(deepseekWaveWordHue(at, hues))
+          cell.bold = true
+          cell.dim = false
+        }
+      }
+    }
+    // The tail sparkles belong to the Wave style's deepseek tier only
+    // (Codex paints spark_frame on Wave+Ultra).
+    if (waveTier === 'deepseek' && style === 'wave') {
+      const spark = deepseekWaveSpark(waveTick!)
+      if (spark !== null) {
+        const last = cells[cells.length - 1]
+        if (last !== undefined && last.char === ' ') {
+          last.char = spark
+          last.color = promptColor
+          last.bold = true
+          last.dim = false
+        }
+      }
+    }
+    const borderRgb = deepseekWaveBorderColor(waveTick!, waveTier!, style, hues, getPalette().dim)
+    return frame(createElement(Text, { wrap: 'truncate-end' }, ...waveRowSpans(cells)), borderRgb)
+  }
 
   return createElement(
     Box,
     { flexDirection: 'column' },
-    // The completion dropdown rides directly above the box (Claude-Code
-    // anchor): rendered from the editor's own live state, never lifted.
-    createElement(CompletionMenu, {
-      active: menuActive,
-      mention: mentionActive,
-      index: completionIndex,
-      rows: menuRows,
-    }),
-    // The framed input box: a visible boundary so the prompt never blends
-    // into the transcript above it; the cursor block sits immediately after
-    // the prompt marker (leftmost), with the dim placeholder trailing it —
-    // no extra space, so the empty state reads `❯ ▮type a message…`.
-    createElement(
-      Box,
-      { width: Math.max(1, columns - 1), borderStyle: 'round', borderColor: waveFrame === null ? inkColor(getPalette().dim) : waveFrame, paddingX: 1 },
-      createElement(
-        Text,
-        { wrap: 'truncate-end' },
-        busy
-          ? createElement(BusyChase)
-          : createElement(Text, { color: promptColor }, '❯ '),
-        value === '' ? undefined : editor.before,
-        createElement(CursorBlock, { char: editor.caret }),
-        value === '' && !busy
-          ? createElement(Text, { dimColor: true }, 'type a message · / commands · @ mentions')
-          : editor.after,
-      ),
-    ),
+    menu,
+    waveTick !== null && waveTier !== null && !busy ? waveRow() : frame(staticRow),
   )
 }
 
@@ -2239,31 +2382,57 @@ export function App(props: AppProps): ReactElement {
   const [effortFor, setEffortFor] = useState<ModelRow | undefined>(undefined)
   /** Effective reasoning effort, shown in the /model picker and switch notice. */
   const [effortLabel, setEffortLabel] = useState<string | undefined>(props.effort)
-  /** DeepSeek easter egg: switching INTO an official DeepSeek route plays a
-   * one-shot blue wave across the composer frame (Codex-style frame glow),
-   * then the border returns to static. The trigger follows the applied model
-   * label (what the status bar actually shows), never the initial paint. */
+  /** DeepSeek easter egg: switching INTO an official DeepSeek route plays
+   * one of Codex's three ignition styles (Wave / Aurora / Pulse, picked at
+   * random without repeating) across the composer's padded band (33ms tick,
+   * per-style durations), then the band returns to static while the prompt
+   * marker keeps the tier accent. The trigger follows the applied model
+   * label (what the status bar actually shows), never the initial paint,
+   * and the tier is derived from the label and cached at the switch. */
   const [waveTick, setWaveTick] = useState<number | null>(null)
+  const [waveTier, setWaveTier] = useState<DeepseekWaveTier | null>(null)
+  const [waveStyle, setWaveStyle] = useState<DeepseekWaveStyle | null>(null)
   const previousModel = useRef<string | undefined>(undefined)
+  const previousEffort = useRef<string | undefined>(props.effort)
+  const previousStyle = useRef<DeepseekWaveStyle | undefined>(undefined)
   useEffect(() => {
     const previous = previousModel.current
     previousModel.current = modelLabel
-    if (previous === undefined || previous === modelLabel) return
-    if (isOfficialDeepSeekLabel(modelLabel)) setWaveTick(0)
-  }, [modelLabel])
-  const waveActive = waveTick !== null && waveTick < DEEPSEEK_WAVE_FRAMES
+    // The wave replays when the applied model changes OR its effort level
+    // changes on the same official DeepSeek route (Codex replays the
+    // ignition on effort changes too).
+    const effortChanged = previousEffort.current !== effortLabel
+    previousEffort.current = effortLabel
+    const modelChanged = previous !== undefined && previous !== modelLabel
+    if (!isOfficialDeepSeekLabel(modelLabel)) {
+      setWaveTier(null)
+      setWaveStyle(null)
+      setWaveTick(null)
+      return
+    }
+    if (modelChanged || effortChanged) {
+      setWaveTier(deepseekWaveTier(modelLabel))
+      const nextStyle = deepseekWaveStyleRandom(previousStyle.current)
+      previousStyle.current = nextStyle
+      setWaveStyle(nextStyle)
+      setWaveTick(0)
+    }
+  }, [modelLabel, effortLabel])
+  const waveActive = waveTick !== null && waveTier !== null && waveStyle !== null
+    && waveTick * DEEPSEEK_WAVE_TICK_MS < deepseekWaveDuration(waveTier, waveStyle)
   useEffect(() => {
     if (!waveActive) return
     const id = setInterval(() => {
       setWaveTick(current => (current === null ? 0 : current + 1))
-    }, DEEPSEEK_WAVE_INTERVAL_MS)
+    }, DEEPSEEK_WAVE_TICK_MS)
     return () => {
       clearInterval(id)
     }
   }, [waveActive])
   useEffect(() => {
-    if (waveTick !== null && waveTick >= DEEPSEEK_WAVE_FRAMES) setWaveTick(null)
-  }, [waveTick])
+    if (waveTick !== null && waveTier !== null && waveStyle !== null
+      && waveTick * DEEPSEEK_WAVE_TICK_MS >= deepseekWaveDuration(waveTier, waveStyle)) setWaveTick(null)
+  }, [waveTick, waveTier, waveStyle])
   const [directory, setDirectory] = useState<ModelDirectory | undefined>(undefined)
   const [modelError, setModelError] = useState<string | undefined>(undefined)
   const [modelLoadEpoch, setModelLoadEpoch] = useState(0)
@@ -2728,6 +2897,8 @@ export function App(props: AppProps): ReactElement {
         historyFill,
         historyConsumed,
         waveTick,
+        waveTier,
+        waveStyle,
       }),
       createElement(StatusLine, {
         facts: {

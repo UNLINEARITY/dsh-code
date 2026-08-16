@@ -4,7 +4,7 @@ import { PassThrough } from 'node:stream'
 import chalk from 'chalk'
 import { createElement } from 'react'
 import { render } from 'ink'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { createAssistantMessage, createToolResultMessage, createUserMessage, type CallId } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { App } from '../src/app.ts'
@@ -138,8 +138,8 @@ describe('Ctrl+O history details', () => {
       expect(output.lastIndexOf('draft')).toBeLessThan(output.lastIndexOf('test/model'))
       expect(output).not.toContain('\x1b[2J')
       // A roomy panel may spend two of its bounded rows on title/body/footer
-      // separation; newline splitting includes the final partial row and the
-      // second status row.
+      // separation; newline splitting includes the final partial row, the
+      // padded composer band (two blank rows), and the second status row.
       expect(output.split('\n').length).toBeLessThanOrEqual(Math.floor(stdout.rows / 2) + 2)
 
       output = ''
@@ -260,12 +260,15 @@ describe('Ctrl+O history details', () => {
 })
 
 describe('DeepSeek model-switch easter egg', () => {
-  it('plays the one-shot eased blue swell on the composer after /model selects DeepSeek, then restores static dim', async () => {
+  it('sweeps Codex-style per-column wave backgrounds inside the composer, sparkles on the deepseek tier, then restores static; switching away restores ❯ + brand', async () => {
     // The color assertions need truecolor ANSI output; the default test
     // environment disables colors (chalk level 0), so force level 3 here and
     // restore the baseline in the finally block.
     const originalChalkLevel = chalk.level
     chalk.level = 3
+    // The ignition style is picked at random; pin Math.random to 0 so the
+    // Wave style runs and the deepseek-tier sparkles are guaranteed.
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0)
     const stdin = Object.assign(new PassThrough(), {
       isTTY: true,
       isRaw: false,
@@ -287,8 +290,10 @@ describe('DeepSeek model-switch easter egg', () => {
     })
     const unsubscribe = (): void => {}
     const noop = (): void => {}
+    const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
     const store = createTranscriptStore()
     // The last selectable row is the official DeepSeek route; 'G' jumps to it.
+    // deepseek-reasoner runs the deepseek tier (dual band + sparkles).
     const models = [
       ...Array.from({ length: 30 }, (_, index) => ({
         provider: 'acme',
@@ -296,7 +301,7 @@ describe('DeepSeek model-switch easter egg', () => {
         model: `model-${String(index).padStart(2, '0')}`,
         modelName: `Model ${String(index).padStart(2, '0')}`,
       })),
-      { provider: 'deepseek-official', providerName: 'DeepSeek', model: 'deepseek-v4-flash', modelName: 'DeepSeek-V4-Flash' },
+      { provider: 'deepseek-official', providerName: 'DeepSeek', model: 'deepseek-reasoner', modelName: 'DeepSeek-Reasoner' },
     ]
     const instance = render(createElement(App, {
       store,
@@ -350,9 +355,10 @@ describe('DeepSeek model-switch easter egg', () => {
 
     try {
       await wait()
-      expect(output).not.toContain('deepseek-v4-flash')
+      expect(output).not.toContain('deepseek-reasoner')
 
-      // /model → jump to the bottom (the DeepSeek row) → select it.
+      // /model → jump to the bottom (the DeepSeek row) → select it. The
+      // deepseek tier runs the 1.3s Wave-Ultra sweep plus the tail sparkles.
       output = ''
       stdin.write('/model')
       await wait()
@@ -363,36 +369,58 @@ describe('DeepSeek model-switch easter egg', () => {
       stdin.write('\r')
       await wait()
 
-      const label = 'deepseek-official/deepseek-v4-flash'
-      // The easter egg paints the COMPOSER frame (Codex-style wave): the
-      // round border and prompt marker ride the eased 32-frame swell (~1.9s),
-      // interpolating a smooth stream of brand-blue shades rather than
-      // stepping between four palette tokens. The accumulated truecolor set
-      // therefore grows far beyond the handful of static palette colors while
-      // the wave runs, then freezes once the swell returns the composer to
-      // its static dim frame — proving the one-shot restore.
+      const label = 'deepseek-official/deepseek-reasoner'
       expect(output).toContain(label)
-      const distinctColors = (): number => new Set((output.match(/38;2;\d{1,3};\d{1,3};\d{1,3}/g) ?? [])).size
-      const baseline = distinctColors()
-      await new Promise(resolve => setTimeout(resolve, 1_000))
-      const mid = distinctColors()
-      expect(mid - baseline).toBeGreaterThanOrEqual(12) // smooth multi-shade gradient
-      await new Promise(resolve => setTimeout(resolve, 1_600)) // wave over (~1.9s)
-      const settled = distinctColors()
-      expect(settled).toBeGreaterThanOrEqual(mid)
-      await new Promise(resolve => setTimeout(resolve, 1_000))
-      expect(distinctColors()).toBe(settled) // no new wave frames
-      // The static frame shows the dim composer border and the code-blue
-      // model name throughout.
-      expect(output).toContain('38;2;129;133;140') // dim border
-      expect(output).toContain('38;2;125;211;252') // model name, code tone
+      // The persistent prompt marker switched to the deepseek tier glyph » in
+      // the tier accent (brandBright in the dark palette) — no border wave.
+      expect(output).toContain('»')
+      expect(output).not.toContain('48;2;')
+
+      // Mid-wave (~0.7s in): the input row paints per-column wave backgrounds
+      // (a truecolor `48;2;` run per sampled gradient column) while the draft
+      // area stays readable — the tint blends at ≤ 0.55 toward the base.
+      await sleep(700)
+      const distinctBg = (): number => new Set((output.match(/48;2;\d{1,3};\d{1,3};\d{1,3}/g) ?? [])).size
+      expect(distinctBg()).toBeGreaterThanOrEqual(5)
+
+      // ~1.5s in: the deepseek tier has dropped the `· ✦ ✧` sparkle sequence
+      // (900ms..1200ms of the wave) into the rightmost blank cell.
+      await sleep(800)
+      expect(output).toContain('✦')
+      expect(output).toContain('✧')
+
+      // Past the 1.3s duration: fresh frames carry no wave backgrounds and no
+      // sparkles — the row returns to transparent (no `backgroundColor`).
+      await sleep(900)
+      const settled = output.length
+      await sleep(400)
+      const settledDelta = output.slice(settled)
+      expect(settledDelta).not.toMatch(/48;2;/)
+      expect(settledDelta).not.toContain('✦')
+
+      // Switch away from DeepSeek: the prompt restores the static brand ❯ and
+      // drops the » glyph — the tier accent is not sticky on other routes.
+      // The panel-open frames still show the tier » in the frozen composer,
+      // so the brand ❯ must be the LAST prompt painted after the selection.
+      output = ''
+      stdin.write('/model')
+      await wait()
+      stdin.write('\r')
+      await wait()
+      const away = output.length
+      stdin.write('\r')
+      await wait()
+      const awayDelta = output.slice(away)
+      expect(awayDelta).toMatch(/38;2;65;118;230m❯/)
+      expect(awayDelta.lastIndexOf('»')).toBeLessThan(awayDelta.lastIndexOf('38;2;65;118;230m❯'))
     } finally {
       instance.unmount()
       stdin.destroy()
       stdout.destroy()
       chalk.level = originalChalkLevel
+      randomSpy.mockRestore()
     }
-  }, 15_000)
+  }, 20_000)
 })
 
 describe('Ctrl+R reasoning fold', () => {
