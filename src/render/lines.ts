@@ -83,6 +83,26 @@ export function markdownLines(text: string, columns: number): readonly StyledLin
   ))
 }
 
+/**
+ * Codex-style reasoning rows: the marker occupies the reply gutter and every
+ * wrapped or explicit continuation starts with the same two-column indent, so
+ * reasoning content and assistant Markdown share one left edge.
+ */
+export function reasoningLines(text: string, columns: number): readonly StyledLine[] {
+  const width = Math.max(1, Math.floor(columns))
+  if (width < 3) return textLines(text, width, 'dimItalic')
+  const contentWidth = width - 2
+  const content = displayText(text).replaceAll('\t', '  ').replaceAll('\r', '')
+    .split('\n')
+    .flatMap(line => styledLines([lineSegment(line, 'dimItalic')], contentWidth))
+  return content.map((line, index) => ({
+    segments: [
+      lineSegment(index === 0 ? '✻ ' : '  ', 'dimItalic'),
+      ...line.segments,
+    ],
+  }))
+}
+
 /** Expanded structured tool detail as scrollable, width-safe rows. */
 function toolDetailLines(detail: ToolDetail, columns: number): readonly StyledLine[] {
   switch (detail.kind) {
@@ -151,12 +171,7 @@ export function transcriptEntryLines(entry: TranscriptEntry, columns: number): r
         lineSegment(entry.text, 'plain'),
       ], width)
     case 'assistant': {
-      const reasoning = entry.reasoning === ''
-        ? []
-        : styledLines([
-          lineSegment('  ✻ ', 'dimItalic'),
-          lineSegment(entry.reasoning, 'dimItalic'),
-        ], width)
+      const reasoning = entry.reasoning === '' ? [] : reasoningLines(entry.reasoning, width)
       // Every reply row carries the composer's two-column gutter, so reply
       // text aligns with the input cursor (Codex LIVE_PREFIX alignment); the
       // wrap budget shrinks by the same amount so no line double-wraps.

@@ -108,6 +108,7 @@ import {
 import {
   lineSegment,
   markdownLines,
+  reasoningLines,
   styledLines,
   textLines,
   transcriptEntryLines,
@@ -290,30 +291,40 @@ function DeepDivingLine({ since }: { since: number }): ReactElement {
  * the freshest tokens stay visible while a long reply streams; the complete
  * text lands in the flushed scrollback once the turn assembles it.
  */
-function StreamTail({ text, dim, maxRows, prefix, children }: {
+function StreamTail({ text, dim, maxRows, prefix = '', continuationPrefix = prefix, children }: {
   text: string
   dim: boolean
   maxRows: number
   prefix?: string
+  continuationPrefix?: string
   children?: ReactElement
 }): ReactElement {
   const columns = useStdout().stdout?.columns ?? 80
   const safeRows = Math.max(1, maxRows)
   // App padding consumes two columns; the final extra column keeps a caret
-  // from wrapping onto an unbudgeted row.
-  const contentColumns = Math.max(10, columns - 3 - visibleColumns(prefix ?? ''))
+  // from wrapping onto an unbudgeted row. Both prefixes participate because
+  // every physical row now repeats its hanging indent.
+  const prefixColumns = Math.max(visibleColumns(prefix), visibleColumns(continuationPrefix))
+  const contentColumns = Math.max(10, columns - 3 - prefixColumns)
   const initial = displayTail(text, contentColumns, safeRows)
   // Reserve one row for the omission marker only when a marker is needed.
   const tail = initial.truncated && safeRows > 1
     ? displayTail(text, contentColumns, safeRows - 1)
     : initial
+  const rows = tail.text.split('\n')
   return createElement(
     Box,
     { flexDirection: 'column' },
     tail.truncated && safeRows > 1
-      ? createElement(Text, { dimColor: true }, '  …')
+      ? createElement(Text, { color: inkColor(getPalette().dim) }, continuationPrefix, '…')
       : undefined,
-    createElement(Text, { dimColor: dim || undefined }, prefix, tail.text, children),
+    ...rows.map((row, index) => createElement(
+      Text,
+      { key: index, dimColor: dim || undefined },
+      index === 0 ? prefix : continuationPrefix,
+      row,
+      index + 1 === rows.length ? children : undefined,
+    )),
   )
 }
 
@@ -327,6 +338,8 @@ function segmentProps(style: MdSegment['style']): {
   switch (style) {
     case 'accent':
       return { color: inkColor(getPalette().brandBright), bold: undefined, italic: undefined, strikethrough: undefined }
+    case 'accentBold':
+      return { color: inkColor(getPalette().brandBright), bold: true, italic: undefined, strikethrough: undefined }
     case 'code':
       return { color: inkColor(getPalette().code), bold: undefined, italic: undefined, strikethrough: undefined }
     case 'dim':
@@ -362,7 +375,7 @@ function lineStyleProps(style: LineStyle): {
     case 'warn':
       return { color: inkColor(getPalette().warn), bold: undefined, italic: undefined, strikethrough: undefined, dimColor: undefined }
     case 'dimItalic':
-      return { color: undefined, bold: undefined, italic: true, strikethrough: undefined, dimColor: true }
+      return { color: inkColor(getPalette().dim), bold: undefined, italic: true, strikethrough: undefined, dimColor: undefined }
     default:
       return { ...segmentProps(style), dimColor: undefined }
   }
@@ -413,6 +426,13 @@ function MarkdownBody({ text, indent = 0 }: { text: string; indent?: number }): 
         : line.segments.map((segment, at) => createElement(Text, { key: at, ...segmentProps(segment.style) }, segment.text)),
     )),
   )
+}
+
+/** Expanded reasoning with the same two-column content edge as the reply. */
+function ReasoningBody({ text }: { text: string }): ReactElement {
+  const columns = useStdout().stdout?.columns ?? 80
+  const lines = useMemo(() => reasoningLines(text, Math.max(10, columns - 2)), [text, columns])
+  return createElement(StyledRows, { lines })
 }
 
 /**
@@ -500,8 +520,8 @@ function EntryLine({ entry, showReasoning, verbose }: { entry: TranscriptEntry; 
         entry.reasoning === ''
           ? undefined
           : showReasoning
-            ? createElement(Text, { dimColor: true, italic: true }, `  ✻ ${displayText(entry.reasoning)}`)
-            : createElement(Text, { dimColor: true }, `  ✻ Thinking (${entry.reasoning.length} chars, Ctrl+R to expand)`),
+            ? createElement(ReasoningBody, { text: entry.reasoning })
+            : createElement(Text, { color: inkColor(getPalette().dim) }, `✻ Thinking (${entry.reasoning.length} chars, Ctrl+R to expand)`),
         createElement(MarkdownBody, { text: entry.text, indent: 2 }),
       )
     case 'tool': {
@@ -2853,7 +2873,8 @@ export function App(props: AppProps): ReactElement {
         view.streamingReasoning !== '' && reasoningRows > 0
           ? createElement(StreamTail, {
             text: showReasoning ? view.streamingReasoning : 'Thinking…',
-            prefix: '  ✻ ',
+            prefix: '✻ ',
+            continuationPrefix: '  ',
             dim: true,
             maxRows: reasoningRows,
           })

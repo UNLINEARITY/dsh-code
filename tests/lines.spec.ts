@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from 'vitest'
 import { visibleColumns } from '../src/render/markdown.ts'
-import { styledLines, lineSegment, transcriptEntryLines } from '../src/render/lines.ts'
+import { styledLines, lineSegment, reasoningLines, transcriptEntryLines } from '../src/render/lines.ts'
 import type { TranscriptEntry } from '../src/render/projection.ts'
 
 const textOf = (lines: ReturnType<typeof styledLines>): string => lines
@@ -46,6 +46,25 @@ describe('styled terminal lines', () => {
     const lines = transcriptEntryLines(entry, 40)
     for (const line of lines) {
       expect(line.segments[0]).toEqual({ text: '  ', style: 'plain' })
+    }
+  })
+
+  it('gives reasoning a Codex-style hanging indent aligned with reply text', () => {
+    const entry: TranscriptEntry = { kind: 'assistant', reasoning: 'first thought\nsecond thought', text: 'answer' }
+    expect(textOf(transcriptEntryLines(entry, 40)).split('\n')).toEqual([
+      '✻ first thought',
+      '  second thought',
+      '  answer',
+    ])
+  })
+
+  it('repeats the reasoning indent on every wrapped physical row', () => {
+    const lines = reasoningLines('one two three four five', 12)
+    expect(lines.length).toBeGreaterThan(1)
+    expect(textOf(lines).split('\n')[0]).toMatch(/^✻ /u)
+    for (const line of textOf(lines).split('\n').slice(1)) expect(line).toMatch(/^  /u)
+    for (const line of lines) {
+      expect(visibleColumns(line.segments.map(segment => segment.text).join(''))).toBeLessThanOrEqual(12)
     }
   })
 

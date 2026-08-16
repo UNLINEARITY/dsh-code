@@ -99,6 +99,61 @@ describe('renderMarkdown', () => {
   it('never throws on unbalanced syntax', () => {
     expect(() => renderMarkdown('**open and `code', 40)).not.toThrow()
   })
+
+  it('renders GFM tables as an aligned borderless grid', () => {
+    const lines = renderMarkdown([
+      '| Name | Status |',
+      '| :--- | ---: |',
+      '| API | Ready |',
+      '| CLI | Busy |',
+    ].join('\n'), 40)
+    expect(text(lines)).toEqual([
+      ' Name   Status',
+      '━━━━━  ━━━━━━━',
+      ' API     Ready',
+      '─────  ───────',
+      ' CLI      Busy',
+    ])
+    expect(lines[0]!.segments.filter(segment => segment.text.trim() !== '').every(segment => segment.style === 'accentBold')).toBe(true)
+    expect(lines[1]!.segments).toEqual([{ text: '━━━━━  ━━━━━━━', style: 'dim' }])
+  })
+
+  it('keeps inline markdown styles inside table cells', () => {
+    const lines = renderMarkdown('| Item | Value |\n| --- | --- |\n| **API** | `ready` |', 40)
+    expect(lines.flatMap(line => line.segments).some(segment => segment.text === 'API' && segment.style === 'bold')).toBe(true)
+    expect(lines.flatMap(line => line.segments).some(segment => segment.text === 'ready' && segment.style === 'code')).toBe(true)
+  })
+
+  it('falls back to stacked records when a grid cannot stay readable', () => {
+    const lines = renderMarkdown([
+      '| Key | State | Owner | Note |',
+      '| --- | --- | --- | --- |',
+      '| api | ready | ops | production route |',
+      '| cli | busy | tui | terminal renderer |',
+    ].join('\n'), 20)
+    const rendered = text(lines)
+    expect(rendered).toContain(' Key')
+    expect(rendered).toContain('  api')
+    expect(rendered).toContain(' Note')
+    expect(rendered).not.toContain('| --- |')
+    expect(rendered.some(line => /^─+$/u.test(line))).toBe(true)
+    for (const line of rendered) expect(visibleColumns(line)).toBeLessThanOrEqual(20)
+  })
+
+  it('uses records instead of fragmenting a prose-heavy three-column grid', () => {
+    const lines = renderMarkdown([
+      '| Option | Description | State |',
+      '| --- | --- | ---: |',
+      '| --verbose | Enable detailed diagnostic output for troubleshooting | Ready |',
+      '| --quiet | Suppress ordinary progress messages | Busy |',
+    ].join('\n'), 20)
+    const rendered = text(lines)
+    expect(rendered).toContain(' Option')
+    expect(rendered).toContain('  --verbose')
+    expect(rendered).toContain(' Description')
+    expect(rendered).not.toContain(' Opti   Desc   State')
+    for (const line of rendered) expect(visibleColumns(line)).toBeLessThanOrEqual(20)
+  })
 })
 
 describe('renderMarkdown tab normalization', () => {
