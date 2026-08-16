@@ -34,6 +34,13 @@ import { mountApprovalAnswerer, type ApprovalStore } from './approval.ts'
 import { isSlashLine, watchCommands, type CommandsView } from './commands.ts'
 import { internals, type TuiMount } from './internals.ts'
 import { buildModelSelection, loadModelDirectory, resolveEffectiveSelection, type ModelRow } from './models.ts'
+import {
+  loadProviderSettings,
+  removeProviderSettings,
+  saveProviderCredential,
+  subscribeProviderSettings,
+  unsetProviderCredential,
+} from './provider-settings.ts'
 import { createMentions, type MentionsApi } from './mentions.ts'
 import { mountQuestionProvider, type QuestionStore } from './questions.ts'
 import { createTranscriptStore, type TranscriptStore } from './store.ts'
@@ -1059,6 +1066,11 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       interrupt,
       quit,
       loadModels: () => loadModelDirectory(ctx),
+      loadModelProviders: () => loadProviderSettings(ctx),
+      subscribeModelProviders: listener => subscribeProviderSettings(ctx, listener),
+      saveModelProviderCredential: (target, key) => saveProviderCredential(ctx, target, key),
+      unsetModelProviderCredential: target => unsetProviderCredential(ctx, target),
+      removeModelProvider: target => removeProviderSettings(ctx, target),
       loadMentions: (query: string, signal?: AbortSignal) => mentions.candidates(query, signal),
       cyclePermission,
       selectModel,

@@ -34,7 +34,7 @@ The interface follows familiar terminal conventions, while runtime behavior cont
 
 ## 2. Quick start
 
-Requires Node `^22.19 || >=24`, the preview `dsh` CLI, and `DEEPSEEK_API_KEY`.
+Requires Node `^22.19 || >=24` and the preview `dsh` CLI. `DEEPSEEK_API_KEY` is not a startup prerequisite: the TUI, sessions, and non-model features remain available without it; press `a` in `/model` to add an API key through the Harness credentials service.
 
 ```sh
 npm install -g @deepseek-ai/dsh dsh-code
@@ -91,7 +91,7 @@ Inside the TUI:
 | `/new [preset]` | Create and enter another session without restarting the terminal |
 | `/resume [id\|prefix]` | Search root sessions or all conversations; filter by cwd, order, and density |
 | `/mode [preset]` | Inspect or select the blank session's Agent composition |
-| `/model` | Switch among models advertised by the live LLM registry |
+| `/model` | Switch among models from the live LLM registry; press `a` to manage providers and API keys |
 | `/plugin [query]` | Inspect loader entries, enabled state, module identity, and fiber phase |
 | `/permission <name>` | Change the permission preset; Shift+Tab cycles presets |
 | `/help` | Browse local commands, Harness commands, skills, and key bindings |
@@ -100,6 +100,8 @@ Inside the TUI:
 | `@` | Mention workspace files or bounded snapshots of persisted sessions |
 | `Esc` / `Ctrl+C` | Close the topmost surface or interrupt the active turn |
 
+The `/model` provider panel reads only credential configuration, source, and writability facts. Typed keys stay masked and are handed directly to Harness persistence. Keys supplied by the launch environment are shown as read-only and cannot be overwritten or removed in the TUI.
+
 ## 4. Features
 
 ### 1. Agent and extensions
@@ -107,7 +109,7 @@ Inside the TUI:
 - Per-session Agent Presets for tools, prompt sections, skills, compaction, plan mode, and delegation
 - Live slash-command and skill discovery from shared Harness registries
 - Read-only Cordis loader diagnostics through `/plugin`
-- Model routing through the live LLM registry, restored per persisted session
+- Model routing through the live LLM registry, restored per persisted session; `/model` can add or rotate keys, remove writable keys, and delete user-added provider profiles
 - Plans, goals, todos, permissions, sandbox state, subagents, and runtime steering
 
 ### 2. Sessions and context

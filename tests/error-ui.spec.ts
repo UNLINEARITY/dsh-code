@@ -8,10 +8,14 @@ import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { App, type AppProps } from '../src/app.ts'
 import { createTranscriptStore } from '../src/store.ts'
 import { DEFAULT_STATUSLINE_ITEMS } from '../src/render/status.ts'
+import type { ProviderTargetView } from '../src/provider-settings.ts'
 
 const wait = async (): Promise<void> => new Promise(resolve => setTimeout(resolve, 100))
 
-function renderApp(overrides: Partial<AppProps> = {}): {
+function renderApp(
+  overrides: Partial<AppProps> = {},
+  terminal: { columns?: number; rows?: number } = {},
+): {
   stdin: NodeJS.ReadStream
   stdout: NodeJS.WriteStream
   output(): string
@@ -31,8 +35,8 @@ function renderApp(overrides: Partial<AppProps> = {}): {
   }) as unknown as NodeJS.ReadStream
   const stdout = Object.assign(new PassThrough(), {
     isTTY: true,
-    columns: 64,
-    rows: 20,
+    columns: terminal.columns ?? 64,
+    rows: terminal.rows ?? 20,
   }) as unknown as NodeJS.WriteStream
   let captured = ''
   stdout.on('data', chunk => {
@@ -201,6 +205,171 @@ describe('/model error recovery', () => {
       expect(app.output()).toContain('model switch failed: route offline ↵ retry later')
       expect(app.output()).toContain('/model')
       expect(app.output()).toContain('test/model')
+    } finally {
+      app.unmount()
+    }
+  })
+})
+
+describe('/model provider credentials', () => {
+  const provider = (overrides: Partial<ProviderTargetView> = {}): ProviderTargetView => ({
+    provider: 'deepseek-official',
+    displayName: 'DeepSeek',
+    active: true,
+    settingsNs: 'llm-deepseek',
+    settingsPath: [],
+    settingsRevision: 1,
+    configured: true,
+    removable: false,
+    credentialRef: 'DEEPSEEK_API_KEY',
+    suggestedRef: 'DEEPSEEK_OFFICIAL_API_KEY',
+    credential: { kind: 'facts', configured: false, writable: true },
+    ...overrides,
+  })
+
+  it('opens from the model list, masks the key, saves it, and returns to model selection', async () => {
+    let saved = ''
+    let current = provider()
+    let invalidate: (() => void) | undefined
+    let unsubscribed = false
+    const app = renderApp({
+      loadModels: async () => ({
+        rows: [{ provider: 'deepseek-official', providerName: 'DeepSeek', model: 'flash', modelName: 'Flash' }],
+        failures: [],
+      }),
+      loadModelProviders: async () => ({ rows: [current], writable: true, failures: [] }),
+      subscribeModelProviders: listener => {
+        invalidate = listener
+        return () => { unsubscribed = true; invalidate = undefined }
+      },
+      saveModelProviderCredential: async (_target, key) => { saved = key },
+      unsetModelProviderCredential: async () => {},
+      removeModelProvider: async () => {},
+    })
+    try {
+      await wait()
+      app.stdin.push('/model')
+      await wait()
+      app.stdin.push('\r')
+      await wait()
+      expect(app.output()).toContain('a providers')
+
+      app.clearOutput()
+      app.stdin.push('a')
+      await wait()
+      expect(app.output()).toContain('/model — providers')
+      expect(app.output()).toContain('key missing')
+
+      current = provider({ credential: { kind: 'facts', configured: true, source: 'file', writable: true } })
+      invalidate?.()
+      await wait()
+      expect(app.output()).toContain('key file')
+
+      app.clearOutput()
+      app.stdin.push('\r')
+      await wait()
+      expect(app.output()).toContain('/model — add API key')
+      app.clearOutput()
+      app.stdin.push('sk-super-secret')
+      await wait()
+      expect(app.output()).toContain('••••')
+      expect(app.output()).not.toContain('sk-super-secret')
+
+      app.stdin.push('\r')
+      await wait()
+      expect(saved).toBe('sk-super-secret')
+      expect(app.output()).toContain('API key saved for DeepSeek; select a model')
+      expect(app.output()).toContain('DeepSeek · Flash')
+    } finally {
+      app.unmount()
+    }
+    await wait()
+    expect(unsubscribed).toBe(true)
+  })
+
+  it('keeps masked input and save failures inside the five-row panel budget', async () => {
+    const row = provider()
+    const app = renderApp({
+      loadModels: async () => ({ rows: [], failures: [] }),
+      loadModelProviders: async () => ({ rows: [row], writable: true, failures: [] }),
+      saveModelProviderCredential: async () => { throw new Error('credential store unavailable') },
+      unsetModelProviderCredential: async () => {},
+      removeModelProvider: async () => {},
+    }, { columns: 64, rows: 14 })
+    try {
+      await wait()
+      app.stdin.push('/model')
+      await wait()
+      app.stdin.push('\r')
+      await wait()
+      app.stdin.push('a')
+      await wait()
+      app.stdin.push('\r')
+      await wait()
+      expect(app.output()).toContain('/model — add API key')
+
+      app.clearOutput()
+      app.stdin.push('sk-short-terminal-secret')
+      await wait()
+      expect(app.output()).toContain('••••')
+      expect(app.output()).not.toContain('sk-short-terminal-secret')
+      app.stdin.push('\r')
+      await wait()
+      expect(app.output()).toContain('credential store unavailable')
+      expect(app.output()).not.toContain('\x1b[3J')
+    } finally {
+      app.unmount()
+    }
+  })
+
+  it('confirms key and custom-provider removals while refusing environment-owned keys', async () => {
+    let unsets = 0
+    let removals = 0
+    let current = provider({
+      credential: { kind: 'facts', configured: true, source: 'file', writable: true },
+      removable: true,
+    })
+    const app = renderApp({
+      loadModels: async () => ({ rows: [], failures: [] }),
+      loadModelProviders: async () => ({ rows: [current], writable: true, failures: [] }),
+      saveModelProviderCredential: async () => {},
+      unsetModelProviderCredential: async () => { unsets += 1 },
+      removeModelProvider: async () => { removals += 1 },
+    })
+    try {
+      await wait()
+      app.stdin.push('/model')
+      await wait()
+      app.stdin.push('\r')
+      await wait()
+      app.stdin.push('a')
+      await wait()
+
+      app.clearOutput()
+      app.stdin.push('d')
+      await wait()
+      expect(app.output()).toContain('/model — remove API key')
+      app.stdin.push('y')
+      await wait()
+      expect(unsets).toBe(1)
+      expect(app.output()).toContain('API key removed for DeepSeek')
+
+      app.clearOutput()
+      app.stdin.push('x')
+      await wait()
+      expect(app.output()).toContain('/model — remove provider')
+      app.stdin.push('y')
+      await wait()
+      expect(removals).toBe(1)
+
+      current = provider({ credential: { kind: 'facts', configured: true, source: 'env', writable: false } })
+      app.stdin.push('r')
+      await wait()
+      app.clearOutput()
+      app.stdin.push('d')
+      await wait()
+      expect(app.output()).toContain('supplied read-only by the environment')
+      expect(unsets).toBe(1)
     } finally {
       app.unmount()
     }

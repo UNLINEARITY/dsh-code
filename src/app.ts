@@ -61,6 +61,7 @@ import {
 import type { ApprovalSnapshot, ApprovalStore } from './approval.ts'
 import type { CommandsView } from './commands.ts'
 import type { ModelDirectory, ModelRow } from './models.ts'
+import type { ProviderSettingsDirectory, ProviderTargetView } from './provider-settings.ts'
 import type { QuestionSnapshot, QuestionStore } from './questions.ts'
 import type { SkillsView, SkillRow } from './skills.ts'
 import type { MentionCandidate } from './mentions.ts'
@@ -161,6 +162,16 @@ export interface AppProps {
   loadMentions(query: string, signal?: AbortSignal): Promise<readonly MentionCandidate[]>
   /** Apply one /model selection (with an advertised reasoning effort, when picked); returns the display label. */
   selectModel(row: ModelRow, effortId?: string): string
+  /** Load provider/settings/credential facts for the optional /model provider stage. */
+  loadModelProviders?(): Promise<ProviderSettingsDirectory>
+  /** Subscribe to Harness credential/settings/adapter invalidations while /model is open. */
+  subscribeModelProviders?(listener: () => void): () => void
+  /** Store or rotate one provider credential through the Harness credential service. */
+  saveModelProviderCredential?(target: ProviderTargetView, key: string): Promise<void>
+  /** Remove one writable provider credential without removing its settings profile. */
+  unsetModelProviderCredential?(target: ProviderTargetView): Promise<void>
+  /** Remove one user-owned provider profile and its page-managed credential. */
+  removeModelProvider?(target: ProviderTargetView): Promise<void>
   /** Cycle to the next permission preset (Shift+Tab); returns the new label. */
   cyclePermission(): string
   /** Export the transcript to a markdown file (/export [path]); reports via notices. */
@@ -1196,10 +1207,11 @@ function QuestionBar({ store, snapshot, locked }: { store: QuestionStore; snapsh
 }
 
 /** The /model panel: a scrolling list over the advisory model directory. */
-function ModelPanel({ directory, error, onSelect, onRetry, onClose }: {
+function ModelPanel({ directory, error, onSelect, onProviders, onRetry, onClose }: {
   directory: ModelDirectory | undefined
   error: string | undefined
   onSelect(row: ModelRow): void
+  onProviders?(): void
   onRetry(): void
   onClose(): void
 }): ReactElement {
@@ -1223,6 +1235,10 @@ function ModelPanel({ directory, error, onSelect, onRetry, onClose }: {
     }
     if (input === 'r') {
       onRetry()
+      return
+    }
+    if (input === 'a' && onProviders !== undefined) {
+      onProviders()
       return
     }
     if (rows.length === 0) return
@@ -1257,7 +1273,8 @@ function ModelPanel({ directory, error, onSelect, onRetry, onClose }: {
 
   if (viewport.maxHeight === 0) return createElement(Box, { display: 'none' })
   if (viewport.compact) {
-    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns('/model · r retry · esc/q close', viewport.contentColumns))
+    const providers = onProviders === undefined ? '' : ' · a providers'
+    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(`/model${providers} · r retry · esc/q close`, viewport.contentColumns))
   }
 
   const stateRows: ReactElement[] = directory === undefined && error === undefined
@@ -1283,7 +1300,8 @@ function ModelPanel({ directory, error, onSelect, onRetry, onClose }: {
   // Measurement and rendering share the same physical-row budget: state
   // messages consume body rows before selectable entries, as in Codex's
   // list-selection views.
-  const rowBudget = Math.max(0, viewport.bodyRows - stateRows.length)
+  const visibleStateRows = stateRows.slice(0, viewport.bodyRows)
+  const rowBudget = Math.max(0, viewport.bodyRows - visibleStateRows.length)
   const first = selectionWindow(cursor, rows.length, rowBudget)
   const visible = rowBudget === 0 ? [] : rows.slice(first, first + rowBudget)
   return createElement(
@@ -1291,7 +1309,7 @@ function ModelPanel({ directory, error, onSelect, onRetry, onClose }: {
     { flexDirection: 'column', width: viewport.outerColumns, paddingX: 1, borderStyle: 'round', borderColor: inkColor(getPalette().brand) },
     createElement(Text, { color: inkColor(getPalette().brand), bold: true, wrap: 'truncate-end' }, truncateColumns(`/model — select model${rows.length === 0 ? '' : ` · ${cursor + 1}/${rows.length}`}`, viewport.contentColumns)),
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
-    ...stateRows,
+    ...visibleStateRows,
     ...visible.map((row) => {
       const index = rows.indexOf(row)
       const label = displayText(`${row.providerName} · ${row.modelName}`)
@@ -1306,7 +1324,303 @@ function ModelPanel({ directory, error, onSelect, onRetry, onClose }: {
       )
     }),
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
-    createElement(Text, { dimColor: true, wrap: 'truncate-end' }, dim(truncateColumns('↑↓ move · pgup/pgdn page · g/G ends · enter select · r retry · esc/q close', viewport.contentColumns))),
+    createElement(Text, { dimColor: true, wrap: 'truncate-end' }, dim(truncateColumns(`↑↓ move · pgup/pgdn page · enter select${onProviders === undefined ? '' : ' · a providers'} · r retry · esc/q close`, viewport.contentColumns))),
+  )
+}
+
+/** Compact provider-state copy; only value-free credential facts cross this boundary. */
+function providerStateLabel(row: ProviderTargetView): string {
+  const route = row.active ? 'active' : 'dormant'
+  const credential = row.credential
+  if (credential?.kind === 'error') return `${route} · key status unavailable`
+  if (credential?.kind === 'facts') {
+    if (!credential.configured) return `${route} · key missing`
+    const source = credential.source === undefined ? 'configured' : singleLineText(credential.source)
+    return `${route} · key ${source}${credential.writable ? '' : ' · read-only'}`
+  }
+  return `${route} · ${row.configured ? 'provider auth' : 'not configured'}`
+}
+
+/** The provider-management stage reached from /model with `a`. */
+function ProviderPanel({ directory, error, onCredential, onUnset, onRemove, onRetry, onBack }: {
+  directory: ProviderSettingsDirectory | undefined
+  error: string | undefined
+  onCredential(target: ProviderTargetView): void
+  onUnset(target: ProviderTargetView): void
+  onRemove(target: ProviderTargetView): void
+  onRetry(): void
+  onBack(): void
+}): ReactElement {
+  const stdout = useStdout().stdout
+  const viewport = panelViewport(stdout?.columns ?? 80, stdout?.rows ?? 30)
+  const rows = directory?.rows ?? []
+  const [cursor, setCursor] = useState(0)
+  const [actionError, setActionError] = useState<string | undefined>(undefined)
+
+  useEffect(() => {
+    if (rows.length === 0) {
+      if (cursor !== 0) setCursor(0)
+      return
+    }
+    if (cursor >= rows.length) setCursor(rows.length - 1)
+  }, [rows.length, cursor])
+
+  useStableInput((input, key) => {
+    if (key.escape || input === 'q') {
+      onBack()
+      return
+    }
+    if (input === 'r') {
+      setActionError(undefined)
+      onRetry()
+      return
+    }
+    if (rows.length === 0) return
+    if (key.upArrow) {
+      setActionError(undefined)
+      setCursor(cursor > 0 ? cursor - 1 : rows.length - 1)
+      return
+    }
+    if (key.downArrow) {
+      setActionError(undefined)
+      setCursor(cursor < rows.length - 1 ? cursor + 1 : 0)
+      return
+    }
+    if (key.pageUp) {
+      setActionError(undefined)
+      setCursor(current => Math.max(0, current - Math.max(1, viewport.bodyRows - 1)))
+      return
+    }
+    if (key.pageDown) {
+      setActionError(undefined)
+      setCursor(current => Math.min(rows.length - 1, current + Math.max(1, viewport.bodyRows - 1)))
+      return
+    }
+    const target = rows[cursor]
+    if (target === undefined) return
+    if (input === 'd') {
+      const facts = target.credential
+      if (facts?.kind !== 'facts' || !facts.configured) {
+        setActionError('this provider has no configured API key to remove')
+      } else if (!facts.writable) {
+        setActionError('this API key is supplied read-only by the environment')
+      } else {
+        onUnset(target)
+      }
+      return
+    }
+    if (input === 'x') {
+      if (!target.removable) {
+        setActionError('this provider profile is not removable')
+      } else {
+        onRemove(target)
+      }
+      return
+    }
+    if (key.return) {
+      if (target.settingsNs.length === 0) {
+        setActionError('this provider is not managed by Harness settings')
+      } else if (target.credential?.kind === 'error') {
+        setActionError('credential status is unavailable; retry before writing')
+      } else if (target.credential?.kind === 'facts' && !target.credential.writable) {
+        setActionError('this API key is supplied read-only by the environment')
+      } else if (target.credentialRef === undefined && directory?.writable !== true) {
+        setActionError('settings are read-only; this provider cannot be activated here')
+      } else {
+        onCredential(target)
+      }
+    }
+  }, true)
+
+  if (viewport.maxHeight === 0) return createElement(Box, { display: 'none' })
+  if (viewport.compact) {
+    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns('/model providers · enter key · d remove key · esc back', viewport.contentColumns))
+  }
+  const stateRows: ReactElement[] = directory === undefined && error === undefined
+    ? [createElement(Text, { key: 'loading', color: inkColor(getPalette().dim), wrap: 'truncate-end' }, '  loading providers…')]
+    : error !== undefined
+      ? [createElement(Text, { key: 'error', color: inkColor(getPalette().error), wrap: 'truncate-end' }, truncateColumns(`  ${singleLineText(error)}`, viewport.contentColumns))]
+      : [
+        ...(actionError === undefined
+          ? []
+          : [createElement(Text, { key: 'action-error', color: inkColor(getPalette().error), wrap: 'truncate-end' }, truncateColumns(`  ${actionError}`, viewport.contentColumns))]),
+        ...(directory?.failures ?? []).map((failure, index) => createElement(
+          Text,
+          { key: `failure-${index}`, color: inkColor(getPalette().warn), wrap: 'truncate-end' },
+          truncateColumns(`  ${singleLineText(failure)}`, viewport.contentColumns),
+        )),
+        ...(rows.length === 0
+          ? [createElement(Text, { key: 'empty', color: inkColor(getPalette().dim), wrap: 'truncate-end' }, '  no configurable providers')]
+          : []),
+      ]
+  const visibleStateRows = stateRows.slice(0, viewport.bodyRows)
+  const rowBudget = Math.max(0, viewport.bodyRows - visibleStateRows.length)
+  const first = selectionWindow(cursor, rows.length, rowBudget)
+  const visible = rowBudget === 0 ? [] : rows.slice(first, first + rowBudget)
+  return createElement(
+    Box,
+    { flexDirection: 'column', width: viewport.outerColumns, paddingX: 1, borderStyle: 'round', borderColor: inkColor(getPalette().brand) },
+    createElement(Text, { color: inkColor(getPalette().brand), bold: true, wrap: 'truncate-end' }, truncateColumns(`/model — providers${rows.length === 0 ? '' : ` · ${cursor + 1}/${rows.length}`}`, viewport.contentColumns)),
+    createElement(PanelGap, { visible: viewport.gapRows > 0 }),
+    ...visibleStateRows,
+    ...visible.map((row) => {
+      const index = rows.indexOf(row)
+      const identity = row.displayName === row.provider ? row.provider : `${row.displayName} (${row.provider})`
+      const label = `${identity} · ${providerStateLabel(row)}${row.removable ? ' · custom' : ''}`
+      return createElement(
+        Text,
+        { key: row.provider, color: index === cursor ? inkColor(getPalette().brandBright) : inkColor(getPalette().dim), wrap: 'truncate-end' },
+        truncateColumns(`${index === cursor ? '❯ ' : '  '}${displayText(label)}`, viewport.contentColumns),
+      )
+    }),
+    createElement(PanelGap, { visible: viewport.gapRows > 0 }),
+    createElement(Text, { color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns('↑↓ move · enter add/update key · d remove key · x remove custom provider · r retry · esc back', viewport.contentColumns)),
+  )
+}
+
+/** Write-only masked API-key editor; the secret lives only in this mounted component. */
+function ProviderCredentialPanel({ target, save, done, back }: {
+  target: ProviderTargetView
+  save(target: ProviderTargetView, key: string): Promise<void>
+  done(): void
+  back(): void
+}): ReactElement {
+  const stdout = useStdout().stdout
+  const viewport = panelViewport(stdout?.columns ?? 80, stdout?.rows ?? 30)
+  const [draft, setDraft] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | undefined>(undefined)
+
+  const submit = (): void => {
+    if (busy) return
+    setBusy(true)
+    setError(undefined)
+    Promise.resolve().then(() => save(target, draft)).then(() => {
+      setDraft('')
+      done()
+    }, (reason: unknown) => {
+      setError(singleLineText(reason instanceof Error ? reason.message : String(reason)))
+      setBusy(false)
+    })
+  }
+
+  useStableInput((input, key) => {
+    if (busy) return
+    if (key.escape) {
+      setDraft('')
+      back()
+      return
+    }
+    if (key.return) {
+      submit()
+      return
+    }
+    if (key.backspace || key.delete) {
+      setError(undefined)
+      setDraft(current => [...current].slice(0, -1).join(''))
+      return
+    }
+    if (key.ctrl && input === 'u') {
+      setError(undefined)
+      setDraft('')
+      return
+    }
+    if (key.ctrl || key.meta || input.length === 0) return
+    const next = draft + input
+    if (next.length > 4096) {
+      setError('API key input is too long')
+      return
+    }
+    setError(undefined)
+    setDraft(next)
+  }, true)
+
+  if (viewport.maxHeight === 0) return createElement(Box, { display: 'none' })
+  const keyBudget = Math.max(1, viewport.contentColumns - 4)
+  const bullets = '•'.repeat(Math.min([...draft].length, keyBudget))
+  if (viewport.compact) {
+    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(`API key ${bullets}${busy ? ' saving…' : ' ▏'} · esc back`, viewport.contentColumns))
+  }
+  const identity = target.displayName === target.provider ? target.provider : `${target.displayName} (${target.provider})`
+  const source = target.credential?.kind === 'facts' && target.credential.configured
+    ? `replaces ${singleLineText(target.credential.source ?? 'stored key')}`
+    : 'new key'
+  const providerRow = createElement(Text, { key: 'provider', wrap: 'truncate-end' }, truncateColumns(`  provider  ${displayText(identity)}`, viewport.contentColumns))
+  const referenceRow = createElement(Text, { key: 'reference', color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns(`  reference ${displayText(target.credentialRef ?? target.suggestedRef)} · ${source}`, viewport.contentColumns))
+  const keyRow = createElement(Text, { key: 'key', color: error === undefined ? inkColor(getPalette().brandBright) : inkColor(getPalette().error), wrap: 'truncate-end' }, truncateColumns(`  key       ${bullets}${busy ? ' saving…' : ' ▏'}`, viewport.contentColumns))
+  const errorRow = error === undefined
+    ? undefined
+    : createElement(Text, { key: 'error', color: inkColor(getPalette().error), wrap: 'truncate-end' }, truncateColumns(`  ${error}`, viewport.contentColumns))
+  const detailRows = errorRow === undefined ? [providerRow, referenceRow] : [providerRow, errorRow]
+  const primaryRow = viewport.bodyRows === 1 && errorRow !== undefined ? errorRow : keyRow
+  const detailBudget = Math.max(0, viewport.bodyRows - 1)
+  const bodyRows = [
+    ...(detailBudget === 0 ? [] : detailRows.slice(-detailBudget)),
+    ...(viewport.bodyRows === 0 ? [] : [primaryRow]),
+  ]
+  return createElement(
+    Box,
+    { flexDirection: 'column', width: viewport.outerColumns, paddingX: 1, borderStyle: 'round', borderColor: inkColor(getPalette().brand) },
+    createElement(Text, { color: inkColor(getPalette().brand), bold: true, wrap: 'truncate-end' }, truncateColumns('/model — add API key', viewport.contentColumns)),
+    createElement(PanelGap, { visible: viewport.gapRows > 0 }),
+    ...bodyRows,
+    createElement(PanelGap, { visible: viewport.gapRows > 0 }),
+    createElement(Text, { color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns('type or paste key · enter save · ctrl+u clear · esc back', viewport.contentColumns)),
+  )
+}
+
+/** Bounded destructive-action confirmation for credential or provider removal. */
+function ProviderConfirmPanel({ target, kind, confirm, done, back }: {
+  target: ProviderTargetView
+  kind: 'credential' | 'provider'
+  confirm(target: ProviderTargetView): Promise<void>
+  done(): void
+  back(): void
+}): ReactElement {
+  const stdout = useStdout().stdout
+  const viewport = panelViewport(stdout?.columns ?? 80, stdout?.rows ?? 30)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | undefined>(undefined)
+  const run = (): void => {
+    if (busy) return
+    setBusy(true)
+    setError(undefined)
+    Promise.resolve().then(() => confirm(target)).then(done, (reason: unknown) => {
+      setError(singleLineText(reason instanceof Error ? reason.message : String(reason)))
+      setBusy(false)
+    })
+  }
+  useStableInput((input, key) => {
+    if (busy) return
+    if (key.escape || input === 'n') {
+      back()
+      return
+    }
+    if (input === 'y') run()
+  }, true)
+
+  if (viewport.maxHeight === 0) return createElement(Box, { display: 'none' })
+  const action = kind === 'credential' ? 'remove API key' : 'remove provider'
+  if (viewport.compact) {
+    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(`${action} ${target.displayName}? · y confirm · n/esc back`, viewport.contentColumns))
+  }
+  const identity = target.displayName === target.provider ? target.provider : `${target.displayName} (${target.provider})`
+  const identityRow = createElement(Text, { key: 'identity', wrap: 'truncate-end' }, truncateColumns(`  ${displayText(identity)}`, viewport.contentColumns))
+  const descriptionRow = createElement(Text, { key: 'description', color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns(kind === 'credential' ? '  the provider profile and selected model stay available' : '  the user settings profile and its managed key will be removed', viewport.contentColumns))
+  const errorRow = error === undefined
+    ? undefined
+    : createElement(Text, { key: 'error', color: inkColor(getPalette().error), wrap: 'truncate-end' }, truncateColumns(`  ${error}`, viewport.contentColumns))
+  const bodyRows = errorRow === undefined
+    ? [identityRow, descriptionRow].slice(0, viewport.bodyRows)
+    : [identityRow, errorRow].slice(-viewport.bodyRows)
+  return createElement(
+    Box,
+    { flexDirection: 'column', width: viewport.outerColumns, paddingX: 1, borderStyle: 'round', borderColor: inkColor(getPalette().warn) },
+    createElement(Text, { color: inkColor(getPalette().warn), bold: true, wrap: 'truncate-end' }, truncateColumns(`/model — ${action}`, viewport.contentColumns)),
+    createElement(PanelGap, { visible: viewport.gapRows > 0 }),
+    ...bodyRows,
+    createElement(PanelGap, { visible: viewport.gapRows > 0 }),
+    createElement(Text, { color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns(busy ? 'working…' : 'y confirm · n/esc back', viewport.contentColumns)),
   )
 }
 
@@ -2593,6 +2907,12 @@ export function App(props: AppProps): ReactElement {
   const skills = useSyncExternalStore(props.skills.subscribe, () => props.skills.rows)
   const [modelLabel, setModelLabel] = useState(props.model)
   const [modelOpen, setModelOpen] = useState(false)
+  /** Nested /model stages; only one owns terminal input at a time. */
+  const [providerOpen, setProviderOpen] = useState(false)
+  const [providerAction, setProviderAction] = useState<{
+    kind: 'credential' | 'unset' | 'remove'
+    target: ProviderTargetView
+  } | undefined>(undefined)
   /** The model row whose effort levels the /model stage lists; undefined shows the model list. */
   const [effortFor, setEffortFor] = useState<ModelRow | undefined>(undefined)
   /** Effective reasoning effort, shown in the /model picker and switch notice. */
@@ -2635,6 +2955,8 @@ export function App(props: AppProps): ReactElement {
   }, [modelLabel, effortLabel])
   const [directory, setDirectory] = useState<ModelDirectory | undefined>(undefined)
   const [modelError, setModelError] = useState<string | undefined>(undefined)
+  const [providerDirectory, setProviderDirectory] = useState<ProviderSettingsDirectory | undefined>(undefined)
+  const [providerError, setProviderError] = useState<string | undefined>(undefined)
   const [modelLoadEpoch, setModelLoadEpoch] = useState(0)
   const [notice, setNotice] = useState<{ text: string; tone: NoticeTone } | undefined>(undefined)
   const notify = useCallback((text: string, tone: NoticeTone = 'info'): void => {
@@ -2661,6 +2983,29 @@ export function App(props: AppProps): ReactElement {
       cancelled = true
     }
   }, [modelOpen, modelLoadEpoch, props.loadModels])
+  useEffect(() => {
+    if (!modelOpen || props.loadModelProviders === undefined) return
+    let cancelled = false
+    setProviderDirectory(undefined)
+    setProviderError(undefined)
+    Promise.resolve().then(() => props.loadModelProviders!()).then((loaded) => {
+      if (!cancelled) setProviderDirectory(loaded)
+    }, (error: unknown) => {
+      if (!cancelled) setProviderError(error instanceof Error ? error.message : String(error))
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [modelOpen, modelLoadEpoch, props.loadModelProviders])
+  useEffect(() => {
+    const subscribe = props.subscribeModelProviders
+    if (!modelOpen || subscribe === undefined) return
+    try {
+      return subscribe(() => setModelLoadEpoch(epoch => epoch + 1))
+    } catch (error: unknown) {
+      setProviderError(error instanceof Error ? error.message : String(error))
+    }
+  }, [modelOpen, props.subscribeModelProviders])
 
   const busy = view.busy
   const [showReasoning, setShowReasoning] = useState(false)
@@ -2720,6 +3065,8 @@ export function App(props: AppProps): ReactElement {
   useEffect(() => {
     if (!approvalPending && !questionPending) return
     setModelOpen(false)
+    setProviderOpen(false)
+    setProviderAction(undefined)
     setEffortFor(undefined)
     setHelpOpen(false)
     setModeOpen(false)
@@ -2850,9 +3197,122 @@ export function App(props: AppProps): ReactElement {
       setEffortLabel(effortId)
       notify(`model → next step uses ${label}${effortId === undefined || effortId === '' ? '' : `@${effortId}`}`)
       setModelOpen(false)
+      setProviderOpen(false)
+      setProviderAction(undefined)
       setEffortFor(undefined)
     } catch (error: unknown) {
       notify(`model switch failed: ${error instanceof Error ? error.message : String(error)}`, 'error')
+    }
+  }
+
+  const reloadModelSurfaces = (): void => {
+    setModelLoadEpoch(epoch => epoch + 1)
+  }
+  const closeModelSurface = (): void => {
+    setModelOpen(false)
+    setProviderOpen(false)
+    setProviderAction(undefined)
+    setEffortFor(undefined)
+  }
+  let modelSurface: ReactElement | undefined
+  if (modelOpen && !approvalPending && !questionPending) {
+    if (providerAction?.kind === 'credential' && props.saveModelProviderCredential !== undefined) {
+      modelSurface = createElement(ProviderCredentialPanel, {
+        target: providerAction.target,
+        save: props.saveModelProviderCredential,
+        done: () => {
+          const target = providerAction.target
+          setProviderAction(undefined)
+          setProviderOpen(false)
+          reloadModelSurfaces()
+          notify(`API key saved for ${target.displayName}; select a model`)
+        },
+        back: () => setProviderAction(undefined),
+      })
+    } else if (providerAction?.kind === 'unset' && props.unsetModelProviderCredential !== undefined) {
+      modelSurface = createElement(ProviderConfirmPanel, {
+        target: providerAction.target,
+        kind: 'credential',
+        confirm: props.unsetModelProviderCredential,
+        done: () => {
+          const target = providerAction.target
+          setProviderAction(undefined)
+          setProviderOpen(true)
+          reloadModelSurfaces()
+          notify(`API key removed for ${target.displayName}`)
+        },
+        back: () => setProviderAction(undefined),
+      })
+    } else if (providerAction?.kind === 'remove' && props.removeModelProvider !== undefined) {
+      modelSurface = createElement(ProviderConfirmPanel, {
+        target: providerAction.target,
+        kind: 'provider',
+        confirm: props.removeModelProvider,
+        done: () => {
+          const target = providerAction.target
+          setProviderAction(undefined)
+          setProviderOpen(true)
+          reloadModelSurfaces()
+          notify(`provider removed: ${target.displayName}`)
+        },
+        back: () => setProviderAction(undefined),
+      })
+    } else if (providerOpen) {
+      modelSurface = createElement(ProviderPanel, {
+        directory: providerDirectory,
+        error: providerError,
+        onCredential: (target: ProviderTargetView) => {
+          if (props.saveModelProviderCredential === undefined) {
+            notify('API key storage is unavailable in this profile', 'warning')
+            return
+          }
+          setProviderAction({ kind: 'credential', target })
+        },
+        onUnset: (target: ProviderTargetView) => {
+          if (props.unsetModelProviderCredential === undefined) {
+            notify('API key removal is unavailable in this profile', 'warning')
+            return
+          }
+          setProviderAction({ kind: 'unset', target })
+        },
+        onRemove: (target: ProviderTargetView) => {
+          if (props.removeModelProvider === undefined) {
+            notify('provider removal is unavailable in this profile', 'warning')
+            return
+          }
+          setProviderAction({ kind: 'remove', target })
+        },
+        onRetry: reloadModelSurfaces,
+        onBack: () => setProviderOpen(false),
+      })
+    } else if (effortFor !== undefined) {
+      modelSurface = createElement(EffortPanel, {
+        row: effortFor,
+        current: effortLabel,
+        select: (effortId: string) => applyModel(effortFor, effortId),
+        back: () => setEffortFor(undefined),
+      })
+    } else {
+      modelSurface = createElement(ModelPanel, {
+        directory,
+        error: modelError,
+        onSelect: (row: ModelRow) => {
+          // A model advertising several levels opens the effort stage first;
+          // one advertised level is its only option, while no capability uses
+          // the model default exactly as before.
+          if (row.reasoning !== undefined && row.reasoning.efforts.length > 1) {
+            setEffortFor(row)
+            return
+          }
+          const effortId = row.reasoning?.efforts.length === 1 ? row.reasoning.efforts[0]!.id : undefined
+          applyModel(row, effortId)
+        },
+        ...(props.loadModelProviders === undefined || props.saveModelProviderCredential === undefined
+          ? {}
+          : { onProviders: () => setProviderOpen(true) }),
+        onRetry: reloadModelSurfaces,
+        onClose: closeModelSurface,
+      })
     }
   }
 
@@ -2894,38 +3354,7 @@ export function App(props: AppProps): ReactElement {
     transcriptVisible ? createElement(TodoPanel, { todos: view.todos }) : undefined,
     createElement(QuestionBar, { store: props.questions, snapshot: questionSnapshot, locked: false }),
     createElement(ApprovalBar, { snapshot: approvalSnapshot, locked: questionPending }),
-    modelOpen && !approvalPending && !questionPending
-      ? effortFor === undefined
-        ? createElement(ModelPanel, {
-          directory,
-          error: modelError,
-          onSelect: (row: ModelRow) => {
-            // A model advertising several levels opens the effort stage first;
-            // one advertised level is its only option (Codex's
-            // single-supported-effort shortcut), and no capability applies
-            // the model default exactly as before.
-            if (row.reasoning !== undefined && row.reasoning.efforts.length > 1) {
-              setEffortFor(row)
-              return
-            }
-            const effortId = row.reasoning?.efforts.length === 1 ? row.reasoning.efforts[0]!.id : undefined
-            applyModel(row, effortId)
-          },
-          onRetry: () => {
-            setModelLoadEpoch(epoch => epoch + 1)
-          },
-          onClose: () => {
-            setModelOpen(false)
-            setEffortFor(undefined)
-          },
-        })
-        : createElement(EffortPanel, {
-          row: effortFor,
-          current: effortLabel,
-          select: (effortId: string) => applyModel(effortFor, effortId),
-          back: () => setEffortFor(undefined),
-        })
-      : undefined,
+    modelSurface,
     helpOpen && !approvalPending && !questionPending
       ? createElement(HelpPanel, {
         descriptors,
@@ -3029,6 +3458,10 @@ export function App(props: AppProps): ReactElement {
         openModel: () => {
           setDirectory(undefined)
           setModelError(undefined)
+          setProviderDirectory(undefined)
+          setProviderError(undefined)
+          setProviderOpen(false)
+          setProviderAction(undefined)
           setEffortFor(undefined)
           setModelOpen(true)
         },

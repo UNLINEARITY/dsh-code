@@ -532,6 +532,23 @@ describe('transcript projection', () => {
     expect(view.entries).toEqual([{ kind: 'error', text: 'SERVER: down' }])
   })
 
+  it('adds an in-product recovery path to missing-credential failures', () => {
+    const event = {
+      type: 'turn/end',
+      seq: 1,
+      time: 0,
+      data: {
+        turn: 1,
+        reason: { kind: 'error', error: { code: 'MISSING_CREDENTIAL', message: 'no API key configured' } },
+      },
+    } as SessionEvent
+    const view = projectEvent(createTranscriptView(), event)
+    expect(view.entries).toEqual([{
+      kind: 'error',
+      text: 'MISSING_CREDENTIAL: no API key configured · open /model to add an API key',
+    }])
+  })
+
   it('tracks the busy flag across the durable turn bracket', () => {
     const open = { type: 'turn/start', seq: 1, time: 0, data: { turn: 1 } } as SessionEvent
     const close = { type: 'turn/end', seq: 2, time: 0, data: { turn: 1, reason: { kind: 'completed' } } } as SessionEvent

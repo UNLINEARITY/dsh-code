@@ -34,7 +34,7 @@ DSH-Code 保留这套结构，并补充适合编码任务的终端工作流。
 
 ## 二、快速开始
 
-需要 Node `^22.19 || >=24`、预览版 `dsh` CLI，以及 `DEEPSEEK_API_KEY`。
+需要 Node `^22.19 || >=24` 和预览版 `dsh` CLI。`DEEPSEEK_API_KEY` 不是启动前置条件：未配置时仍可进入 TUI、查看会话和使用非模型功能；在 `/model` 中按 `a` 可通过 Harness credentials 服务添加 API key。
 
 ```sh
 npm install -g @deepseek-ai/dsh dsh-code
@@ -90,7 +90,7 @@ dsh --profile cli --session my-id    # 使用指定 id 新建会话
 | `/new [preset]` | 不重启终端，创建并进入另一个会话 |
 | `/resume [id\|前缀]` | 搜索根会话或全部对话，并按 cwd、排序和密度筛选 |
 | `/mode [preset]` | 检查或选择空会话的 Agent 组合 |
-| `/model` | 在实时 LLM 注册表提供的模型间切换 |
+| `/model` | 在实时 LLM 注册表提供的模型间切换；按 `a` 管理 provider 与 API key |
 | `/plugin [query]` | 检查 loader 条目、启用状态、模块身份和 fiber 阶段 |
 | `/permission <name>` | 切换权限预设；Shift+Tab 可循环切换 |
 | `/help` | 浏览本地命令、Harness 命令、技能和快捷键 |
@@ -99,6 +99,8 @@ dsh --profile cli --session my-id    # 使用指定 id 新建会话
 | `@` | 引用工作区文件或持久会话的有界快照 |
 | `Esc` / `Ctrl+C` | 关闭最上层界面或中断当前 turn |
 
+`/model` 的 provider 面板只读取 credential 的已配置状态、来源和可写性；输入内容始终遮蔽并直接交给 Harness 持久化。由启动环境提供的 key 会标记为只读，不能在 TUI 中覆盖或移除。
+
 ## 四、功能
 
 ### 1. Agent 与扩展
@@ -106,7 +108,7 @@ dsh --profile cli --session my-id    # 使用指定 id 新建会话
 - 每会话 Agent Preset：组合工具、提示词、技能、上下文压缩、plan mode 与委派能力
 - 从共享 Harness 注册表实时发现斜杠命令和用户技能
 - 通过 `/plugin` 只读诊断 Cordis loader
-- 从实时 LLM 注册表路由模型，并按持久会话恢复选择
+- 从实时 LLM 注册表路由模型，并按持久会话恢复选择；`/model` 可添加或轮换 key、移除可写 key，以及删除用户添加的 provider profile
 - 支持 plan、goal、todo、权限、sandbox、subagent 与运行中 steering
 
 ### 2. 会话与上下文

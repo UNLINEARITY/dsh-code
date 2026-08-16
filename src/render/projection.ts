@@ -610,7 +610,10 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
       const reason = event.data.reason
       const appended: TranscriptEntry[] = []
       if (reason.kind === 'error') {
-        appended.push({ kind: 'error', text: `${reason.error.code}: ${reason.error.message}` })
+        const recovery = reason.error.code === 'MISSING_CREDENTIAL'
+          ? ' · open /model to add an API key'
+          : ''
+        appended.push({ kind: 'error', text: `${reason.error.code}: ${reason.error.message}${recovery}` })
       } else {
         // Non-error outcomes deserve their own durable row (the web renders
         // distinct max-tokens / abort / interruption nodes); `completed` stays
@@ -1173,7 +1176,10 @@ export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent):
       const reason = event.data.reason
       const appended: TranscriptEntry[] = []
       if (reason.kind === 'error') {
-        appended.push({ kind: 'error', text: `${reason.error.code}: ${reason.error.message}` })
+        const recovery = reason.error.code === 'MISSING_CREDENTIAL'
+          ? ' · open /model to add an API key'
+          : ''
+        appended.push({ kind: 'error', text: `${reason.error.code}: ${reason.error.message}${recovery}` })
       } else {
         const marker = reason.kind === 'aborted'
           ? reason.reason.kind === 'user' ? 'turn cancelled by the user' : `turn cancelled (${reason.reason.kind})`
