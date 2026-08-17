@@ -41,7 +41,7 @@ describe('streaming token bursts', () => {
     // uETS contract: getSnapshot must return a cached identity — a fresh
     // object per call manufactures the very infinite loop this suite guards
     // against, so the snapshots are module-stable constants.
-    const approvalSnapshot = frozen({ pending: undefined, answered: false })
+    const approvalSnapshot = frozen({ pending: undefined, answered: false, queued: 0 })
     const questionSnapshot = frozen({ pending: undefined })
 
     const props: AppProps = {

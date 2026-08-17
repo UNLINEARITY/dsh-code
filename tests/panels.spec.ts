@@ -18,7 +18,7 @@ const wait = async (): Promise<void> => new Promise(resolve => setTimeout(resolv
 // useSyncExternalStore compares getSnapshot results by identity: these
 // doubles must return one frozen object forever, or React spins into an
 // infinite re-render loop (Maximum update depth exceeded).
-const approvalSnapshot = Object.freeze({ pending: undefined, answered: false })
+const approvalSnapshot = Object.freeze({ pending: undefined, answered: false, queued: 0 })
 const questionSnapshot = Object.freeze({ pending: undefined })
 
 describe('exclusive panel height budgets', () => {
@@ -46,7 +46,7 @@ describe('exclusive panel height budgets', () => {
     })
     const approvalListeners = new Set<() => void>()
     const questionListeners = new Set<() => void>()
-    let approvalSnapshot: ApprovalSnapshot = { pending: undefined, answered: false }
+    let approvalSnapshot: ApprovalSnapshot = { pending: undefined, answered: false, queued: 0 }
     let questionSnapshot: QuestionSnapshot = { pending: undefined }
     let questionCancelCount = 0
     const noop = (): void => {}
@@ -129,14 +129,16 @@ describe('exclusive panel height budgets', () => {
           answer: noop,
         },
         answered: false,
+        queued: 0,
       }
       approvalListeners.forEach(listener => listener())
       await wait()
-      expect(output).toContain('waiting for approval')
+      expect(output).toContain('Yes, proceed')
+      expect(output).toContain('approval reason 0')
       expect(output.lastIndexOf('type a message')).toBeLessThan(output.lastIndexOf('test/model'))
       expect(output).not.toContain('\x1b[2J')
 
-      approvalSnapshot = { pending: undefined, answered: false }
+      approvalSnapshot = { pending: undefined, answered: false, queued: 0 }
       approvalListeners.forEach(listener => listener())
       questionSnapshot = { pending: undefined }
       questionListeners.forEach(listener => listener())
@@ -187,7 +189,7 @@ describe('exclusive panel height budgets', () => {
       stdin.write('q')
       await wait()
 
-      approvalSnapshot = { pending: undefined, answered: false }
+      approvalSnapshot = { pending: undefined, answered: false, queued: 0 }
       approvalListeners.forEach(listener => listener())
       await wait()
       output = ''
@@ -293,7 +295,7 @@ describe('exclusive panel height budgets', () => {
     })
     const approvalListeners = new Set<() => void>()
     const questionListeners = new Set<() => void>()
-    let approvalSnapshot: ApprovalSnapshot = { pending: undefined, answered: false }
+    let approvalSnapshot: ApprovalSnapshot = { pending: undefined, answered: false, queued: 0 }
     let questionSnapshot: QuestionSnapshot = { pending: undefined }
     const noop = (): void => {}
     const saved: readonly string[][] = []
@@ -438,7 +440,7 @@ describe('queued messages and global recall', () => {
     })
     const approvalListeners = new Set<() => void>()
     const questionListeners = new Set<() => void>()
-    const approvalSnapshot: ApprovalSnapshot = { pending: undefined, answered: false }
+    const approvalSnapshot: ApprovalSnapshot = { pending: undefined, answered: false, queued: 0 }
     const questionSnapshot: QuestionSnapshot = { pending: undefined }
     const noop = (): void => {}
     const steering = createUserMessage({
@@ -799,7 +801,7 @@ describe('/model effort stage', () => {
     const noop = (): void => {}
     const approvalListeners = new Set<() => void>()
     const questionListeners = new Set<() => void>()
-    const approvalSnapshot: ApprovalSnapshot = { pending: undefined, answered: false }
+    const approvalSnapshot: ApprovalSnapshot = { pending: undefined, answered: false, queued: 0 }
     const questionSnapshot: QuestionSnapshot = { pending: undefined }
     const picked: { row: ModelRow; effortId?: string }[] = []
     const rows: readonly ModelRow[] = [

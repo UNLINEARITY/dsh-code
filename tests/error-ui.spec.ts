@@ -44,7 +44,7 @@ function renderApp(
   })
   const noop = (): void => {}
   const store = createTranscriptStore()
-  const approvalSnapshot = Object.freeze({ pending: undefined, answered: false })
+  const approvalSnapshot = Object.freeze({ pending: undefined, answered: false, queued: 0 })
   const questionSnapshot = Object.freeze({ pending: undefined })
   const props: AppProps = {
     store,

@@ -1564,3 +1564,99 @@ describe('completion menu', () => {
     }
   })
 })
+
+describe('approval dialog', () => {
+  it('renders the Codex-style option list and answers through quick keys', async () => {
+    const answers: string[] = []
+    const snapshot = Object.freeze({
+      pending: {
+        headline: 'run the build?',
+        toolName: 'bash',
+        command: 'pnpm build',
+        answer: (outcome: string): void => {
+          answers.push(outcome)
+        },
+      },
+      answered: false,
+      queued: 0,
+    })
+    const harness = createTty(100, 24)
+    const instance = renderApp(harness, appProps({
+      approval: { subscribe: () => unsubscribe, getSnapshot: () => snapshot },
+    }))
+    try {
+      await wait()
+      expect(harness.output.text).toContain('run the build?')
+      expect(harness.output.text).toContain('pnpm build')
+      expect(harness.output.text).toContain('1. Yes, proceed (y)')
+      expect(harness.output.text).toContain('2. No, and tell it what to do differently (n)')
+      expect(harness.output.text).toContain('3. No, continue without running it (d)')
+      harness.stdin.write('y')
+      await wait()
+      expect(answers).toEqual(['allowed-once'])
+    } finally {
+      instance.unmount()
+      harness.stdin.destroy()
+      harness.stdout.destroy()
+    }
+  })
+
+  it('confirms the default selection on Enter and rejects on Esc', async () => {
+    const answers: string[] = []
+    const snapshot = Object.freeze({
+      pending: {
+        headline: 'run the build?',
+        toolName: 'bash',
+        command: 'pnpm build',
+        answer: (outcome: string): void => {
+          answers.push(outcome)
+        },
+      },
+      answered: false,
+      queued: 0,
+    })
+    const harness = createTty(100, 24)
+    const instance = renderApp(harness, appProps({
+      approval: { subscribe: () => unsubscribe, getSnapshot: () => snapshot },
+    }))
+    try {
+      await wait()
+      // Enter confirms the default-selected first option (Yes).
+      harness.stdin.write('\r')
+      await wait()
+      expect(answers).toEqual(['allowed-once'])
+    } finally {
+      instance.unmount()
+      harness.stdin.destroy()
+      harness.stdout.destroy()
+    }
+    const second = createTty(100, 24)
+    const answers2: string[] = []
+    const snapshot2 = Object.freeze({
+      pending: {
+        headline: 'run the build?',
+        toolName: 'bash',
+        command: 'pnpm build',
+        answer: (outcome: string): void => {
+          answers2.push(outcome)
+        },
+      },
+      answered: false,
+      queued: 0,
+    })
+    const instance2 = renderApp(second, appProps({
+      approval: { subscribe: () => unsubscribe, getSnapshot: () => snapshot2 },
+    }))
+    try {
+      await wait()
+      // Esc is Codex's cancel: an explicit rejection.
+      second.stdin.write('\x1b')
+      await wait()
+      expect(answers2).toEqual(['rejected'])
+    } finally {
+      instance2.unmount()
+      second.stdin.destroy()
+      second.stdout.destroy()
+    }
+  })
+})

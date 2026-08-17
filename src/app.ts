@@ -877,72 +877,139 @@ function NoticeLine({ text, tone, columns }: {
   )
 }
 
-/** The y/n approval bar rendered while an approval ask is pending. */
-function ApprovalBar({ snapshot, locked }: { snapshot: ApprovalSnapshot; locked: boolean }): ReactElement | undefined {
+/** One selectable approval decision (Codex approval-overlay wording). */
+interface ApprovalOption {
+  readonly key: 'allow' | 'reject-note' | 'reject'
+  readonly label: string
+  readonly hotkey: string
+}
+
+/** The fixed decision list; answers stay in the binary answerer vocabulary. */
+const APPROVAL_OPTIONS: readonly ApprovalOption[] = [
+  { key: 'allow', label: 'Yes, proceed', hotkey: 'y' },
+  { key: 'reject-note', label: 'No, and tell it what to do differently', hotkey: 'n' },
+  { key: 'reject', label: 'No, continue without running it', hotkey: 'd' },
+]
+
+/**
+ * The approval dialog (Codex ApprovalOverlay contract): a bold question
+ * header, the bounded command body with an explicit overflow marker, a
+ * numbered option list with a `›` cursor, single-key shortcuts, and digits
+ * for direct selection. Askers queue FIFO — the count rides the header.
+ * The upstream answerer vocabulary stays binary (`allowed-once` /
+ * `rejected`): "tell it what to do differently" rejects and hands the
+ * composer back with a hint notice, exactly Codex's decline-then-type flow.
+ */
+function ApprovalBar({ snapshot, locked, notify }: {
+  snapshot: ApprovalSnapshot
+  locked: boolean
+  notify(text: string, tone?: NoticeTone): void
+}): ReactElement | undefined {
   const stdout = useStdout().stdout
   const viewport = panelViewport(stdout?.columns ?? 80, stdout?.rows ?? 30)
-  const [scroll, setScroll] = useState(0)
+  const [cursor, setCursor] = useState(0)
   const pending = snapshot.pending
-  const active = !locked && snapshot.pending !== undefined && !snapshot.answered
-  const content = useMemo<readonly StyledLine[]>(() => pending === undefined
+  const active = !locked && pending !== undefined && !snapshot.answered
+  const body = useMemo<readonly StyledLine[]>(() => pending === undefined || pending.command === ''
     ? []
-    : [
-      ...styledLines([lineSegment(pending.headline, 'warn')], viewport.contentColumns),
-      ...(pending.command === '' ? [] : textLines(`  ${pending.command}`, viewport.contentColumns, 'dim')),
-    ], [pending, viewport.contentColumns])
-  const visibleScroll = clampScroll(scroll, content.length, viewport.bodyRows)
+    : textLines(pending.command, viewport.contentColumns, 'dim'), [pending, viewport.contentColumns])
 
   useEffect(() => {
-    setScroll(0)
+    setCursor(0)
   }, [pending])
 
-  useEffect(() => {
-    if (visibleScroll !== scroll) setScroll(visibleScroll)
-  }, [visibleScroll, scroll])
+  const decide = (option: ApprovalOption): void => {
+    const ask = snapshot.pending
+    if (ask === undefined || snapshot.answered) return
+    if (option.key === 'allow') {
+      ask.answer('allowed-once')
+      return
+    }
+    ask.answer('rejected')
+    if (option.key === 'reject-note') {
+      notify('rejected — type below what it should do differently (it steers the next step)', 'warning')
+    }
+  }
 
   useInput((input, key) => {
-    if (snapshot.pending === undefined) return
+    const ask = snapshot.pending
+    if (ask === undefined || snapshot.answered) return
     if (key.upArrow) {
-      setScroll(current => moveScroll(current, -1, content.length, viewport.bodyRows))
+      setCursor(current => (current + APPROVAL_OPTIONS.length - 1) % APPROVAL_OPTIONS.length)
       return
     }
     if (key.downArrow) {
-      setScroll(current => moveScroll(current, 1, content.length, viewport.bodyRows))
+      setCursor(current => (current + 1) % APPROVAL_OPTIONS.length)
       return
     }
-    if (key.pageUp) {
-      setScroll(current => moveScroll(current, -Math.max(1, viewport.bodyRows - 1), content.length, viewport.bodyRows))
+    if (key.return) {
+      decide(APPROVAL_OPTIONS[cursor]!)
       return
     }
-    if (key.pageDown) {
-      setScroll(current => moveScroll(current, Math.max(1, viewport.bodyRows - 1), content.length, viewport.bodyRows))
+    if (key.escape) {
+      decide(APPROVAL_OPTIONS[2]!)
       return
     }
-    if (snapshot.answered) return
     if (input === 'y' || input === 'Y') {
-      snapshot.pending.answer('allowed-once')
+      decide(APPROVAL_OPTIONS[0]!)
       return
     }
     if (input === 'n' || input === 'N') {
-      snapshot.pending.answer('rejected')
+      decide(APPROVAL_OPTIONS[1]!)
+      return
+    }
+    if (input === 'd' || input === 'D') {
+      decide(APPROVAL_OPTIONS[2]!)
+      return
+    }
+    if (/^[1-9]$/u.test(input)) {
+      const index = Number(input) - 1
+      if (index < APPROVAL_OPTIONS.length) decide(APPROVAL_OPTIONS[index]!)
     }
   }, { isActive: active })
-  if (snapshot.pending === undefined) return undefined
+
+  if (pending === undefined) return undefined
   if (viewport.maxHeight === 0) return createElement(Box, { display: 'none' })
+  const queuedSuffix = snapshot.queued > 0 ? ` · +${snapshot.queued} queued` : ''
   if (viewport.compact) {
-    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns('approval · y allow · n reject', viewport.contentColumns))
+    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(`approval${queuedSuffix} · enter/y allow · esc/n reject`, viewport.contentColumns))
   }
-  const { answered } = snapshot
+  // Body budget: title + options + footer consume fixed rows; the command
+  // preview shrinks with an explicit overflow marker (Codex's "[… N lines]").
+  const reservedRows = 3 + APPROVAL_OPTIONS.length
+  const bodyBudget = Math.max(1, viewport.bodyRows - reservedRows)
+  const visibleBody = body.slice(0, bodyBudget)
+  const overflow = body.length - visibleBody.length
   return createElement(
     Box,
     { flexDirection: 'column', width: viewport.outerColumns, paddingX: 1, borderStyle: 'round', borderColor: inkColor(getPalette().warn) },
-    createElement(Text, { color: inkColor(getPalette().warn), bold: true, wrap: 'truncate-end' }, truncateColumns(`⏸ waiting for approval · lines ${content.length === 0 ? 0 : visibleScroll + 1}-${Math.min(content.length, visibleScroll + viewport.bodyRows)}/${content.length}`, viewport.contentColumns)),
-    createElement(PanelGap, { visible: viewport.gapRows > 0 }),
-    createElement(StyledRows, { lines: content.slice(visibleScroll, visibleScroll + viewport.bodyRows) }),
-    createElement(PanelGap, { visible: viewport.gapRows > 0 }),
-    createElement(Text, { dimColor: true, wrap: 'truncate-end' }, dim(truncateColumns(answered
+    createElement(
+      Text,
+      { color: inkColor(getPalette().warn), bold: true, wrap: 'truncate-end' },
+      truncateColumns(`${pending.headline}${queuedSuffix}`, viewport.contentColumns),
+    ),
+    createElement(PanelGap, { visible: viewport.gapRows > 0 && body.length > 0 }),
+    ...visibleBody.map((line, index) => createElement(StyledRows, { key: `body-${index}`, lines: [line] })),
+    ...(overflow > 0
+      ? [createElement(Text, { key: 'overflow', color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns(`… +${overflow} more lines · ctrl+o shows the full call in the transcript`, viewport.contentColumns))]
+      : []),
+    ...(body.length > 0 ? [createElement(PanelGap, { visible: viewport.gapRows > 0 })] : []),
+    ...APPROVAL_OPTIONS.map((option, index) => {
+      const selected = !snapshot.answered && index === cursor
+      return createElement(
+        Text,
+        {
+          key: option.key,
+          color: selected ? inkColor(getPalette().brandBright) : inkColor(getPalette().text),
+          bold: selected || undefined,
+          wrap: 'truncate-end',
+        },
+        truncateColumns(`${selected ? '›' : ' '} ${index + 1}. ${option.label} (${option.hotkey})`, viewport.contentColumns),
+      )
+    }),
+    createElement(Text, { color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns(snapshot.answered
       ? 'submitted…'
-      : '↑↓/pgup/pgdn scroll · y allow once · n reject', viewport.contentColumns))),
+      : '↑↓ choose · enter confirm · y/n/d quick · esc reject', viewport.contentColumns)),
   )
 }
 
@@ -3405,7 +3472,7 @@ export function App(props: AppProps): ReactElement {
       : undefined,
     transcriptVisible ? createElement(TodoPanel, { todos: view.todos }) : undefined,
     createElement(QuestionBar, { store: props.questions, snapshot: questionSnapshot, locked: false }),
-    createElement(ApprovalBar, { snapshot: approvalSnapshot, locked: questionPending }),
+    createElement(ApprovalBar, { snapshot: approvalSnapshot, locked: questionPending, notify }),
     modelSurface,
     helpOpen && !approvalPending && !questionPending
       ? createElement(HelpPanel, {

@@ -33,10 +33,12 @@ export interface PendingApproval {
 
 /** The pending-question snapshot the renderer subscribes to. */
 export interface ApprovalSnapshot {
-  /** The pending question, or undefined when none is being asked. */
+  /** The question on screen (queue head), or undefined when none is asked. */
   pending: PendingApproval | undefined
   /** Presentational: an answer was submitted, the ask has not settled yet. */
   answered: boolean
+  /** Further asks waiting behind the on-screen one (FIFO, Codex-style). */
+  queued: number
 }
 
 /** Store the pending question lands in; the renderer reads, the answerer writes. */
@@ -65,11 +67,26 @@ export function mountApprovalAnswerer(
   owns: (agent: Agent) => boolean,
   preview: (request: ApprovalRequest) => string,
 ): ApprovalStore {
-  let snapshot: ApprovalSnapshot = { pending: undefined, answered: false }
+  /** One live ask: its pending view plus the one-shot settle plumbing. */
+  interface Slot {
+    readonly pending: PendingApproval
+    answered: boolean
+  }
+  const queue: Slot[] = []
+  let snapshot: ApprovalSnapshot = { pending: undefined, answered: false, queued: 0 }
   const listeners = new Set<() => void>()
-  const set = (next: ApprovalSnapshot): void => {
-    snapshot = next
+  const publish = (): void => {
+    const head = queue[0]
+    snapshot = {
+      pending: head === undefined ? undefined : head.pending,
+      answered: head !== undefined && head.answered,
+      queued: Math.max(0, queue.length - 1),
+    }
     for (const listener of listeners) listener()
+  }
+  const removeSlot = (slot: Slot): void => {
+    const at = queue.indexOf(slot)
+    if (at !== -1) queue.splice(at, 1)
   }
 
   ctx.on('approval/request', (request: ApprovalRequest, next: () => Promise<ApprovalOutcome>) => {
@@ -90,7 +107,8 @@ export function mountApprovalAnswerer(
       if (resolved) return
       resolved = true
       detachAbort()
-      set({ pending: undefined, answered: false })
+      removeSlot(slot)
+      publish()
       // The service's signal race would conclude 'cancelled' anyway; settle
       // the same way so this listener never dangles a pending promise.
       settle('cancelled')
@@ -98,25 +116,33 @@ export function mountApprovalAnswerer(
     if (signal !== undefined) {
       signal.addEventListener('abort', onAbort, { once: true })
     }
-    const pending: PendingApproval = {
-      headline: request.reason ?? `tool ${request.toolName} asks for your approval`,
-      toolName: request.toolName,
-      command: preview(request),
-      answer: (outcome: ApprovalAnswer): void => {
-        // One-shot latch: a second keypress after submission is inert.
-        if (resolved) return
-        resolved = true
-        detachAbort()
-        set({ pending, answered: true })
-        settle(outcome)
+    const slot: Slot = {
+      answered: false,
+      pending: {
+        headline: request.reason ?? `tool ${request.toolName} asks for your approval`,
+        toolName: request.toolName,
+        command: preview(request),
+        answer: (outcome: ApprovalAnswer): void => {
+          // One-shot latch: a second keypress after submission is inert.
+          if (resolved) return
+          resolved = true
+          detachAbort()
+          slot.answered = true
+          publish()
+          settle(outcome)
+        },
       },
     }
-    set({ pending, answered: false })
+    queue.push(slot)
+    publish()
 
     return new Promise<ApprovalOutcome>((resolve) => {
       settle = resolve
     }).then((outcome) => {
-      if (outcome !== 'cancelled') set({ pending: undefined, answered: false })
+      if (outcome !== 'cancelled') {
+        removeSlot(slot)
+        publish()
+      }
       return outcome
     })
   })

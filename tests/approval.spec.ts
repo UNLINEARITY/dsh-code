@@ -164,4 +164,42 @@ describe('approval answerer', () => {
     expect(controller.attached()).toBe(false)
     await expect(settled).resolves.toBe('cancelled')
   })
+
+  it('queues concurrent asks FIFO and advances the head on settle', async () => {
+    const harness = fakeContext()
+    const store = mountApprovalAnswerer(harness.ctx, () => true, req => `cmd:${req.toolName}`)
+    const first = harness.listener()(request({ reason: 'first ask' }), () => Promise.resolve<ApprovalOutcome>('unavailable'))
+    const second = harness.listener()(request({ reason: 'second ask' }), () => Promise.resolve<ApprovalOutcome>('unavailable'))
+
+    // Only the queue head renders; the count surfaces the wait behind it.
+    expect(store.getSnapshot().pending?.headline).toBe('first ask')
+    expect(store.getSnapshot().queued).toBe(1)
+
+    store.getSnapshot().pending?.answer('allowed-once')
+    await expect(first).resolves.toBe('allowed-once')
+    expect(store.getSnapshot().pending?.headline).toBe('second ask')
+    expect(store.getSnapshot().queued).toBe(0)
+
+    store.getSnapshot().pending?.answer('rejected')
+    await expect(second).resolves.toBe('rejected')
+    expect(store.getSnapshot().pending).toBeUndefined()
+  })
+
+  it('withdraws a queued (non-head) ask on abort without disturbing the head', async () => {
+    const harness = fakeContext()
+    const store = mountApprovalAnswerer(harness.ctx, () => true, () => '')
+    const controller = new AbortController()
+    const first = harness.listener()(request({ reason: 'first ask' }), () => Promise.resolve<ApprovalOutcome>('unavailable'))
+    const second = harness.listener()(
+      request({ reason: 'second ask', signal: controller.signal }),
+      () => Promise.resolve<ApprovalOutcome>('unavailable'),
+    )
+    expect(store.getSnapshot().queued).toBe(1)
+    controller.abort()
+    expect(store.getSnapshot().pending?.headline).toBe('first ask')
+    expect(store.getSnapshot().queued).toBe(0)
+    await expect(second).resolves.toBe('cancelled')
+    store.getSnapshot().pending?.answer('rejected')
+    await expect(first).resolves.toBe('rejected')
+  })
 })
