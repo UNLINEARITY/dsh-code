@@ -3675,7 +3675,12 @@ export function App(props: AppProps): ReactElement {
               return
             }
             if (row.reasoning === undefined || row.reasoning.efforts.length === 0) {
-              notify('current model does not expose reasoning efforts', 'warning')
+              // A model that advertises no levels still opens the stage: the
+              // panel itself carries the empty state (the web effort pane's
+              // "no levels" copy), instead of a bare notice that reads like
+              // a failure.
+              setEffortFor(row)
+              setModelOpen(true)
               return
             }
             setEffortFor(row)

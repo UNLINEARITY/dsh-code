@@ -456,12 +456,15 @@ export function StatuslinePanel({ enabled, change, close }: {
 /**
  * The `/model` reasoning-effort stage (the Codex model → reasoning popup
  * contract): one bounded list over the selected model's adapter-advertised
- * effort levels, with the effective effort and the model default marked.
- * A model WITHOUT an adapter-declared default leads with a "Default"
- * (provider-default) row — the web effort pane's first entry — so the user
- * can clear a picked level back to provider behavior instead of being forced
- * to choose an advertised one. Enter applies one level; Esc returns to the
- * model list without applying.
+ * effort levels — in the adapter's own display order, ids verbatim (the
+ * kernel treats them as opaque and rejects anything else) — with the
+ * effective effort and the model default marked. A model WITHOUT an
+ * adapter-declared default leads with a "Default" (provider-default) row —
+ * the web effort pane's first entry — so the user can clear a picked level
+ * back to provider behavior. A model advertising no levels opens the same
+ * stage with an explicit empty state (the web pane's "no levels" copy)
+ * instead of a bare failure notice. Enter applies one level; Esc returns to
+ * the model list without applying.
  */
 export function EffortPanel({ row, current, select, back }: {
   /** The model row whose advertised levels this stage lists. */
@@ -474,13 +477,16 @@ export function EffortPanel({ row, current, select, back }: {
   back(): void
 }): ReactElement {
   const [cursor, setCursor] = useState(0)
-  const efforts = row.reasoning?.efforts ?? []
+  const advertised = row.reasoning?.efforts ?? []
+  const empty = row.reasoning === undefined || advertised.length === 0
   // The provider-default row only exists when the adapter declares no default
   // effort: with one, the default is an advertised level already in the list.
   const hasDefaultRow = row.reasoning !== undefined && row.reasoning.defaultEffort === undefined
-  const rows = hasDefaultRow
-    ? [{ id: '', name: 'Default' }, ...efforts]
-    : efforts
+  const rows = empty
+    ? [{ id: '', name: '' }]
+    : hasDefaultRow
+      ? [{ id: '', name: 'Default' }, ...advertised]
+      : advertised
   // An absent or cleared effort is the Default row's current state.
   const effective = current === undefined || current === '' ? '' : current
   useEffect(() => {
@@ -492,7 +498,7 @@ export function EffortPanel({ row, current, select, back }: {
   }, [rows.length, cursor])
   useInput((input, key) => {
     if (key.escape || input === 'q') return back()
-    if (rows.length === 0) return
+    if (empty) return
     if (key.upArrow) {
       setCursor(cursor > 0 ? cursor - 1 : rows.length - 1)
       return
@@ -507,14 +513,16 @@ export function EffortPanel({ row, current, select, back }: {
   })
   return createElement(ListFrame, {
     title: `/model — effort for ${row.providerName} · ${row.modelName}`,
-    rows: rows.map(effort => ({
-      key: effort.id,
-      text: `${effort.id === effective ? '●' : '○'} ${effort.name}${effort.id === row.reasoning?.defaultEffort ? ' · default' : ''}${effort.description === undefined ? '' : ` · ${effort.description}`}`,
-    })),
+    rows: empty
+      ? [{ key: 'empty', disabled: true, text: 'this model advertises no reasoning effort levels — the provider default applies' }]
+      : rows.map(effort => ({
+        key: effort.id,
+        text: `${effort.id === effective ? '●' : '○'} ${effort.name}${effort.id === row.reasoning?.defaultEffort ? ' · default' : ''}${effort.description === undefined ? '' : ` · ${effort.description}`}`,
+      })),
     cursor,
     loading: false,
     query: '',
-    footer: '↑↓ choose · enter apply · esc/q back',
+    footer: empty ? 'esc back' : '↑↓ choose · enter apply · esc/q back',
   })
 }
 

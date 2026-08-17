@@ -865,6 +865,26 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     } else {
       active.selection.picked = selection
     }
+    // Advisory immediate validation (web selectModel parity): run the same
+    // local resolveCallConfig check the request pipeline would, so a stale
+    // directory — an effort the adapter withdrew since /model loaded —
+    // surfaces as a pick-time notice instead of failing the next assembled
+    // step. Best-effort: an llm service without the resolver keeps the
+    // existing request-boundary rejection. Called as a method (`this`-bound)
+    // like resolveModelInfo in models.ts.
+    const llm = ctx.get('llm')
+    const resolveCallConfig = (llm as {
+      resolveCallConfig?: (this: unknown, config: { provider: string; model: string; reasoningEffort?: string }) => Promise<unknown>
+    } | undefined)?.resolveCallConfig
+    if (llm !== undefined && typeof resolveCallConfig === 'function') {
+      void Promise.resolve(resolveCallConfig.call(llm, {
+        provider: selection.provider,
+        model: selection.model,
+        ...selection.reasoningEffort === undefined ? {} : { reasoningEffort: selection.reasoningEffort },
+      })).catch((error: unknown) => {
+        bridge.notify(`model selection rejected: ${error instanceof Error ? error.message : String(error)} — reopen /model to pick again`, 'error')
+      })
+    }
     return `${row.provider}/${row.model}`
   }
 
