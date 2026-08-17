@@ -19,6 +19,8 @@ const wait = async (): Promise<void> => new Promise(resolve => setTimeout(resolv
 // doubles must return one frozen object forever, or React spins into an
 // infinite re-render loop (Maximum update depth exceeded).
 const approvalSnapshot = Object.freeze({ pending: undefined, answered: false, queued: 0 })
+/** Shared identity-stable empty subagent feed snapshot (getSnapshot contract). */
+const EMPTY_AGENTS = Object.freeze([])
 const questionSnapshot = Object.freeze({ pending: undefined })
 
 describe('exclusive panel height budgets', () => {
@@ -52,6 +54,7 @@ describe('exclusive panel height budgets', () => {
     const noop = (): void => {}
     const instance = render(createElement(App, {
       store: createTranscriptStore(),
+      subagents: { subscribe: () => () => {}, getSnapshot: () => EMPTY_AGENTS },
       approval: {
         subscribe: (listener: () => void) => {
           approvalListeners.add(listener)
@@ -302,6 +305,7 @@ describe('exclusive panel height budgets', () => {
     let currentItems: readonly string[] = DEFAULT_STATUSLINE_ITEMS
     const instance = render(createElement(App, {
       store: createTranscriptStore(),
+      subagents: { subscribe: () => () => {}, getSnapshot: () => EMPTY_AGENTS },
       approval: {
         subscribe: (listener: () => void) => {
           approvalListeners.add(listener)
@@ -344,6 +348,7 @@ describe('exclusive panel height budgets', () => {
       switchMode: async id => id,
       createSession: noop,
       loadSessions: async () => [],
+      loadSubagents: async () => [],
       loadSessionTranscript: async () => '',
       switchSession: noop,
       cancelSessionSwitch: () => false,
@@ -453,6 +458,7 @@ describe('queued messages and global recall', () => {
     })
     const cancelled: string[] = []
     const instance = render(createElement(App, {
+      subagents: { subscribe: () => () => {}, getSnapshot: () => EMPTY_AGENTS },
       store: createTranscriptStore([
         {
           type: 'agent/inbox/spliced',
@@ -509,6 +515,7 @@ describe('queued messages and global recall', () => {
       switchMode: async id => id,
       createSession: noop,
       loadSessions: async () => [],
+      loadSubagents: async () => [],
       loadSessionTranscript: async () => '',
       switchSession: noop,
       cancelSessionSwitch: () => false,
@@ -581,6 +588,7 @@ describe('queued messages and global recall', () => {
     const questionListeners = new Set<() => void>()
     const instance = render(createElement(App, {
       store: createTranscriptStore(),
+      subagents: { subscribe: () => () => {}, getSnapshot: () => EMPTY_AGENTS },
       approval: {
         subscribe: (listener: () => void) => {
           approvalListeners.add(listener)
@@ -623,6 +631,7 @@ describe('queued messages and global recall', () => {
       switchMode: async id => id,
       createSession: noop,
       loadSessions: async () => [],
+      loadSubagents: async () => [],
       loadSessionTranscript: async () => '',
       switchSession: noop,
       cancelSessionSwitch: () => false,
@@ -705,6 +714,7 @@ describe('queued messages and global recall', () => {
     })
     const noop = (): void => {}
     const instance = render(createElement(App, {
+      subagents: { subscribe: () => () => {}, getSnapshot: () => EMPTY_AGENTS },
       store: createTranscriptStore([
         { type: 'turn/start', seq: 1, time: 0, data: { turn: 1 } } as never,
       ]),
@@ -744,6 +754,7 @@ describe('queued messages and global recall', () => {
       switchMode: async id => id,
       createSession: noop,
       loadSessions: async () => [],
+      loadSubagents: async () => [],
       loadSessionTranscript: async () => '',
       switchSession: noop,
       cancelSessionSwitch: () => false,
@@ -843,6 +854,7 @@ describe('/model effort stage', () => {
     ]
     const instance = render(createElement(App, {
       store: createTranscriptStore(),
+      subagents: { subscribe: () => () => {}, getSnapshot: () => EMPTY_AGENTS },
       approval: {
         subscribe: (listener: () => void) => {
           approvalListeners.add(listener)
@@ -888,6 +900,7 @@ describe('/model effort stage', () => {
       switchMode: async id => id,
       createSession: noop,
       loadSessions: async () => [],
+      loadSubagents: async () => [],
       loadSessionTranscript: async () => '',
       switchSession: noop,
       cancelSessionSwitch: () => false,
@@ -1057,6 +1070,7 @@ describe('/effort command', () => {
     ]
     const instance = render(createElement(App, {
       store: createTranscriptStore(),
+      subagents: { subscribe: () => () => {}, getSnapshot: () => EMPTY_AGENTS },
       approval: { subscribe: () => noop, getSnapshot: () => approvalSnapshot },
       questions: {
         subscribe: () => noop,
@@ -1093,6 +1107,7 @@ describe('/effort command', () => {
       switchMode: async id => id,
       createSession: noop,
       loadSessions: async () => [],
+      loadSubagents: async () => [],
       loadSessionTranscript: async () => '',
       switchSession: noop,
       cancelSessionSwitch: () => false,

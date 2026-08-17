@@ -46,8 +46,10 @@ function renderApp(
   const store = createTranscriptStore()
   const approvalSnapshot = Object.freeze({ pending: undefined, answered: false, queued: 0 })
   const questionSnapshot = Object.freeze({ pending: undefined })
+  const emptyAgents = Object.freeze([])
   const props: AppProps = {
     store,
+    subagents: { subscribe: () => noop, getSnapshot: () => emptyAgents },
     approval: { subscribe: () => noop, getSnapshot: () => approvalSnapshot },
     questions: {
       subscribe: () => noop,
@@ -81,6 +83,7 @@ function renderApp(
     switchMode: async id => id,
     createSession: noop,
     loadSessions: async () => [],
+    loadSubagents: async () => [],
     loadSessionTranscript: async () => '',
     switchSession: noop,
     cancelSessionSwitch: () => false,

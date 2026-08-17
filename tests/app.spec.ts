@@ -19,10 +19,12 @@ const resizeClear = '\x1b[r\x1b[0m\x1b[H\x1b[2J\x1b[3J\x1b[H'
 // useSyncExternalStore compares getSnapshot results by identity: these
 // doubles must return one frozen object forever, or React spins into an
 // infinite re-render loop (Maximum update depth exceeded).
-const approvalSnapshot = Object.freeze({ pending: undefined, answered: false })
+const approvalSnapshot = Object.freeze({ pending: undefined, answered: false, queued: 0 })
 const questionSnapshot = Object.freeze({ pending: undefined })
 const unsubscribe = (): void => {}
 const noop = (): void => {}
+/** Shared identity-stable empty subagent feed snapshot (getSnapshot contract). */
+const EMPTY_AGENTS = Object.freeze([])
 
 /** One TTY harness: the PassThrough streams Ink renders through plus the
  * accumulated stdout bytes. */
@@ -60,6 +62,7 @@ function createTty(columns = 100, rows = 24): TtyHarness {
 function appProps(overrides: Partial<AppProps> = {}): AppProps {
   return {
     store: createTranscriptStore(),
+    subagents: { subscribe: () => unsubscribe, getSnapshot: () => EMPTY_AGENTS },
     approval: { subscribe: () => unsubscribe, getSnapshot: () => approvalSnapshot },
     questions: {
       subscribe: () => unsubscribe,
@@ -93,6 +96,7 @@ function appProps(overrides: Partial<AppProps> = {}): AppProps {
     switchMode: async id => id,
     createSession: noop,
     loadSessions: async () => [],
+    loadSubagents: async () => [],
     loadSessionTranscript: async () => '',
     switchSession: noop,
     cancelSessionSwitch: () => false,
@@ -225,6 +229,7 @@ describe('Ctrl+O history details', () => {
     }))
     const instance = render(createElement(App, {
       store,
+      subagents: { subscribe: () => unsubscribe, getSnapshot: () => EMPTY_AGENTS },
       approval: { subscribe: () => unsubscribe, getSnapshot: () => approvalSnapshot },
       questions: {
         subscribe: () => unsubscribe,
@@ -260,6 +265,7 @@ describe('Ctrl+O history details', () => {
       switchMode: async id => id,
       createSession: noop,
       loadSessions: async () => [],
+      loadSubagents: async () => [],
       loadSessionTranscript: async () => '',
       switchSession: noop,
       cancelSessionSwitch: () => false,
@@ -473,6 +479,7 @@ describe('DeepSeek model-switch easter egg', () => {
     ]
     const instance = render(createElement(App, {
       store,
+      subagents: { subscribe: () => unsubscribe, getSnapshot: () => EMPTY_AGENTS },
       approval: { subscribe: () => unsubscribe, getSnapshot: () => approvalSnapshot },
       questions: {
         subscribe: () => unsubscribe,
@@ -506,6 +513,7 @@ describe('DeepSeek model-switch easter egg', () => {
       switchMode: async id => id,
       createSession: noop,
       loadSessions: async () => [],
+      loadSubagents: async () => [],
       loadSessionTranscript: async () => '',
       switchSession: noop,
       cancelSessionSwitch: () => false,
@@ -643,6 +651,7 @@ describe('Ctrl+R reasoning fold', () => {
     ])
     const instance = render(createElement(App, {
       store,
+      subagents: { subscribe: () => unsubscribe, getSnapshot: () => EMPTY_AGENTS },
       approval: { subscribe: () => unsubscribe, getSnapshot: () => approvalSnapshot },
       questions: {
         subscribe: () => unsubscribe,
@@ -676,6 +685,7 @@ describe('Ctrl+R reasoning fold', () => {
       switchMode: async id => id,
       createSession: noop,
       loadSessions: async () => [],
+      loadSubagents: async () => [],
       loadSessionTranscript: async () => '',
       switchSession: noop,
       cancelSessionSwitch: () => false,
@@ -773,6 +783,7 @@ describe('deferred session remount', () => {
     }))
     const props = {
       store,
+      subagents: { subscribe: () => unsubscribe, getSnapshot: () => EMPTY_AGENTS },
       approval: { subscribe: () => unsubscribe, getSnapshot: () => approvalSnapshot },
       questions: {
         subscribe: () => unsubscribe,
@@ -806,6 +817,7 @@ describe('deferred session remount', () => {
       switchMode: async id => id,
       createSession: noop,
       loadSessions: async () => [],
+      loadSubagents: async () => [],
       loadSessionTranscript: async () => '',
       switchSession: noop,
       cancelSessionSwitch: () => false,
@@ -894,6 +906,7 @@ describe('deferred session remount', () => {
     }))
     const props = {
       store,
+      subagents: { subscribe: () => unsubscribe, getSnapshot: () => EMPTY_AGENTS },
       approval: { subscribe: () => unsubscribe, getSnapshot: () => approvalSnapshot },
       questions: {
         subscribe: () => unsubscribe,
@@ -927,6 +940,7 @@ describe('deferred session remount', () => {
       switchMode: async id => id,
       createSession: noop,
       loadSessions: async () => [],
+      loadSubagents: async () => [],
       loadSessionTranscript: async () => '',
       switchSession: noop,
       cancelSessionSwitch: () => false,
@@ -1056,6 +1070,7 @@ describe('context stepless bar', () => {
     } as unknown as SessionEvent)
     const instance = render(createElement(App, {
       store,
+      subagents: { subscribe: () => unsubscribe, getSnapshot: () => EMPTY_AGENTS },
       approval: { subscribe: () => unsubscribe, getSnapshot: () => approvalSnapshot },
       questions: {
         subscribe: () => unsubscribe,
@@ -1089,6 +1104,7 @@ describe('context stepless bar', () => {
       switchMode: async id => id,
       createSession: noop,
       loadSessions: async () => [],
+      loadSubagents: async () => [],
       loadSessionTranscript: async () => '',
       switchSession: noop,
       cancelSessionSwitch: () => false,
@@ -1157,6 +1173,7 @@ describe('light theme rendering', () => {
     setTheme('light')
     const instance = render(createElement(App, {
       store: createTranscriptStore(),
+      subagents: { subscribe: () => noop, getSnapshot: () => EMPTY_AGENTS },
       approval: { subscribe: () => noop, getSnapshot: () => approvalSnapshot },
       questions: {
         subscribe: () => noop,
@@ -1190,6 +1207,7 @@ describe('light theme rendering', () => {
       switchMode: async id => id,
       createSession: noop,
       loadSessions: async () => [],
+      loadSubagents: async () => [],
       loadSessionTranscript: async () => '',
       switchSession: noop,
       cancelSessionSwitch: () => false,
@@ -1557,6 +1575,39 @@ describe('completion menu', () => {
       harness.stdin.write('\r')
       await wait()
       expect(dispatch).toHaveBeenCalledWith('/command-00')
+    } finally {
+      instance.unmount()
+      harness.stdin.destroy()
+      harness.stdout.destroy()
+    }
+  })
+})
+
+describe('/agents panel', () => {
+  it('opens from the composer and lists live feed rows with transcript entry', async () => {
+    const agents = [
+      Object.freeze({ id: 'child-session-1', label: 'explorer', state: 'running' as const, activity: 'tool grep', updatedAt: 3 }),
+    ]
+    const harness = createTty(100, 24)
+    const instance = renderApp(harness, appProps({
+      subagents: { subscribe: () => unsubscribe, getSnapshot: () => agents },
+      loadSubagents: async () => [{
+        id: 'child-session-2', createdAt: 2, cwd: 'C:\\repo', workspace: 'repo',
+        parent: 'root', subagent: true, resumable: false, live: false, persisted: true, preset: 'standard',
+      }],
+    }))
+    try {
+      await wait()
+      expect(harness.output.text).toContain('agents 1 live')
+      harness.stdin.write('/agents')
+      await wait()
+      harness.stdin.write('\r')
+      await wait()
+      expect(harness.output.text).toContain('/agents · 1 live · 2 total')
+      expect(harness.output.text).toContain('explorer · tool grep · live')
+      harness.stdin.write('q')
+      await wait()
+      expect(harness.output.text.lastIndexOf('type a message')).toBeGreaterThan(harness.output.text.lastIndexOf('/agents ·'))
     } finally {
       instance.unmount()
       harness.stdin.destroy()

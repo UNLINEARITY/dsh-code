@@ -44,6 +44,7 @@ import {
 import { createMentions, type MentionsApi } from './mentions.ts'
 import { mountQuestionProvider, type QuestionStore } from './questions.ts'
 import { createTranscriptStore, type TranscriptStore } from './store.ts'
+import { createSubagentFeed, type SubagentFeedView } from './subagents.ts'
 import { parseStatuslineItems } from './render/status.ts'
 import { HISTORY_MAX_ENTRIES, parseHistoryFile, serializeHistoryList } from './history.ts'
 import { watchSkills, type SkillsView } from './skills.ts'
@@ -358,6 +359,9 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   let agent: Agent | undefined
   let session: Session | undefined
   let store: TranscriptStore = createTranscriptStore()
+  // Live subagent activity (child sessions of the current root): one bounded
+  // row per child, folded from the same event bus the transcript feeds on.
+  const subagents: SubagentFeedView & { apply(sessionId: string, event: SessionEvent): void; reset(): void } = createSubagentFeed()
   // File-only mentions from the start: `@` completion works on a bare launch
   // (no session yet); the prepare/activate paths replace this with the full
   // agent-scoped instance that also resolves session references.
@@ -418,7 +422,17 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   // before the first render. The handler reads the current session/store, so
   // the deferred first session of a bare launch is covered by the same feed.
   const off = ctx.on('session/event', (subject: Session, event: SessionEvent) => {
-    if (session !== undefined && subject.id === session.id) store.apply(event)
+    if (session === undefined) return
+    if (subject.id === session.id) {
+      store.apply(event)
+      return
+    }
+    // Child sessions (subagent conversations this root spawned) fold into
+    // the bounded live-activity feed, never the transcript: the root stays
+    // the only durable transcript truth while a running subagent remains
+    // visible. Lineage comes from the child header, same field the session
+    // directory uses to tag `↳` rows.
+    if (subject.header.parentSession === session.id) subagents.apply(subject.id, event)
   })
 
   const commands: CommandsView = watchCommands(ctx)
@@ -720,6 +734,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
         session = next.session
         store = next.store
         mentions = next.mentions
+        subagents.reset()
         pendingMode = undefined
         pendingPermission = undefined
         commands.setAgent(agent)
@@ -966,6 +981,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       session = next.session
       store = next.store
       mentions = next.mentions
+      subagents.reset()
       pendingMode = undefined
       pendingPermission = undefined
       commands.setAgent(agent)
@@ -1110,6 +1126,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       store,
       approval,
       questions,
+      subagents,
       commands,
       skills,
       model,
@@ -1145,6 +1162,12 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       createSession,
       loadSessions,
       loadSessionTranscript,
+      loadSubagents: () => {
+        const current = session
+        if (current === undefined || sessionQuery === undefined) return Promise.resolve([])
+        return loadSessions({ sessions: 'all', cwd: 'all', sort: 'newest', currentCwd: current.header.cwd ?? cwd, query: '' })
+          .then(rows => rows.filter(row => row.parent === current.id))
+      },
       switchSession,
       cancelSessionSwitch,
       loadPlugins: () => listPluginRows(ctx),

@@ -13,6 +13,8 @@ const wait = async (): Promise<void> => new Promise(resolve => setTimeout(resolv
 const unsubscribe = (): void => {}
 const noop = (): void => {}
 const frozen = <T,>(value: T): T => Object.freeze(value)
+/** Shared identity-stable empty subagent feed snapshot (getSnapshot contract). */
+const EMPTY_AGENTS = frozen([])
 
 function tty(columns: number, rows: number): { stdin: NodeJS.ReadStream; stdout: NodeJS.WriteStream; read: () => string } {
   const stdin = Object.assign(new PassThrough(), {
@@ -46,6 +48,7 @@ describe('streaming token bursts', () => {
 
     const props: AppProps = {
       store,
+      subagents: { subscribe: () => unsubscribe, getSnapshot: () => EMPTY_AGENTS },
       approval: { subscribe: () => unsubscribe, getSnapshot: () => approvalSnapshot },
       questions: { subscribe: () => unsubscribe, getSnapshot: () => questionSnapshot, submit: noop, cancel: noop },
       commands: { descriptors: [], subscribe: () => unsubscribe },
@@ -75,6 +78,7 @@ describe('streaming token bursts', () => {
       switchMode: async id => id,
       createSession: noop,
       loadSessions: async () => [],
+      loadSubagents: async () => [],
       loadSessionTranscript: async () => '',
       switchSession: noop,
       cancelSessionSwitch: () => false,

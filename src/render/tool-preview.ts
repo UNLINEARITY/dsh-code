@@ -48,3 +48,30 @@ export function toolArgumentsPreview(args: string, toolName: string): string {
   }
   return boundedRawPreview(args)
 }
+
+/** Visible budget for one delegation prompt row on the tool card. */
+const MAX_PROMPT_CHARS = 160
+
+/**
+ * Bounded prompt preview for delegation-style tools (`subagent`): the
+ * `prompt` argument rendered as the card's second row, so the transcript
+ * shows what the child agent was asked — not just its description label —
+ * while it runs (Codex's SpawnAgent card preview). Anything else returns ''.
+ * @param toolName - the tool the arguments belong to.
+ * @param args - raw JSON arguments string as the model produced it.
+ * @returns the one-line prompt preview, or '' when none applies.
+ */
+export function toolPromptPreview(toolName: string, args: string): string {
+  if (toolName !== 'subagent' || args === '' || args.length > MAX_PARSE_CHARS) return ''
+  try {
+    const parsed: unknown = JSON.parse(args)
+    if (parsed === null || typeof parsed !== 'object') return ''
+    const prompt = (parsed as Record<string, unknown>)['prompt']
+    if (typeof prompt !== 'string' || prompt === '') return ''
+    const flat = prompt.replace(/\s+/gu, ' ').trim()
+    return flat.length > MAX_PROMPT_CHARS ? `${flat.slice(0, MAX_PROMPT_CHARS - 1)}…` : flat
+  } catch {
+    // Malformed arguments degrade to no prompt row, never a thrown parse.
+    return ''
+  }
+}

@@ -3,6 +3,7 @@
 import { createElement, useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
 import { Box, Text, useInput, useStdout } from 'ink'
 import type { ModelRow } from './models.ts'
+import type { SubagentRow } from './subagents.ts'
 import type { PermissionRow } from './permissions.ts'
 import type { PresetRow } from './presets.ts'
 import type { PluginRow } from './plugin-inventory.ts'
@@ -514,5 +515,123 @@ export function EffortPanel({ row, current, select, back }: {
     loading: false,
     query: '',
     footer: '↑↓ choose · enter apply · esc/q back',
+  })
+}
+
+/** One merged /agents row: live feed state or a persisted child session. */
+interface AgentsEntry {
+  readonly id: string
+  readonly label: string
+  readonly activity: string
+  readonly running: boolean
+  readonly done: boolean
+  readonly live: boolean
+}
+
+/**
+ * The /agents panel (the Codex agent-picker contract, read-only): this
+ * conversation's subagent conversations — live rows from the activity feed
+ * first, persisted children the feed has not seen this process after — with
+ * Enter/t opening the child's full transcript in the shared read-only
+ * document view (the same projection the exporter uses).
+ */
+export function AgentsPanel({ live, load, readTranscript, close }: {
+  /** Live feed rows (child sessions observed this process). */
+  live: readonly SubagentRow[]
+  /** Load this session's persisted child sessions by lineage. */
+  load(): Promise<readonly SessionRow[]>
+  /** Read one child session's full transcript as markdown. */
+  readTranscript(id: string, signal?: AbortSignal): Promise<string>
+  close(): void
+}): ReactElement {
+  const [dirRows, setDirRows] = useState<readonly SessionRow[] | undefined>(undefined)
+  const [error, setError] = useState<string>()
+  const [loading, setLoading] = useState(true)
+  const [cursor, setCursor] = useState(0)
+  const [transcript, setTranscript] = useState<{ id: string; text?: string; error?: string }>()
+  const transcriptLoad = useRef<AbortController>()
+  useEffect(() => () => transcriptLoad.current?.abort(), [])
+  const refresh = (): void => {
+    setLoading(true)
+    setError(undefined)
+    Promise.resolve().then(load).then(value => {
+      setDirRows(value)
+      setLoading(false)
+    }, reason => {
+      setError(reason instanceof Error ? reason.message : String(reason))
+      setLoading(false)
+    })
+  }
+  useEffect(refresh, [])
+  // Live feed rows first (they carry the running state), then persisted
+  // children only the directory knows — settled subagents from earlier turns.
+  const rows = useMemo<readonly AgentsEntry[]>(() => {
+    const seen = new Set(live.map(row => row.id))
+    const feedRows: AgentsEntry[] = live.map(row => ({
+      id: row.id,
+      label: row.label,
+      activity: row.activity,
+      running: row.state === 'running',
+      done: row.state === 'done',
+      live: true,
+    }))
+    const persisted: AgentsEntry[] = (dirRows ?? [])
+      .filter(row => !seen.has(row.id))
+      .map(row => ({
+        id: row.id,
+        label: row.title ?? row.id.slice(-12),
+        activity: row.workspace,
+        running: false,
+        done: !row.live,
+        live: row.live,
+      }))
+    return [...feedRows, ...persisted]
+  }, [live, dirRows])
+  useEffect(() => setCursor(value => Math.min(value, Math.max(0, rows.length - 1))), [rows.length])
+  const openTranscript = (): void => {
+    const row = rows[cursor]
+    if (row === undefined) return
+    transcriptLoad.current?.abort()
+    setTranscript({ id: row.id })
+    const controller = new AbortController()
+    transcriptLoad.current = controller
+    Promise.resolve().then(() => readTranscript(row.id, controller.signal)).then(
+      text => {
+        if (!controller.signal.aborted) setTranscript({ id: row.id, text })
+      },
+      reason => {
+        if (!controller.signal.aborted) setTranscript({ id: row.id, error: reason instanceof Error ? reason.message : String(reason) })
+      },
+    )
+  }
+  useInput((input, key) => {
+    if (key.escape || input === 'q') return close()
+    if (input === 'r') return refresh()
+    if (key.upArrow) return setCursor(value => rows.length === 0 ? 0 : (value + rows.length - 1) % rows.length)
+    if (key.downArrow) return setCursor(value => rows.length === 0 ? 0 : (value + 1) % rows.length)
+    if ((key.return || input === 't') && rows[cursor] !== undefined) return openTranscript()
+  }, { isActive: transcript === undefined })
+  if (transcript !== undefined) {
+    return createElement(DocumentPanel, {
+      title: `subagent · ${transcript.id.slice(-12)}`,
+      text: transcript.text,
+      error: transcript.error,
+      close: () => {
+        transcriptLoad.current?.abort()
+        setTranscript(undefined)
+      },
+    })
+  }
+  return createElement(ListFrame, {
+    title: `/agents · ${live.length} live · ${rows.length} total`,
+    rows: rows.map(row => ({
+      key: row.id,
+      text: `${row.running ? '●' : row.done ? '✓' : row.live ? '⏸' : '○'} ${row.label} · ${row.activity}${row.live ? ' · live' : ''}`,
+    })),
+    cursor,
+    loading,
+    ...error === undefined ? {} : { error },
+    query: '',
+    footer: '↑↓ choose · enter/t transcript · r refresh · esc close',
   })
 }

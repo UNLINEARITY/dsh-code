@@ -22,7 +22,7 @@ import type {} from '@deepseek-ai/dsh-plan-mode'
 import type {} from '@deepseek-ai/dsh-permission-presets'
 import type {} from '@deepseek-ai/dsh-sandbox-policy'
 import type {} from '@deepseek-ai/dsh-session-title'
-import { toolArgumentsPreview } from './tool-preview.ts'
+import { toolArgumentsPreview, toolPromptPreview } from './tool-preview.ts'
 import { toolResultDetail, type ToolDetail } from './tool-detail.ts'
 
 /** In-flight UI buffers are tails; the assembled assistant message is authoritative. */
@@ -85,6 +85,8 @@ export interface ToolEntry {
   arguments: string
   /** Bounded human-meaningful arguments preview for the tool card. */
   preview: string
+  /** Bounded delegation prompt (subagent cards' second row), '' when none. */
+  prompt: string
   /** Execution state; `running` until the paired result lands. */
   state: 'running' | 'done' | 'error'
   /** Bounded first text block of the result, empty until it lands. */
@@ -525,6 +527,7 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
           name: data.name,
           arguments: data.arguments,
           preview: toolArgumentsPreview(data.arguments, data.name),
+          prompt: toolPromptPreview(data.name, data.arguments),
           state: 'running',
           summary: '',
           detail: undefined,
@@ -1098,6 +1101,7 @@ export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent):
         name: data.name,
         arguments: data.arguments,
         preview: toolArgumentsPreview(data.arguments, data.name),
+        prompt: toolPromptPreview(data.name, data.arguments),
         state: 'running',
         summary: '',
         detail: undefined,

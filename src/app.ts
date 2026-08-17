@@ -66,7 +66,8 @@ import type { ProviderSettingsDirectory, ProviderTargetView } from './provider-s
 import type { QuestionSnapshot, QuestionStore } from './questions.ts'
 import type { SkillsView, SkillRow } from './skills.ts'
 import type { MentionCandidate } from './mentions.ts'
-import { EffortPanel, ModePanel, HistoryPanel, PermissionPanel, PluginPanel, ResumePanel, StatuslinePanel } from './kernel-panels.ts'
+import type { SubagentFeedView, SubagentRow } from './subagents.ts'
+import { AgentsPanel, EffortPanel, ModePanel, HistoryPanel, PermissionPanel, PluginPanel, ResumePanel, StatuslinePanel } from './kernel-panels.ts'
 import type { PresetRow } from './presets.ts'
 import type { PermissionRow } from './permissions.ts'
 import type { PluginRow } from './plugin-inventory.ts'
@@ -131,6 +132,8 @@ export interface AppProps {
   approval: ApprovalStore
   /** ask_user_question store fed by the single UI provider. */
   questions: QuestionStore
+  /** Live subagent activity feed (child sessions of the current root). */
+  subagents: SubagentFeedView
   /** Live slash-command descriptor list (completion candidates). */
   commands: CommandsView
   /** Live user-invocable skill catalog (completion candidates). */
@@ -193,6 +196,8 @@ export interface AppProps {
   createSession(mode?: string): void
   loadSessions(options: SessionDirectoryOptions, signal?: AbortSignal): Promise<readonly SessionRow[]>
   loadSessionTranscript(id: string, signal?: AbortSignal): Promise<string>
+  /** Load this session's subagent conversations (children by lineage). */
+  loadSubagents(): Promise<readonly SessionRow[]>
   switchSession(row: SessionRow): void
   cancelSessionSwitch(): boolean
   loadPlugins(): readonly PluginRow[]
@@ -689,6 +694,30 @@ function Header({ resumed }: { resumed: boolean }): ReactElement {
 /** Todo status glyph: web TodoPanel's three-state marker. */
 function todoMark(status: TodoItem['status']): string {
   return status === 'completed' ? '✓' : status === 'in_progress' ? '●' : '○'
+}
+
+/**
+ * One-row live subagent summary (the Codex agent status feed, compressed to
+ * the transcript's budget): running count, total, and the most recently
+ * active child's current activity. One line, never more — the full view is
+ * the /agents panel.
+ */
+function AgentsLine({ rows }: { rows: readonly SubagentRow[] }): ReactElement | undefined {
+  if (rows.length === 0) return undefined
+  const running = rows.filter(row => row.state !== 'done').length
+  const newest = [...rows].sort((left, right) => right.updatedAt - left.updatedAt)[0]!
+  const mark = newest.state === 'done' ? '✓' : newest.state === 'idle' ? '⏸' : '●'
+  return createElement(
+    Box,
+    { paddingX: 1 },
+    createElement(
+      Text,
+      { color: inkColor(getPalette().brand), bold: true, wrap: 'truncate-end' },
+      `agents ${running} live`,
+      createElement(Text, { color: inkColor(getPalette().dim) }, ` · ${rows.length} total · /agents`),
+      createElement(Text, { color: inkColor(getPalette().text) }, ` · ${mark} ${newest.label} ${newest.activity}`),
+    ),
+  )
 }
 
 /** One-row todo summary: task count cannot grow the live Ink tree. */
@@ -1752,6 +1781,7 @@ function HelpPanel({ descriptors, skills, commandError, skillError, onClose }: {
     createElement(Box, { key: 'local-statusline' }, row('/statusline', 'customize the status line items')),
     createElement(Box, { key: 'local-theme' }, row('/theme', 'switch the color theme')),
     createElement(Box, { key: 'local-history' }, row('/history', 'search and recall past prompts')),
+    createElement(Box, { key: 'local-agents' }, row('/agents', 'inspect subagent sessions of this conversation')),
     createElement(Box, { key: 'local-clear' }, row('/clear', 'clear the screen')),
     createElement(Box, { key: 'local-export' }, row('/export', 'export the transcript to markdown (/export [path])')),
     createElement(Box, { key: 'local-title' }, row('/title', 'rename this session (/title <text>)')),
@@ -2088,6 +2118,7 @@ export function completionCandidates(
     { label: '/statusline', description: 'customize the status line', origin: 'command' },
     { label: '/theme', description: 'switch the color theme', origin: 'command' },
     { label: '/history', description: 'search and recall past prompts', origin: 'command' },
+    { label: '/agents', description: 'inspect subagent sessions of this conversation', origin: 'command' },
     { label: '/clear', description: 'clear the screen', origin: 'command' },
     { label: '/export', description: 'export the transcript to markdown', origin: 'command' },
     { label: '/title', description: 'rename this session', origin: 'command' },
@@ -2190,7 +2221,7 @@ function CompletionMenu({ active, mention, index, rows }: {
  * While a modal (approval / question / model panel) owns the keys, the
  * box passes every key through untouched.
  */
-function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openEffort, openHelp, openMode, openPermission, openResume, openPlugin, openStatusline, openTheme, openHistory, createSession, cancelSessionSwitch, notify, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, cyclePermission, exportTranscript, renameTitle, recallSpace, recordLocal, recordHistory, queued, cancelQueued, historyFill, historyConsumed, waveTier, waveStyle }: {
+function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openEffort, openHelp, openMode, openPermission, openResume, openPlugin, openStatusline, openTheme, openHistory, openAgents, createSession, cancelSessionSwitch, notify, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, cyclePermission, exportTranscript, renameTitle, recallSpace, recordLocal, recordHistory, queued, cancelQueued, historyFill, historyConsumed, waveTier, waveStyle }: {
   active: boolean
   frozen: boolean
   busy: boolean
@@ -2210,6 +2241,8 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   openStatusline(): void
   openTheme(): void
   openHistory(): void
+  /** Open the /agents panel (live subagent feed + transcript entry). */
+  openAgents(): void
   createSession(mode?: string): void
   cancelSessionSwitch(): boolean
   notify(text: string, tone?: NoticeTone): void
@@ -2571,6 +2604,10 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
       }
       if (text === '/history') {
         openHistory()
+        return
+      }
+      if (text === '/agents') {
+        openAgents()
         return
       }
       if (busy && !text.startsWith('/')) {
@@ -3137,6 +3174,7 @@ export function App(props: AppProps): ReactElement {
   const [statuslineItems, setStatuslineItems] = useState<readonly StatusItemId[]>(() => parseStatuslineItems(props.statusline))
   const [themeOpen, setThemeOpen] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
+  const [agentsOpen, setAgentsOpen] = useState(false)
   /** The /history panel's accepted entry: text plus its recall-space index. */
   const [historyFill, setHistoryFill] = useState<{ text: string; index: number } | undefined>(undefined)
   /** Submissions recorded in this process (Codex local history; persistent file stays in the runner). */
@@ -3173,10 +3211,11 @@ export function App(props: AppProps): ReactElement {
   const [refreshEpoch, setRefreshEpoch] = useState(0)
   const approvalSnapshot = useSyncExternalStore(props.approval.subscribe, props.approval.getSnapshot)
   const questionSnapshot = useSyncExternalStore(props.questions.subscribe, props.questions.getSnapshot)
+  const agentRows = useSyncExternalStore(props.subagents.subscribe, props.subagents.getSnapshot)
   const approvalPending = approvalSnapshot.pending !== undefined
   const questionPending = questionSnapshot.pending !== undefined
   // While any modal owns the keys, the prompt box passes everything through.
-  const inputActive = !modelOpen && !helpOpen && !modeOpen && !permissionOpen && !resumeOpen && !pluginOpen && !statuslineOpen && !themeOpen && !historyOpen && !verboseOpen && !approvalPending && !questionPending
+  const inputActive = !modelOpen && !helpOpen && !modeOpen && !permissionOpen && !resumeOpen && !pluginOpen && !statuslineOpen && !themeOpen && !historyOpen && !agentsOpen && !verboseOpen && !approvalPending && !questionPending
 
   // Human questions outrank local inspectors. Close the lower modal instead
   // of leaving an approval/question visible but keyboard-locked behind it.
@@ -3194,6 +3233,7 @@ export function App(props: AppProps): ReactElement {
     setStatuslineOpen(false)
     setThemeOpen(false)
     setHistoryOpen(false)
+    setAgentsOpen(false)
     setVerboseOpen(false)
   }, [approvalPending, questionPending])
 
@@ -3297,9 +3337,9 @@ export function App(props: AppProps): ReactElement {
           ? Math.max(1, Math.floor(streamRows / 3))
           : 1
   const answerRows = view.streaming === '' ? 0 : Math.max(1, streamRows - reasoningRows)
-  const transcriptVisible = !modelOpen && !helpOpen && !modeOpen && !permissionOpen && !resumeOpen && !pluginOpen && !statuslineOpen && !themeOpen && !historyOpen && !verboseOpen && !approvalPending && !questionPending
+  const transcriptVisible = !modelOpen && !helpOpen && !modeOpen && !permissionOpen && !resumeOpen && !pluginOpen && !statuslineOpen && !themeOpen && !historyOpen && !agentsOpen && !verboseOpen && !approvalPending && !questionPending
   const inspectorVisible = verboseOpen && !approvalPending && !questionPending
-  const modalVisible = modelOpen || helpOpen || modeOpen || permissionOpen || resumeOpen || pluginOpen || statuslineOpen || themeOpen || historyOpen || inspectorVisible || approvalPending || questionPending
+  const modalVisible = modelOpen || helpOpen || modeOpen || permissionOpen || resumeOpen || pluginOpen || statuslineOpen || themeOpen || historyOpen || agentsOpen || inspectorVisible || approvalPending || questionPending
   const closeInspector = useCallback((): void => {
     setVerboseOpen(false)
   }, [])
@@ -3471,6 +3511,7 @@ export function App(props: AppProps): ReactElement {
       )
       : undefined,
     transcriptVisible ? createElement(TodoPanel, { todos: view.todos }) : undefined,
+    transcriptVisible ? createElement(AgentsLine, { rows: agentRows }) : undefined,
     createElement(QuestionBar, { store: props.questions, snapshot: questionSnapshot, locked: false }),
     createElement(ApprovalBar, { snapshot: approvalSnapshot, locked: questionPending, notify }),
     modelSurface,
@@ -3567,6 +3608,14 @@ export function App(props: AppProps): ReactElement {
         close: () => setHistoryOpen(false),
       })
       : undefined,
+    agentsOpen && !approvalPending && !questionPending
+      ? createElement(AgentsPanel, {
+        live: agentRows,
+        load: props.loadSubagents,
+        readTranscript: props.loadSessionTranscript,
+        close: () => setAgentsOpen(false),
+      })
+      : undefined,
     notice === undefined
       ? undefined
       : createElement(NoticeLine, {
@@ -3645,6 +3694,7 @@ export function App(props: AppProps): ReactElement {
         openStatusline: () => setStatuslineOpen(true),
         openTheme: () => setThemeOpen(true),
         openHistory: () => setHistoryOpen(true),
+        openAgents: () => setAgentsOpen(true),
         createSession: props.createSession,
         cancelSessionSwitch: props.cancelSessionSwitch,
         notify,
