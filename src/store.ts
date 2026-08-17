@@ -3,15 +3,17 @@
  * and notifies subscribers. The renderer subscribes through
  * `useSyncExternalStore`; the runner owns event feeding.
  *
- * Notifications stay synchronous per applied event on purpose: the view is
- * always current when `apply` returns, and the listener side owns burst
- * coalescing — React 18 (react-reconciler 0.29, used by Ink 5) reuses an
- * already-scheduled sync callback in `ensureRootIsScheduled`, so N `apply`s
- * inside one synchronous burst already render once with the final snapshot,
- * while events delivered across macrotasks (streaming chunks) each render
- * once for live UI. Deferring the notify here would either break the
- * documented synchronous contract or add streaming latency, without fixing
- * anything the scheduler does not already handle.
+ * Notification coalescing: the fold stays synchronous — `getView()` always
+ * returns the latest state the moment `apply` returns — but listener
+ * notification is scheduled on a microtask and deduplicated, so N events
+ * delivered inside one synchronous drain (the zai/GLM adapter drains its
+ * token buffer in sub-millisecond bursts) produce ONE React re-render.
+ * Synchronous per-event notification instead cascades one
+ * `useSyncExternalStore` force-update per token inside a single flush; the
+ * reconciler counts those as nested passive updates and floods React's
+ * "Maximum update depth exceeded" warning past 50 events, besides rendering
+ * the whole live tree once per token. A microtask keeps latency within the
+ * same macrotask, before Ink's throttled paint.
  *
  * @module @deepseek-ai/dsh-tui/store
  */
@@ -44,6 +46,17 @@ export interface TranscriptStore {
 export function createTranscriptStore(replay?: readonly SessionEvent[]): TranscriptStore {
   let view = replay === undefined ? createTranscriptView() : projectEvents(replay)
   const listeners = new Set<() => void>()
+  let scheduled = false
+  const notify = (): void => {
+    if (scheduled) return
+    scheduled = true
+    queueMicrotask(() => {
+      scheduled = false
+      for (const listener of listeners) {
+        listener()
+      }
+    })
+  }
   return {
     getView: () => view,
     subscribe(listener: () => void): () => void {
@@ -56,15 +69,11 @@ export function createTranscriptStore(replay?: readonly SessionEvent[]): Transcr
       const next = projectEvent(view, event)
       if (next === view) return
       view = next
-      for (const listener of listeners) {
-        listener()
-      }
+      notify()
     },
     reset(): void {
       view = createTranscriptView()
-      for (const listener of listeners) {
-        listener()
-      }
+      notify()
     },
   }
 }
