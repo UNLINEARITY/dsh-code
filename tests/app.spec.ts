@@ -1531,3 +1531,36 @@ describe('queued inbox rows in a mixed mutable tail', () => {
     }
   })
 })
+
+describe('completion menu', () => {
+  it('accepts the highlighted candidate on Enter (Codex list parity with Tab)', async () => {
+    const harness = createTty(100, 24)
+    const dispatch = vi.fn()
+    const instance = renderApp(harness, appProps({
+      dispatch,
+      commands: {
+        descriptors: [{ name: 'command-00', description: 'registry command' }],
+        subscribe: () => unsubscribe,
+      },
+    }))
+    try {
+      await wait()
+      harness.stdin.write('/command-0')
+      await wait()
+      // The menu is open and nothing has been submitted yet.
+      expect(harness.output.text).toContain('/command-00')
+      harness.stdin.write('\r')
+      await wait()
+      expect(dispatch).not.toHaveBeenCalled()
+      // The accepted candidate landed in the composer with its trailing
+      // space; the second return submits it through the registry path.
+      harness.stdin.write('\r')
+      await wait()
+      expect(dispatch).toHaveBeenCalledWith('/command-00')
+    } finally {
+      instance.unmount()
+      harness.stdin.destroy()
+      harness.stdout.destroy()
+    }
+  })
+})

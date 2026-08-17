@@ -2289,6 +2289,39 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
       }))
       : candidates
 
+  /** Accept the highlighted completion-menu candidate into the draft. */
+  const acceptMenuCandidate = (): void => {
+    if (mentionActive && mentionToken !== undefined) {
+      const row = mentionRows[completionIndex % mentionRows.length]
+      if (row !== undefined) {
+        // Session rows carry the canonical @[label](dsh-session:…) token;
+        // file rows insert `@path` (directories keep their trailing slash).
+        const insertion = row.label.startsWith('@')
+          ? row.label
+          : `@${row.label}${row.kind === 'directory' ? '/' : ''}`
+        setValue(value.slice(0, mentionToken.start) + insertion + value.slice(cursor))
+        setCursor(mentionToken.start + insertion.length)
+      }
+    } else if (pathActive) {
+      const row = pathRows[completionIndex % Math.max(1, pathRows.length)]
+      if (row !== undefined) {
+        // Bare path completion replaces the typed token with the chosen
+        // workspace path (directories keep their trailing slash).
+        const insertion = row.kind === 'directory' ? `${row.label}/` : row.label
+        setValue(value.slice(0, pathTokenStart) + insertion + value.slice(cursor))
+        setCursor(pathTokenStart + insertion.length)
+      }
+    } else {
+      const candidate = candidates[completionIndex % candidates.length]
+      if (candidate !== undefined) {
+        setValue(`${candidate.label} `)
+        setCursor(candidate.label.length + 1)
+      }
+    }
+    setCompletionIndex(0)
+    setDismissedMenuValue(undefined)
+  }
+
   useInput((input, key) => {
     // Modal ownership: approval/question/model dialogs consume all keys.
     if (!active) return
@@ -2362,6 +2395,18 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
         setCursor(cursor + 1)
         setDismissedMenuValue(undefined)
         return
+      }
+      // Enter on an open completion menu accepts the highlighted candidate
+      // (Codex list parity: Tab and Enter are both accept keys — many users
+      // never discover Tab) — UNLESS the draft already spells one candidate
+      // exactly, in which case Enter submits it (typing a full "/effort" and
+      // pressing return must run the command, not re-accept its own text).
+      if (menuActive) {
+        const exactSlash = !mentionActive && !pathActive && candidates.some(candidate => candidate.label === value)
+        if (!exactSlash) {
+          acceptMenuCandidate()
+          return
+        }
       }
       const text = value.trim()
       setValue('')
@@ -2506,35 +2551,7 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
       return
     }
     if (key.tab && menuActive) {
-      if (mentionActive && mentionToken !== undefined) {
-        const row = mentionRows[completionIndex % mentionRows.length]
-        if (row !== undefined) {
-          // Session rows carry the canonical @[label](dsh-session:…) token;
-          // file rows insert `@path` (directories keep their trailing slash).
-          const insertion = row.label.startsWith('@')
-            ? row.label
-            : `@${row.label}${row.kind === 'directory' ? '/' : ''}`
-          setValue(value.slice(0, mentionToken.start) + insertion + value.slice(cursor))
-          setCursor(mentionToken.start + insertion.length)
-        }
-      } else if (pathActive) {
-        const row = pathRows[completionIndex % Math.max(1, pathRows.length)]
-        if (row !== undefined) {
-          // Bare path completion replaces the typed token with the chosen
-          // workspace path (directories keep their trailing slash).
-          const insertion = row.kind === 'directory' ? `${row.label}/` : row.label
-          setValue(value.slice(0, pathTokenStart) + insertion + value.slice(cursor))
-          setCursor(pathTokenStart + insertion.length)
-        }
-      } else {
-        const candidate = candidates[completionIndex % candidates.length]
-        if (candidate !== undefined) {
-          setValue(`${candidate.label} `)
-          setCursor(candidate.label.length + 1)
-        }
-      }
-      setCompletionIndex(0)
-      setDismissedMenuValue(undefined)
+      acceptMenuCandidate()
       return
     }
     if (key.backspace || key.delete) {
