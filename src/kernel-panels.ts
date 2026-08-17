@@ -743,15 +743,11 @@ export function SubagentPanel({ current, load, pick, inherit, close }: {
     if (index >= 0) setCursor(index + 1)
   }, [rows, current])
   useEffect(() => setCursor(value => Math.min(value, rows.length)), [rows.length])
-  if (effortFor !== undefined) {
-    return createElement(EffortPanel, {
-      row: effortFor,
-      current: current === '' ? undefined : current.split('@')[1],
-      select: effortId => pick(effortFor, effortId),
-      back: () => setEffortFor(undefined),
-    })
-  }
+  // Hooks stay unconditional: the effort stage below swaps the rendered
+  // subtree but must never skip the input hook (an early return here would
+  // change the hook count when the stage opens and closes).
   useInput((input, key) => {
+    if (effortFor !== undefined) return
     if (key.escape || input === 'q') return close()
     if (input === 'r' && !loading) return refresh()
     if (key.upArrow) return setCursor(value => (value + rows.length) % (rows.length + 1))
@@ -768,6 +764,14 @@ export function SubagentPanel({ current, load, pick, inherit, close }: {
       pick(row, effortId)
     }
   })
+  if (effortFor !== undefined) {
+    return createElement(EffortPanel, {
+      row: effortFor,
+      current: current === '' ? undefined : current.split('@')[1],
+      select: effortId => pick(effortFor, effortId),
+      back: () => setEffortFor(undefined),
+    })
+  }
   return createElement(ListFrame, {
     title: `/subagent — model for delegated agents${current === '' ? '' : ` · override ${current}`}`,
     rows: [

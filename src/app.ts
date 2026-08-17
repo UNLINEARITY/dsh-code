@@ -3672,8 +3672,10 @@ export function App(props: AppProps): ReactElement {
         load: props.loadModels,
         pick: (row: ModelRow, effortId?: string) => {
           try {
+            // The runner's label already carries the effort suffix
+            // (`provider/model@effort`), so no second append here.
             const label = props.setSubagentModel(row, effortId)
-            notify(`subagents → ${label}${effortId === undefined || effortId === '' ? '' : `@${effortId}`}`)
+            notify(`subagents → ${label}`)
             setSubagentOpen(false)
           } catch (reason: unknown) {
             notify(`subagent model change failed: ${reason instanceof Error ? reason.message : String(reason)}`, 'error')
