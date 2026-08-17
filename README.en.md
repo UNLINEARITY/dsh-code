@@ -39,10 +39,17 @@ Requires Node `^22.19 || >=24` and the preview `dsh` CLI. `DEEPSEEK_API_KEY` is 
 ```sh
 npm install -g @deepseek-ai/dsh dsh-code
 npm install -g pnpm
-dsh plugin --profile cli add dsh-code@0.9.0
+dsh plugin --profile cli add dsh-code@0.9.1
 ```
 
-> Note: pnpm ignores packages published less than 24 hours ago, so pin `dsh-code@0.9.0` on the release day; the version can be omitted afterwards. npm installs are not affected.
+> Note: pnpm ignores packages published less than 24 hours ago, so pin `dsh-code@0.9.1` on the release day; the version can be omitted afterwards. npm installs are not affected.
+
+### Updating
+
+```sh
+npm install -g dsh-code@0.9.1
+dsh plugin --profile cli add dsh-code@0.9.1
+```
 
 Available launch commands:
 
