@@ -56,6 +56,7 @@ import {
   applyPendingPermission,
   cyclePermission as cyclePermissionPreset,
   effectivePermission,
+  listPermissionRows,
   permissionPresetsFrom,
   selectPermission,
 } from './permissions.ts'
@@ -753,11 +754,10 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       )
       return
     }
-    if (line === '/permission' || line.startsWith('/permission ')) {
-      const wanted = line.slice(11).trim()
+    if (line.startsWith('/permission ')) {
       try {
-        const selected = setPermissionAction(wanted)
-        bridge.notify(wanted === '' ? `permission ${selected}` : `permission → ${selected}`)
+        const selected = setPermissionAction(line.slice(12).trim())
+        bridge.notify(`permission → ${selected}`)
       } catch (error: unknown) {
         bridge.notify(`permission change failed: ${error instanceof Error ? error.message : String(error)}`, 'error')
       }
@@ -803,9 +803,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     if (permissionPresets === undefined || permissionPresets.names.length === 0) {
       throw new Error('permission presets are not mounted in this composition')
     }
-    if (id === '') {
-      return `${effectivePermission(permissionPresets, session, pendingPermission)} · ${permissionPresets.names.join(' | ')}`
-    }
+    if (id === '') throw new Error('usage: /permission <preset>')
     const selected = selectPermission(permissionPresets, session, id)
     if (session === undefined) {
       pendingPermission = selected
@@ -1141,6 +1139,9 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       renameTitle,
       loadPresets: () => presets.list(),
       switchMode: switchModeAction,
+      loadPermissions: () => permissionPresets === undefined
+        ? Promise.reject(new Error('permission presets are not mounted in this composition'))
+        : Promise.resolve(listPermissionRows(permissionPresets)),
       createSession,
       loadSessions,
       loadSessionTranscript,

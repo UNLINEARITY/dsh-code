@@ -3,6 +3,12 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 
+/** One selectable permission preset row for the /permission panel. */
+export interface PermissionRow {
+  readonly id: string
+  readonly description?: string
+}
+
 /** Structural boundary over Harness permission presets; values stay service-owned. */
 export interface PermissionPresetsService {
   readonly names: readonly string[]
@@ -10,6 +16,8 @@ export interface PermissionPresetsService {
   resolve(name: string): unknown
   current(events: readonly SessionEvent[]): string
   set(session: Session, preset: string): void
+  /** Client presentation metadata for one preset; may reject unknown names. */
+  optionOf?(name: string): { name: string; description?: string } | undefined
 }
 
 /** Read the optional Harness service without importing its runtime package. */
@@ -58,4 +66,20 @@ export function applyPendingPermission(
   if (pending !== undefined && effectivePermission(service, session, undefined) !== pending) {
     selectPermission(service, session, pending)
   }
+}
+
+/**
+ * List every switchable preset for the /permission panel, table order kept.
+ * Description lookup failures degrade to an undocumented row, never a failed
+ * panel load — `optionOf` rejects names its table no longer knows.
+ */
+export function listPermissionRows(service: PermissionPresetsService): readonly PermissionRow[] {
+  return service.names.map((id) => {
+    if (service.optionOf === undefined) return { id }
+    try {
+      return { id, description: service.optionOf(id)?.description }
+    } catch {
+      return { id }
+    }
+  })
 }

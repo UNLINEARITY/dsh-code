@@ -89,6 +89,7 @@ function appProps(overrides: Partial<AppProps> = {}): AppProps {
     exportTranscript: async () => {},
     renameTitle: () => '',
     loadPresets: async () => [],
+    loadPermissions: async () => [],
     switchMode: async id => id,
     createSession: noop,
     loadSessions: async () => [],
@@ -138,19 +139,32 @@ describe('pre-session controls', () => {
       setPermission,
       cyclePermission,
       loadPresets: async () => [{ id: 'minimal', trust: 'system' }],
+      loadPermissions: async () => [{ id: 'read-only' }, { id: 'workspace-write' }, { id: 'danger-full-access' }],
     }))
 
     try {
       await wait()
       expect(harness.output.text).toContain('/mode standard')
-      expect(harness.output.text).toContain('/permission workspace-write')
+      expect(harness.output.text).toContain('workspace-write')
 
-      harness.stdin.write('/permission read-only')
+      // Bare /permission opens the bounded selection panel; enter applies
+      // the cursor row without creating a session.
+      harness.stdin.write('/permission')
+      await wait()
+      harness.stdin.write('\r')
       await wait()
       harness.stdin.write('\r')
       await wait()
       expect(setPermission).toHaveBeenCalledWith('read-only')
-      expect(dispatch).not.toHaveBeenCalled()
+      expect(dispatch).not.toHaveBeenCalledWith(expect.stringContaining('/permission'))
+
+      // The direct-argument form routes through dispatch (the runner owns
+      // pre-session validation), never the App-level prop.
+      harness.stdin.write('/permission danger-full-access')
+      await wait()
+      harness.stdin.write('\r')
+      await wait()
+      expect(dispatch).toHaveBeenCalledWith('/permission danger-full-access')
 
       harness.stdin.write('\x1b[Z')
       await wait()
@@ -242,6 +256,7 @@ describe('Ctrl+O history details', () => {
       exportTranscript: async () => {},
       renameTitle: () => '',
       loadPresets: async () => [],
+      loadPermissions: async () => [],
       switchMode: async id => id,
       createSession: noop,
       loadSessions: async () => [],
@@ -487,6 +502,7 @@ describe('DeepSeek model-switch easter egg', () => {
       exportTranscript: async () => {},
       renameTitle: () => '',
       loadPresets: async () => [],
+      loadPermissions: async () => [],
       switchMode: async id => id,
       createSession: noop,
       loadSessions: async () => [],
@@ -656,6 +672,7 @@ describe('Ctrl+R reasoning fold', () => {
       exportTranscript: async () => {},
       renameTitle: () => '',
       loadPresets: async () => [],
+      loadPermissions: async () => [],
       switchMode: async id => id,
       createSession: noop,
       loadSessions: async () => [],
@@ -785,6 +802,7 @@ describe('deferred session remount', () => {
       exportTranscript: async () => {},
       renameTitle: () => '',
       loadPresets: async () => [],
+      loadPermissions: async () => [],
       switchMode: async id => id,
       createSession: noop,
       loadSessions: async () => [],
@@ -905,6 +923,7 @@ describe('deferred session remount', () => {
       exportTranscript: async () => {},
       renameTitle: () => '',
       loadPresets: async () => [],
+      loadPermissions: async () => [],
       switchMode: async id => id,
       createSession: noop,
       loadSessions: async () => [],
@@ -972,7 +991,7 @@ describe('deferred session remount', () => {
   })
 })
 
-describe('context segmented bar', () => {
+describe('context stepless bar', () => {
   it('paints one DeepSeek-blue run per content type with the usage readout', async () => {
     // The color assertions need truecolor ANSI output; force level 3 and
     // restore the baseline in the finally block.
@@ -1066,6 +1085,7 @@ describe('context segmented bar', () => {
       exportTranscript: async () => {},
       renameTitle: () => '',
       loadPresets: async () => [],
+      loadPermissions: async () => [],
       switchMode: async id => id,
       createSession: noop,
       loadSessions: async () => [],
@@ -1089,17 +1109,13 @@ describe('context segmented bar', () => {
 
     try {
       await wait()
-      // The segmented bar: centered per-type labels, dim free track, and the
+      // The stepless bar: one solid fill run, dim dotted track, and the
       // right-aligned readout, all on one primary-row budget.
       const stripAnsi = (text: string): string => text.replace(/\x1b\[[0-9;]*m/g, '')
-      expect(stripAnsi(output)).toContain('sys pr  ast th  tl ▱▱78%')
-      // Each segment tone paints its own blue run around its label (the
-      // mapping-layer regression: all five ctx* tones resolve to colors).
-      expect(output).toMatch(/38;2;72;104;178m[^\x1b]*sys/) // system → brandDeep
-      expect(output).toMatch(/38;2;65;118;230m[^\x1b]*pr/) // prompt → brand
-      expect(output).toMatch(/38;2;86;134;254m[^\x1b]*ast/) // assistant → brandMid
-      expect(output).toMatch(/38;2;103;158;254m[^\x1b]*th/) // thinking → brandBright
-      expect(output).toMatch(/38;2;125;211;252m[^\x1b]*tl/) // tools → code sky
+      expect(stripAnsi(output)).toContain('███████████████████░░78%')
+      // The fill paints one brand-blue run; the dotted track reads dim.
+      expect(output).toMatch(/38;2;65;118;230m[^\x1b]*█/) // ctxFill → brand
+      expect(output).toMatch(/38;2;129;133;140m[^\x1b]*░/) // track → dim gray
     } finally {
       instance.unmount()
       stdin.destroy()
@@ -1170,6 +1186,7 @@ describe('light theme rendering', () => {
       exportTranscript: async () => {},
       renameTitle: () => '',
       loadPresets: async () => [],
+      loadPermissions: async () => [],
       switchMode: async id => id,
       createSession: noop,
       loadSessions: async () => [],

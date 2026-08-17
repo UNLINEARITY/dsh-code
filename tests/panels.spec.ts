@@ -5,7 +5,7 @@ import { createElement } from 'react'
 import { render } from 'ink'
 import { describe, expect, it, vi } from 'vitest'
 import { App } from '../src/app.ts'
-import { HistoryPanel, ModePanel, ResumePanel } from '../src/kernel-panels.ts'
+import { HistoryPanel, ModePanel, PermissionPanel, ResumePanel } from '../src/kernel-panels.ts'
 import { createTranscriptStore } from '../src/store.ts'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { DEFAULT_STATUSLINE_ITEMS } from '../src/render/status.ts'
@@ -338,6 +338,7 @@ describe('exclusive panel height budgets', () => {
       exportTranscript: async () => {},
       renameTitle: () => '',
       loadPresets: async () => [],
+      loadPermissions: async () => [],
       switchMode: async id => id,
       createSession: noop,
       loadSessions: async () => [],
@@ -502,6 +503,7 @@ describe('queued messages and global recall', () => {
       exportTranscript: async () => {},
       renameTitle: () => '',
       loadPresets: async () => [],
+      loadPermissions: async () => [],
       switchMode: async id => id,
       createSession: noop,
       loadSessions: async () => [],
@@ -615,6 +617,7 @@ describe('queued messages and global recall', () => {
       exportTranscript: async () => {},
       renameTitle: () => '',
       loadPresets: async () => [],
+      loadPermissions: async () => [],
       switchMode: async id => id,
       createSession: noop,
       loadSessions: async () => [],
@@ -735,6 +738,7 @@ describe('queued messages and global recall', () => {
       exportTranscript: async () => {},
       renameTitle: () => '',
       loadPresets: async () => [],
+      loadPermissions: async () => [],
       switchMode: async id => id,
       createSession: noop,
       loadSessions: async () => [],
@@ -878,6 +882,7 @@ describe('/model effort stage', () => {
       exportTranscript: async () => {},
       renameTitle: () => '',
       loadPresets: async () => [],
+      loadPermissions: async () => [],
       switchMode: async id => id,
       createSession: noop,
       loadSessions: async () => [],
@@ -1082,6 +1087,7 @@ describe('/effort command', () => {
       exportTranscript: async () => {},
       renameTitle: () => '',
       loadPresets: async () => [],
+      loadPermissions: async () => [],
       switchMode: async id => id,
       createSession: noop,
       loadSessions: async () => [],
@@ -1176,6 +1182,51 @@ describe('panel row sanitization', () => {
       expect(output).toContain('desc\\u202eFlipped ↵ newline')
       expect(output).not.toContain('\x1b]')
       expect(output).not.toContain('\u202e')
+    } finally {
+      instance.unmount()
+      stdin.destroy()
+      stdout.destroy()
+    }
+  })
+
+  it('lists and selects permission presets from the /permission panel', async () => {
+    const { stdin, stdout, read } = fakeStreams()
+    const selected: string[] = []
+    let closed = false
+    const instance = render(createElement(PermissionPanel, {
+      current: 'workspace-write',
+      load: async () => [
+        { id: 'read-only', description: 'read\u202eOnly' },
+        { id: 'workspace-write', description: 'write within the workspace' },
+        { id: 'danger-full-access' },
+      ],
+      select: id => {
+        selected.push(id)
+      },
+      close: () => {
+        closed = true
+      },
+    }), {
+      stdin,
+      stdout,
+      stderr: stdout,
+      exitOnCtrlC: false,
+      patchConsole: false,
+    })
+    try {
+      await wait()
+      const output = read()
+      expect(output).toContain('/permission · current workspace-write')
+      // The current preset carries the ● mark; descriptions stay sanitized.
+      expect(output).toContain('● workspace-write · write within the workspace')
+      expect(output).toContain('read\\u202eOnly')
+      // Enter applies the cursor row (read-only); escape closes.
+      stdin.write('\r')
+      await wait()
+      expect(selected).toEqual(['read-only'])
+      stdin.write('\x1b')
+      await wait()
+      expect(closed).toBe(true)
     } finally {
       instance.unmount()
       stdin.destroy()

@@ -11,7 +11,7 @@
  */
 
 import { visibleColumns } from './markdown.ts'
-import type { ContextSegments, TranscriptStats } from './projection.ts'
+import type { TranscriptStats } from './projection.ts'
 import { singleLineText, truncateColumns } from './text.ts'
 
 /**
@@ -79,14 +79,9 @@ export type StatusTone =
   | 'success'
   | 'warn'
   | 'error'
-  // Context-bar segment tones, one DeepSeek blue shade per content type
-  // (dark → light: system/prompt/assistant/thinking/tools). Only the
-  // context bar emits them; the footer maps each to an existing theme color.
-  | 'ctxSystem'
-  | 'ctxPrompt'
-  | 'ctxAssistant'
-  | 'ctxThinking'
-  | 'ctxTools'
+  // Context-bar fill: one DeepSeek blue for the whole occupied run (the free
+  // track uses the dim 'label' tone). Only the context bar emits it.
+  | 'ctxFill'
 
 /** One colored run inside the status bar. */
 export interface StatusSpan {
@@ -143,94 +138,21 @@ export const CONTEXT_WARN_PERCENT = 90
  * the warning stays visible even at 100%+ occupancy. */
 const CONTEXT_MIN_FREE = 5
 
-/** One content-type segment of the context bar (pure data; colors live in app.ts). */
-export interface ContextSegmentSpec {
-  key: keyof ContextSegments
-  /** Tone the footer maps to a DeepSeek blue shade. */
-  tone: StatusTone
-  /** Labels longest → shortest; the first one fitting the segment width wins. */
-  labels: readonly string[]
-}
-
-/** The five content types in conversation order, dark → light blue. */
-export const CONTEXT_SEGMENTS: readonly ContextSegmentSpec[] = [
-  { key: 'system', tone: 'ctxSystem', labels: ['system', 'sys', 's'] },
-  { key: 'prompt', tone: 'ctxPrompt', labels: ['prompt', 'pr', 'p'] },
-  { key: 'assistant', tone: 'ctxAssistant', labels: ['assistant', 'ast', 'a'] },
-  { key: 'thinking', tone: 'ctxThinking', labels: ['think', 'th', 't'] },
-  { key: 'tools', tone: 'ctxTools', labels: ['tools', 'tl', 'x'] },
-] as const
-
-/** First label whose visible width fits the segment; empty only when none do. */
-function chooseContextLabel(labels: readonly string[], width: number): string {
-  for (const label of labels) {
-    if (visibleColumns(label) <= width) return label
-  }
-  return ''
-}
-
-/** Center a label inside its segment width; the padding spaces carry the tone. */
-function centerInSegment(text: string, width: number): string {
-  const textWidth = visibleColumns(text)
-  const left = Math.floor((width - textWidth) / 2)
-  return ' '.repeat(Math.max(0, left)) + text + ' '.repeat(Math.max(0, width - textWidth - left))
-}
-
 /**
- * Largest-remainder allocation: distribute `columns` across `values`
- * proportionally, handing each leftover column to the largest remainder.
- */
-function allocateProportionally(values: readonly number[], columns: number): number[] {
-  if (columns <= 0) return values.map(() => 0)
-  const total = values.reduce((sum, value) => sum + value, 0)
-  if (total <= 0) return values.map(() => 0)
-  const raw = values.map(value => value / total * columns)
-  const allocated = raw.map(Math.floor)
-  let remaining = columns - allocated.reduce((sum, value) => sum + value, 0)
-  const remainders = raw
-    .map((value, index) => ({ index, remainder: value - Math.floor(value) }))
-    .sort((left, right) => right.remainder - left.remainder)
-  for (const slot of remainders) {
-    if (remaining <= 0) break
-    allocated[slot.index] = (allocated[slot.index] ?? 0) + 1
-    remaining -= 1
-  }
-  return allocated
-}
-
-/** Bar column widths: every non-zero segment keeps at least one column before
- * the remaining columns share by token proportion. */
-function allocateBarColumns(values: readonly number[], width: number): number[] {
-  const visible = values
-    .map((value, index) => (value > 0 ? index : -1))
-    .filter(index => index >= 0)
-  if (visible.length === 0 || visible.length >= width) {
-    return allocateProportionally(values, width)
-  }
-  const minimum = values.map(() => 0)
-  for (const index of visible) minimum[index] = 1
-  const remaining = allocateProportionally(values, width - visible.length)
-  return minimum.map((min, index) => min + (remaining[index] ?? 0))
-}
-
-/**
- * Render context occupancy as a segmented bar: one DeepSeek-blue run per
- * content type (system/prompt/assistant/thinking/tools), column widths
- * proportional to their estimated token share, each with a centered label
- * that shortens to fit (system→sys→s). The remaining free tail is a dim
- * track whose right edge carries the usage readout (`12.3K/1.0M 25%`,
- * shrinking to the bare percent as the tail narrows). The readout flips to
- * amber once occupancy reaches the warning threshold; the segment blues stay
- * untouched so the composition remains readable at full context. The used
- * total comes from the reported `lastPromptTokens`, never from the estimates.
- * @param segments - estimated used tokens per content type.
+ * Render context occupancy as ONE stepless bar: a solid DeepSeek-blue fill
+ * run, a dim dotted free track, and the usage readout riding the track's
+ * right edge (`12.3K/1.0M 25%`, shrinking to the bare percent as the track
+ * narrows). No per-content-type segmentation. Column split is deterministic:
+ * the free share is `Math.round(free/window*width)` clamped to at least
+ * CONTEXT_MIN_FREE columns and at most the full width; the fill takes every
+ * remaining column, so a given occupancy always renders the identical bar.
+ * The readout flips to amber once occupancy reaches the warning threshold.
  * @param usedTokens - reported used tokens (drives the readout and percent).
  * @param contextWindow - route capacity.
  * @param width - total bar interior columns.
  * @returns tone-split spans for the footer to paint.
  */
 export function contextBar(
-  segments: ContextSegments,
   usedTokens: number,
   contextWindow: number,
   width: number,
@@ -253,26 +175,10 @@ export function contextBar(
       ? percentText
       : ''
 
-  const values = CONTEXT_SEGMENTS.map(segment => segments[segment.key])
-  const estimated = values.reduce((sum, value) => sum + value, 0)
-  // No estimate yet (a resumed session before any text-bearing event): treat
-  // the whole reported used context as one prompt segment instead of an
-  // empty bar.
-  const allocation = allocateBarColumns(
-    estimated > 0 ? values : [0, used, 0, 0, 0],
-    usedColumns,
-  )
   const spans: StatusSpan[] = []
-  for (let index = 0; index < CONTEXT_SEGMENTS.length; index += 1) {
-    const columns = allocation[index] ?? 0
-    if (columns <= 0) continue
-    spans.push({
-      text: centerInSegment(chooseContextLabel(CONTEXT_SEGMENTS[index].labels, columns), columns),
-      tone: CONTEXT_SEGMENTS[index].tone,
-    })
-  }
+  if (usedColumns > 0) spans.push({ text: '█'.repeat(usedColumns), tone: 'ctxFill' })
   const pad = freeColumns - visibleColumns(readout)
-  if (pad > 0) spans.push({ text: '▱'.repeat(pad), tone: 'label' })
+  if (pad > 0) spans.push({ text: '░'.repeat(pad), tone: 'label' })
   if (readout !== '') spans.push({ text: readout, tone: readoutTone })
   return spans
 }
@@ -358,6 +264,12 @@ export function parseStatuslineItems(value: unknown): readonly StatusItemId[] {
 const LEFT_RIGHT_GAP = 2
 /** Column held back so Ink/yoga measurement drift can never force a wrap. */
 const WIDTH_SAFETY = 1
+/**
+ * Extra left padding on the secondary row so its content aligns with the
+ * model name's left edge on the primary row (padding 2 + busy dot 2). The
+ * layout subtracts it from row 2's budget so the indent can never wrap it.
+ */
+export const STATUS_ROW2_INDENT = 2
 /** Column budget for the session title before it ellipsizes. */
 const TITLE_BUDGET = 48
 
@@ -548,7 +460,7 @@ function buildCandidates(
       group: {
         spans: [
           { text: 'context ', tone: 'label' },
-          ...contextBar(stats.contextSegments, stats.lastPromptTokens, stats.contextWindow, CONTEXT_BAR_WIDTH),
+          ...contextBar(stats.lastPromptTokens, stats.contextWindow, CONTEXT_BAR_WIDTH),
         ],
       },
       rank: RANK_CONTEXT,
@@ -598,7 +510,7 @@ function buildCandidates(
   const permission = safe(facts.permission)
   let badge = -1
   if (permission !== '' && enabled.has('permission')) {
-    right.push({ span: { text: `/permission ${permission}`, tone: permissionTone(permission) }, rank: RANK_BADGE, id: 'permission' })
+    right.push({ span: { text: permission, tone: permissionTone(permission) }, rank: RANK_BADGE, id: 'permission' })
     badge = right.length - 1
   }
   return { left, right, badge, row2 }
@@ -704,13 +616,14 @@ export function layoutStatusBar(
     }
   }
 
-  // Row 2 fits its own budget; the lowest-rank group drops first until the
-  // row fits or nothing is left. An empty row2 is a valid state — the footer
-  // degrades back to a single status row.
+  // Row 2 fits its own budget minus the model-name indent; the lowest-rank
+  // group drops first until the row fits or nothing is left. An empty row2 is
+  // a valid state — the footer degrades back to a single status row.
   const row2Kept = [...orderedRow2]
+  const row2Budget = Math.max(1, budget - STATUS_ROW2_INDENT)
   const row2Width = (): number =>
     joinWidth(row2Kept.map(entry => spansWidth(entry.group.spans)), groupSeparator)
-  while (row2Width() > budget && row2Kept.length > 0) {
+  while (row2Width() > row2Budget && row2Kept.length > 0) {
     let dropIndex = 0
     let dropRank = Number.POSITIVE_INFINITY
     for (let index = 0; index < row2Kept.length; index += 1) {

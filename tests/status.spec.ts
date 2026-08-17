@@ -16,6 +16,7 @@ import {
   STATUS_CYCLE_HINT,
   STATUS_GROUP_SEPARATOR,
   STATUS_ITEM_SEPARATOR,
+  STATUS_ROW2_INDENT,
   type StatusFacts,
   type StatusLayout,
   type StatusRow,
@@ -49,14 +50,15 @@ const baseFacts: StatusFacts = {
   permission: '',
 }
 
-/** Plain text of one row exactly as the footer would join it. */
-function rowText(row: StatusRow): string {
+/** Plain text of one row exactly as the footer would join it (indent included). */
+function rowText(row: StatusRow, indent = 0): string {
   const left = row.left
     .map(group => group.spans.map(span => span.text).join(''))
     .join(STATUS_GROUP_SEPARATOR)
   const right = row.right.map(span => span.text).join(STATUS_ITEM_SEPARATOR)
     + (row.hint ? STATUS_CYCLE_HINT : '')
-  return right === '' ? left : left + '  ' + right
+  const body = right === '' ? left : left + '  ' + right
+  return ' '.repeat(indent) + body
 }
 
 /** Group text with spans concatenated (separators ride inside the spans). */
@@ -105,81 +107,48 @@ describe('context progress bar', () => {
   /** Joined text of the tone-split bar spans. */
   const barText = (spans: readonly { text: string }[]): string => spans.map(span => span.text).join('')
 
-  const segments = { system: 8, prompt: 12, assistant: 6, thinking: 8, tools: 10 }
-
-  it('renders proportional per-type segments with a dim free track and right-aligned readout', () => {
-    expect(contextBar(segments, 32_000, 128_000, CONTEXT_BAR_WIDTH)).toEqual([
-      { text: 's', tone: 'ctxSystem' },
-      { text: 'pr', tone: 'ctxPrompt' },
-      { text: 'a', tone: 'ctxAssistant' },
-      { text: 't', tone: 'ctxThinking' },
-      { text: 'x', tone: 'ctxTools' },
-      { text: '▱▱▱▱▱▱', tone: 'label' },
+  it('renders one stepless fill run with a dim dotted track and right-aligned readout', () => {
+    expect(contextBar(32_000, 128_000, CONTEXT_BAR_WIDTH)).toEqual([
+      { text: '██████', tone: 'ctxFill' },
+      { text: '░░░░░░', tone: 'label' },
       { text: '32K/128K 25%', tone: 'value' },
     ])
   })
 
   it('fills exactly the requested width at any occupancy', () => {
     for (const used of [8_000, 32_000, 64_000, 96_000, 121_600, 150_000]) {
-      const spans = contextBar(segments, used, 128_000, CONTEXT_BAR_WIDTH)
+      const spans = contextBar(used, 128_000, CONTEXT_BAR_WIDTH)
       expect(visibleColumns(barText(spans))).toBe(CONTEXT_BAR_WIDTH)
     }
   })
 
-  it('lengthens segment labels and keeps the full readout on a wider bar', () => {
-    const wide = contextBar(
-      { system: 8_000, prompt: 12_000, assistant: 6_000, thinking: 8_000, tools: 4_000 },
-      32_000,
-      128_000,
-      40,
-    )
-    expect(barText(wide)).toBe('s pr a thx' + '▱'.repeat(18) + '32K/128K 25%')
-    expect(wide.map(span => span.tone)).toEqual([
-      'ctxSystem', 'ctxPrompt', 'ctxAssistant', 'ctxThinking', 'ctxTools', 'label', 'value',
-    ])
+  it('keeps the deterministic rounding pinned: half-up free share, fill takes the rest', () => {
+    // 0.6875 of 24 free columns = 16.5 → rounds half-up to 17 free, so the
+    // fill takes 7; the same occupancy always renders the identical bar.
+    expect(contextBar(40_000, 128_000, 24).map(span => span.text)).toEqual(['█'.repeat(7), '░'.repeat(5), '40K/128K 31%'])
+    expect(contextBar(32_000, 128_000, 40).map(span => span.text)).toEqual(['█'.repeat(10), '░'.repeat(18), '32K/128K 25%'])
   })
 
-  it('shrinks the readout to the bare percent as the free tail narrows', () => {
-    const tight = contextBar(
-      { system: 8_000, prompt: 12_000, assistant: 6_000, thinking: 8_000, tools: 4_000 },
-      96_000,
-      128_000,
-      CONTEXT_BAR_WIDTH,
-    )
-    expect(barText(tight)).toBe('sys  pr  ast th tl▱▱▱75%')
-    expect(tight.map(span => span.tone)).toEqual([
-      'ctxSystem', 'ctxPrompt', 'ctxAssistant', 'ctxThinking', 'ctxTools', 'label', 'value',
-    ])
+  it('shrinks the readout to the bare percent as the free track narrows', () => {
+    const tight = contextBar(96_000, 128_000, CONTEXT_BAR_WIDTH)
+    expect(tight.map(span => span.text)).toEqual(['█'.repeat(18), '░'.repeat(3), '75%'])
+    expect(tight.map(span => span.tone)).toEqual(['ctxFill', 'label', 'value'])
   })
 
-  it('flips the readout to amber at the warning threshold while the segment blues stay', () => {
-    const at = contextBar(segments, 121_600, 128_000, CONTEXT_BAR_WIDTH)
-    expect(barText(at)).toMatch(/▱▱95%$/)
+  it('flips the readout to amber at the warning threshold while the fill stays blue', () => {
+    const at = contextBar(121_600, 128_000, CONTEXT_BAR_WIDTH)
+    expect(at.map(span => span.text)).toEqual(['█'.repeat(19), '░░', '95%'])
     expect(at.at(-1)).toEqual({ text: '95%', tone: 'warn' })
-    expect(at.map(span => span.tone).filter(tone => tone.startsWith('ctx')))
-      .toEqual(['ctxSystem', 'ctxPrompt', 'ctxAssistant', 'ctxThinking', 'ctxTools'])
-    const over = contextBar(segments, 200_000, 128_000, CONTEXT_BAR_WIDTH)
+    expect(at[0]).toEqual({ text: '█'.repeat(19), tone: 'ctxFill' })
+    const over = contextBar(200_000, 128_000, CONTEXT_BAR_WIDTH)
     // Over budget: the percent keeps the raw value while the fill saturates.
-    expect(barText(over)).toMatch(/▱156%$/)
+    expect(over.map(span => span.text)).toEqual(['█'.repeat(19), '░', '156%'])
     expect(over.at(-1)).toEqual({ text: '156%', tone: 'warn' })
   })
 
-  it('treats the whole used context as one prompt segment when no estimate exists', () => {
-    expect(contextBar(
-      { system: 0, prompt: 0, assistant: 0, thinking: 0, tools: 0 },
-      32_000,
-      128_000,
-      CONTEXT_BAR_WIDTH,
-    )).toEqual([
-      { text: 'prompt', tone: 'ctxPrompt' },
-      { text: '▱▱▱▱▱▱', tone: 'label' },
-      { text: '32K/128K 25%', tone: 'value' },
-    ])
-  })
-
   it('returns no spans for a non-positive width or window', () => {
-    expect(contextBar(segments, 32_000, 128_000, 0)).toEqual([])
-    expect(contextBar(segments, 32_000, 0, CONTEXT_BAR_WIDTH)).toEqual([])
+    expect(contextBar(32_000, 128_000, 0)).toEqual([])
+    expect(contextBar(32_000, 0, CONTEXT_BAR_WIDTH)).toEqual([])
   })
 })
 
@@ -236,9 +205,9 @@ describe('status layout', () => {
     )
     expect(groupText(layout.row1)).toEqual([
       '○ m · r · /mode standard · ⑂ main',
-      'context spratx▱▱▱▱▱▱32K/128K 25%',
+      'context ██████░░░░░░32K/128K 25%',
     ])
-    expect(layout.row1.right).toEqual([{ text: '/permission workspace-write', tone: 'warn' }])
+    expect(layout.row1.right).toEqual([{ text: 'workspace-write', tone: 'warn' }])
     expect(layout.row1.hint).toBe(true)
     expect(groupText(layout.row2)).toEqual(['cache 0%', 'in 32K · out 800', 's'])
   })
@@ -309,7 +278,7 @@ describe('status layout', () => {
     )
     expect(groupText(layout.row1)).toEqual([
       '○ m · r',
-      'context spratx▱▱▱▱▱▱32K/128K 25%',
+      'context ██████░░░░░░32K/128K 25%',
     ])
     expect(groupText(layout.row2)).toEqual(['cache 0%', 'in 32K · out 800'])
   })
@@ -323,11 +292,11 @@ describe('status layout', () => {
 
   it('pins the permission badge right with the idle cycle hint', () => {
     const layout = layoutStatusBar({ ...baseFacts, permission: 'workspace-write' }, emptyStats, 120)
-    expect(layout.row1.right).toEqual([{ text: '/permission workspace-write', tone: 'warn' }])
+    expect(layout.row1.right).toEqual([{ text: 'workspace-write', tone: 'warn' }])
     expect(layout.row1.hint).toBe(true)
     const busy = layoutStatusBar({ ...baseFacts, permission: 'workspace-write' }, emptyStats, 120, { busy: true })
     expect(busy.row1.hint).toBe(false)
-    expect(busy.row1.right).toEqual([{ text: '/permission workspace-write', tone: 'warn' }])
+    expect(busy.row1.right).toEqual([{ text: 'workspace-write', tone: 'warn' }])
   })
 
   it('traffic-lights presets, surfaces divergent sandbox, and spells the goal round', () => {
@@ -344,7 +313,7 @@ describe('status layout', () => {
       emptyStats,
       160,
     )
-    expect(layout.row1.right).toEqual([{ text: '/permission workspace-write', tone: 'warn' }])
+    expect(layout.row1.right).toEqual([{ text: 'workspace-write', tone: 'warn' }])
     expect(groupText(layout.row2)).toEqual([
       's',
       '◎ round 2/8',
@@ -360,7 +329,7 @@ describe('status layout', () => {
       emptyStats,
       160,
     )
-    expect(echo.row1.right).toEqual([{ text: '/permission workspace-write', tone: 'warn' }])
+    expect(echo.row1.right).toEqual([{ text: 'workspace-write', tone: 'warn' }])
     expect(groupText(echo.row2)).toEqual(['s', '◎ blocked'])
   })
 
@@ -390,7 +359,7 @@ describe('statusline item configuration', () => {
       { items: ['model', 'permission'] },
     )
     expect(groupText(layout.row1)).toEqual(['○ m'])
-    expect(layout.row1.right.map(span => span.text)).toEqual(['/permission workspace-write'])
+    expect(layout.row1.right.map(span => span.text)).toEqual(['workspace-write'])
     expect(layout.row2.left).toEqual([])
   })
 
@@ -410,7 +379,7 @@ describe('statusline item configuration', () => {
       { items: ['turns', 'cwd', 'model', 'permission', 'goal'] },
     )
     expect(groupText(layout.row1)).toEqual(['○ m · r'])
-    expect(layout.row1.right.map(span => span.text)).toEqual(['/permission workspace-write'])
+    expect(layout.row1.right.map(span => span.text)).toEqual(['workspace-write'])
     expect(groupText(layout.row2)).toEqual(['turns 1 · steps 1', '◎ round 1/4'])
   })
 })
@@ -451,9 +420,9 @@ describe('status width degradation', () => {
     expect(layout.row1.hint).toBe(true)
     expect(groupText(layout.row1)).toEqual([
       '○ provider/model-name · repository · /mode code · ⑂ feature-branch',
-      'context spratx▱▱▱▱▱▱32K/128K 25%',
+      'context ██████░░░░░░32K/128K 25%',
     ])
-    expect(layout.row1.right.map(span => span.text)).toEqual(['/permission workspace-write'])
+    expect(layout.row1.right.map(span => span.text)).toEqual(['workspace-write'])
     expect(groupText(layout.row2)).toEqual([
       '⧉ plan',
       'turns 3 · steps 9',
@@ -472,8 +441,8 @@ describe('status width degradation', () => {
     const texts = keptTexts(layout)
     const groups = keptGroups(layout)
     expect(texts).not.toContain('a'.repeat(40))
-    expect(groups).toContain('context spratx▱▱▱▱▱▱32K/128K 25%')
-    expect(groups).toContain('/permission workspace-write')
+    expect(groups).toContain('context ██████░░░░░░32K/128K 25%')
+    expect(groups).toContain('workspace-write')
     expect(groups).toContain('turns 3 · steps 9')
     expect(groups).toContain('◎ round 2/8')
     expect(groups).toContain('sandbox danger-full-access')
@@ -482,8 +451,8 @@ describe('status width degradation', () => {
   it('degrades row 2 without moving secondary figures onto row 1', () => {
     const layout = layoutStatusBar(richFacts, richStats, 150)
     const groups = keptGroups(layout)
-    expect(groupText(layout.row1)).toContain('context spratx▱▱▱▱▱▱32K/128K 25%')
-    expect(groups).toContain('/permission workspace-write')
+    expect(groupText(layout.row1)).toContain('context ██████░░░░░░32K/128K 25%')
+    expect(groups).toContain('workspace-write')
     expect(groups).toContain('turns 3 · steps 9')
     expect(groups).toContain('in 12.2K · out 2.4K')
     expect(groups).toContain('◎ round 2/8')
@@ -495,7 +464,7 @@ describe('status width degradation', () => {
   it('keeps permission rightmost before the identity must ellipsize', () => {
     const withBadge = layoutStatusBar(richFacts, richStats, 100)
     expect(withBadge.row1.left).toHaveLength(1)
-    expect(withBadge.row1.right.map(span => span.text)).toEqual(['/permission workspace-write'])
+    expect(withBadge.row1.right.map(span => span.text)).toEqual(['workspace-write'])
     const identityAlone = layoutStatusBar(richFacts, richStats, 80)
     expect(identityAlone.row1.left).toHaveLength(1)
     expect(identityAlone.row1.right).toEqual([])
@@ -509,7 +478,7 @@ describe('status width degradation', () => {
     // Row 2 independently keeps at most one secondary group at this width.
     expect(layout.row2.left.length).toBeLessThanOrEqual(1)
     if (layout.row2.left.length > 0) {
-      expect(visibleColumns(rowText(layout.row2))).toBeLessThanOrEqual(23)
+      expect(visibleColumns(rowText(layout.row2, STATUS_ROW2_INDENT))).toBeLessThanOrEqual(23)
     }
     const text = rowText(layout.row1)
     expect(text.endsWith('…')).toBe(true)
@@ -523,7 +492,7 @@ describe('status width degradation', () => {
       const layout = layoutStatusBar(richFacts, richStats, columns)
       expect(visibleColumns(rowText(layout.row1))).toBeLessThanOrEqual(columns - 1)
       if (layout.row2.left.length > 0) {
-        expect(visibleColumns(rowText(layout.row2))).toBeLessThanOrEqual(columns - 1)
+        expect(visibleColumns(rowText(layout.row2, STATUS_ROW2_INDENT))).toBeLessThanOrEqual(columns - 1)
       }
       expect(layout.row1.left.length).toBeGreaterThanOrEqual(1)
       // The ellipsized identity is width-dependent by design; every whole

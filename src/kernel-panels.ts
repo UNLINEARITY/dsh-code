@@ -3,6 +3,7 @@
 import { createElement, useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
 import { Box, Text, useInput, useStdout } from 'ink'
 import type { ModelRow } from './models.ts'
+import type { PermissionRow } from './permissions.ts'
 import type { PresetRow } from './presets.ts'
 import type { PluginRow } from './plugin-inventory.ts'
 import type { SessionDirectoryOptions, SessionRow } from './session-directory.ts'
@@ -97,6 +98,42 @@ export function ModePanel({ current, load, select, close }: {
     title: `/mode · current ${current}`,
     rows: visible.map(row => ({ key: row.id, disabled: row.broken !== undefined, text: `${row.id === current ? '●' : '○'} ${row.name ?? row.id} · ${row.description ?? row.trust}${row.broken === undefined ? '' : ` · broken: ${row.broken}`}` })),
     cursor, loading, error, query, footer: '↑↓ choose · enter switch · r refresh · esc close',
+  })
+}
+
+export function PermissionPanel({ current, load, select, close }: {
+  current: string
+  load(): Promise<readonly PermissionRow[]>
+  select(id: string): void
+  close(): void
+}): ReactElement {
+  const [rows, setRows] = useState<readonly PermissionRow[]>([])
+  const [query, setQuery] = useState('')
+  const [cursor, setCursor] = useState(0)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string>()
+  const refresh = (): void => {
+    setLoading(true); setError(undefined)
+    Promise.resolve().then(load).then(value => { setRows(value); setLoading(false) }, reason => {
+      setError(reason instanceof Error ? reason.message : String(reason)); setLoading(false)
+    })
+  }
+  useEffect(refresh, [])
+  const visible = useMemo(() => rows.filter(row => `${row.id} ${row.description ?? ''}`.toLowerCase().includes(query.toLowerCase())), [rows, query])
+  useEffect(() => setCursor(value => Math.min(value, Math.max(0, visible.length - 1))), [visible.length])
+  useInput((input, key) => {
+    if (key.escape || input === 'q') return close()
+    if (input === 'r' && query === '') return refresh()
+    if (key.upArrow) return setCursor(value => visible.length === 0 ? 0 : (value + visible.length - 1) % visible.length)
+    if (key.downArrow) return setCursor(value => visible.length === 0 ? 0 : (value + 1) % visible.length)
+    if (key.return && visible[cursor] !== undefined) return select(visible[cursor]!.id)
+    const next = editQuery(query, input, key)
+    if (next !== undefined) { setQuery(next); setCursor(0) }
+  })
+  return createElement(ListFrame, {
+    title: `/permission · current ${current}`,
+    rows: visible.map(row => ({ key: row.id, text: `${row.id === current ? '●' : '○'} ${row.id}${row.description === undefined ? '' : ` · ${row.description}`}` })),
+    cursor, loading, error, query, footer: '↑↓ choose · enter select · r refresh · esc close',
   })
 }
 

@@ -77,6 +77,7 @@ function renderApp(
     exportTranscript: async () => {},
     renameTitle: () => '',
     loadPresets: async () => [],
+    loadPermissions: async () => [],
     switchMode: async id => id,
     createSession: noop,
     loadSessions: async () => [],

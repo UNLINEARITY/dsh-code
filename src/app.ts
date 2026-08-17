@@ -66,8 +66,9 @@ import type { ProviderSettingsDirectory, ProviderTargetView } from './provider-s
 import type { QuestionSnapshot, QuestionStore } from './questions.ts'
 import type { SkillsView, SkillRow } from './skills.ts'
 import type { MentionCandidate } from './mentions.ts'
-import { EffortPanel, ModePanel, HistoryPanel, PluginPanel, ResumePanel, StatuslinePanel } from './kernel-panels.ts'
+import { EffortPanel, ModePanel, HistoryPanel, PermissionPanel, PluginPanel, ResumePanel, StatuslinePanel } from './kernel-panels.ts'
 import type { PresetRow } from './presets.ts'
+import type { PermissionRow } from './permissions.ts'
 import type { PluginRow } from './plugin-inventory.ts'
 import {
   recallEntries,
@@ -90,6 +91,7 @@ import {
   STATUS_CYCLE_HINT,
   STATUS_GROUP_SEPARATOR,
   STATUS_ITEM_SEPARATOR,
+  STATUS_ROW2_INDENT,
   type StatusFacts,
   type StatusGroup,
   type StatusItemId,
@@ -186,6 +188,8 @@ export interface AppProps {
   /** Preset/session/plugin kernel operations. */
   loadPresets(): Promise<readonly PresetRow[]>
   switchMode(id: string): Promise<string>
+  /** Load the switchable permission presets for the /permission panel. */
+  loadPermissions(): Promise<readonly PermissionRow[]>
   createSession(mode?: string): void
   loadSessions(options: SessionDirectoryOptions, signal?: AbortSignal): Promise<readonly SessionRow[]>
   loadSessionTranscript(id: string, signal?: AbortSignal): Promise<string>
@@ -740,19 +744,10 @@ function statusToneProps(tone: StatusTone): {
       return { color: inkColor(getPalette().dim), bold: undefined, dimColor: undefined }
     case 'accent':
       return { color: inkColor(getPalette().brandDeep), bold: undefined, dimColor: undefined }
-    // Context-bar segment shades, dark → light across the DeepSeek blues:
-    // system/prompt/assistant/thinking/tools. The tools segment borrows the
-    // code sky-blue as the fifth shade (no new theme token).
-    case 'ctxSystem':
-      return { color: inkColor(getPalette().brandDeep), bold: undefined, dimColor: undefined }
-    case 'ctxPrompt':
+    // Context-bar fill: one DeepSeek blue over the whole occupied run; the
+    // dotted free track reads through the dim label gray.
+    case 'ctxFill':
       return { color: inkColor(getPalette().brand), bold: undefined, dimColor: undefined }
-    case 'ctxAssistant':
-      return { color: inkColor(getPalette().brandMid), bold: undefined, dimColor: undefined }
-    case 'ctxThinking':
-      return { color: inkColor(getPalette().brandBright), bold: undefined, dimColor: undefined }
-    case 'ctxTools':
-      return { color: inkColor(getPalette().code), bold: undefined, dimColor: undefined }
     case 'success':
       return { color: inkColor(getPalette().code), bold: true, dimColor: undefined }
     case 'warn':
@@ -804,7 +799,7 @@ function StatusLine({ facts, stats, busy, columns, items }: {
 }): ReactElement {
   const layout = layoutStatusBar(facts, stats, Math.max(8, columns - 2), { busy, items })
 
-  const renderRow = (row: { left: readonly StatusGroup[]; right: readonly StatusSpan[]; hint: boolean }, key: string): ReactElement => {
+  const renderRow = (row: { left: readonly StatusGroup[]; right: readonly StatusSpan[]; hint: boolean }, key: string, indent = 0): ReactElement => {
     const leftParts: ReactElement[] = []
     row.left.forEach((group, groupIndex) => {
       if (groupIndex > 0) {
@@ -838,9 +833,10 @@ function StatusLine({ facts, stats, busy, columns, items }: {
     return createElement(
       Box,
       // Match the prompt text inside the bordered composer: one border column
-      // plus one padding column. Keeping these rows margin-free also makes
-      // the composer and status a fixed bottom unit in every interface.
-      { paddingLeft: 2, justifyContent: rightParts.length > 0 ? 'space-between' : undefined },
+      // plus one padding column. The secondary row adds the model-name indent
+      // (its budget already shrinks by the same amount) so its figures align
+      // under the model name rather than under the busy dot.
+      { paddingLeft: 2 + indent, justifyContent: rightParts.length > 0 ? 'space-between' : undefined },
       createElement(Text, { wrap: 'truncate-end' }, ...leftParts),
       rightParts.length > 0 ? createElement(Text, { wrap: 'truncate-end' }, ...rightParts) : undefined,
     )
@@ -850,7 +846,7 @@ function StatusLine({ facts, stats, busy, columns, items }: {
     Box,
     { flexDirection: 'column' },
     renderRow(layout.row1, 's1'),
-    row2Present ? renderRow(layout.row2, 's2') : undefined,
+    row2Present ? renderRow(layout.row2, 's2', STATUS_ROW2_INDENT) : undefined,
   )
 }
 
@@ -2127,7 +2123,7 @@ function CompletionMenu({ active, mention, index, rows }: {
  * While a modal (approval / question / model panel) owns the keys, the
  * box passes every key through untouched.
  */
-function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openEffort, openHelp, openMode, openResume, openPlugin, openStatusline, openTheme, openHistory, createSession, cancelSessionSwitch, notify, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, cyclePermission, setPermission, exportTranscript, renameTitle, recallSpace, recordLocal, recordHistory, queued, cancelQueued, historyFill, historyConsumed, waveTier, waveStyle }: {
+function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openEffort, openHelp, openMode, openPermission, openResume, openPlugin, openStatusline, openTheme, openHistory, createSession, cancelSessionSwitch, notify, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, cyclePermission, exportTranscript, renameTitle, recallSpace, recordLocal, recordHistory, queued, cancelQueued, historyFill, historyConsumed, waveTier, waveStyle }: {
   active: boolean
   frozen: boolean
   busy: boolean
@@ -2141,6 +2137,7 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   openEffort(): void
   openHelp(): void
   openMode(): void
+  openPermission(): void
   openResume(): void
   openPlugin(query?: string): void
   openStatusline(): void
@@ -2157,7 +2154,6 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   refresh(): void
   loadMentions(query: string, signal?: AbortSignal): Promise<readonly MentionCandidate[]>
   cyclePermission(): string
-  setPermission(id: string): string
   exportTranscript(argument: string): Promise<void>
   renameTitle(argument: string): string
   /** Newest-first recall space (persistent + in-session, deduped). */
@@ -2421,14 +2417,12 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
         openEffort()
         return
       }
-      if (text === '/permission' || text.startsWith('/permission ')) {
-        const wanted = text.slice(11).trim()
-        try {
-          const selected = setPermission(wanted)
-          notify(wanted === '' ? `permission ${selected}` : `permission → ${selected}`)
-        } catch (error: unknown) {
-          notify(`permission change failed: ${error instanceof Error ? error.message : String(error)}`, 'error')
-        }
+      if (text === '/permission') {
+        openPermission()
+        return
+      }
+      if (text.startsWith('/permission ')) {
+        dispatch(text)
         return
       }
       if (text === '/mode' || text.startsWith('/mode ')) {
@@ -2930,8 +2924,20 @@ export function computeSettledRows(
 /** The whole terminal app; state arrives via the store, output via Ink. */
 export function App(props: AppProps): ReactElement {
   const view = useSyncExternalStore(props.store.subscribe, props.store.getView)
-  const descriptors = useSyncExternalStore(props.commands.subscribe, () => props.commands.descriptors)
-  const skills = useSyncExternalStore(props.skills.subscribe, () => props.skills.rows)
+  // getSnapshot must be a STABLE reference (the React contract): an inline
+  // arrow here re-subscribes the store hook on every render and cascades
+  // force-updates — during a fast reasoning stream that chain crossed React's
+  // nested-passive-update limit and flooded "Maximum update depth exceeded"
+  // warnings. The view objects are process-stable, so one callback per view
+  // identity is enough.
+  // getSnapshot should be a stable reference (the React contract): an inline
+  // arrow re-subscribes the store hook on every render and forces the uETS
+  // consistency check to re-run per commit. The view objects are
+  // process-stable, so one callback per view identity is enough.
+  const readDescriptors = useCallback(() => props.commands.descriptors, [props.commands])
+  const readSkills = useCallback(() => props.skills.rows, [props.skills])
+  const descriptors = useSyncExternalStore(props.commands.subscribe, readDescriptors)
+  const skills = useSyncExternalStore(props.skills.subscribe, readSkills)
   const [modelLabel, setModelLabel] = useState(props.model)
   const [modelOpen, setModelOpen] = useState(false)
   /** Nested /model stages; only one owns terminal input at a time. */
@@ -3039,6 +3045,7 @@ export function App(props: AppProps): ReactElement {
   const [verboseOpen, setVerboseOpen] = useState(false)
   const [helpOpen, setHelpOpen] = useState(false)
   const [modeOpen, setModeOpen] = useState(false)
+  const [permissionOpen, setPermissionOpen] = useState(false)
   const [resumeOpen, setResumeOpen] = useState(false)
   const [pluginOpen, setPluginOpen] = useState(false)
   const [pluginQuery, setPluginQuery] = useState('')
@@ -3085,7 +3092,7 @@ export function App(props: AppProps): ReactElement {
   const approvalPending = approvalSnapshot.pending !== undefined
   const questionPending = questionSnapshot.pending !== undefined
   // While any modal owns the keys, the prompt box passes everything through.
-  const inputActive = !modelOpen && !helpOpen && !modeOpen && !resumeOpen && !pluginOpen && !statuslineOpen && !themeOpen && !historyOpen && !verboseOpen && !approvalPending && !questionPending
+  const inputActive = !modelOpen && !helpOpen && !modeOpen && !permissionOpen && !resumeOpen && !pluginOpen && !statuslineOpen && !themeOpen && !historyOpen && !verboseOpen && !approvalPending && !questionPending
 
   // Human questions outrank local inspectors. Close the lower modal instead
   // of leaving an approval/question visible but keyboard-locked behind it.
@@ -3097,6 +3104,7 @@ export function App(props: AppProps): ReactElement {
     setEffortFor(undefined)
     setHelpOpen(false)
     setModeOpen(false)
+    setPermissionOpen(false)
     setResumeOpen(false)
     setPluginOpen(false)
     setStatuslineOpen(false)
@@ -3205,9 +3213,9 @@ export function App(props: AppProps): ReactElement {
           ? Math.max(1, Math.floor(streamRows / 3))
           : 1
   const answerRows = view.streaming === '' ? 0 : Math.max(1, streamRows - reasoningRows)
-  const transcriptVisible = !modelOpen && !helpOpen && !modeOpen && !resumeOpen && !pluginOpen && !statuslineOpen && !themeOpen && !historyOpen && !verboseOpen && !approvalPending && !questionPending
+  const transcriptVisible = !modelOpen && !helpOpen && !modeOpen && !permissionOpen && !resumeOpen && !pluginOpen && !statuslineOpen && !themeOpen && !historyOpen && !verboseOpen && !approvalPending && !questionPending
   const inspectorVisible = verboseOpen && !approvalPending && !questionPending
-  const modalVisible = modelOpen || helpOpen || modeOpen || resumeOpen || pluginOpen || statuslineOpen || themeOpen || historyOpen || inspectorVisible || approvalPending || questionPending
+  const modalVisible = modelOpen || helpOpen || modeOpen || permissionOpen || resumeOpen || pluginOpen || statuslineOpen || themeOpen || historyOpen || inspectorVisible || approvalPending || questionPending
   const closeInspector = useCallback((): void => {
     setVerboseOpen(false)
   }, [])
@@ -3412,6 +3420,22 @@ export function App(props: AppProps): ReactElement {
         close: () => setModeOpen(false),
       })
       : undefined,
+    permissionOpen && !approvalPending && !questionPending
+      ? createElement(PermissionPanel, {
+        current: props.permission,
+        load: props.loadPermissions,
+        select: (id: string) => {
+          try {
+            const selected = props.setPermission(id)
+            notify(`permission → ${selected}`)
+            setPermissionOpen(false)
+          } catch (reason: unknown) {
+            notify(`permission change failed: ${reason instanceof Error ? reason.message : String(reason)}`, 'error')
+          }
+        },
+        close: () => setPermissionOpen(false),
+      })
+      : undefined,
     resumeOpen && !approvalPending && !questionPending
       ? createElement(ResumePanel, {
         currentCwd: props.workspaceRoot,
@@ -3531,6 +3555,7 @@ export function App(props: AppProps): ReactElement {
           setHelpOpen(true)
         },
         openMode: () => setModeOpen(true),
+        openPermission: () => setPermissionOpen(true),
         openResume: () => setResumeOpen(true),
         openPlugin: (query = '') => { setPluginQuery(query); setPluginOpen(true) },
         openStatusline: () => setStatuslineOpen(true),
@@ -3560,7 +3585,6 @@ export function App(props: AppProps): ReactElement {
         },
         loadMentions: props.loadMentions,
         cyclePermission: props.cyclePermission,
-        setPermission: props.setPermission,
         exportTranscript: props.exportTranscript,
         renameTitle: props.renameTitle,
         recallSpace,
