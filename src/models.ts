@@ -12,6 +12,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { ModelSelection } from '@deepseek-ai/dsh-agent'
 import {
   ReasoningEffortId,
+  type LlmCallConfig,
   type LlmModelInfo,
   type LlmModelReasoningInfo,
   type LlmResolvedModelInfo,
@@ -136,6 +137,31 @@ export function modelSelectionLabel(selection: ModelSelection): string {
   return selection.reasoningEffort === undefined
     ? `${selection.provider}/${selection.model}`
     : `${selection.provider}/${selection.model}@${selection.reasoningEffort}`
+}
+
+/**
+ * Apply one model selection onto a resolved request config — the exact
+ * semantics of the kernel's `installModelSelection` request listener,
+ * extracted so the TUI can mirror it for subagent-origin requests: children
+ * spawned by the subagent tool inherit the parent's CREATE-TIME AgentOptions,
+ * which a mid-session /model switch never touches, so delegated work would
+ * otherwise keep running on the launch-time route. An absent effort strips
+ * any inherited effort (restoring the selected model's provider default),
+ * matching the kernel listener field-for-field.
+ * @param resolved - the config the inner chain produced.
+ * @param selection - the selection to enforce.
+ * @returns the overridden config.
+ */
+export function applyModelSelectionToConfig(resolved: LlmCallConfig, selection: ModelSelection): LlmCallConfig {
+  const { reasoningEffort: _inheritedEffort, ...withoutInheritedEffort } = resolved
+  return {
+    ...withoutInheritedEffort,
+    provider: selection.provider,
+    model: selection.model,
+    ...selection.reasoningEffort === undefined
+      ? {}
+      : { reasoningEffort: selection.reasoningEffort },
+  }
 }
 
 /**

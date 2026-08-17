@@ -1,11 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import type { SessionHeader } from '@deepseek-ai/dsh-session'
 import {
+  collectDeletionSubtree,
+  encodeSessionSegment,
+  formatRelativeTime,
   isSubagentSession,
   matchSessionId,
   mergeSessionTitles,
   newestRootForCwd,
   projectSessionRows,
+  sessionArtifactDirectory,
   type SessionRecord,
 } from '../src/session-directory.ts'
 
@@ -71,5 +75,68 @@ describe('session selection policy', () => {
     expect(newestRootForCwd(headers, 'C:\\absent')).toBeUndefined()
     // A directory whose only sessions are subagents yields nothing.
     expect(newestRootForCwd([record('only-child', 1, { cwd: 'C:\\repo', parentSession: 'x' }).header], 'C:\\repo')).toBeUndefined()
+  })
+})
+
+describe('session last-activity ordering', () => {
+  it('sorts by the resolved updated map, falling back to createdAt', () => {
+    const updated = new Map([['old', 100], ['new', 2]])
+    const rows = projectSessionRows([
+      record('old', 1, { cwd: 'C:\\a' }),
+      record('new', 3, { cwd: 'C:\\a' }),
+      record('mid', 2, { cwd: 'C:\\a' }),
+    ], { sessions: 'roots', cwd: 'all', sort: 'newest', currentCwd: 'C:\\a', query: '' }, updated)
+    // old has the newest activity (100) despite the oldest creation time.
+    expect(rows.map(row => row.id)).toEqual(['old', 'new', 'mid'])
+    expect(rows[0]?.updatedAt).toBe(100)
+    // A bogus (stale) mtime degrades to createdAt inside the projection.
+    const stale = new Map([['old', 0]])
+    const degraded = projectSessionRows([record('old', 1), record('new', 2)], {
+      sessions: 'roots', cwd: 'all', sort: 'newest', currentCwd: '', query: '',
+    }, stale)
+    expect(degraded[0]?.id).toBe('new')
+  })
+})
+
+describe('session deletion guards', () => {
+  it('encodes session ids into safe path segments like the JSONL backend', () => {
+    expect(encodeSessionSegment('session-abc')).toBe('session-abc')
+    expect(encodeSessionSegment('../evil')).toBe('..~002Fevil')
+    expect(encodeSessionSegment('a~b')).toBe('a~007Eb')
+    expect(encodeSessionSegment('.')).toBe('~002E')
+    expect(encodeSessionSegment('..')).toBe('~002E~002E')
+  })
+
+  it('accepts only artifact files inside the id-named directory', () => {
+    expect(sessionArtifactDirectory('C:\\root\\--repo--\\session-x\\session.jsonl', 'session-x'))
+      .toBe('C:\\root\\--repo--\\session-x')
+    expect(sessionArtifactDirectory('C:\\root\\--repo--\\session-x\\session.jsonl.zstd', 'session-x'))
+      .toBe('C:\\root\\--repo--\\session-x')
+    expect(sessionArtifactDirectory('C:\\root\\--repo--\\session-x\\notes.txt', 'session-x')).toBeUndefined()
+    expect(sessionArtifactDirectory('C:\\root\\--repo--\\other\\session.jsonl', 'session-x')).toBeUndefined()
+  })
+
+  it('collects the deletion subtree across listing order', () => {
+    const records = [
+      record('root', 1),
+      record('child', 2, { parentSession: 'root' }),
+      record('grand', 3, { parentSession: 'child' }),
+      record('sibling', 4, { parentSession: 'root' }),
+      record('unrelated', 5),
+    ]
+    expect(collectDeletionSubtree(records, 'root')).toEqual(expect.arrayContaining(['root', 'child', 'grand', 'sibling']))
+    expect(collectDeletionSubtree(records, 'child')).toEqual(['child', 'grand'])
+    expect(collectDeletionSubtree(records, 'unrelated')).toEqual(['unrelated'])
+  })
+})
+
+describe('relative session time', () => {
+  it('formats recent activity compactly and dates older entries', () => {
+    const now = 1_700_000_000_000
+    expect(formatRelativeTime(now, now)).toBe('now')
+    expect(formatRelativeTime(now - 5 * 60_000, now)).toBe('5m ago')
+    expect(formatRelativeTime(now - 3 * 3_600_000, now)).toBe('3h ago')
+    expect(formatRelativeTime(now - 2 * 86_400_000, now)).toBe('2d ago')
+    expect(formatRelativeTime(now - 30 * 86_400_000, now)).toMatch(/^\d{4}-\d{2}-\d{2}$/)
   })
 })

@@ -90,6 +90,10 @@ describe('exclusive panel height budgets', () => {
       loadModels: async () => ({ rows: [], failures: [] }),
       loadMentions: async () => [],
       selectModel: () => 'test/model',
+      subagentModel: '',
+      setSubagentModel: () => '',
+      clearSubagentModel: noop,
+      deleteSession: async () => '',
       cyclePermission: () => '',
       setPermission: id => id,
       exportTranscript: async () => {},
@@ -339,6 +343,10 @@ describe('exclusive panel height budgets', () => {
       loadModels: async () => ({ rows: [], failures: [] }),
       loadMentions: async () => [],
       selectModel: () => 'test/model',
+      subagentModel: '',
+      setSubagentModel: () => '',
+      clearSubagentModel: noop,
+      deleteSession: async () => '',
       cyclePermission: () => '',
       setPermission: id => id,
       exportTranscript: async () => {},
@@ -506,6 +514,10 @@ describe('queued messages and global recall', () => {
       loadModels: async () => ({ rows: [], failures: [] }),
       loadMentions: async () => [],
       selectModel: () => 'test/model',
+      subagentModel: '',
+      setSubagentModel: () => '',
+      clearSubagentModel: noop,
+      deleteSession: async () => '',
       cyclePermission: () => '',
       setPermission: id => id,
       exportTranscript: async () => {},
@@ -622,6 +634,10 @@ describe('queued messages and global recall', () => {
       loadModels: async () => ({ rows: [], failures: [] }),
       loadMentions: async () => [],
       selectModel: () => 'test/model',
+      subagentModel: '',
+      setSubagentModel: () => '',
+      clearSubagentModel: noop,
+      deleteSession: async () => '',
       cyclePermission: () => '',
       setPermission: id => id,
       exportTranscript: async () => {},
@@ -745,6 +761,10 @@ describe('queued messages and global recall', () => {
       loadModels: async () => ({ rows: [], failures: [] }),
       loadMentions: async () => [],
       selectModel: () => 'test/model',
+      subagentModel: '',
+      setSubagentModel: () => '',
+      clearSubagentModel: noop,
+      deleteSession: async () => '',
       cyclePermission: () => '',
       setPermission: id => id,
       exportTranscript: async () => {},
@@ -926,6 +946,12 @@ describe('/model effort stage', () => {
       await wait()
       stdin.write('\r')
       await wait()
+      // The list opens on the APPLIED model (acme/plain, row 3 of 4) — the
+      // cursor follows the current pick. Jump to the first row to reach the
+      // multi-level DeepSeek model.
+      expect(output).toContain('· 3/4')
+      stdin.write('g')
+      await wait()
       stdin.write('\r')
       await wait()
       // The first row advertises three levels: the effort stage opens instead
@@ -936,7 +962,9 @@ describe('/model effort stage', () => {
       expect(output).toContain('· default')
       expect(picked).toHaveLength(0)
 
-      // Esc returns to the model list without applying anything.
+      // Esc returns to the model list without applying anything. The cursor
+      // re-positions on the APPLIED model (acme/plain, index 2) — one up
+      // reaches acme/single.
       output = ''
       stdin.write('\x1b')
       await wait()
@@ -946,20 +974,20 @@ describe('/model effort stage', () => {
 
       // A single advertised level is applied directly, no stage.
       output = ''
-      stdin.write('\x1b[B')
+      stdin.write('\x1b[A')
       await wait()
       stdin.write('\r')
       await wait()
       expect(picked).toEqual([{ row: rows[1], effortId: 'high' }])
       expect(output).toContain('model → next step uses acme/single@high')
 
-      // A model without reasoning applies with no effort at all.
+      // A model without reasoning applies with no effort at all. The list
+      // now opens on the APPLIED model (acme/single from the last pick):
+      // one down reaches acme/plain.
       output = ''
       stdin.write('/model')
       await wait()
       stdin.write('\r')
-      await wait()
-      stdin.write('\x1b[B')
       await wait()
       stdin.write('\x1b[B')
       await wait()
@@ -971,17 +999,19 @@ describe('/model effort stage', () => {
       ])
       expect(output).toContain('model → next step uses acme/plain')
 
-      // Re-open the multi-level model and pick the third level.
+      // Re-open the multi-level model and pick the third level. The list
+      // opens on acme/plain again: jump to the top, then the effort stage
+      // opens ON the effective level (high) and one down reaches max.
       output = ''
       stdin.write('/model')
       await wait()
       stdin.write('\r')
       await wait()
+      stdin.write('g')
+      await wait()
       stdin.write('\r')
       await wait()
       expect(output).toContain('effort for DeepSeek · V4')
-      stdin.write('\x1b[B')
-      await wait()
       stdin.write('\x1b[B')
       await wait()
       stdin.write('\r')
@@ -996,7 +1026,10 @@ describe('/model effort stage', () => {
 
       // A model WITHOUT an adapter-declared default leads the effort stage
       // with a provider-default row: picking it clears the effort back to
-      // provider behavior instead of forcing an advertised level.
+      // provider behavior instead of forcing an advertised level. The list
+      // opens on deepseek-v4 (the applied model): three downs reach
+      // acme/think; its stage opens on the effective level (max), so jump to
+      // the top for the Default row.
       output = ''
       stdin.write('/model')
       await wait()
@@ -1012,6 +1045,8 @@ describe('/model effort stage', () => {
       await wait()
       expect(output).toContain('effort for Acme · Think')
       expect(output).toContain('Default')
+      stdin.write('g')
+      await wait()
       stdin.write('\r')
       await wait()
       expect(picked).toEqual([
@@ -1258,6 +1293,7 @@ describe('panel row sanitization', () => {
       load: async () => [{
         id: 's-1',
         createdAt: 1,
+        updatedAt: 1,
         cwd: 'C:\\evil',
         workspace: 'evil',
         subagent: false,
@@ -1268,6 +1304,7 @@ describe('panel row sanitization', () => {
         title: 'T\x1b[31mred\u202eR',
       }],
       readTranscript: async () => '',
+      remove: async () => '',
       select: () => {},
       close: () => {},
     }), {

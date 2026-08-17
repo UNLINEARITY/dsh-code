@@ -12,7 +12,7 @@
 import { randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { mkdir, writeFile as writeFileAsync } from 'node:fs/promises'
+import { mkdir, rm, stat, writeFile as writeFileAsync } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { createElement } from 'react'
 import type { Context } from '@deepseek-ai/cordis'
@@ -33,7 +33,7 @@ import { App, type NoticeTone } from './app.ts'
 import { mountApprovalAnswerer, type ApprovalStore } from './approval.ts'
 import { isSlashLine, watchCommands, type CommandsView } from './commands.ts'
 import { internals, type TuiMount } from './internals.ts'
-import { buildModelSelection, loadModelDirectory, resolveEffectiveSelection, type ModelRow } from './models.ts'
+import { buildModelSelection, applyModelSelectionToConfig, loadModelDirectory, modelSelectionLabel, resolveEffectiveSelection, type ModelRow } from './models.ts'
 import {
   loadProviderSettings,
   removeProviderSettings,
@@ -64,11 +64,14 @@ import {
 import { listPluginRows } from './plugin-inventory.ts'
 import { parseThemeName, setTheme, type ThemeName } from './theme.ts'
 import {
+  collectDeletionSubtree,
   isSubagentSession,
   matchSessionId,
   mergeSessionTitles,
   newestRootForCwd,
   projectSessionRows,
+  SESSION_ARTIFACT_NAMES,
+  sessionArtifactDirectory,
   type SessionDirectoryOptions,
   type SessionQueryService,
   type SessionRow,
@@ -275,7 +278,10 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   if (agents === undefined || defaultModel === undefined || sessions === undefined) return
 
   const cwd = process.cwd()
-  const defaults = defaultModel.currentSelection()
+  // Live deployment default (web selectModel parity): read on every use, not
+  // snapshotted at launch, so a /model pick this process saves becomes the
+  // default for sessions composed afterwards without a restart.
+  const currentDefaults = (): ModelSelection => defaultModel.currentSelection()
   const presets = agentPresetsFrom(ctx)
   if (presets === undefined) throw new Error('agent preset service is unavailable; check the dsh-code bundle patch')
   const permissionPresets = permissionPresetsFrom(ctx)
@@ -315,17 +321,22 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       mode = mounted.id
       const selection: ModelSelectionRef = {
         get current(): ModelSelection | undefined {
-          return resolveEffectiveSelection(selectionState.picked, agentCtx.agent?.session.requestHeader()?.config, defaults)
+          return resolveEffectiveSelection(selectionState.picked, agentCtx.agent?.session.requestHeader()?.config, currentDefaults())
         },
         set current(value: ModelSelection | undefined) { selectionState.picked = value },
         assembled: undefined,
       }
       installModelSelection(agentCtx, selection)
     }
+    // AgentOptions seed the loop's fallback route; effort rides the selection
+    // ref (installModelSelection), so only the provider/model pair is seeded.
+    const seedOptions = pendingSelection === undefined
+      ? { provider: currentDefaults().provider, model: currentDefaults().model }
+      : { provider: pendingSelection.provider, model: pendingSelection.model }
     const handle = next.resume
       ? await agents.resume({
         resumeSessionId: SessionId(next.sessionId),
-        agentOptions: { provider: defaults.provider, model: defaults.model },
+        agentOptions: seedOptions,
         // Quit aborts an in-flight composition so the exit wait never hangs
         // on a prepare that cannot settle; upstream rolls the creation back.
         signal: quitAbort.signal,
@@ -334,7 +345,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       : await agents.create({
         sessionId: SessionId(next.sessionId),
         meta: { cwd: nextCwd, agentPreset: mode },
-        agentOptions: { provider: defaults.provider, model: defaults.model },
+        agentOptions: seedOptions,
         signal: quitAbort.signal,
         setup,
       })
@@ -449,6 +460,28 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     candidate => agent !== undefined && candidate.id === agent.id,
     request => approvalCommandPreview(store.getView().entries, request.callId, request.toolName),
   )
+
+  // Subagent model routing. The kernel seeds child agents from the parent's
+  // CREATE-TIME AgentOptions (resolveChildAgentOptions), which a mid-session
+  // /model switch never touches — delegated work would keep running on the
+  // launch-time route. This plugin-level listener mirrors installModelSelection
+  // for subagent-origin requests (scope filtering delivers the agent subject
+  // inside the payload): the explicit /subagent override wins, else the root's
+  // effective selection (explicit pick > session header > deployment default).
+  // Effort rides the selection exactly like the kernel listener applies it.
+  let subagentOverride: ModelSelection | undefined
+  ctx.on('agent/request', (payload, next) => {
+    const subject = payload.agent
+    const header = subject.session.header
+    if (header.parentSession === undefined && header.origin !== 'subagent') return next()
+    const picked = subagentOverride
+      ?? resolveEffectiveSelection(
+        active?.selection.picked ?? pendingSelection,
+        subject.session.requestHeader()?.config,
+        currentDefaults(),
+      )
+    return next().then(resolved => applyModelSelectionToConfig(resolved, picked))
+  })
 
   // ask_user_question provider: the single UI provider on the shared service,
   // one request on screen at a time. Plan reviews (exit_plan_mode) arrive
@@ -865,6 +898,14 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     } else {
       active.selection.picked = selection
     }
+    // Global default (web selectModel parity): every pick is persisted as the
+    // deployment default through the same agentDefaultModel service the web
+    // host writes, so the choice survives restarts and other surfaces read
+    // it. Save failures degrade to a notice — the in-session switch already
+    // took effect and must not roll back (the web contract).
+    void defaultModel.saveSelection(selection).catch((error: unknown) => {
+      bridge.notify(`model switch applies to this session but was not saved as the default: ${error instanceof Error ? error.message : String(error)}`, 'warning')
+    })
     // Advisory immediate validation (web selectModel parity): run the same
     // local resolveCallConfig check the request pipeline would, so a stale
     // directory — an effort the adapter withdrew since /model loaded —
@@ -886,6 +927,22 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       })
     }
     return `${row.provider}/${row.model}`
+  }
+
+  /** The /subagent override label, '' when delegated agents follow the current model. */
+  const subagentModelLabel = (): string => subagentOverride === undefined ? '' : modelSelectionLabel(subagentOverride)
+
+  /** Apply one /subagent model pick; returns the override label. */
+  const setSubagentModel = (row: ModelRow, effortId?: string): string => {
+    subagentOverride = buildModelSelection(row, effortId)
+    renderCurrent()
+    return modelSelectionLabel(subagentOverride)
+  }
+
+  /** Drop the /subagent override: delegated agents follow the current model again. */
+  const clearSubagentModel = (): void => {
+    subagentOverride = undefined
+    renderCurrent()
   }
 
   /**
@@ -939,13 +996,75 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
 
   const loadSessions = async (options: SessionDirectoryOptions, signal?: AbortSignal): Promise<readonly SessionRow[]> => {
     if (sessionQuery === undefined) throw new Error('session query is unavailable in this profile')
-    const projected = projectSessionRows(await sessionQuery.listSessions(signal), options)
+    const records = await sessionQuery.listSessions(signal)
+    // Last-activity timestamps for sorting (codex UpdatedAt default): the
+    // JSONL artifact's mtime via locate()+stat — the upstream api-proxy's own
+    // cold-probe pattern. O(1) per session; backends without a location (or
+    // vanished files) fall back to createdAt inside the projection.
+    const updated = new Map<string, number>()
+    for (const record of records) {
+      const location = persistence?.locate(record.header)
+      if (location === undefined) continue
+      try {
+        updated.set(record.header.id, (await stat(location.path)).mtimeMs)
+      } catch {
+        // Artifact gone or unreadable: the projection falls back to createdAt.
+      }
+    }
+    const projected = projectSessionRows(records, options, updated)
     // Titles are the expensive fold. Fetch only the first bounded picker page;
     // navigation/filter changes trigger a fresh, cancellable observation.
     const page = projected.slice(0, 32)
     if (page.length === 0) return projected
     const observations = await sessionQuery.readTitleSnapshots(page.map(row => row.id), signal)
     return mergeSessionTitles(projected, observations)
+  }
+
+  /**
+   * Delete one session subtree (/delete, codex semantics: subagent threads go
+   * with their root). The kernel persistence seam has NO deletion API by
+   * design — logs accumulate "until removed externally" — so this is the
+   * controlled external removal: guards (live/current refusal, subtree
+   * collection, and the JSONL layout check `encodeSegment(id)/session.jsonl`)
+   * run before any filesystem touch, and only the backend-located artifacts
+   * are removed. Backends without a locatable artifact (SQLite) are refused.
+   * @param id - the root session id to delete.
+   * @returns the outcome line for the panel/notice.
+   */
+  const deleteSession = async (id: string): Promise<string> => {
+    if (sessionQuery === undefined) return 'session query is unavailable in this profile'
+    if (session !== undefined && session.id === id) return 'cannot delete the session you are using — switch or /new first'
+    const records = await sessionQuery.listSessions()
+    const target = records.find(record => record.header.id === id)
+    if (target === undefined) return `no persisted session matches "${id}"`
+    if (target.live) return 'cannot delete a live session — it is open in this or another process'
+    const doomed = collectDeletionSubtree(records, id)
+    const byId = new Map<string, (typeof records)[number]>(records.map(record => [record.header.id, record]))
+    let removed = 0
+    for (const candidate of doomed) {
+      const record = byId.get(candidate)
+      if (record === undefined || record.live) continue
+      const location = persistence?.locate(record.header)
+      if (location === undefined) {
+        return `session backend exposes no deletable artifact for ${candidate.slice(-12)} (deletion is unsupported on this backend)`
+      }
+      const dir = sessionArtifactDirectory(location.path, candidate)
+      if (dir === undefined) {
+        return `refusing to delete: unexpected artifact layout at ${location.path}`
+      }
+      try {
+        for (const name of SESSION_ARTIFACT_NAMES) {
+          await rm(join(dir, name), { force: true })
+        }
+        // Remove the now-empty session directory; a non-empty one stays (an
+        // unexpected sibling file is never ours to delete).
+        await rm(dir, { force: true, recursive: false }).catch(() => {})
+        removed += 1
+      } catch (error: unknown) {
+        return `delete failed for ${candidate.slice(-12)}: ${error instanceof Error ? error.message : String(error)}`
+      }
+    }
+    return `deleted ${removed} session${removed === 1 ? '' : 's'}`
   }
 
   const loadSessionTranscript = async (id: string, signal?: AbortSignal): Promise<string> => {
@@ -1128,6 +1247,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     // process-local and create no durable state before that composition.
     const sessionCwd = session?.header.cwd ?? cwd
     const currentView = store.getView()
+    const defaults = currentDefaults()
     const model = currentView.model !== ''
       ? currentView.model
       : pendingSelection !== undefined
@@ -1172,6 +1292,10 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       cyclePermission,
       setPermission: setPermissionAction,
       selectModel,
+      subagentModel: subagentModelLabel(),
+      setSubagentModel,
+      clearSubagentModel,
+      deleteSession,
       exportTranscript,
       renameTitle,
       loadPresets: () => presets.list(),

@@ -2,12 +2,13 @@
 
 import { createElement, useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
 import { Box, Text, useInput, useStdout } from 'ink'
-import type { ModelRow } from './models.ts'
+import type { ModelDirectory, ModelRow } from './models.ts'
 import type { SubagentRow } from './subagents.ts'
 import type { PermissionRow } from './permissions.ts'
 import type { PresetRow } from './presets.ts'
 import type { PluginRow } from './plugin-inventory.ts'
 import type { SessionDirectoryOptions, SessionRow } from './session-directory.ts'
+import { formatRelativeTime } from './session-directory.ts'
 import { panelViewport, revealRow } from './render/inspector.ts'
 import { textLines } from './render/lines.ts'
 import { DEFAULT_STATUSLINE_ITEMS, STATUS_ITEMS, type StatusItemId } from './render/status.ts'
@@ -164,14 +165,23 @@ export function PluginPanel({ load, close, initialQuery = '' }: { load(): readon
   })
 }
 
-export function ResumePanel({ currentCwd, load, readTranscript, select, close }: {
+export function ResumePanel({ currentCwd, load, readTranscript, select, remove, deleteMode = false, initialDeleteId, close }: {
   currentCwd: string
   load(options: SessionDirectoryOptions, signal?: AbortSignal): Promise<readonly SessionRow[]>
   readTranscript(id: string, signal?: AbortSignal): Promise<string>
   select(row: SessionRow): void
+  /** Delete one session subtree; resolves with the outcome line. */
+  remove(id: string): Promise<string>
+  /** Opened via /delete: hint-first delete mode. */
+  deleteMode?: boolean
+  /** A /delete <id> argument pre-arming the confirmation on its row. */
+  initialDeleteId?: string
   close(): void
 }): ReactElement {
-  const [options, setOptions] = useState<SessionDirectoryOptions>({ sessions: 'roots', cwd: 'all', sort: 'newest', currentCwd, query: '' })
+  // Codex resume-picker default: the CURRENT directory's root sessions; the
+  // cwd filter widens to all only on request (the old default leaked every
+  // directory's sessions into what read as a current-directory view).
+  const [options, setOptions] = useState<SessionDirectoryOptions>({ sessions: 'roots', cwd: 'current', sort: 'newest', currentCwd, query: '' })
   const [focus, setFocus] = useState(0)
   const [density, setDensity] = useState<'comfortable' | 'dense'>('comfortable')
   const [rows, setRows] = useState<readonly SessionRow[]>([])
@@ -180,6 +190,11 @@ export function ResumePanel({ currentCwd, load, readTranscript, select, close }:
   const [error, setError] = useState<string>()
   const [expanded, setExpanded] = useState<string>()
   const [transcript, setTranscript] = useState<{ id: string; text?: string; error?: string }>()
+  /** Pending deletion (codex y/N confirm): the row id awaiting y/n. */
+  const [pendingDelete, setPendingDelete] = useState<string | undefined>(initialDeleteId)
+  const [deleting, setDeleting] = useState(false)
+  /** Reference clock pinned per row render, so relative times never drift mid-list. */
+  const now = useMemo(() => Date.now(), [rows, options])
   const transcriptLoad = useRef<AbortController>()
   useEffect(() => () => transcriptLoad.current?.abort(), [])
   useEffect(() => {
@@ -204,7 +219,27 @@ export function ResumePanel({ currentCwd, load, readTranscript, select, close }:
       return { ...value, sort: value.sort === 'newest' ? 'oldest' : 'newest' }
     })
   }
+  const confirmDelete = (): void => {
+    const target = pendingDelete
+    if (target === undefined || deleting) return
+    setDeleting(true)
+    Promise.resolve().then(() => remove(target)).then(outcome => {
+      setDeleting(false)
+      setPendingDelete(undefined)
+      setError(outcome.startsWith('deleted ') ? undefined : outcome)
+    }, reason => {
+      setDeleting(false)
+      setPendingDelete(undefined)
+      setError(reason instanceof Error ? reason.message : String(reason))
+    })
+  }
   useInput((input, key) => {
+    if (pendingDelete !== undefined) {
+      // The confirm gate owns every key: y proceeds, anything else cancels.
+      if (input === 'y' || input === 'Y') return confirmDelete()
+      setPendingDelete(undefined)
+      return
+    }
     if (key.escape || input === 'q') return close()
     if (key.tab) return setFocus(value => (value + (key.shift ? 3 : 1)) % 4)
     if (key.leftArrow) return cycle()
@@ -215,7 +250,7 @@ export function ResumePanel({ currentCwd, load, readTranscript, select, close }:
     if (key.pageDown) return setCursor(value => Math.min(rows.length - 1, value + 8))
     if (input === 'g') return setCursor(0)
     if (input === 'G') return setCursor(Math.max(0, rows.length - 1))
-    if (input === 'd') return setDensity(value => value === 'comfortable' ? 'dense' : 'comfortable')
+    if (input === 'D' && rows[cursor] !== undefined) return setPendingDelete(rows[cursor]!.id)
     if (input === 'e' && rows[cursor] !== undefined) {
       return setExpanded(value => value === rows[cursor]!.id ? undefined : rows[cursor]!.id)
     }
@@ -243,15 +278,20 @@ export function ResumePanel({ currentCwd, load, readTranscript, select, close }:
       close: () => { transcriptLoad.current?.abort(); setTranscript(undefined) },
     })
   }
+  const pendingRow = pendingDelete === undefined ? undefined : rows.find(row => row.id === pendingDelete)
   const toolbar = `[${focus === 0 ? '>' : ''}${options.sessions}] [${focus === 1 ? '>' : ''}${options.cwd} cwd] [${focus === 2 ? '>' : ''}${options.sort}] [${focus === 3 ? '>' : ''}${density}]`
   return createElement(ListFrame, {
-    title: `/resume · ${toolbar}`,
+    title: pendingDelete === undefined
+      ? `/resume${deleteMode ? ' — delete mode' : ''} · ${toolbar}`
+      : `permanently delete ${pendingRow?.title ?? pendingDelete.slice(-12)}? this cannot be undone · subagent threads go too`,
     rows: rows.map(row => ({
       key: row.id,
       disabled: !row.resumable,
-      text: `${row.subagent ? '↳' : '○'} ${row.title ?? row.id.slice(-12)}${density === 'comfortable' ? ` · ${row.workspace} · ${row.preset}` : ''}${row.live ? ' · live' : ''}${expanded === row.id ? ` · ${row.id} · ${row.cwd}${row.parent === undefined ? '' : ` · parent ${row.parent}`}` : ''}`,
+      text: `${row.subagent ? '↳' : '○'} ${row.title ?? row.id.slice(-12)}${density === 'comfortable' ? ` · ${formatRelativeTime(row.updatedAt ?? row.createdAt, now)} · ${row.workspace} · ${row.preset}` : ''}${row.live ? ' · live' : ''}${expanded === row.id ? ` · ${row.id} · ${row.cwd}${row.parent === undefined ? '' : ` · parent ${row.parent}`}` : ''}`,
     })), cursor, loading, error, query: options.query,
-    footer: 'type search · tab/←→ filters · ↑↓/pg navigate · e details · t transcript · enter resume',
+    footer: pendingDelete === undefined
+      ? 'type search · tab/←→ filters · ↑↓/pg navigate · e details · t transcript · D delete · enter resume'
+      : deleting ? 'deleting…' : 'y delete · any other key cancels',
   })
 }
 
@@ -476,7 +516,6 @@ export function EffortPanel({ row, current, select, back }: {
   /** Return to the model list without applying. */
   back(): void
 }): ReactElement {
-  const [cursor, setCursor] = useState(0)
   const advertised = row.reasoning?.efforts ?? []
   const empty = row.reasoning === undefined || advertised.length === 0
   // The provider-default row only exists when the adapter declares no default
@@ -489,6 +528,11 @@ export function EffortPanel({ row, current, select, back }: {
       : advertised
   // An absent or cleared effort is the Default row's current state.
   const effective = current === undefined || current === '' ? '' : current
+  // The list opens ON the effective level (or the model's default row), so a
+  // quick re-pick never restarts the cursor from the top.
+  const wanted = effective === '' ? row.reasoning?.defaultEffort ?? '' : effective
+  const initialCursor = Math.max(0, rows.findIndex(effort => effort.id === wanted))
+  const [cursor, setCursor] = useState(initialCursor)
   useEffect(() => {
     if (rows.length === 0) {
       if (cursor !== 0) setCursor(0)
@@ -499,6 +543,14 @@ export function EffortPanel({ row, current, select, back }: {
   useInput((input, key) => {
     if (key.escape || input === 'q') return back()
     if (empty) return
+    if (input === 'g') {
+      setCursor(0)
+      return
+    }
+    if (input === 'G') {
+      setCursor(rows.length - 1)
+      return
+    }
     if (key.upArrow) {
       setCursor(cursor > 0 ? cursor - 1 : rows.length - 1)
       return
@@ -641,5 +693,94 @@ export function AgentsPanel({ live, load, readTranscript, close }: {
     ...error === undefined ? {} : { error },
     query: '',
     footer: '↑↓ choose · enter/t transcript · r refresh · esc close',
+  })
+}
+
+/**
+ * The /subagent model panel: which model configuration delegated subagents
+ * run on. The kernel seeds child agents from the parent's CREATE-TIME
+ * AgentOptions, so a mid-session /model switch would otherwise leave them on
+ * the launch-time route; the TUI mirrors the selection onto subagent-origin
+ * requests (or an explicit override picked here) via an agent/request
+ * listener. The leading "inherit" row restores follow-the-current-model
+ * behavior; picking a model with several advertised efforts opens the same
+ * effort stage /model uses. Effort overrides are not offered separately —
+ * the kernel's AgentOptions has no effort channel for children, so the level
+ * rides the selected model exactly as /model applies it.
+ */
+export function SubagentPanel({ current, load, pick, inherit, close }: {
+  /** Display label of the override in force, '' when following the current model. */
+  current: string
+  load(): Promise<ModelDirectory>
+  /** Apply one model (with an advertised effort, when picked) as the override. */
+  pick(row: ModelRow, effortId?: string): void
+  /** Drop the override: subagents follow the current model again. */
+  inherit(): void
+  close(): void
+}): ReactElement {
+  const [directory, setDirectory] = useState<ModelDirectory | undefined>(undefined)
+  const [error, setError] = useState<string>()
+  const [loading, setLoading] = useState(true)
+  const [cursor, setCursor] = useState(0)
+  const [effortFor, setEffortFor] = useState<ModelRow | undefined>(undefined)
+  const refresh = (): void => {
+    setLoading(true)
+    setError(undefined)
+    Promise.resolve().then(load).then(value => {
+      setDirectory(value)
+      setLoading(false)
+    }, reason => {
+      setError(reason instanceof Error ? reason.message : String(reason))
+      setLoading(false)
+    })
+  }
+  useEffect(refresh, [])
+  const rows = useMemo(() => directory?.rows ?? [], [directory])
+  // The list opens on the override's own row (index 0 is the inherit row).
+  useEffect(() => {
+    if (current === '' || rows.length === 0) return
+    const index = rows.findIndex(row => current.startsWith(`${row.provider}/${row.model}`))
+    if (index >= 0) setCursor(index + 1)
+  }, [rows, current])
+  useEffect(() => setCursor(value => Math.min(value, rows.length)), [rows.length])
+  if (effortFor !== undefined) {
+    return createElement(EffortPanel, {
+      row: effortFor,
+      current: current === '' ? undefined : current.split('@')[1],
+      select: effortId => pick(effortFor, effortId),
+      back: () => setEffortFor(undefined),
+    })
+  }
+  useInput((input, key) => {
+    if (key.escape || input === 'q') return close()
+    if (input === 'r' && !loading) return refresh()
+    if (key.upArrow) return setCursor(value => (value + rows.length) % (rows.length + 1))
+    if (key.downArrow) return setCursor(value => (value + 1) % (rows.length + 1))
+    if (key.return) {
+      if (cursor === 0) return inherit()
+      const row = rows[cursor - 1]
+      if (row === undefined) return
+      if (row.reasoning !== undefined && row.reasoning.efforts.length > 1) {
+        setEffortFor(row)
+        return
+      }
+      const effortId = row.reasoning?.efforts.length === 1 ? row.reasoning.efforts[0]!.id : undefined
+      pick(row, effortId)
+    }
+  })
+  return createElement(ListFrame, {
+    title: `/subagent — model for delegated agents${current === '' ? '' : ` · override ${current}`}`,
+    rows: [
+      { key: '__inherit__', text: `${current === '' ? '●' : '○'} inherit — follow the current model (/model switches apply)` },
+      ...rows.map(row => ({
+        key: `${row.provider}/${row.model}`,
+        text: `${current.startsWith(`${row.provider}/${row.model}`) ? '●' : '○'} ${row.providerName} · ${row.modelName}`,
+      })),
+    ],
+    cursor,
+    loading,
+    ...error === undefined ? {} : { error },
+    query: '',
+    footer: '↑↓ choose · enter apply · r refresh · esc close',
   })
 }

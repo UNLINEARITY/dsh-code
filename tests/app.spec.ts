@@ -87,6 +87,10 @@ function appProps(overrides: Partial<AppProps> = {}): AppProps {
     loadModels: async () => ({ rows: [], failures: [] }),
     loadMentions: async () => [],
     selectModel: () => 'test/model',
+      subagentModel: '',
+      setSubagentModel: () => '',
+      clearSubagentModel: noop,
+      deleteSession: async () => '',
     cyclePermission: () => '',
     setPermission: id => id,
     exportTranscript: async () => {},
@@ -256,6 +260,10 @@ describe('Ctrl+O history details', () => {
       loadModels: async () => ({ rows: models, failures: [] }),
       loadMentions: async () => [],
       selectModel: () => 'test/model',
+      subagentModel: '',
+      setSubagentModel: () => '',
+      clearSubagentModel: noop,
+      deleteSession: async () => '',
       cyclePermission: () => '',
       setPermission: id => id,
       exportTranscript: async () => {},
@@ -504,6 +512,10 @@ describe('DeepSeek model-switch easter egg', () => {
       loadModels: async () => ({ rows: models, failures: [] }),
       loadMentions: async () => [],
       selectModel: row => `${row.provider}/${row.model}`,
+      subagentModel: '',
+      setSubagentModel: () => '',
+      clearSubagentModel: noop,
+      deleteSession: async () => '',
       cyclePermission: () => '',
       setPermission: id => id,
       exportTranscript: async () => {},
@@ -581,12 +593,16 @@ describe('DeepSeek model-switch easter egg', () => {
       // drops the » glyph — the tier accent is not sticky on other routes.
       // The panel-open frames still show the tier » in the frozen composer,
       // so the brand ❯ must be the LAST prompt painted after the selection.
+      // The reopened list rests on the APPLIED deepseek row: one up reaches
+      // the previous acme row.
       output = ''
       stdin.write('/model')
       await wait()
       stdin.write('\r')
       await wait()
       const away = output.length
+      stdin.write('\x1b[A')
+      await wait()
       stdin.write('\r')
       await wait()
       const awayDelta = output.slice(away)
@@ -676,6 +692,10 @@ describe('Ctrl+R reasoning fold', () => {
       loadModels: async () => ({ rows: [], failures: [] }),
       loadMentions: async () => [],
       selectModel: () => 'test/model',
+      subagentModel: '',
+      setSubagentModel: () => '',
+      clearSubagentModel: noop,
+      deleteSession: async () => '',
       cyclePermission: () => '',
       setPermission: id => id,
       exportTranscript: async () => {},
@@ -808,6 +828,10 @@ describe('deferred session remount', () => {
       loadModels: async () => ({ rows: models, failures: [] }),
       loadMentions: async () => [],
       selectModel: () => 'test/model',
+      subagentModel: '',
+      setSubagentModel: () => '',
+      clearSubagentModel: noop,
+      deleteSession: async () => '',
       cyclePermission: () => '',
       setPermission: id => id,
       exportTranscript: async () => {},
@@ -931,6 +955,10 @@ describe('deferred session remount', () => {
       loadModels: async () => ({ rows: models, failures: [] }),
       loadMentions: async () => [],
       selectModel: () => 'test/model',
+      subagentModel: '',
+      setSubagentModel: () => '',
+      clearSubagentModel: noop,
+      deleteSession: async () => '',
       cyclePermission: () => '',
       setPermission: id => id,
       exportTranscript: async () => {},
@@ -1095,6 +1123,10 @@ describe('context stepless bar', () => {
       loadModels: async () => ({ rows: [], failures: [] }),
       loadMentions: async () => [],
       selectModel: () => 'test/model',
+      subagentModel: '',
+      setSubagentModel: () => '',
+      clearSubagentModel: noop,
+      deleteSession: async () => '',
       cyclePermission: () => '',
       setPermission: id => id,
       exportTranscript: async () => {},
@@ -1198,6 +1230,10 @@ describe('light theme rendering', () => {
       loadModels: async () => ({ rows: [], failures: [] }),
       loadMentions: async () => [],
       selectModel: () => 'test/model',
+      subagentModel: '',
+      setSubagentModel: () => '',
+      clearSubagentModel: noop,
+      deleteSession: async () => '',
       cyclePermission: () => '',
       setPermission: id => id,
       exportTranscript: async () => {},
@@ -1708,6 +1744,75 @@ describe('approval dialog', () => {
       instance2.unmount()
       second.stdin.destroy()
       second.stdout.destroy()
+    }
+  })
+})
+
+describe('/delete and /subagent', () => {
+  it('opens the resume picker in delete mode and confirms a deletion with y', async () => {
+    const harness = createTty(100, 24)
+    const removed: string[] = []
+    const instance = renderApp(harness, appProps({
+      loadSessions: async () => [{
+        id: 's-1', createdAt: 1, updatedAt: 1, cwd: 'C:\\repo', workspace: 'repo',
+        subagent: false, resumable: true, live: false, persisted: true, preset: 'standard',
+      }],
+      deleteSession: async (id: string) => {
+        removed.push(id)
+        return 'deleted 1 session'
+      },
+    }))
+    try {
+      await wait()
+      harness.stdin.write('/delete')
+      await wait()
+      harness.stdin.write('\r')
+      await wait()
+      expect(harness.output.text).toContain('delete mode')
+      harness.stdin.write('D')
+      await wait()
+      expect(harness.output.text).toContain('permanently delete')
+      harness.stdin.write('y')
+      await wait()
+      expect(removed).toEqual(['s-1'])
+    } finally {
+      instance.unmount()
+      harness.stdin.destroy()
+      harness.stdout.destroy()
+    }
+  })
+
+  it('opens /subagent with the inherit row and applies a picked override', async () => {
+    const harness = createTty(100, 24)
+    const applied: string[] = []
+    const instance = renderApp(harness, appProps({
+      subagentModel: '',
+      loadModels: async () => ({
+        rows: [{ provider: 'acme', providerName: 'Acme', model: 'plain', modelName: 'Plain' }],
+        failures: [],
+      }),
+      setSubagentModel: (row: { provider: string; model: string }) => {
+        applied.push(`${row.provider}/${row.model}`)
+        return `${row.provider}/${row.model}`
+      },
+    }))
+    try {
+      await wait()
+      harness.stdin.write('/subagent')
+      await wait()
+      harness.stdin.write('\r')
+      await wait()
+      expect(harness.output.text).toContain('/subagent — model for delegated agents')
+      expect(harness.output.text).toContain('inherit')
+      harness.stdin.write('\x1b[B')
+      await wait()
+      harness.stdin.write('\r')
+      await wait()
+      expect(applied).toEqual(['acme/plain'])
+    } finally {
+      instance.unmount()
+      harness.stdin.destroy()
+      harness.stdout.destroy()
     }
   })
 })

@@ -67,7 +67,7 @@ import type { QuestionSnapshot, QuestionStore } from './questions.ts'
 import type { SkillsView, SkillRow } from './skills.ts'
 import type { MentionCandidate } from './mentions.ts'
 import type { SubagentFeedView, SubagentRow } from './subagents.ts'
-import { AgentsPanel, EffortPanel, ModePanel, HistoryPanel, PermissionPanel, PluginPanel, ResumePanel, StatuslinePanel } from './kernel-panels.ts'
+import { AgentsPanel, EffortPanel, ModePanel, HistoryPanel, PermissionPanel, PluginPanel, ResumePanel, StatuslinePanel, SubagentPanel } from './kernel-panels.ts'
 import type { PresetRow } from './presets.ts'
 import type { PermissionRow } from './permissions.ts'
 import type { PluginRow } from './plugin-inventory.ts'
@@ -170,6 +170,14 @@ export interface AppProps {
   loadMentions(query: string, signal?: AbortSignal): Promise<readonly MentionCandidate[]>
   /** Apply one /model selection (with an advertised reasoning effort, when picked); returns the display label. */
   selectModel(row: ModelRow, effortId?: string): string
+  /** The /subagent override label, '' when delegated agents follow the current model. */
+  subagentModel: string
+  /** Apply one /subagent model pick; returns the override label. */
+  setSubagentModel(row: ModelRow, effortId?: string): string
+  /** Drop the /subagent override (delegated agents follow the current model). */
+  clearSubagentModel(): void
+  /** Delete one session subtree; resolves with the outcome line. */
+  deleteSession(id: string): Promise<string>
   /** Load provider/settings/credential facts for the optional /model provider stage. */
   loadModelProviders?(): Promise<ProviderSettingsDirectory>
   /** Subscribe to Harness credential/settings/adapter invalidations while /model is open. */
@@ -1313,9 +1321,11 @@ function QuestionBar({ store, snapshot, locked }: { store: QuestionStore; snapsh
 }
 
 /** The /model panel: a scrolling list over the advisory model directory. */
-function ModelPanel({ directory, error, onSelect, onProviders, onRetry, onClose }: {
+function ModelPanel({ directory, error, current, onSelect, onProviders, onRetry, onClose }: {
   directory: ModelDirectory | undefined
   error: string | undefined
+  /** `provider/model` label of the applied model: the cursor lands on it once. */
+  current?: string
   onSelect(row: ModelRow): void
   onProviders?(): void
   onRetry(): void
@@ -1325,14 +1335,27 @@ function ModelPanel({ directory, error, onSelect, onProviders, onRetry, onClose 
   const stdout = useStdout().stdout
   const viewport = panelViewport(stdout?.columns ?? 80, stdout?.rows ?? 30)
   const rows = directory?.rows ?? []
+  const positioned = useRef(false)
 
   useEffect(() => {
-    if (rows.length === 0) {
-      if (cursor !== 0) setCursor(0)
+    // Open ON the applied model (Codex resumes the previous pick): the first
+    // non-empty directory positions the cursor once, never on later refreshes.
+    if (positioned.current || rows.length === 0 || current === undefined) {
+      if (rows.length === 0) {
+        if (cursor !== 0) setCursor(0)
+        return
+      }
+      if (cursor >= rows.length) setCursor(rows.length - 1)
       return
     }
-    if (cursor >= rows.length) setCursor(rows.length - 1)
-  }, [rows.length, cursor])
+    const index = rows.findIndex(row => `${row.provider}/${row.model}` === current)
+    if (index >= 0) {
+      positioned.current = true
+      setCursor(index)
+    } else if (cursor >= rows.length) {
+      setCursor(Math.max(0, rows.length - 1))
+    }
+  }, [rows, cursor, current])
 
   useInput((input, key) => {
     if (key.escape || input === 'q') {
@@ -1782,6 +1805,8 @@ function HelpPanel({ descriptors, skills, commandError, skillError, onClose }: {
     createElement(Box, { key: 'local-theme' }, row('/theme', 'switch the color theme')),
     createElement(Box, { key: 'local-history' }, row('/history', 'search and recall past prompts')),
     createElement(Box, { key: 'local-agents' }, row('/agents', 'inspect subagent sessions of this conversation')),
+    createElement(Box, { key: 'local-subagent' }, row('/subagent', 'choose the model delegated subagents run on')),
+    createElement(Box, { key: 'local-delete' }, row('/delete', 'delete a session and its subagent threads')),
     createElement(Box, { key: 'local-clear' }, row('/clear', 'clear the screen')),
     createElement(Box, { key: 'local-export' }, row('/export', 'export the transcript to markdown (/export [path])')),
     createElement(Box, { key: 'local-title' }, row('/title', 'rename this session (/title <text>)')),
@@ -2119,6 +2144,8 @@ export function completionCandidates(
     { label: '/theme', description: 'switch the color theme', origin: 'command' },
     { label: '/history', description: 'search and recall past prompts', origin: 'command' },
     { label: '/agents', description: 'inspect subagent sessions of this conversation', origin: 'command' },
+    { label: '/subagent', description: 'choose the model delegated subagents run on', origin: 'command' },
+    { label: '/delete', description: 'delete a session and its subagent threads', origin: 'command' },
     { label: '/clear', description: 'clear the screen', origin: 'command' },
     { label: '/export', description: 'export the transcript to markdown', origin: 'command' },
     { label: '/title', description: 'rename this session', origin: 'command' },
@@ -2221,7 +2248,7 @@ function CompletionMenu({ active, mention, index, rows }: {
  * While a modal (approval / question / model panel) owns the keys, the
  * box passes every key through untouched.
  */
-function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openEffort, openHelp, openMode, openPermission, openResume, openPlugin, openStatusline, openTheme, openHistory, openAgents, createSession, cancelSessionSwitch, notify, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, cyclePermission, exportTranscript, renameTitle, recallSpace, recordLocal, recordHistory, queued, cancelQueued, historyFill, historyConsumed, waveTier, waveStyle }: {
+function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openEffort, openHelp, openMode, openPermission, openResume, openPlugin, openStatusline, openTheme, openHistory, openAgents, openSubagent, openDelete, createSession, cancelSessionSwitch, notify, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, cyclePermission, exportTranscript, renameTitle, recallSpace, recordLocal, recordHistory, queued, cancelQueued, historyFill, historyConsumed, waveTier, waveStyle }: {
   active: boolean
   frozen: boolean
   busy: boolean
@@ -2243,6 +2270,10 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   openHistory(): void
   /** Open the /agents panel (live subagent feed + transcript entry). */
   openAgents(): void
+  /** Open the /subagent model panel. */
+  openSubagent(): void
+  /** Open the /resume picker in delete mode, optionally pre-armed on one id. */
+  openDelete(id?: string): void
   createSession(mode?: string): void
   cancelSessionSwitch(): boolean
   notify(text: string, tone?: NoticeTone): void
@@ -2608,6 +2639,14 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
       }
       if (text === '/agents') {
         openAgents()
+        return
+      }
+      if (text === '/subagent') {
+        openSubagent()
+        return
+      }
+      if (text === '/delete' || text.startsWith('/delete ')) {
+        openDelete(text.slice(7).trim())
         return
       }
       if (busy && !text.startsWith('/')) {
@@ -3175,6 +3214,9 @@ export function App(props: AppProps): ReactElement {
   const [themeOpen, setThemeOpen] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
   const [agentsOpen, setAgentsOpen] = useState(false)
+  const [subagentOpen, setSubagentOpen] = useState(false)
+  /** /delete state: delete-mode hint plus an optional pre-armed row id. */
+  const [resumeDelete, setResumeDelete] = useState<{ mode: boolean; id?: string }>({ mode: false })
   /** The /history panel's accepted entry: text plus its recall-space index. */
   const [historyFill, setHistoryFill] = useState<{ text: string; index: number } | undefined>(undefined)
   /** Submissions recorded in this process (Codex local history; persistent file stays in the runner). */
@@ -3215,7 +3257,7 @@ export function App(props: AppProps): ReactElement {
   const approvalPending = approvalSnapshot.pending !== undefined
   const questionPending = questionSnapshot.pending !== undefined
   // While any modal owns the keys, the prompt box passes everything through.
-  const inputActive = !modelOpen && !helpOpen && !modeOpen && !permissionOpen && !resumeOpen && !pluginOpen && !statuslineOpen && !themeOpen && !historyOpen && !agentsOpen && !verboseOpen && !approvalPending && !questionPending
+  const inputActive = !modelOpen && !helpOpen && !modeOpen && !permissionOpen && !resumeOpen && !pluginOpen && !statuslineOpen && !themeOpen && !historyOpen && !agentsOpen && !subagentOpen && !verboseOpen && !approvalPending && !questionPending
 
   // Human questions outrank local inspectors. Close the lower modal instead
   // of leaving an approval/question visible but keyboard-locked behind it.
@@ -3234,6 +3276,7 @@ export function App(props: AppProps): ReactElement {
     setThemeOpen(false)
     setHistoryOpen(false)
     setAgentsOpen(false)
+    setSubagentOpen(false)
     setVerboseOpen(false)
   }, [approvalPending, questionPending])
 
@@ -3337,9 +3380,9 @@ export function App(props: AppProps): ReactElement {
           ? Math.max(1, Math.floor(streamRows / 3))
           : 1
   const answerRows = view.streaming === '' ? 0 : Math.max(1, streamRows - reasoningRows)
-  const transcriptVisible = !modelOpen && !helpOpen && !modeOpen && !permissionOpen && !resumeOpen && !pluginOpen && !statuslineOpen && !themeOpen && !historyOpen && !agentsOpen && !verboseOpen && !approvalPending && !questionPending
+  const transcriptVisible = !modelOpen && !helpOpen && !modeOpen && !permissionOpen && !resumeOpen && !pluginOpen && !statuslineOpen && !themeOpen && !historyOpen && !agentsOpen && !subagentOpen && !verboseOpen && !approvalPending && !questionPending
   const inspectorVisible = verboseOpen && !approvalPending && !questionPending
-  const modalVisible = modelOpen || helpOpen || modeOpen || permissionOpen || resumeOpen || pluginOpen || statuslineOpen || themeOpen || historyOpen || agentsOpen || inspectorVisible || approvalPending || questionPending
+  const modalVisible = modelOpen || helpOpen || modeOpen || permissionOpen || resumeOpen || pluginOpen || statuslineOpen || themeOpen || historyOpen || agentsOpen || subagentOpen || inspectorVisible || approvalPending || questionPending
   const closeInspector = useCallback((): void => {
     setVerboseOpen(false)
   }, [])
@@ -3446,6 +3489,9 @@ export function App(props: AppProps): ReactElement {
       })
     } else if (effortFor !== undefined) {
       modelSurface = createElement(EffortPanel, {
+        // Keyed per row: switching models remounts the stage so its cursor
+        // initializes on the new model's effective effort.
+        key: `${effortFor.provider}/${effortFor.model}`,
         row: effortFor,
         current: effortLabel,
         select: (effortId: string) => applyModel(effortFor, effortId),
@@ -3455,6 +3501,7 @@ export function App(props: AppProps): ReactElement {
       modelSurface = createElement(ModelPanel, {
         directory,
         error: modelError,
+        current: modelLabel,
         onSelect: (row: ModelRow) => {
           // A model advertising several levels opens the effort stage first;
           // one advertised level is its only option, while no capability uses
@@ -3566,6 +3613,9 @@ export function App(props: AppProps): ReactElement {
         currentCwd: props.workspaceRoot,
         load: props.loadSessions,
         readTranscript: props.loadSessionTranscript,
+        remove: props.deleteSession,
+        deleteMode: resumeDelete.mode,
+        initialDeleteId: resumeDelete.id,
         select: (row: SessionRow) => { props.switchSession(row); setResumeOpen(false) },
         close: () => setResumeOpen(false),
       })
@@ -3614,6 +3664,27 @@ export function App(props: AppProps): ReactElement {
         load: props.loadSubagents,
         readTranscript: props.loadSessionTranscript,
         close: () => setAgentsOpen(false),
+      })
+      : undefined,
+    subagentOpen && !approvalPending && !questionPending
+      ? createElement(SubagentPanel, {
+        current: props.subagentModel,
+        load: props.loadModels,
+        pick: (row: ModelRow, effortId?: string) => {
+          try {
+            const label = props.setSubagentModel(row, effortId)
+            notify(`subagents → ${label}${effortId === undefined || effortId === '' ? '' : `@${effortId}`}`)
+            setSubagentOpen(false)
+          } catch (reason: unknown) {
+            notify(`subagent model change failed: ${reason instanceof Error ? reason.message : String(reason)}`, 'error')
+          }
+        },
+        inherit: () => {
+          props.clearSubagentModel()
+          notify('subagents → inherit current model')
+          setSubagentOpen(false)
+        },
+        close: () => setSubagentOpen(false),
       })
       : undefined,
     notice === undefined
@@ -3694,12 +3765,18 @@ export function App(props: AppProps): ReactElement {
         },
         openMode: () => setModeOpen(true),
         openPermission: () => setPermissionOpen(true),
-        openResume: () => setResumeOpen(true),
+        openResume: () => { setResumeDelete({ mode: false }); setResumeOpen(true) },
         openPlugin: (query = '') => { setPluginQuery(query); setPluginOpen(true) },
         openStatusline: () => setStatuslineOpen(true),
         openTheme: () => setThemeOpen(true),
         openHistory: () => setHistoryOpen(true),
         openAgents: () => setAgentsOpen(true),
+        openSubagent: () => setSubagentOpen(true),
+        openDelete: (id?: string) => {
+          const armed = id === undefined || id === '' ? undefined : id
+          setResumeDelete({ mode: true, ...armed === undefined ? {} : { id: armed } })
+          setResumeOpen(true)
+        },
         createSession: props.createSession,
         cancelSessionSwitch: props.cancelSessionSwitch,
         notify,

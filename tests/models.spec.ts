@@ -5,9 +5,11 @@ import type { Context } from '@deepseek-ai/cordis'
 import { ReasoningEffortId, type LlmModelReasoningInfo } from '@deepseek-ai/dsh-llm'
 import type { ModelSelection } from '@deepseek-ai/dsh-agent'
 import {
+  applyModelSelectionToConfig,
   buildModelSelection,
   loadModelDirectory,
   mapReasoning,
+  modelSelectionLabel,
   resolveEffectiveSelection,
   type ModelRow,
 } from '../src/models.ts'
@@ -185,5 +187,38 @@ describe('loadModelDirectory reasoning', () => {
     ])
     expect(directory.failures).toEqual([])
     expect(directory.reasoningFailures).toEqual([])
+  })
+})
+
+describe('selection labels and subagent config application', () => {
+  it('labels a selection with its effort suffix', () => {
+    expect(modelSelectionLabel({ provider: 'acme', model: 'plain' })).toBe('acme/plain')
+    expect(modelSelectionLabel({ provider: 'acme', model: 'think', reasoningEffort: ReasoningEffortId('max') }))
+      .toBe('acme/think@max')
+  })
+
+  it('applies provider/model and effort onto a resolved config, stripping inherited effort', () => {
+    const resolved = {
+      provider: 'old',
+      model: 'old-model',
+      reasoningEffort: ReasoningEffortId('high'),
+      maxTokens: 100,
+    }
+    const applied = applyModelSelectionToConfig(resolved, {
+      provider: 'acme',
+      model: 'think',
+      reasoningEffort: ReasoningEffortId('max'),
+    })
+    expect(applied).toEqual({
+      provider: 'acme',
+      model: 'think',
+      reasoningEffort: ReasoningEffortId('max'),
+      maxTokens: 100,
+    })
+    // An absent effort clears any inherited one (provider default behavior),
+    // exactly like the kernel's installModelSelection listener.
+    const cleared = applyModelSelectionToConfig(resolved, { provider: 'acme', model: 'plain' })
+    expect(cleared).toEqual({ provider: 'acme', model: 'plain', maxTokens: 100 })
+    expect('reasoningEffort' in cleared).toBe(false)
   })
 })
