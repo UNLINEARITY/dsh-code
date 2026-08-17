@@ -616,6 +616,198 @@ describe('DeepSeek model-switch easter egg', () => {
       randomSpy.mockRestore()
     }
   }, 20_000)
+
+  it('plays the "Into the Unknown" wave on a non-DeepSeek model at an above-high effort, then restores static', async () => {
+    const originalChalkLevel = chalk.level
+    chalk.level = 3
+    // Pin the Wave style (the unknown tier shares the deepseek Ultra
+    // parameters, including the sparkle tail) and force dark.
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0)
+    setTheme('dark')
+    const stdin = Object.assign(new PassThrough(), {
+      isTTY: true,
+      isRaw: false,
+      setRawMode(value: boolean) {
+        this.isRaw = value
+        return this
+      },
+      ref() {},
+      unref() {},
+    }) as unknown as NodeJS.ReadStream
+    const stdout = Object.assign(new PassThrough(), {
+      isTTY: true,
+      columns: 100,
+      rows: 24,
+    }) as unknown as NodeJS.WriteStream
+    let output = ''
+    stdout.on('data', chunk => {
+      output += chunk.toString()
+    })
+    const noop = (): void => {}
+    const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
+    // The applied route is NON-DeepSeek, so only an above-high effort may
+    // trigger the wave. acme/think advertises off/high/max with default high.
+    const models = [
+      { provider: 'acme', providerName: 'Acme', model: 'model-01', modelName: 'Model 01' },
+      {
+        provider: 'acme',
+        providerName: 'Acme',
+        model: 'think',
+        modelName: 'Think',
+        reasoning: {
+          efforts: [
+            { id: 'off', name: 'Off' },
+            { id: 'high', name: 'High' },
+            { id: 'max', name: 'Max' },
+          ],
+          defaultEffort: 'high',
+        },
+      },
+    ]
+    const instance = render(createElement(App, {
+      store: createTranscriptStore(),
+      subagents: { subscribe: () => unsubscribe, getSnapshot: () => EMPTY_AGENTS },
+      approval: { subscribe: () => unsubscribe, getSnapshot: () => approvalSnapshot },
+      questions: {
+        subscribe: () => unsubscribe,
+        getSnapshot: () => questionSnapshot,
+        submit: noop,
+        cancel: noop,
+      },
+      commands: { descriptors: [], subscribe: () => unsubscribe },
+      skills: { rows: [], subscribe: () => unsubscribe },
+      model: 'acme/model-01',
+      cwd: 'dsh-cli',
+      workspaceRoot: 'C:\\repo\\dsh-cli',
+      branch: 'main',
+      sessionId: '12345678',
+      resumed: false,
+      mode: 'standard',
+      permission: 'workspace-write',
+      dispatch: noop,
+      steer: noop,
+      interrupt: () => false,
+      quit: noop,
+      loadModels: async () => ({ rows: models, failures: [] }),
+      loadMentions: async () => [],
+      selectModel: row => `${row.provider}/${row.model}`,
+      subagentModel: '',
+      setSubagentModel: () => '',
+      clearSubagentModel: noop,
+      deleteSession: async () => '',
+      cyclePermission: () => '',
+      setPermission: id => id,
+      exportTranscript: async () => {},
+      renameTitle: () => '',
+      loadPresets: async () => [],
+      loadPermissions: async () => [],
+      switchMode: async id => id,
+      createSession: noop,
+      loadSessions: async () => [],
+      loadSubagents: async () => [],
+      loadSessionTranscript: async () => '',
+      switchSession: noop,
+      cancelSessionSwitch: () => false,
+      loadPlugins: () => [],
+      statusline: DEFAULT_STATUSLINE_ITEMS,
+      saveStatusline: noop,
+      history: [],
+      recordHistory: noop,
+      cancelQueued: noop,
+      onBridgeReady: noop,
+    }), {
+      stdin,
+      stdout,
+      stderr: stdout,
+      exitOnCtrlC: false,
+      patchConsole: false,
+    })
+
+    try {
+      // The welcome header's bilingual slogan is "Into the Unknown 探索未至之
+      // 境", so a bare "Into the Unknown" WITHOUT the Chinese suffix is the
+      // wave wordmark's unique signal.
+      const stripAnsi = (text: string): string => text.replace(/\x1b\[[0-9;]*m/g, '')
+      const bareWordmark = (text: string): RegExpMatchArray | null =>
+        stripAnsi(text).match(/Into the Unknown(?!\s*探索未至之境)/)
+
+      await wait()
+      // The non-DeepSeek route with no high effort never waves: static brand
+      // prompt, no wordmark, no per-column background.
+      expect(bareWordmark(output)).toBeNull()
+
+      // /model → down to acme/think → its effort stage opens on the default
+      // (high) → one more down reaches max → apply.
+      output = ''
+      stdin.write('/model')
+      await wait()
+      stdin.write('\r')
+      await wait()
+      stdin.write('\x1b[B')
+      await wait()
+      stdin.write('\r')
+      await wait()
+      expect(output).toContain('effort for Acme · Think')
+      stdin.write('\x1b[B')
+      await wait()
+      stdin.write('\r')
+      await wait()
+      expect(output).toContain('model → next step uses acme/think@max')
+
+      // The applied label is acme/think@max — a non-DeepSeek route with an
+      // effort strictly above high — so the "Into the Unknown" wave plays
+      // the deepseek-tier motion: per-column backgrounds mid-wave…
+      await sleep(700)
+      const distinctBg = (): number => new Set((output.match(/48;2;\d{1,3};\d{1,3};\d{1,3}/g) ?? [])).size
+      expect(distinctBg()).toBeGreaterThanOrEqual(5)
+      // …the Into the Unknown wordmark surfaces through the middle…
+      expect(bareWordmark(output)).not.toBeNull()
+      // …and the prompt keeps the static brand glyph (only official DeepSeek
+      // tiers swap to ›/»).
+      expect(output).not.toContain('»')
+
+      // The nominal `· ✦ ✧` tail spans about 1.04s..1.38s; wait generously.
+      await sleep(1600)
+      expect(output).toContain('✦')
+      expect(output).toContain('✧')
+
+      // Past the 1.5s duration: fresh frames carry no wave backgrounds and no
+      // sparkles — the row returns to transparent.
+      await sleep(900)
+      const settled = output.length
+      await sleep(400)
+      const settledDelta = output.slice(settled)
+      expect(settledDelta).not.toMatch(/48;2;/)
+      expect(settledDelta).not.toContain('✦')
+
+      // Dropping the effort back to high clears the wave state: no "Into the
+      // Unknown" wordmark on a fresh trigger, static brand restored.
+      output = ''
+      stdin.write('/model')
+      await wait()
+      stdin.write('\r') // opens the model list on the APPLIED row (acme/think)
+      await wait()
+      stdin.write('\r') // its effort stage opens on the effective level (max)
+      await wait()
+      expect(output).toContain('effort for Acme · Think')
+      stdin.write('g') // top of the list (off)
+      await wait()
+      stdin.write('\x1b[B') // one down reaches high
+      await wait()
+      stdin.write('\r')
+      await wait()
+      expect(output).toContain('model → next step uses acme/think@high')
+      await sleep(400)
+      expect(bareWordmark(output)).toBeNull()
+    } finally {
+      instance.unmount()
+      stdin.destroy()
+      stdout.destroy()
+      chalk.level = originalChalkLevel
+      setTheme('dark')
+      randomSpy.mockRestore()
+    }
+  }, 20_000)
 })
 
 describe('Ctrl+R reasoning fold', () => {

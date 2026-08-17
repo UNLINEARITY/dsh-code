@@ -59,11 +59,15 @@ export function caretVisible(tick: number): boolean {
 export const DEEPSEEK_WAVE_TICK_MS = 33
 
 /**
- * The two DeepSeek wave tiers. The concept maps Codex's reasoning tiers to
+ * The DeepSeek wave tiers. The concept maps Codex's reasoning tiers to
  * model ids: `flash` runs the Max parameters, `deepseek` (pro models) runs
  * the Ultra parameters (dual band + tail sparkles on the Wave style).
+ * `unknown` is the "Into the Unknown" variant: it reuses the deepseek tier's
+ * exact parameters (dual band, durations, sparkles) for NON-DeepSeek models
+ * running a reasoning effort above high — the wordmark renders differently
+ * but the motion is identical.
  */
-export type DeepseekWaveTier = 'flash' | 'deepseek'
+export type DeepseekWaveTier = 'flash' | 'deepseek' | 'unknown'
 
 /**
  * The three ignition styles — Codex `IgnitionStyle`: a traveling crest
@@ -100,18 +104,22 @@ export const DEEPSEEK_WAVE_BANDS: Readonly<Record<DeepseekWaveStyle, Readonly<Re
     flash: [[0.10, 0.75, 1.0]],
     // Wave-Ultra: two offset bands for a richer crest.
     deepseek: [[0.10, 0.70, 1.0], [0.35, 0.55, 1.0]],
+    // Into the Unknown reuses the Ultra parameters verbatim.
+    unknown: [[0.10, 0.70, 1.0], [0.35, 0.55, 1.0]],
   },
   aurora: {
     // Aurora-Max: two drifting bands (hues 0 and 1).
     flash: [[0.35, 0.15, 0.0], [-0.50, 0.60, 1.0]],
     // Aurora-Ultra: a third band adds hue 2.
     deepseek: [[0.35, 0.15, 0.0], [-0.50, 0.60, 1.0], [0.75, 0.35, 2.0]],
+    unknown: [[0.35, 0.15, 0.0], [-0.50, 0.60, 1.0], [0.75, 0.35, 2.0]],
   },
   pulse: {
     // Pulse-Max: one expanding ring.
     flash: [[0.10, 0.60, 1.0]],
     // Pulse-Ultra: two rings (inner weaker, outer stronger).
     deepseek: [[0.10, 0.55, 0.8], [0.45, 0.55, 1.1]],
+    unknown: [[0.10, 0.55, 0.8], [0.45, 0.55, 1.1]],
   },
 }
 
@@ -120,10 +128,12 @@ export const DEEPSEEK_WAVE_DURATION_EXTENSION_MS = 200
 
 /** Original Codex duration used as the animation's sampling timeline. */
 function deepseekWaveBaseDuration(tier: DeepseekWaveTier, style: DeepseekWaveStyle): number {
+  // The unknown tier reuses the deepseek (pro) durations exactly.
+  const pro = tier === 'deepseek' || tier === 'unknown'
   switch (style) {
-    case 'aurora': return tier === 'flash' ? 1300 : 1600
-    case 'pulse': return tier === 'flash' ? 900 : 1250
-    case 'wave': return tier === 'flash' ? 1000 : 1300
+    case 'aurora': return pro ? 1600 : 1300
+    case 'pulse': return pro ? 1250 : 900
+    case 'wave': return pro ? 1300 : 1000
   }
 }
 
@@ -403,4 +413,38 @@ export function isOfficialDeepSeekLabel(label: string): boolean {
   const provider = slash < 0 ? label : label.slice(0, slash)
   const model = slash < 0 ? '' : label.slice(slash + 1)
   return provider.toLowerCase().includes('deepseek') || model.toLowerCase().includes('deepseek')
+}
+
+/**
+ * Known reasoning-effort ranks in ascending order. Effort ids are opaque
+ * adapter-owned strings, so the rank table covers the conventional names
+ * (off → low → medium → high → xhigh → max/ultra); an unrecognized id
+ * ranks as unknown (0), which never triggers the high-effort wave.
+ */
+const EFFORT_RANK: Readonly<Record<string, number>> = {
+  off: 0,
+  none: 0,
+  low: 1,
+  medium: 2,
+  med: 2,
+  high: 3,
+  xhigh: 4,
+  'x-high': 4,
+  'very-high': 4,
+  max: 5,
+  maximum: 5,
+  ultra: 5,
+}
+
+/**
+ * True when an effective reasoning effort is STRICTLY above `high` — the
+ * trigger gate for the "Into the Unknown" wave on non-DeepSeek routes.
+ * Absent efforts and unrecognized ids never qualify.
+ * @param effort - the effective reasoning-effort id ('' or undefined when none).
+ * @returns whether the effort ranks above high.
+ */
+export function effortAboveHigh(effort: string | undefined): boolean {
+  if (effort === undefined || effort === '') return false
+  const rank = EFFORT_RANK[effort.trim().toLowerCase()]
+  return rank !== undefined && rank > 3
 }

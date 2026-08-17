@@ -21,6 +21,7 @@ import {
   deepseekWaveWordHue,
   deepseekWaveWordVisible,
   easeInOut,
+  effortAboveHigh,
   envelope,
   isOfficialDeepSeekLabel,
   pulseFrame,
@@ -101,6 +102,64 @@ describe('isOfficialDeepSeekLabel', () => {
   it('matches case-insensitively', () => {
     expect(isOfficialDeepSeekLabel('DeepSeek-Official/DeepSeek-V4-Flash')).toBe(true)
     expect(isOfficialDeepSeekLabel('DEEPSEEK/deepseek-chat')).toBe(true)
+  })
+})
+
+describe('effortAboveHigh', () => {
+  it('accepts only efforts strictly above high', () => {
+    expect(effortAboveHigh('xhigh')).toBe(true)
+    expect(effortAboveHigh('max')).toBe(true)
+    expect(effortAboveHigh('ultra')).toBe(true)
+    expect(effortAboveHigh('maximum')).toBe(true)
+    expect(effortAboveHigh('very-high')).toBe(true)
+  })
+
+  it('rejects high and everything below, plus absent and unknown ids', () => {
+    expect(effortAboveHigh('high')).toBe(false)
+    expect(effortAboveHigh('medium')).toBe(false)
+    expect(effortAboveHigh('med')).toBe(false)
+    expect(effortAboveHigh('low')).toBe(false)
+    expect(effortAboveHigh('off')).toBe(false)
+    expect(effortAboveHigh('')).toBe(false)
+    expect(effortAboveHigh(undefined)).toBe(false)
+    expect(effortAboveHigh('super-duper')).toBe(false)
+  })
+
+  it('matches case-insensitively and trims whitespace', () => {
+    expect(effortAboveHigh('MAX')).toBe(true)
+    expect(effortAboveHigh('  max  ')).toBe(true)
+  })
+})
+
+describe('unknown tier (Into the Unknown)', () => {
+  it('reuses the deepseek tier bands verbatim for every style', () => {
+    expect(DEEPSEEK_WAVE_BANDS.wave.unknown).toEqual(DEEPSEEK_WAVE_BANDS.wave.deepseek)
+    expect(DEEPSEEK_WAVE_BANDS.aurora.unknown).toEqual(DEEPSEEK_WAVE_BANDS.aurora.deepseek)
+    expect(DEEPSEEK_WAVE_BANDS.pulse.unknown).toEqual(DEEPSEEK_WAVE_BANDS.pulse.deepseek)
+  })
+
+  it('runs the deepseek (pro) durations', () => {
+    expect(deepseekWaveDuration('unknown', 'wave')).toBe(1500)
+    expect(deepseekWaveDuration('unknown', 'aurora')).toBe(1800)
+    expect(deepseekWaveDuration('unknown', 'pulse')).toBe(1450)
+  })
+
+  it('samples the same per-column wave as the deepseek tier', () => {
+    for (const style of ['wave', 'aurora', 'pulse'] as const) {
+      for (let tick = 0; tick < 45; tick += 1) {
+        for (let column = 0; column < 40; column += 1) {
+          expect(deepseekWaveColumnBg(tick, column, 40, 'unknown', style, deepseekHues, WAVE_BASE_DARK))
+            .toEqual(deepseekWaveColumnBg(tick, column, 40, 'deepseek', style, deepseekHues, WAVE_BASE_DARK))
+        }
+      }
+    }
+  })
+
+  it('shows the wordmark through the same mid-wave window', () => {
+    const frames = Math.floor(deepseekWaveDuration('unknown') / DEEPSEEK_WAVE_TICK_MS)
+    expect(deepseekWaveWordVisible(0, 'unknown')).toBe(false)
+    expect(deepseekWaveWordVisible(frames - 1, 'unknown')).toBe(false)
+    expect(deepseekWaveWordVisible(Math.floor(frames / 2), 'unknown')).toBe(true)
   })
 })
 

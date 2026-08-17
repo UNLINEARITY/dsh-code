@@ -52,6 +52,7 @@ import {
   deepseekWaveTier,
   deepseekWaveWordHue,
   deepseekWaveWordVisible,
+  effortAboveHigh,
   isOfficialDeepSeekLabel,
   pulseFrame,
   WAVE_BASE_DARK,
@@ -817,9 +818,10 @@ function statusToneProps(tone: StatusTone): {
 
 /** Theme anchors for the one-shot composer wave, read from the active palette
  * so the wave stays coordinated in both themes. The flash tier runs the
- * brand blues; the deepseek tier swaps in the code sky-blue for a brighter,
- * richer mix. Codex's Wave bands carry no hue index (only hues[0] tints the
- * row), so the accent the prompt keeps is always hues[0]. */
+ * brand blues; the deepseek AND unknown tiers swap in the code sky-blue for
+ * a brighter, richer mix (the unknown tier reuses the pro palette). Codex's
+ * Wave bands carry no hue index (only hues[0] tints the row), so the accent
+ * the prompt keeps is always hues[0]. */
 function deepseekWaveHues(tier: DeepseekWaveTier): readonly [RgbTriple, RgbTriple, RgbTriple] {
   const palette = getPalette()
   return tier === 'flash'
@@ -2307,9 +2309,11 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   historyFill: { text: string; index: number } | undefined
   /** Marks the accepted entry consumed (called after the fill is applied). */
   historyConsumed(): void
-  /** DeepSeek easter-egg wave tier of the applied official DeepSeek model
-   * (null otherwise): drives the persistent prompt glyph/accent and the
-   * sparkle tier. */
+  /** DeepSeek easter-egg wave tier of the applied route (null otherwise):
+   * official DeepSeek models drive their flash/pro tiers, non-DeepSeek
+   * models running an effort above high drive the "Into the Unknown"
+   * variant. Drives the persistent prompt glyph/accent and the sparkle
+   * tier. */
   waveTier: DeepseekWaveTier | null
   /** The ignition style running, if any: Wave / Aurora / Pulse. */
   waveStyle: DeepseekWaveStyle | null
@@ -2772,7 +2776,7 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   // starts the sweep whenever that pair changes (App picks a NEW random style
   // for every replay — including effort changes on the same route — so the
   // pair always differs when a new wave should run) and stops it when the
-  // model leaves the official DeepSeek route (tier becomes null).
+  // route leaves every wave tier (tier becomes null).
   const [waveTick, setWaveTick] = useState<number | null>(null)
   const wavePrevious = useRef<{ tier: DeepseekWaveTier | null; style: DeepseekWaveStyle | null }>({ tier: null, style: null })
   useEffect(() => {
@@ -2904,11 +2908,12 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
     while (cells.length < contentWidth) {
       cells.push({ char: ' ', backgroundColor: waveBg(cells.length) })
     }
-    // The brand wordmark rides the wave's middle: `deepseek` in the tier's
-    // cycled hues, placed in the row's mid-section and only over blank or
-    // placeholder cells — real draft text is never covered.
+    // The wordmark rides the wave's middle: `deepseek` on the official
+    // tiers, `Into the Unknown` on the non-DeepSeek high-effort variant —
+    // in the tier's cycled hues, placed in the row's mid-section and only
+    // over blank or placeholder cells — real draft text is never covered.
     if (deepseekWaveWordVisible(waveTick!, waveTier!, style)) {
-      const word = 'deepseek'
+      const word = waveTier === 'unknown' ? 'Into the Unknown' : 'deepseek'
       const start = Math.max(2, Math.floor((contentWidth - word.length) / 2))
       let clear = true
       for (let at = 0; at < word.length; at += 1) {
@@ -2925,9 +2930,10 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
         }
       }
     }
-    // The tail sparkles belong to the Wave style's deepseek tier only
-    // (Codex paints spark_frame on Wave+Ultra).
-    if (waveTier === 'deepseek' && style === 'wave') {
+    // The tail sparkles belong to the Wave style's pro tiers only (the
+    // deepseek and unknown tiers share the Ultra parameters — Codex paints
+    // spark_frame on Wave+Ultra).
+    if ((waveTier === 'deepseek' || waveTier === 'unknown') && style === 'wave') {
       const spark = deepseekWaveSpark(waveTick!)
       if (spark !== null) {
         const last = cells[cells.length - 1]
@@ -3141,16 +3147,18 @@ export function App(props: AppProps): ReactElement {
   const [effortFor, setEffortFor] = useState<ModelRow | undefined>(undefined)
   /** Effective reasoning effort, shown in the /model picker and switch notice. */
   const [effortLabel, setEffortLabel] = useState<string | undefined>(props.effort)
-  /** DeepSeek easter egg: switching INTO an official DeepSeek route plays
-   * one of Codex's three ignition styles (Wave / Aurora / Pulse, picked at
-   * random without repeating) across the composer's padded band (33ms tick,
-   * per-style durations), then the band returns to static while the prompt
-   * marker keeps the tier accent. The trigger follows the applied model
-   * label (what the status bar actually shows), never the initial paint,
-   * and the tier is derived from the label and cached at the switch. The
-   * 33ms tick itself lives inside Input, so the sweep re-renders only the
-   * composer row, not the whole tree, at 30fps; App owns the rarely-changing
-   * tier/style and Input starts the sweep whenever that pair changes. */
+  /** DeepSeek easter egg: switching INTO an official DeepSeek route — or
+   * onto a NON-DeepSeek model running a reasoning effort strictly above
+   * high — plays one of Codex's three ignition styles (Wave / Aurora /
+   * Pulse, picked at random without repeating) across the composer's
+   * padded band (33ms tick, per-style durations), then the band returns
+   * to static while the prompt marker keeps the tier accent. The trigger
+   * follows the applied model label (what the status bar actually shows),
+   * never the initial paint, and the tier is derived from the label and
+   * cached at the switch. The 33ms tick itself lives inside Input, so the
+   * sweep re-renders only the composer row, not the whole tree, at 30fps;
+   * App owns the rarely-changing tier/style and Input starts the sweep
+   * whenever that pair changes. */
   const [waveTier, setWaveTier] = useState<DeepseekWaveTier | null>(null)
   const [waveStyle, setWaveStyle] = useState<DeepseekWaveStyle | null>(null)
   const previousModel = useRef<string | undefined>(undefined)
@@ -3160,18 +3168,23 @@ export function App(props: AppProps): ReactElement {
     const previous = previousModel.current
     previousModel.current = modelLabel
     // The wave replays when the applied model changes OR its effort level
-    // changes on the same official DeepSeek route (Codex replays the
-    // ignition on effort changes too).
+    // changes (Codex replays the ignition on effort changes too). Official
+    // DeepSeek routes run their flash/pro tiers; a NON-DeepSeek model
+    // running a reasoning effort STRICTLY above high runs the "Into the
+    // Unknown" variant — the deepseek tier's exact motion with a different
+    // wordmark. Any other non-DeepSeek route stays static.
     const effortChanged = previousEffort.current !== effortLabel
     previousEffort.current = effortLabel
     const modelChanged = previous !== undefined && previous !== modelLabel
-    if (!isOfficialDeepSeekLabel(modelLabel)) {
+    const official = isOfficialDeepSeekLabel(modelLabel)
+    const unknownTrigger = !official && effortAboveHigh(effortLabel)
+    if (!official && !unknownTrigger) {
       setWaveTier(null)
       setWaveStyle(null)
       return
     }
     if (modelChanged || effortChanged) {
-      setWaveTier(deepseekWaveTier(modelLabel))
+      setWaveTier(official ? deepseekWaveTier(modelLabel) : 'unknown')
       const nextStyle = deepseekWaveStyleRandom(previousStyle.current)
       previousStyle.current = nextStyle
       setWaveStyle(nextStyle)
