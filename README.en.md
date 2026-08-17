@@ -216,7 +216,16 @@ dsh plugin --profile cli add github:unlinearity/dsh-code
 
 The Git package builds during installation. If pnpm asks for an `allowBuilds` entry, copy the complete entry it prints into `~/.dsh/profiles/cli/pnpm-workspace.yaml`, then run the command again. The key includes the Git URL and commit, so do not replace it with only `dsh-code`.
 
-### 2. References
+### 2. Uninstall
+
+```sh
+dsh plugin --profile cli remove dsh-code   # unmount the plugin from the cli profile
+npm uninstall -g dsh-code                  # remove the global package and the deepseek / dsh-code commands
+```
+
+Both steps are required for a full removal: the first only unmounts the profile — the `deepseek` command still exists afterwards and reports "the cli profile does not mount dsh-code yet" — while the second removes the global npm package and its launch aliases. Uninstalling does not touch `@deepseek-ai/dsh` itself or persisted session data.
+
+### 3. References
 
 - Runtime services, events, plugin scopes, and persistence follow **DeepSeek Harness**.
 - Session navigation, popup sizing, scrollback, bottom-pane layout, and resize behavior refer to **Codex CLI**.

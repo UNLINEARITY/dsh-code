@@ -215,7 +215,16 @@ dsh plugin --profile cli add github:unlinearity/dsh-code
 
 Git 包会在安装阶段构建。若 pnpm 要求添加 `allowBuilds`，请把它输出的完整条目复制到 `~/.dsh/profiles/cli/pnpm-workspace.yaml`，再重新执行命令。该键包含 Git URL 与 commit，不能只写 `dsh-code`。
 
-### 2. 参考
+### 2. 卸载
+
+```sh
+dsh plugin --profile cli remove dsh-code   # 移除 cli profile 中的插件挂载
+npm uninstall -g dsh-code                  # 移除全局包与 deepseek / dsh-code 命令
+```
+
+两条都要执行才是全量卸载：第一条只解除 profile 挂载，此时 `deepseek` 命令仍存在并提示 "the cli profile does not mount dsh-code yet"；第二条移除全局 npm 包与启动别名。卸载不影响 `@deepseek-ai/dsh` 本体与已持久化的会话数据。
+
+### 3. 参考
 
 - 运行时服务、事件、插件作用域和持久化模型遵循 **DeepSeek Harness**。
 - 会话导航、浮层尺寸、scrollback、底部布局与缩放处理参考 **Codex CLI**。
