@@ -22,7 +22,24 @@ interface ListFrameProps {
   readonly loading: boolean
   readonly error?: string
   readonly query: string
+  /** Ctrl+F-gated search focus for this panel: typing edits the query only
+   * while true. `undefined` keeps the plain "type to filter" prompt (the
+   * panel filters by typing directly). */
+  readonly searching?: boolean
   readonly footer: string
+}
+
+/** True for the Ctrl+F search-focus toggle. */
+function isSearchToggle(input: string, key: { ctrl?: boolean }): boolean {
+  return key.ctrl === true && input === 'f'
+}
+
+/** The search-state line: gated panels show only an ACTIVE filter (the ctrl+f
+ * toggle lives in the footer), direct-typing panels keep the plain prompt. */
+function searchLine(searching: boolean | undefined, query: string): string {
+  if (searching === true) return `search: ${query === '' ? 'type to filter · esc stops' : query}`
+  if (searching === false) return query === '' ? '' : `search: ${query}`
+  return `search: ${query === '' ? 'type to filter' : query}`
 }
 
 function ListFrame(props: ListFrameProps): ReactElement {
@@ -46,7 +63,7 @@ function ListFrame(props: ListFrameProps): ReactElement {
     Box,
     { width: viewport.outerColumns, borderStyle: 'round', borderColor: inkColor(getPalette().dim), flexDirection: 'column', paddingX: 1 },
     createElement(Text, { color: inkColor(getPalette().brandBright), wrap: 'truncate-end' }, truncateColumns(singleLineText(props.title), viewport.contentColumns)),
-    createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns(singleLineText(`search: ${props.query === '' ? 'type to filter' : props.query}`), viewport.contentColumns)),
+    createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns(singleLineText(searchLine(props.searching, props.query)), viewport.contentColumns)),
     ...visible.map((row, index) => {
       const absolute = offset + index
       const selected = !props.loading && props.error === undefined && props.rows.length > 0 && absolute === props.cursor
@@ -165,17 +182,19 @@ export function PluginPanel({ load, close, initialQuery = '' }: { load(): readon
   })
 }
 
-export function ResumePanel({ currentCwd, load, readTranscript, select, remove, deleteMode = false, initialDeleteId, close }: {
+export function ResumePanel({ currentCwd, load, readTranscript, select, requestDelete, deleteConfirmId, reloadToken = 0, deleteMode = false, close }: {
   currentCwd: string
   load(options: SessionDirectoryOptions, signal?: AbortSignal): Promise<readonly SessionRow[]>
   readTranscript(id: string, signal?: AbortSignal): Promise<string>
   select(row: SessionRow): void
-  /** Delete one session subtree; resolves with the outcome line. */
-  remove(id: string): Promise<string>
+  /** Arm the composer-based delete confirm for one row (App owns the keys). */
+  requestDelete?(row: SessionRow): void
+  /** The row id awaiting y/n in the composer, when any (App-owned). */
+  deleteConfirmId?: string
+  /** Bump to reload the listing (e.g. after a deletion). */
+  reloadToken?: number
   /** Opened via /delete: hint-first delete mode. */
   deleteMode?: boolean
-  /** A /delete <id> argument pre-arming the confirmation on its row. */
-  initialDeleteId?: string
   close(): void
 }): ReactElement {
   // Codex resume-picker default: the CURRENT directory's root sessions; the
@@ -190,9 +209,8 @@ export function ResumePanel({ currentCwd, load, readTranscript, select, remove, 
   const [error, setError] = useState<string>()
   const [expanded, setExpanded] = useState<string>()
   const [transcript, setTranscript] = useState<{ id: string; text?: string; error?: string }>()
-  /** Pending deletion (codex y/N confirm): the row id awaiting y/n. */
-  const [pendingDelete, setPendingDelete] = useState<string | undefined>(initialDeleteId)
-  const [deleting, setDeleting] = useState(false)
+  /** Ctrl+F-gated search: typing filters only while searching (codex). */
+  const [searching, setSearching] = useState(false)
   /** Reference clock pinned per row render, so relative times never drift mid-list. */
   const now = useMemo(() => Date.now(), [rows, options])
   const transcriptLoad = useRef<AbortController>()
@@ -206,7 +224,7 @@ export function ResumePanel({ currentCwd, load, readTranscript, select, remove, 
       if (!controller.signal.aborted) { setError(reason instanceof Error ? reason.message : String(reason)); setLoading(false) }
     })
     return () => controller.abort()
-  }, [options])
+  }, [options, reloadToken])
   useEffect(() => setCursor(value => Math.min(value, Math.max(0, rows.length - 1))), [rows.length])
   const cycle = (): void => {
     if (focus === 3) {
@@ -219,28 +237,22 @@ export function ResumePanel({ currentCwd, load, readTranscript, select, remove, 
       return { ...value, sort: value.sort === 'newest' ? 'oldest' : 'newest' }
     })
   }
-  const confirmDelete = (): void => {
-    const target = pendingDelete
-    if (target === undefined || deleting) return
-    setDeleting(true)
-    Promise.resolve().then(() => remove(target)).then(outcome => {
-      setDeleting(false)
-      setPendingDelete(undefined)
-      setError(outcome.startsWith('deleted ') ? undefined : outcome)
-    }, reason => {
-      setDeleting(false)
-      setPendingDelete(undefined)
-      setError(reason instanceof Error ? reason.message : String(reason))
-    })
-  }
   useInput((input, key) => {
-    if (pendingDelete !== undefined) {
-      // The confirm gate owns every key: y proceeds, anything else cancels.
-      if (input === 'y' || input === 'Y') return confirmDelete()
-      setPendingDelete(undefined)
+    // While a deletion awaits y/n, the COMPOSER owns every key (App routes
+    // them); the panel yields so y/n cannot be handled twice.
+    if (deleteConfirmId !== undefined) return
+    if (key.escape) {
+      if (searching) { setSearching(false); return }
+      return close()
+    }
+    if (isSearchToggle(input, key)) { setSearching(current => !current); return }
+    if (searching) {
+      if (key.return) { setSearching(false); return }
+      const next = editQuery(options.query, input, key)
+      if (next !== undefined) { setOptions(value => ({ ...value, query: next })); setCursor(0) }
       return
     }
-    if (key.escape || input === 'q') return close()
+    if (input === 'q') return close()
     if (key.tab) return setFocus(value => (value + (key.shift ? 3 : 1)) % 4)
     if (key.leftArrow) return cycle()
     if (key.rightArrow) return cycle()
@@ -250,7 +262,7 @@ export function ResumePanel({ currentCwd, load, readTranscript, select, remove, 
     if (key.pageDown) return setCursor(value => Math.min(rows.length - 1, value + 8))
     if (input === 'g') return setCursor(0)
     if (input === 'G') return setCursor(Math.max(0, rows.length - 1))
-    if (input === 'D' && rows[cursor] !== undefined) return setPendingDelete(rows[cursor]!.id)
+    if (input === 'd' && rows[cursor] !== undefined && requestDelete !== undefined) return requestDelete(rows[cursor]!)
     if (input === 'e' && rows[cursor] !== undefined) {
       return setExpanded(value => value === rows[cursor]!.id ? undefined : rows[cursor]!.id)
     }
@@ -267,8 +279,6 @@ export function ResumePanel({ currentCwd, load, readTranscript, select, remove, 
       return
     }
     if (key.return && rows[cursor]?.resumable === true) return select(rows[cursor]!)
-    const next = editQuery(options.query, input, key)
-    if (next !== undefined) { setOptions(value => ({ ...value, query: next })); setCursor(0) }
   }, { isActive: transcript === undefined })
   if (transcript !== undefined) {
     return createElement(DocumentPanel, {
@@ -278,20 +288,18 @@ export function ResumePanel({ currentCwd, load, readTranscript, select, remove, 
       close: () => { transcriptLoad.current?.abort(); setTranscript(undefined) },
     })
   }
-  const pendingRow = pendingDelete === undefined ? undefined : rows.find(row => row.id === pendingDelete)
+  const pendingRow = deleteConfirmId === undefined ? undefined : rows.find(row => row.id === deleteConfirmId)
   const toolbar = `[${focus === 0 ? '>' : ''}${options.sessions}] [${focus === 1 ? '>' : ''}${options.cwd} cwd] [${focus === 2 ? '>' : ''}${options.sort}] [${focus === 3 ? '>' : ''}${density}]`
   return createElement(ListFrame, {
-    title: pendingDelete === undefined
-      ? `/resume${deleteMode ? ' — delete mode' : ''} · ${toolbar}`
-      : `permanently delete ${pendingRow?.title ?? pendingDelete.slice(-12)}? this cannot be undone · subagent threads go too`,
+    title: deleteConfirmId === undefined
+      ? `/resume${deleteMode ? ' — delete mode' : ''}${searching ? ' — searching' : ''} · ${toolbar}`
+      : `permanently delete ${pendingRow === undefined ? deleteConfirmId.slice(-12) : pendingRow.title ?? pendingRow.id}? this cannot be undone · subagent threads go too`,
     rows: rows.map(row => ({
       key: row.id,
       disabled: !row.resumable,
       text: `${row.subagent ? '↳' : '○'} ${row.title ?? row.id.slice(-12)}${density === 'comfortable' ? ` · ${formatRelativeTime(row.updatedAt ?? row.createdAt, now)} · ${row.workspace} · ${row.preset}` : ''}${row.live ? ' · live' : ''}${expanded === row.id ? ` · ${row.id} · ${row.cwd}${row.parent === undefined ? '' : ` · parent ${row.parent}`}` : ''}`,
-    })), cursor, loading, error, query: options.query,
-    footer: pendingDelete === undefined
-      ? 'type search · tab/←→ filters · ↑↓/pg navigate · e details · t transcript · D delete · enter resume'
-      : deleting ? 'deleting…' : 'y delete · any other key cancels',
+    })), cursor, loading, error, query: options.query, searching,
+    footer: 'tab/←→ filters · ↑↓/pg navigate · ctrl+f search · e details · t transcript · d delete · enter resume',
   })
 }
 

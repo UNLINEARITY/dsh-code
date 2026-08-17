@@ -1769,9 +1769,11 @@ describe('/delete and /subagent', () => {
       harness.stdin.write('\r')
       await wait()
       expect(harness.output.text).toContain('delete mode')
-      harness.stdin.write('D')
+      harness.stdin.write('d')
       await wait()
+      // The confirm prompt moves into the composer box (warn-styled).
       expect(harness.output.text).toContain('permanently delete')
+      expect(harness.output.text).toContain('y delete · any other key cancels')
       harness.stdin.write('y')
       await wait()
       expect(removed).toEqual(['s-1'])

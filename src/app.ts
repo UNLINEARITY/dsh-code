@@ -2248,7 +2248,7 @@ function CompletionMenu({ active, mention, index, rows }: {
  * While a modal (approval / question / model panel) owns the keys, the
  * box passes every key through untouched.
  */
-function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openEffort, openHelp, openMode, openPermission, openResume, openPlugin, openStatusline, openTheme, openHistory, openAgents, openSubagent, openDelete, createSession, cancelSessionSwitch, notify, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, cyclePermission, exportTranscript, renameTitle, recallSpace, recordLocal, recordHistory, queued, cancelQueued, historyFill, historyConsumed, waveTier, waveStyle }: {
+function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openEffort, openHelp, openMode, openPermission, openResume, openPlugin, openStatusline, openTheme, openHistory, openAgents, openSubagent, openDelete, deleteConfirm, confirmDelete, cancelDelete, createSession, cancelSessionSwitch, notify, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, cyclePermission, exportTranscript, renameTitle, recallSpace, recordLocal, recordHistory, queued, cancelQueued, historyFill, historyConsumed, waveTier, waveStyle }: {
   active: boolean
   frozen: boolean
   busy: boolean
@@ -2274,6 +2274,12 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   openSubagent(): void
   /** Open the /resume picker in delete mode, optionally pre-armed on one id. */
   openDelete(id?: string): void
+  /** The row id awaiting y/n in this box, when a deletion is pending. */
+  deleteConfirm?: string
+  /** Confirm the pending deletion (y in the box). */
+  confirmDelete(): void
+  /** Cancel the pending deletion (any other key in the box). */
+  cancelDelete(): void
   createSession(mode?: string): void
   cancelSessionSwitch(): boolean
   notify(text: string, tone?: NoticeTone): void
@@ -2456,6 +2462,17 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   useInput((input, key) => {
     // Modal ownership: approval/question/model dialogs consume all keys.
     if (!active) return
+    // Deletion confirm owns the box: y proceeds, anything else cancels.
+    // Typed in the INPUT BOX (codex delete-confirm): the keystroke is echoed
+    // as the box's own prompt, not an invisible panel keypress.
+    if (deleteConfirm !== undefined) {
+      if (input === 'y' || input === 'Y') {
+        confirmDelete()
+      } else {
+        cancelDelete()
+      }
+      return
+    }
     // Shift+Tab cycles the permission preset (Claude-Code convention).
     if (key.tab && key.shift) {
       try {
@@ -2792,6 +2809,20 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   const promptColor = tierHues === null ? inkColor(getPalette().brand) : inkColor(tierHues[0])
   const promptGlyph = waveTier === 'flash' ? '›' : waveTier === 'deepseek' ? '»' : '❯'
   if (frozen) {
+    // A pending deletion turns the box into the confirm prompt: the y/n is
+    // typed HERE, with a readable warn-styled hint instead of a dim footer.
+    if (deleteConfirm !== undefined) {
+      return createElement(
+        Box,
+        { width: Math.max(1, columns - 1), borderStyle: 'round', borderColor: inkColor(getPalette().warn), paddingX: 1 },
+        createElement(
+          Text,
+          { wrap: 'truncate-end' },
+          createElement(Text, { color: inkColor(getPalette().warn), bold: true }, '❯ '),
+          createElement(Text, { color: inkColor(getPalette().warn), bold: true }, 'y delete · any other key cancels'),
+        ),
+      )
+    }
     const frozen = value === ''
       ? 'type a message'
       : verboseLine(value, Math.max(1, columns - 6))
@@ -3217,6 +3248,30 @@ export function App(props: AppProps): ReactElement {
   const [subagentOpen, setSubagentOpen] = useState(false)
   /** /delete state: delete-mode hint plus an optional pre-armed row id. */
   const [resumeDelete, setResumeDelete] = useState<{ mode: boolean; id?: string }>({ mode: false })
+  /** The row id awaiting y/n in the COMPOSER (codex delete confirm): the
+   * composer takes the keys, the resume panel yields until it settles. */
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | undefined>(undefined)
+  /** Bumped after a deletion so the /resume listing reloads immediately. */
+  const [deleteReloadToken, setDeleteReloadToken] = useState(0)
+  const requestDelete = useCallback((row: SessionRow): void => {
+    setDeleteConfirmId(row.id)
+  }, [])
+  const cancelDelete = useCallback((): void => {
+    setDeleteConfirmId(undefined)
+  }, [])
+  const confirmDelete = useCallback((): void => {
+    const id = deleteConfirmId
+    if (id === undefined) return
+    setDeleteConfirmId(undefined)
+    void props.deleteSession(id).then(outcome => {
+      notify(outcome)
+      // Keep the picker open and reload: a successful deletion must vanish
+      // from the list immediately, not look like a no-op.
+      setDeleteReloadToken(token => token + 1)
+    }, (reason: unknown) => {
+      notify(`delete failed: ${reason instanceof Error ? reason.message : String(reason)}`, 'error')
+    })
+  }, [deleteConfirmId, props.deleteSession, notify])
   /** The /history panel's accepted entry: text plus its recall-space index. */
   const [historyFill, setHistoryFill] = useState<{ text: string; index: number } | undefined>(undefined)
   /** Submissions recorded in this process (Codex local history; persistent file stays in the runner). */
@@ -3257,7 +3312,12 @@ export function App(props: AppProps): ReactElement {
   const approvalPending = approvalSnapshot.pending !== undefined
   const questionPending = questionSnapshot.pending !== undefined
   // While any modal owns the keys, the prompt box passes everything through.
-  const inputActive = !modelOpen && !helpOpen && !modeOpen && !permissionOpen && !resumeOpen && !pluginOpen && !statuslineOpen && !themeOpen && !historyOpen && !agentsOpen && !subagentOpen && !verboseOpen && !approvalPending && !questionPending
+  // While a deletion waits for y/n, the composer takes the keys (the resume
+  // panel yields): the confirm is typed IN the input box, not as an invisible
+  // panel keypress.
+  const inputActive = deleteConfirmId !== undefined
+    ? !approvalPending && !questionPending
+    : !modelOpen && !helpOpen && !modeOpen && !permissionOpen && !resumeOpen && !pluginOpen && !statuslineOpen && !themeOpen && !historyOpen && !agentsOpen && !subagentOpen && !verboseOpen && !approvalPending && !questionPending
 
   // Human questions outrank local inspectors. Close the lower modal instead
   // of leaving an approval/question visible but keyboard-locked behind it.
@@ -3277,6 +3337,7 @@ export function App(props: AppProps): ReactElement {
     setHistoryOpen(false)
     setAgentsOpen(false)
     setSubagentOpen(false)
+    setDeleteConfirmId(undefined)
     setVerboseOpen(false)
   }, [approvalPending, questionPending])
 
@@ -3613,9 +3674,10 @@ export function App(props: AppProps): ReactElement {
         currentCwd: props.workspaceRoot,
         load: props.loadSessions,
         readTranscript: props.loadSessionTranscript,
-        remove: props.deleteSession,
+        requestDelete,
+        deleteConfirmId,
+        reloadToken: deleteReloadToken,
         deleteMode: resumeDelete.mode,
-        initialDeleteId: resumeDelete.id,
         select: (row: SessionRow) => { props.switchSession(row); setResumeOpen(false) },
         close: () => setResumeOpen(false),
       })
@@ -3777,8 +3839,12 @@ export function App(props: AppProps): ReactElement {
         openDelete: (id?: string) => {
           const armed = id === undefined || id === '' ? undefined : id
           setResumeDelete({ mode: true, ...armed === undefined ? {} : { id: armed } })
+          setDeleteConfirmId(armed)
           setResumeOpen(true)
         },
+        deleteConfirm: deleteConfirmId,
+        confirmDelete,
+        cancelDelete,
         createSession: props.createSession,
         cancelSessionSwitch: props.cancelSessionSwitch,
         notify,
