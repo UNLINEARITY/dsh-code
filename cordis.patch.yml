@@ -69,7 +69,14 @@
 - id: tool-todo
   disabled: true
 - id: tool-web
-  disabled: true
+  config:
+    # web_fetch is a core TUI capability, not an opt-in: the fetch provider
+    # (web-fetch-http below) needs no API key. The per-preset tool-web rows
+    # keep `fetch: false` on the agent plane; through the scope-layered tool
+    # registry the preset's web_search shadows the host's same-name tool while
+    # the host's web_fetch stays visible, so every model still sees both.
+    fetch: true
+    searchTimeoutMs: 60000
 
 - insert:
     # Code Mode is a core execution capability, not a Web component.
@@ -88,6 +95,20 @@
       name: '@deepseek-ai/dsh-agent-presets'
       config:
         default: standard
+
+    # Cordis self-inspection (the shipped `cordis` agent preset's toolset):
+    # the host runner publishes the `dynamicCordisRunner`/`cordisInspect`
+    # services `tool-cordis` injects. Without this host row the preset mount
+    # fails ("1 row(s) did not activate: tool-cordis"), because models write
+    # composition through the agent plane but the runner is a host singleton.
+    - id: cordis-host-runner
+      name: '@deepseek-ai/dsh-cordis-host-runner'
+
+    # Anonymous public HTTP(S) fetch provider for web_fetch (no key): the web
+    # service and its search provider stay on the host plane (dsh-base), and
+    # this row is what makes fetching real URLs work out of the box.
+    - id: web-fetch-http
+      name: '@deepseek-ai/dsh-web-fetch-http'
 
     - id: tui-startup
       name: 'dsh-code/startup'

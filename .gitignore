@@ -5,3 +5,4 @@ lib/
 /.agents/
 CLAUDE.md
 /log/*
+/.pnpm-store/
