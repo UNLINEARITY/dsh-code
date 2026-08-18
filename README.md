@@ -41,7 +41,7 @@ DSH-Code 保留这套结构，并补充适合编码任务的终端工作流。
 ```sh
 npm install -g @deepseek-ai/dsh dsh-code
 npm install -g pnpm
-deepseek setup
+dsh plugin --profile cli add dsh-code@0.9.1
 ```
 
 > 提示：pnpm 会忽略发布不足 24 小时的包，因此发布首日请使用精确版本 `dsh-code@0.9.1`；24 小时后可省略版本号。npm 安装不受此限制。
@@ -50,8 +50,12 @@ deepseek setup
 
 ```sh
 npm install -g dsh-code@0.9.1
-deepseek setup
+dsh plugin --profile cli add dsh-code@0.9.1
 ```
+
+### DSH-Code 封装
+
+DSH-Code 是叠加在 DeepSeek Harness 之上的终端封装，不修改 Harness 的 Agent、会话、模型、工具、审批和持久化等核心服务；`cli` profile 负责将它们与终端 bundle 组合起来。`deepseek` 与 `dsh-code` 只是 `dsh --profile cli` 的便利启动别名。
 
 ### 3. 启动指令
 
@@ -60,8 +64,6 @@ deepseek setup
 dsh --profile cli
 deepseek
 dsh-code
-deepseek "检查这个仓库并运行测试"
-deepseek --image screenshot.png "分析这个错误界面"
 ```
 
 `dsh --profile cli`、`deepseek` 与 `dsh-code` 是并列的启动命令。`deepseek` 与 `dsh-code` 都是 `dsh --profile cli` 的全局别名，后续参数会原样转发，例如 `deepseek --resume abc123`。
@@ -94,6 +96,7 @@ dsh --profile cli --mode code        # 使用 Agent Preset 启动
 dsh --profile cli --continue         # 恢复当前目录最新会话
 dsh --profile cli --resume abc123    # 按 id 或唯一前缀恢复持久会话
 dsh --profile cli --session my-id    # 使用指定 id 新建会话
+deepseek setup                        # 挂载当前发布版本到 cli profile
 deepseek doctor                       # 检查 Node、DSH、profile 与组合
 deepseek completion powershell       # 生成 shell completion
 deepseek update                       # 只检查可用版本
@@ -108,21 +111,19 @@ deepseek update --apply               # 显式更新全局安装
 | `/resume [id\|前缀]` | 搜索根会话或全部对话，并按 cwd、排序和密度筛选 |
 | `/fork [event-seq]` | 从包含指定事件的已完成 turn 创建可继续的普通 fork |
 | `/mode [preset]` | 检查或选择空会话的 Agent 组合 |
-| `/model` | 在实时 LLM 注册表提供的模型间切换；按 `a` 管理 provider 与 API key |
+| `/model` | 在实时 LLM 注册表提供的模型间切换；按 `a` 管理 provider，选中后按 `Tab` 编辑 URL、模型与窗口 |
 | `/plugin [query]` | 检查 loader 条目、启用状态、模块身份和 fiber 阶段 |
-| `/diff [--staged\|ref]` | 在有界只读面板中检查完整 Git diff |
+| `/diff [--staged\|ref]` | 按文件查看完整 Git diff；左右方向键切换文件 |
 | `/review [--staged\|ref]` | 切换到 `read-only` 权限并提交有上限的代码审查任务 |
-| `/settings`、`/mcp`、`/hooks`、`/jobs` | 查看脱敏设置、组合状态和后台任务 |
 | `/copy` | 复制最近一条完整助手回复 |
 | `/permission <name>` | 切换权限预设；Shift+Tab 可循环切换 |
 | `/help` | 浏览本地命令、Harness 命令、技能和快捷键 |
 | `Ctrl+O` | 打开独占历史详情视图，切换条目并滚动完整内容 |
 | `Ctrl+R` | 折叠或展开模型思考过程 |
-| `Ctrl+G` | 用 `$VISUAL` / `$EDITOR`（Windows 默认记事本）编辑当前草稿 |
 | `@` | 引用工作区文件或持久会话的有界快照 |
 | `Esc` / `Ctrl+C` | 关闭最上层界面或中断当前 turn |
 
-`/model` 的 provider 面板只读取 credential 的已配置状态、来源和可写性；输入内容始终遮蔽并直接交给 Harness 持久化。由启动环境提供的 key 会标记为只读，不能在 TUI 中覆盖或移除。
+`/model` 中按 `a` 进入 provider 管理；选中 provider 后按 `Tab` 可编辑 endpoint URL、显式启用的模型及每个模型的上下文/输出窗口。API key 输入始终遮蔽并由 Harness 持久化；由启动环境提供的 key 会标记为只读，不能在 TUI 中覆盖或移除。
 
 ## 四、功能
 
@@ -131,7 +132,7 @@ deepseek update --apply               # 显式更新全局安装
 - 每会话 Agent Preset：组合工具、提示词、技能、上下文压缩、plan mode 与委派能力
 - 从共享 Harness 注册表实时发现斜杠命令和用户技能
 - 通过 `/plugin` 只读诊断 Cordis loader
-- 从实时 LLM 注册表路由模型，并按持久会话恢复选择；`/model` 可添加或轮换 key、移除可写 key，以及删除用户添加的 provider profile
+- 从实时 LLM 注册表路由模型，并按持久会话恢复选择；`/model` 可添加或轮换 key、移除可写 key、删除用户添加的 provider profile，并设置 endpoint、模型白名单和 token 窗口
 - 支持 plan、goal、todo、权限、sandbox、subagent 与运行中 steering
 
 ### 2. 会话与上下文

@@ -8,11 +8,17 @@ import { join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const packageRequire = createRequire(import.meta.url)
+const packageVersion = packageRequire('../package.json').version
 
 /** Arguments required to boot DSH-Code's conventional profile. */
 export const profileArgs = (args = []) => ['--profile', 'cli', ...args]
 
 export const OPERATION_COMMANDS = ['setup', 'doctor', 'completion', 'update']
+
+/** Exact first-day package spec used by setup (pnpm delays an unpinned release). */
+export const setupBundle = (args = []) => args.includes('--local')
+  ? fileURLToPath(new URL('..', import.meta.url))
+  : `dsh-code@${packageVersion}`
 
 /** Wrapper-owned operation, or undefined when arguments belong to the TUI. */
 export function operationName(args = process.argv.slice(2)) {
@@ -132,7 +138,9 @@ export function launchOperation(args = process.argv.slice(2)) {
     return true
   }
   if (operation === 'setup') {
-    const command = rawDshCommand(['plugin', '--profile', 'cli', 'add', args.includes('--local') ? fileURLToPath(new URL('..', import.meta.url)) : 'dsh-code'])
+    // pnpm deliberately delays unpinned packages during their first 24 hours.
+    // Setup must mount the exact globally installed release on launch day.
+    const command = rawDshCommand(['plugin', '--profile', 'cli', 'add', setupBundle(args)])
     if (command === undefined) {
       console.error('dsh-code: @deepseek-ai/dsh is not installed; run: npm install -g @deepseek-ai/dsh dsh-code')
       process.exitCode = 1

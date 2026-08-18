@@ -93,7 +93,7 @@ export function resolveTuiStartup(options: TuiStartupOptions): TuiStartup {
 function tuiCommand(): Command {
   return new Command()
     .name('dsh --profile cli')
-    .description('Claude-Code-style interactive terminal for DeepSeek Harness.')
+    .description('DeepSeek Harness CLI core: the interactive coding terminal.')
     .helpOption('-h, --help', 'show this help')
     .option('-r, --resume <session>', 'resume the persisted session with this id (or unique id prefix)')
     .option('-c, --continue', 'resume the most recent persisted session for this working directory')

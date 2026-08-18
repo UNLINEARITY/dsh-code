@@ -1,6 +1,6 @@
 {
   "name": "dsh-code",
-  "description": "Claude-Code-style interactive TUI bundle for DeepSeek Harness (dsh): DeepSeek-blue whale banner, live session transcript, and a blended status line",
+  "description": "DeepSeek Harness CLI core bundle: interactive coding terminal, durable sessions, and model management for dsh --profile cli",
   "version": "0.9.1",
   "type": "module",
   "bin": {

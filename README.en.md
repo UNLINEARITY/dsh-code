@@ -53,6 +53,10 @@ npm install -g dsh-code@0.9.1
 dsh plugin --profile cli add dsh-code@0.9.1
 ```
 
+### DSH-Code wrapper
+
+DSH-Code is a terminal wrapper over DeepSeek Harness. It does not replace Harness services for Agent, sessions, models, tools, approvals, or persistence; the `cli` profile composes those services with the terminal bundle. `deepseek` and `dsh-code` are convenience aliases for `dsh --profile cli`.
+
 ### 3. launching
 
 Available launch commands:
@@ -93,6 +97,11 @@ dsh --profile cli --mode code        # start with an Agent Preset
 dsh --profile cli --continue         # resume the newest session for this directory
 dsh --profile cli --resume abc123    # resume by id or unique prefix
 dsh --profile cli --session my-id    # start a fresh session with an explicit id
+deepseek setup                        # mount the current release in the cli profile
+deepseek doctor                       # check Node, DSH, profile, and composition
+deepseek completion powershell       # generate shell completion
+deepseek update                       # check available versions only
+deepseek update --apply               # explicitly update the global install
 ```
 
 Inside the TUI:
@@ -101,9 +110,13 @@ Inside the TUI:
 | --- | --- |
 | `/new [preset]` | Create and enter another session without restarting the terminal |
 | `/resume [id\|prefix]` | Search root sessions or all conversations; filter by cwd, order, and density |
+| `/fork [event-seq]` | Create a resumable ordinary fork from a completed turn containing the event |
 | `/mode [preset]` | Inspect or select the blank session's Agent composition |
-| `/model` | Switch among models from the live LLM registry; press `a` to manage providers and API keys |
+| `/model` | Switch among live-registry models; press `a` to manage providers, then `Tab` to edit URL, models, and windows |
 | `/plugin [query]` | Inspect loader entries, enabled state, module identity, and fiber phase |
+| `/diff [--staged\|ref]` | Inspect the complete Git diff by file; left/right switches files |
+| `/review [--staged\|ref]` | Submit a bounded code review after switching to `read-only` permissions |
+| `/copy` | Copy the latest complete assistant response |
 | `/permission <name>` | Change the permission preset; Shift+Tab cycles presets |
 | `/help` | Browse local commands, Harness commands, skills, and key bindings |
 | `Ctrl+O` | Open the exclusive history detail view; switch entries and scroll all content |
@@ -111,7 +124,7 @@ Inside the TUI:
 | `@` | Mention workspace files or bounded snapshots of persisted sessions |
 | `Esc` / `Ctrl+C` | Close the topmost surface or interrupt the active turn |
 
-The `/model` provider panel reads only credential configuration, source, and writability facts. Typed keys stay masked and are handed directly to Harness persistence. Keys supplied by the launch environment are shown as read-only and cannot be overwritten or removed in the TUI.
+Press `a` in `/model` to manage providers; press `Tab` on a provider to edit its endpoint URL, explicit model allow-list, and per-model context/output windows. Typed API keys stay masked and are handed directly to Harness persistence. Keys supplied by the launch environment are read-only and cannot be overwritten or removed in the TUI.
 
 ## 4. Features
 
@@ -120,17 +133,18 @@ The `/model` provider panel reads only credential configuration, source, and wri
 - Per-session Agent Presets for tools, prompt sections, skills, compaction, plan mode, and delegation
 - Live slash-command and skill discovery from shared Harness registries
 - Read-only Cordis loader diagnostics through `/plugin`
-- Model routing through the live LLM registry, restored per persisted session; `/model` can add or rotate keys, remove writable keys, and delete user-added provider profiles
+- Model routing through the live LLM registry, restored per persisted session; `/model` can add or rotate keys, remove writable keys, delete user-added provider profiles, and set an endpoint, explicit model allow-list, and token windows
 - Plans, goals, todos, permissions, sandbox state, subagents, and runtime steering
 
 ### 2. Sessions and context
 
-- `/new`, `/resume`, `--continue`, and explicit session identifiers without remounting Ink
+- `/new`, `/resume`, `/fork`, `--continue`, and explicit session identifiers without remounting Ink
 - Codex-style searchable resume panel with root/all-conversation, cwd, order, and density filters
 - Bare launches defer session creation until your first real input; quitting early leaves nothing behind
 - Global input recall: Up/Down walks past prompts across sessions, and `/history` searches and fills the composer
 - Lazy title snapshots and explicitly loaded, fully scrollable transcripts
 - Read-only subagent conversation inspection and bounded `@` session references
+- Initial prompts and repeated `--image`; Harness persists image bytes in its attachment store and records content-addressed references in session events
 - Markdown export, persistent titles, context occupancy, cache, token, TTFT, and timing metrics
 
 ### 3. Approvals and interaction

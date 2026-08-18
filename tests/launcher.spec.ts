@@ -7,6 +7,7 @@ import {
   launchDsh,
   profileArgs,
   profileHasDshCode,
+  setupBundle,
 } from '../bin/deepseek.mjs'
 
 describe('global launcher aliases', () => {
@@ -18,6 +19,10 @@ describe('global launcher aliases', () => {
   })
   it('forwards every application argument to the cli profile', () => {
     expect(profileArgs(['--resume', 'abc123'])).toEqual(['--profile', 'cli', '--resume', 'abc123'])
+  })
+
+  it('pins setup to this release so pnpm can install it on publication day', () => {
+    expect(setupBundle([])).toBe('dsh-code@0.9.1')
   })
 
   it('starts dsh with inherited stdio and preserves its exit code', () => {
