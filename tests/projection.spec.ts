@@ -87,6 +87,27 @@ describe('transcript projection', () => {
     expect(view.entries).toEqual([{ kind: 'user', text: 'hello', notice: false }])
   })
 
+  it('projects durable image metadata without paths or encoded bytes', () => {
+    const attachment = {
+      attachmentId: 'sha-1', mediaType: 'image/png', bytes: 128,
+      width: 20, height: 10, name: 'diagram.png',
+    }
+    const event = {
+      type: 'user/message', seq: 1, time: 0,
+      data: createUserMessage({
+        content: [{ type: 'text', text: 'inspect' }, { type: 'image', attachment }],
+        source: { kind: 'user' },
+      }),
+    } as unknown as SessionEvent
+    const sequential = projectEvent(createTranscriptView(), event)
+    const replay = projectEvents([event])
+    expect(sequential).toEqual(replay)
+    expect(sequential.entries[0]).toMatchObject({
+      kind: 'user', text: 'inspect', images: [{ name: 'diagram.png', width: 20, height: 10, bytes: 128 }],
+    })
+    expect(JSON.stringify(sequential)).not.toContain('base64')
+  })
+
   it('collapses injected plugin context to a bounded notice row', () => {
     const event = {
       type: 'user/message',

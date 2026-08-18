@@ -1,6 +1,7 @@
 /**
  * The interactive terminal app's command-line provider: parses `--resume`,
- * `--continue`, `--session`, `--mode`, `--theme`, and `--help`, then
+ * `--continue`, `--session`, `--mode`, `--theme`, `--image`, an optional
+ * initial prompt, and `--help`, then
  * publishes {@link TUI_STARTUP_SERVICE} for the runner to consume lazily.
  * Follows the headless bundle's startup shape (a commander action publishing
  * a service through {@link parseCmdline}).
@@ -36,10 +37,16 @@ export const TUI_STARTUP_SERVICE = 'tuiStartup'
 
 /** How the runner obtains its session identity. */
 export type TuiStartup =
-  | { readonly kind: 'fresh'; readonly mode?: string; readonly theme?: ThemeName }
-  | { readonly kind: 'named'; readonly sessionId: string; readonly mode?: string; readonly theme?: ThemeName }
-  | { readonly kind: 'resume'; readonly sessionId: string; readonly theme?: ThemeName }
-  | { readonly kind: 'latest'; readonly theme?: ThemeName }
+  | ({ readonly kind: 'fresh'; readonly mode?: string } & TuiStartupInput)
+  | ({ readonly kind: 'named'; readonly sessionId: string; readonly mode?: string } & TuiStartupInput)
+  | ({ readonly kind: 'resume'; readonly sessionId: string } & TuiStartupInput)
+  | ({ readonly kind: 'latest' } & TuiStartupInput)
+
+interface TuiStartupInput {
+  readonly theme?: ThemeName
+  readonly prompt?: string
+  readonly images?: readonly string[]
+}
 
 export interface TuiStartupOptions {
   readonly resume?: string
@@ -47,6 +54,8 @@ export interface TuiStartupOptions {
   readonly session?: string
   readonly mode?: string
   readonly theme?: ThemeName
+  readonly prompt?: string
+  readonly images?: readonly string[]
 }
 
 /** Pure option policy shared by Commander and tests. */
@@ -62,14 +71,18 @@ export function resolveTuiStartup(options: TuiStartupOptions): TuiStartup {
   if (options.theme !== undefined && !THEME_NAMES.includes(options.theme)) {
     throw new Error('--theme must be dark, light, or auto')
   }
-  const theme = options.theme === undefined ? {} : { theme: options.theme }
+  const input = {
+    ...(options.theme === undefined ? {} : { theme: options.theme }),
+    ...(options.prompt === undefined || options.prompt.trim() === '' ? {} : { prompt: options.prompt.trim() }),
+    ...(options.images === undefined || options.images.length === 0 ? {} : { images: [...options.images] }),
+  }
   return options.resume !== undefined
-    ? { kind: 'resume', sessionId: options.resume, ...theme }
+    ? { kind: 'resume', sessionId: options.resume, ...input }
     : options.continue === true
-      ? { kind: 'latest', ...theme }
+      ? { kind: 'latest', ...input }
       : options.session !== undefined
-        ? { kind: 'named', sessionId: options.session, ...options.mode === undefined ? {} : { mode: options.mode }, ...theme }
-        : { kind: 'fresh', ...options.mode === undefined ? {} : { mode: options.mode }, ...theme }
+        ? { kind: 'named', sessionId: options.session, ...options.mode === undefined ? {} : { mode: options.mode }, ...input }
+        : { kind: 'fresh', ...options.mode === undefined ? {} : { mode: options.mode }, ...input }
 }
 
 /**
@@ -87,6 +100,8 @@ function tuiCommand(): Command {
     .option('--session <id>', 'create a new session under this explicit id')
     .option('--mode <preset>', 'agent preset for a newly created session')
     .option('--theme <name>', 'color theme: dark (default), light, or auto')
+    .option('-i, --image <path>', 'attach an image to the initial prompt (repeatable)', (path, paths: string[]) => [...paths, path], [])
+    .argument('[prompt...]', 'initial prompt; sends immediately after startup')
     .addHelpText('after', `
 Examples:
   dsh --profile cli                       fresh session, minted id
@@ -94,6 +109,8 @@ Examples:
   dsh --profile cli --continue            resume the latest local session
   dsh --profile cli --mode minimal        fresh session using the minimal preset
   dsh --profile cli --theme light         light palette for bright terminals
+  dsh --profile cli "explain this repo"   start and send an initial prompt
+  dsh --profile cli -i diagram.png "review this diagram"
 `)
 }
 
@@ -104,8 +121,8 @@ Examples:
  */
 export function apply(ctx: Context): void {
   const program = tuiCommand()
-  program.action(() => {
-    const options = program.opts<TuiStartupOptions>()
+  program.action((prompt: string[]) => {
+    const options = { ...program.opts<TuiStartupOptions>(), prompt: prompt.join(' ') }
     let startup: TuiStartup | undefined
     try {
       startup = resolveTuiStartup(options)

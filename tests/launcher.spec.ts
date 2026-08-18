@@ -2,12 +2,20 @@ import { EventEmitter } from 'node:events'
 import { describe, expect, it } from 'vitest'
 import {
   dshCommand,
+  completionScript,
+  operationName,
   launchDsh,
   profileArgs,
   profileHasDshCode,
 } from '../bin/deepseek.mjs'
 
 describe('global launcher aliases', () => {
+  it('recognizes wrapper operations without stealing ordinary prompts', () => {
+    expect(operationName(['doctor'])).toBe('doctor')
+    expect(operationName(['explain', 'doctor'])).toBeUndefined()
+    expect(completionScript('powershell')).toContain('Register-ArgumentCompleter')
+    expect(() => completionScript('fish')).toThrow('completion needs one shell')
+  })
   it('forwards every application argument to the cli profile', () => {
     expect(profileArgs(['--resume', 'abc123'])).toEqual(['--profile', 'cli', '--resume', 'abc123'])
   })

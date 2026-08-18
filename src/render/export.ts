@@ -7,7 +7,7 @@
  */
 
 import { assertNever } from '@deepseek-ai/dsh-llm'
-import type { TranscriptView } from './projection.ts'
+import { imageLabels, type TranscriptView } from './projection.ts'
 
 /**
  * Render the transcript as a standalone markdown document.
@@ -29,7 +29,7 @@ export function buildExportMarkdown(view: TranscriptView, sessionId: string): st
         if (entry.notice) {
           out.push(`> ⤷ context: ${entry.text}`, '')
         } else {
-          out.push('## user', '', entry.text, '')
+          out.push('## user', '', entry.text, ...(imageLabels(entry.images) === '' ? [] : [imageLabels(entry.images)]), '')
         }
         break
       case 'assistant':
@@ -68,7 +68,7 @@ export function buildExportMarkdown(view: TranscriptView, sessionId: string): st
         break
       case 'pending':
         // Codex PendingSteer: queued prompts export like ordinary user rows.
-        out.push('## user', '', entry.text, '')
+        out.push('## user', '', entry.text, ...(imageLabels(entry.images) === '' ? [] : [imageLabels(entry.images)]), '')
         break
       default:
         assertNever(entry, 'transcript entry kind')

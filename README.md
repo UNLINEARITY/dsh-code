@@ -41,7 +41,7 @@ DSH-Code 保留这套结构，并补充适合编码任务的终端工作流。
 ```sh
 npm install -g @deepseek-ai/dsh dsh-code
 npm install -g pnpm
-dsh plugin --profile cli add dsh-code@0.9.1
+deepseek setup
 ```
 
 > 提示：pnpm 会忽略发布不足 24 小时的包，因此发布首日请使用精确版本 `dsh-code@0.9.1`；24 小时后可省略版本号。npm 安装不受此限制。
@@ -50,7 +50,7 @@ dsh plugin --profile cli add dsh-code@0.9.1
 
 ```sh
 npm install -g dsh-code@0.9.1
-dsh plugin --profile cli add dsh-code@0.9.1
+deepseek setup
 ```
 
 ### 3. 启动指令
@@ -60,6 +60,8 @@ dsh plugin --profile cli add dsh-code@0.9.1
 dsh --profile cli
 deepseek
 dsh-code
+deepseek "检查这个仓库并运行测试"
+deepseek --image screenshot.png "分析这个错误界面"
 ```
 
 `dsh --profile cli`、`deepseek` 与 `dsh-code` 是并列的启动命令。`deepseek` 与 `dsh-code` 都是 `dsh --profile cli` 的全局别名，后续参数会原样转发，例如 `deepseek --resume abc123`。
@@ -92,6 +94,10 @@ dsh --profile cli --mode code        # 使用 Agent Preset 启动
 dsh --profile cli --continue         # 恢复当前目录最新会话
 dsh --profile cli --resume abc123    # 按 id 或唯一前缀恢复持久会话
 dsh --profile cli --session my-id    # 使用指定 id 新建会话
+deepseek doctor                       # 检查 Node、DSH、profile 与组合
+deepseek completion powershell       # 生成 shell completion
+deepseek update                       # 只检查可用版本
+deepseek update --apply               # 显式更新全局安装
 ```
 
 进入 TUI 后：
@@ -100,13 +106,19 @@ dsh --profile cli --session my-id    # 使用指定 id 新建会话
 | --- | --- |
 | `/new [preset]` | 不重启终端，创建并进入另一个会话 |
 | `/resume [id\|前缀]` | 搜索根会话或全部对话，并按 cwd、排序和密度筛选 |
+| `/fork [event-seq]` | 从包含指定事件的已完成 turn 创建可继续的普通 fork |
 | `/mode [preset]` | 检查或选择空会话的 Agent 组合 |
 | `/model` | 在实时 LLM 注册表提供的模型间切换；按 `a` 管理 provider 与 API key |
 | `/plugin [query]` | 检查 loader 条目、启用状态、模块身份和 fiber 阶段 |
+| `/diff [--staged\|ref]` | 在有界只读面板中检查完整 Git diff |
+| `/review [--staged\|ref]` | 切换到 `read-only` 权限并提交有上限的代码审查任务 |
+| `/settings`、`/mcp`、`/hooks`、`/jobs` | 查看脱敏设置、组合状态和后台任务 |
+| `/copy` | 复制最近一条完整助手回复 |
 | `/permission <name>` | 切换权限预设；Shift+Tab 可循环切换 |
 | `/help` | 浏览本地命令、Harness 命令、技能和快捷键 |
 | `Ctrl+O` | 打开独占历史详情视图，切换条目并滚动完整内容 |
 | `Ctrl+R` | 折叠或展开模型思考过程 |
+| `Ctrl+G` | 用 `$VISUAL` / `$EDITOR`（Windows 默认记事本）编辑当前草稿 |
 | `@` | 引用工作区文件或持久会话的有界快照 |
 | `Esc` / `Ctrl+C` | 关闭最上层界面或中断当前 turn |
 
@@ -124,12 +136,13 @@ dsh --profile cli --session my-id    # 使用指定 id 新建会话
 
 ### 2. 会话与上下文
 
-- `/new`、`/resume`、`--continue` 与显式 session id，且无需重新挂载 Ink
+- `/new`、`/resume`、`/fork`、`--continue` 与显式 session id，且无需重新挂载 Ink
 - Codex 风格可搜索恢复面板，支持根/全部对话、cwd、排序和密度筛选
 - 裸启动延迟到首次真实输入才创建会话，未输入即退出零残留
 - 全局输入历史：Up/Down 跨会话召回，`/history` 搜索面板回填输入框
 - 标题快照按需折叠，完整转录仅在显式请求时加载并支持全量滚动
 - subagent 对话只读检查，以及通过 `@` 注入有界会话引用
+- 启动 prompt 与重复 `--image`；图片字节由 Harness attachment store 持久化，会话事件只保存内容寻址引用
 - Markdown 导出、持久标题、上下文占用、缓存、token、TTFT 与耗时指标
 
 ### 3. 审批与交互

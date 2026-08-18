@@ -7,7 +7,7 @@
  * @module @deepseek-ai/dsh-tui/render/projection
  */
 
-import { boundContextSummary, type ContentBlock, type MessageId } from '@deepseek-ai/dsh-llm'
+import { boundContextSummary, type ContentBlock, type ImageBlock, type MessageId } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent, TodoItem } from '@deepseek-ai/dsh-session'
 // Type-only imports merge the plugin-owned SessionEventMap variants
 // (agent/inbox/spliced, command/*, compaction/*, goal/change, llm/retry*,
@@ -52,6 +52,8 @@ export interface UserEntry {
   /** True for collapsed injected context (plugin/continuation notices), which
    * the renderer marks with a dim ↳ instead of the user ❯ prompt. */
   notice: boolean
+  /** Durable image references carried by this prompt. */
+  images?: readonly ImageBlock['attachment'][]
 }
 
 /** One user message waiting in the agent inbox (the web's queued-message row). */
@@ -63,6 +65,8 @@ export interface PendingEntry {
   target: 'next-turn' | 'next-step'
   /** Full message text — Codex PendingSteer renders queued prompts exactly like user rows. */
   text: string
+  /** Durable image references queued with this prompt. */
+  images?: readonly ImageBlock['attachment'][]
 }
 
 /** One assembled assistant reply. */
@@ -320,6 +324,27 @@ function textOf(content: readonly ContentBlock[]): string {
   return content.filter(block => block.type === 'text').map(block => block.text).join('')
 }
 
+/** Durable image references in their model-visible order. */
+function imagesOf(content: readonly ContentBlock[]): readonly ImageBlock['attachment'][] {
+  return content.filter((block): block is ImageBlock => block.type === 'image').map(block => block.attachment)
+}
+
+/** Human-readable bounded image labels for transcript, inspector, and export surfaces. */
+export function imageLabels(images: readonly ImageBlock['attachment'][] | undefined): string {
+  if (images === undefined || images.length === 0) return ''
+  return images.map((image, index) => {
+    const rawName = image.name?.trim() || `image ${index + 1}`
+    const name = rawName.length <= 80 ? rawName : `${rawName.slice(0, 79)}…`
+    return `[image: ${name} · ${image.width}×${image.height} · ${image.bytes} B]`
+  }).join('\n')
+}
+
+/** Prompt text with its durable image labels, without exposing local paths or bytes. */
+export function promptDisplayText(entry: Pick<UserEntry | PendingEntry, 'text' | 'images'>): string {
+  const labels = imageLabels(entry.images)
+  return entry.text === '' ? labels : labels === '' ? entry.text : `${entry.text}\n${labels}`
+}
+
 /** Join the reasoning blocks of a content list; non-reasoning blocks contribute nothing. */
 function reasoningOf(content: readonly ContentBlock[]): string {
   return content.filter(block => block.type === 'reasoning').map(block => block.text).join('')
@@ -395,11 +420,12 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
       // to a bounded notice row, exactly like collapsed transcript context
       // elsewhere in the product; only direct human prompts render in full.
       const text = textOf(message.content)
+      const images = imagesOf(message.content)
       if (message.source.kind === 'user') {
         return {
           ...view,
           pending,
-          entries: [...entries, { kind: 'user', text, notice: false }],
+          entries: [...entries, { kind: 'user', text, notice: false, ...(images.length === 0 ? {} : { images }) }],
           stats: {
             ...view.stats,
             contextSegments: {
@@ -450,6 +476,7 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
           messageId: message.id,
           target,
           text: pendingText(message.content),
+          ...imagesOf(message.content).length === 0 ? {} : { images: imagesOf(message.content) },
         }]
       }
       return { ...view, entries, pending: { ...view.pending, [target]: nextIds } }
@@ -1000,8 +1027,9 @@ export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent):
         }
       }
       const text = textOf(message.content)
+      const images = imagesOf(message.content)
       if (message.source.kind === 'user') {
-        appendReplayEntry(acc, { kind: 'user', text, notice: false })
+        appendReplayEntry(acc, { kind: 'user', text, notice: false, ...(images.length === 0 ? {} : { images }) })
         acc.stats = {
           ...acc.stats,
           contextSegments: {
@@ -1043,7 +1071,8 @@ export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent):
         }
       }
       for (const message of inserted) {
-        appendReplayEntry(acc, { kind: 'pending', messageId: message.id, target, text: pendingText(message.content) })
+        const images = imagesOf(message.content)
+        appendReplayEntry(acc, { kind: 'pending', messageId: message.id, target, text: pendingText(message.content), ...(images.length === 0 ? {} : { images }) })
         indexList(acc.pendingIndex, message.id).push(acc.entries.length - 1)
         ids.push(message.id)
         acc.ops += 1

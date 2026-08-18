@@ -21,7 +21,7 @@ describe('session directory', () => {
   it('defaults to root sessions across workspaces and sorts newest first', () => {
     const rows = projectSessionRows([
       record('old', 1, { cwd: 'C:\\a' }),
-      record('child', 3, { cwd: 'C:\\a', parentSession: 'old' }),
+      record('child', 3, { cwd: 'C:\\a', parentSession: 'old', origin: 'subagent' }),
       record('new', 2, { cwd: 'C:\\b', agentPreset: 'code' }),
     ], { sessions: 'roots', cwd: 'all', sort: 'newest', currentCwd: 'C:\\a', query: '' })
     expect(rows.map(row => row.id)).toEqual(['new', 'old'])
@@ -53,7 +53,7 @@ describe('session selection policy', () => {
   it('flags subagent conversations by durable lineage', () => {
     expect(isSubagentSession({ id: 'root', createdAt: 1 } as SessionHeader)).toBe(false)
     expect(isSubagentSession({ id: 'child', createdAt: 1, origin: 'subagent' } as SessionHeader)).toBe(true)
-    expect(isSubagentSession({ id: 'child', createdAt: 1, parentSession: 'root' } as SessionHeader)).toBe(true)
+    expect(isSubagentSession({ id: 'fork', createdAt: 1, parentSession: 'root' } as SessionHeader)).toBe(false)
   })
 
   it('matches a session by exact id or unique prefix and rejects ambiguity', () => {
@@ -67,14 +67,14 @@ describe('session selection policy', () => {
   it('picks the newest root session pinned to the cwd, skipping subagents', () => {
     const headers = [
       record('old', 1, { cwd: 'C:\\repo' }).header,
-      record('child', 5, { cwd: 'C:\\repo', parentSession: 'old' }).header,
+      record('child', 5, { cwd: 'C:\\repo', parentSession: 'old', origin: 'subagent' }).header,
       record('newer', 3, { cwd: 'C:\\repo' }).header,
       record('other', 9, { cwd: 'C:\\elsewhere' }).header,
     ]
     expect(newestRootForCwd(headers, 'C:\\repo')?.id).toBe('newer')
     expect(newestRootForCwd(headers, 'C:\\absent')).toBeUndefined()
     // A directory whose only sessions are subagents yields nothing.
-    expect(newestRootForCwd([record('only-child', 1, { cwd: 'C:\\repo', parentSession: 'x' }).header], 'C:\\repo')).toBeUndefined()
+    expect(newestRootForCwd([record('only-child', 1, { cwd: 'C:\\repo', parentSession: 'x', origin: 'subagent' }).header], 'C:\\repo')).toBeUndefined()
   })
 })
 

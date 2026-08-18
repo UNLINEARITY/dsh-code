@@ -1,6 +1,6 @@
 /** Width-safe styled physical rows for bounded terminal panels. */
 
-import type { TranscriptEntry } from './projection.ts'
+import { promptDisplayText, type TranscriptEntry } from './projection.ts'
 import type { ToolDetail } from './tool-detail.ts'
 import { renderMarkdown, visibleColumns, type MdStyle } from './markdown.ts'
 import { formatTokens } from './status.ts'
@@ -176,14 +176,14 @@ export function transcriptEntryLines(entry: TranscriptEntry, columns: number): r
     case 'user':
       return styledLines([
         lineSegment(entry.notice ? '⤷ ' : '❯ ', entry.notice ? 'dim' : 'brand'),
-        lineSegment(entry.text, entry.notice ? 'dim' : 'plain'),
+        lineSegment(promptDisplayText(entry), entry.notice ? 'dim' : 'plain'),
       ], width)
     case 'pending':
       // Codex PendingSteer: a queued prompt renders exactly like an ordinary
       // user row, so the durable user/message retires it without any flicker.
       return styledLines([
         lineSegment('❯ ', 'brand'),
-        lineSegment(entry.text, 'plain'),
+        lineSegment(promptDisplayText(entry), 'plain'),
       ], width)
     case 'assistant': {
       const reasoning = entry.reasoning === '' ? [] : reasoningLines(entry.reasoning, width)

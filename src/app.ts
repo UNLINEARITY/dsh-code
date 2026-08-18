@@ -18,7 +18,7 @@ import {
   createElement, memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactElement,
 } from 'react'
 import chalk from 'chalk'
-import { Box, Static, Text, useInput, useStdout, type Key } from 'ink'
+import { Box, Static, Text, useInput, useStdin, useStdout, type Key } from 'ink'
 import { assertNever } from '@deepseek-ai/dsh-llm'
 import type { CommandDescriptor } from '@deepseek-ai/dsh-commands'
 import type { TodoItem } from '@deepseek-ai/dsh-session'
@@ -38,7 +38,7 @@ import { ThemePanel } from './theme-panel.ts'
 import { WHALE_GLYPH, WHALE_GLYPH_COLUMNS } from './whale-glyph.ts'
 import { DSH_CODE_VERSION } from './version.ts'
 import type { TranscriptStore } from './store.ts'
-import { settledEntryCount, type TranscriptEntry } from './render/projection.ts'
+import { promptDisplayText, settledEntryCount, type TranscriptEntry } from './render/projection.ts'
 import { renderMarkdown, type MdSegment, visibleColumns } from './render/markdown.ts'
 import type { ToolDetail } from './render/tool-detail.ts'
 import {
@@ -202,12 +202,24 @@ export interface AppProps {
   exportTranscript(argument: string): Promise<void>
   /** Rename the session (/title <text>); returns the outcome line for the notice. */
   renameTitle(argument: string): string
+  /** Copy the latest complete assistant response; resolves to notice text. */
+  copyLastResponse(): Promise<string>
+  /** Round-trip the current composer draft through a blocking external editor. */
+  editDraft(text: string): Promise<string>
+  /** Load a complete read-only Git diff for the bounded text panel. */
+  loadGitDiff(argument: string): Promise<{ title: string; text: string }>
+  /** Start a model review after applying the read-only permission preset. */
+  reviewChanges(argument: string): void
+  /** Load a read-only kernel operations view with secrets already redacted. */
+  loadOperationalView(kind: 'settings' | 'mcp' | 'hooks' | 'jobs'): Promise<{ title: string; text: string }>
   /** Preset/session/plugin kernel operations. */
   loadPresets(): Promise<readonly PresetRow[]>
   switchMode(id: string): Promise<string>
   /** Load the switchable permission presets for the /permission panel. */
   loadPermissions(): Promise<readonly PermissionRow[]>
   createSession(mode?: string): void
+  /** Fork the active session at a completed-turn boundary. */
+  forkSession(argument: string): void
   loadSessions(options: SessionDirectoryOptions, signal?: AbortSignal): Promise<readonly SessionRow[]>
   loadSessionTranscript(id: string, signal?: AbortSignal): Promise<string>
   /** Load this session's subagent conversations (children by lineage). */
@@ -464,6 +476,34 @@ function StyledRows({ lines }: { lines: readonly StyledLine[] }): ReactElement {
   )
 }
 
+/** Generic full-content, bounded viewport for read-only command output. */
+function TextPanel({ title, text, onClose }: { title: string; text: string; onClose(): void }): ReactElement {
+  const stdout = useStdout().stdout
+  const viewport = panelViewport(stdout?.columns ?? 80, stdout?.rows ?? 30)
+  const lines = useMemo(() => textLines(text, viewport.contentColumns), [text, viewport.contentColumns])
+  const [scroll, setScroll] = useState(0)
+  const visibleScroll = clampScroll(scroll, lines.length, viewport.bodyRows)
+  useInput((input, key) => {
+    if (key.escape || input === 'q') onClose()
+    else if (input === 'g') setScroll(0)
+    else if (input === 'G') setScroll(Math.max(0, lines.length - viewport.bodyRows))
+    else if (key.upArrow) setScroll(current => moveScroll(current, -1, lines.length, viewport.bodyRows))
+    else if (key.downArrow) setScroll(current => moveScroll(current, 1, lines.length, viewport.bodyRows))
+    else if (key.pageUp) setScroll(current => moveScroll(current, -viewport.bodyRows, lines.length, viewport.bodyRows))
+    else if (key.pageDown) setScroll(current => moveScroll(current, viewport.bodyRows, lines.length, viewport.bodyRows))
+  })
+  if (viewport.compact) return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(`${title} · esc/q close`, viewport.contentColumns))
+  return createElement(
+    Box,
+    { flexDirection: 'column', borderStyle: 'round', borderColor: inkColor(getPalette().dim), paddingX: 1 },
+    createElement(Text, { color: inkColor(getPalette().brand), bold: true, wrap: 'truncate-end' }, truncateColumns(`${title} · rows ${lines.length === 0 ? 0 : visibleScroll + 1}-${Math.min(lines.length, visibleScroll + viewport.bodyRows)}/${lines.length}`, viewport.contentColumns)),
+    createElement(PanelGap, { visible: viewport.gapRows > 0 }),
+    createElement(StyledRows, { lines: lines.slice(visibleScroll, visibleScroll + viewport.bodyRows) }),
+    createElement(PanelGap, { visible: viewport.gapRows > 0 }),
+    createElement(Text, { color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns('↑/↓ scroll · g/G ends · esc/q close', viewport.contentColumns)),
+  )
+}
+
 /** Codex-style panel rhythm that still participates in the row budget. */
 function PanelGap({ visible }: { visible: boolean }): ReactElement | undefined {
   return visible ? createElement(Text, null, ' ') : undefined
@@ -574,8 +614,8 @@ function EntryLine({ entry, showReasoning, verbose }: { entry: TranscriptEntry; 
       // Collapsed injected context reads as a dim ↳ row; only direct human
       // prompts get the brand ❯ (they are different surfaces, not the same).
       return entry.notice
-        ? createElement(Text, { dimColor: true }, `⤷ ${displayText(entry.text)}`)
-        : createElement(Text, null, brand('❯ '), displayText(entry.text))
+        ? createElement(Text, { dimColor: true }, `⤷ ${displayText(promptDisplayText(entry))}`)
+        : createElement(Text, null, brand('❯ '), displayText(promptDisplayText(entry)))
     case 'assistant':
       // Claude-Code-style thinking: a dim ✻ marker collapsed, the reasoning
       // text dim-italic expanded (Ctrl+R toggles globally). The collapsed
@@ -1931,6 +1971,7 @@ function HelpPanel({ descriptors, skills, commandError, skillError, onClose }: {
     createElement(Box, { key: 'local-mode' }, row('/mode', 'inspect or select the agent preset (/mode [preset])')),
     createElement(Box, { key: 'local-permission' }, row('/permission', 'inspect or select the permission preset (/permission [preset])')),
     createElement(Box, { key: 'local-new' }, row('/new', 'create and switch to a fresh session (/new [preset])')),
+    createElement(Box, { key: 'local-fork' }, row('/fork', 'fork at the latest completed turn (/fork [event-seq])')),
     createElement(Box, { key: 'local-resume' }, row('/resume', 'browse or switch root sessions (/resume [id|prefix])')),
     createElement(Box, { key: 'local-plugin' }, row('/plugin', 'inspect the live plugin composition')),
     createElement(Box, { key: 'local-statusline' }, row('/statusline', 'customize the status line items')),
@@ -1943,6 +1984,13 @@ function HelpPanel({ descriptors, skills, commandError, skillError, onClose }: {
     createElement(Box, { key: 'local-clear' }, row('/clear', 'clear the screen')),
     createElement(Box, { key: 'local-export' }, row('/export', 'export the transcript to markdown (/export [path])')),
     createElement(Box, { key: 'local-title' }, row('/title', 'rename this session (/title <text>)')),
+    createElement(Box, { key: 'local-copy' }, row('/copy', 'copy the latest assistant response')),
+    createElement(Box, { key: 'local-diff' }, row('/diff', 'inspect Git changes (/diff [--staged|ref])')),
+    createElement(Box, { key: 'local-review' }, row('/review', 'review Git changes under read-only permissions')),
+    createElement(Box, { key: 'local-settings' }, row('/settings', 'inspect redacted Harness settings')),
+    createElement(Box, { key: 'local-mcp' }, row('/mcp', 'inspect MCP composition')),
+    createElement(Box, { key: 'local-hooks' }, row('/hooks', 'inspect hook composition')),
+    createElement(Box, { key: 'local-jobs' }, row('/jobs', 'inspect background jobs')),
     createElement(Box, { key: 'local-quit' }, row('/quit', 'exit')),
     ...descriptors.map(descriptor => createElement(
       Text,
@@ -2271,6 +2319,7 @@ export function completionCandidates(
     { label: '/mode', description: 'select the agent preset', origin: 'command' },
     { label: '/permission', description: 'inspect or select the permission preset', origin: 'command' },
     { label: '/new', description: 'start a fresh session', origin: 'command' },
+    { label: '/fork', description: 'fork at a completed turn', origin: 'command' },
     { label: '/resume', description: 'browse or switch sessions', origin: 'command' },
     { label: '/plugin', description: 'inspect the plugin composition', origin: 'command' },
     { label: '/statusline', description: 'customize the status line', origin: 'command' },
@@ -2283,6 +2332,13 @@ export function completionCandidates(
     { label: '/clear', description: 'clear the screen', origin: 'command' },
     { label: '/export', description: 'export the transcript to markdown', origin: 'command' },
     { label: '/title', description: 'rename this session', origin: 'command' },
+    { label: '/copy', description: 'copy the latest assistant response', origin: 'command' },
+    { label: '/diff', description: 'inspect Git changes', origin: 'command' },
+    { label: '/review', description: 'review changes read-only', origin: 'command' },
+    { label: '/settings', description: 'inspect redacted settings', origin: 'command' },
+    { label: '/mcp', description: 'inspect MCP composition', origin: 'command' },
+    { label: '/hooks', description: 'inspect hook composition', origin: 'command' },
+    { label: '/jobs', description: 'inspect background jobs', origin: 'command' },
     { label: '/quit', description: 'exit', origin: 'command' },
   ]
   // Local commands shadow registry names (e.g. the TUI-local /permission works
@@ -2382,7 +2438,7 @@ function CompletionMenu({ active, mention, index, rows }: {
  * While a modal (approval / question / model panel) owns the keys, the
  * box passes every key through untouched.
  */
-function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openEffort, openHelp, openMode, openPermission, openResume, openPlugin, openStatusline, openTheme, openHistory, openAgents, openSubagent, openTodos, openDelete, deleteConfirm, confirmDelete, cancelDelete, createSession, cancelSessionSwitch, notify, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, cyclePermission, exportTranscript, renameTitle, recallSpace, recordLocal, recordHistory, queued, cancelQueued, historyFill, historyConsumed, waveTier, waveStyle }: {
+function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openEffort, openHelp, openMode, openPermission, openResume, openPlugin, openStatusline, openTheme, openHistory, openAgents, openSubagent, openTodos, openDelete, openDiff, openOperations, reviewChanges, deleteConfirm, confirmDelete, cancelDelete, createSession, forkSession, cancelSessionSwitch, notify, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, cyclePermission, exportTranscript, renameTitle, copyLastResponse, editDraft, recallSpace, recordLocal, recordHistory, queued, cancelQueued, historyFill, historyConsumed, waveTier, waveStyle }: {
   active: boolean
   frozen: boolean
   busy: boolean
@@ -2410,6 +2466,9 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   openTodos(): void
   /** Open the /resume picker in delete mode, optionally pre-armed on one id. */
   openDelete(id?: string): void
+  openDiff(argument: string): void
+  openOperations(kind: 'settings' | 'mcp' | 'hooks' | 'jobs'): void
+  reviewChanges(argument: string): void
   /** The row id awaiting y/n in this box, when a deletion is pending. */
   deleteConfirm?: string
   /** Confirm the pending deletion (y in the box). */
@@ -2417,6 +2476,7 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   /** Cancel the pending deletion (any other key in the box). */
   cancelDelete(): void
   createSession(mode?: string): void
+  forkSession(argument: string): void
   cancelSessionSwitch(): boolean
   notify(text: string, tone?: NoticeTone): void
   hasNotice: boolean
@@ -2429,6 +2489,8 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   cyclePermission(): string
   exportTranscript(argument: string): Promise<void>
   renameTitle(argument: string): string
+  copyLastResponse(): Promise<string>
+  editDraft(text: string): Promise<string>
   /** Newest-first recall space (persistent + in-session, deduped). */
   recallSpace: readonly string[]
   /** Record one in-session submission (deduped, local only). */
@@ -2453,7 +2515,9 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   waveStyle: DeepseekWaveStyle | null
 }): ReactElement {
   const columns = useStdout().stdout?.columns ?? 80
+  const { setRawMode } = useStdin()
   const [value, setValue] = useState('')
+  const [editing, setEditing] = useState(false)
   const [cursor, setCursor] = useState(0)
   // Codex shell-style recall: the navigation cursor, the saved draft restored
   // on Down past the newest entry, and the boundary-gate anchor.
@@ -2599,7 +2663,7 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
 
   useInput((input, key) => {
     // Modal ownership: approval/question/model dialogs consume all keys.
-    if (!active) return
+    if (!active || editing) return
     // Deletion confirm owns the box: y proceeds, anything else cancels.
     // Typed in the INPUT BOX (codex delete-confirm): the keystroke is echoed
     // as the box's own prompt, not an invisible panel keypress.
@@ -2744,6 +2808,25 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
         notify(outcome, tone)
         return
       }
+      if (text === '/copy') {
+        void copyLastResponse().then(
+          outcome => notify(outcome),
+          error => notify(`copy failed: ${error instanceof Error ? error.message : String(error)}`, 'error'),
+        )
+        return
+      }
+      if (text === '/diff' || text.startsWith('/diff ')) {
+        openDiff(text.slice(5))
+        return
+      }
+      if (text === '/review' || text.startsWith('/review ')) {
+        reviewChanges(text.slice(7))
+        return
+      }
+      if (text === '/settings' || text === '/mcp' || text === '/hooks' || text === '/jobs') {
+        openOperations(text.slice(1) as 'settings' | 'mcp' | 'hooks' | 'jobs')
+        return
+      }
       if (text === '/model' || text.startsWith('/model ')) {
         openModel()
         return
@@ -2778,6 +2861,10 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
       }
       if (text === '/new' || text.startsWith('/new ')) {
         createSession(text.slice(4).trim() || undefined)
+        return
+      }
+      if (text === '/fork' || text.startsWith('/fork ')) {
+        forkSession(text.slice(5))
         return
       }
       if (text === '/plugin' || text.startsWith('/plugin ')) {
@@ -2875,6 +2962,22 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
     }
     if (key.rightArrow) {
       setCursor(Math.min(value.length, cursor + 1))
+      return
+    }
+    if (key.ctrl && input === 'g') {
+      setEditing(true)
+      setRawMode(false)
+      void editDraft(value).then((edited) => {
+        setValue(edited)
+        setCursor(edited.length)
+        setDismissedMenuValue(undefined)
+      }, (error: unknown) => {
+        notify(`editor failed: ${error instanceof Error ? error.message : String(error)}`, 'error')
+      }).finally(() => {
+        setRawMode(true)
+        setEditing(false)
+        refresh()
+      })
       return
     }
     if (key.ctrl && input === 'u') {
@@ -3389,6 +3492,7 @@ export function App(props: AppProps): ReactElement {
   const busy = view.busy
   const [showReasoning, setShowReasoning] = useState(false)
   const [verboseOpen, setVerboseOpen] = useState(false)
+  const [textPanel, setTextPanel] = useState<{ title: string; text: string } | undefined>(undefined)
   const [helpOpen, setHelpOpen] = useState(false)
   const [modeOpen, setModeOpen] = useState(false)
   const [permissionOpen, setPermissionOpen] = useState(false)
@@ -3473,7 +3577,7 @@ export function App(props: AppProps): ReactElement {
   // panel keypress.
   const inputActive = deleteConfirmId !== undefined
     ? !approvalPending && !questionPending
-    : !modelOpen && !helpOpen && !modeOpen && !permissionOpen && !resumeOpen && !pluginOpen && !statuslineOpen && !themeOpen && !historyOpen && !agentsOpen && !subagentOpen && !todosOpen && !verboseOpen && !approvalPending && !questionPending
+    : !modelOpen && !helpOpen && !modeOpen && !permissionOpen && !resumeOpen && !pluginOpen && !statuslineOpen && !themeOpen && !historyOpen && !agentsOpen && !subagentOpen && !todosOpen && !verboseOpen && textPanel === undefined && !approvalPending && !questionPending
 
   // Human questions outrank local inspectors. Close the lower modal instead
   // of leaving an approval/question visible but keyboard-locked behind it.
@@ -3496,6 +3600,7 @@ export function App(props: AppProps): ReactElement {
     setTodosOpen(false)
     setDeleteConfirmId(undefined)
     setVerboseOpen(false)
+    setTextPanel(undefined)
   }, [approvalPending, questionPending])
 
   // Append-only transcript: everything up to the first still-mutable entry
@@ -3605,9 +3710,9 @@ export function App(props: AppProps): ReactElement {
           ? Math.max(1, Math.floor(streamRows / 3))
           : 1
   const answerRows = view.streaming === '' ? 0 : Math.max(1, streamRows - reasoningRows)
-  const transcriptVisible = !modelOpen && !helpOpen && !modeOpen && !permissionOpen && !resumeOpen && !pluginOpen && !statuslineOpen && !themeOpen && !historyOpen && !agentsOpen && !subagentOpen && !todosOpen && !verboseOpen && !approvalPending && !questionPending
+  const transcriptVisible = !modelOpen && !helpOpen && !modeOpen && !permissionOpen && !resumeOpen && !pluginOpen && !statuslineOpen && !themeOpen && !historyOpen && !agentsOpen && !subagentOpen && !todosOpen && !verboseOpen && textPanel === undefined && !approvalPending && !questionPending
   const inspectorVisible = verboseOpen && !approvalPending && !questionPending
-  const modalVisible = modelOpen || helpOpen || modeOpen || permissionOpen || resumeOpen || pluginOpen || statuslineOpen || themeOpen || historyOpen || agentsOpen || subagentOpen || todosOpen || inspectorVisible || approvalPending || questionPending
+  const modalVisible = modelOpen || helpOpen || modeOpen || permissionOpen || resumeOpen || pluginOpen || statuslineOpen || themeOpen || historyOpen || agentsOpen || subagentOpen || todosOpen || inspectorVisible || textPanel !== undefined || approvalPending || questionPending
   const closeInspector = useCallback((): void => {
     setVerboseOpen(false)
   }, [])
@@ -3824,6 +3929,13 @@ export function App(props: AppProps): ReactElement {
         },
       })
       : undefined,
+    textPanel !== undefined && !approvalPending && !questionPending
+      ? createElement(TextPanel, {
+        title: textPanel.title,
+        text: textPanel.text,
+        onClose: () => setTextPanel(undefined),
+      })
+      : undefined,
     verboseOpen && !approvalPending && !questionPending
       ? createElement(MemoVerbosePanel, {
         entries: view.entries,
@@ -4033,10 +4145,22 @@ export function App(props: AppProps): ReactElement {
           setDeleteConfirmId(armed)
           setResumeOpen(true)
         },
+        openDiff: (argument: string) => {
+          void props.loadGitDiff(argument).then(setTextPanel, (error: unknown) => {
+            notify(`diff failed: ${error instanceof Error ? error.message : String(error)}`, 'error')
+          })
+        },
+        openOperations: (kind: 'settings' | 'mcp' | 'hooks' | 'jobs') => {
+          void props.loadOperationalView(kind).then(setTextPanel, (error: unknown) => {
+            notify(`${kind} unavailable: ${error instanceof Error ? error.message : String(error)}`, 'error')
+          })
+        },
+        reviewChanges: props.reviewChanges,
         deleteConfirm: deleteConfirmId,
         confirmDelete,
         cancelDelete,
         createSession: props.createSession,
+        forkSession: props.forkSession,
         cancelSessionSwitch: props.cancelSessionSwitch,
         notify,
         hasNotice: notice !== undefined,
@@ -4061,6 +4185,8 @@ export function App(props: AppProps): ReactElement {
         cyclePermission: props.cyclePermission,
         exportTranscript: props.exportTranscript,
         renameTitle: props.renameTitle,
+        copyLastResponse: props.copyLastResponse,
+        editDraft: props.editDraft,
         recallSpace,
         recordLocal,
         recordHistory: props.recordHistory,

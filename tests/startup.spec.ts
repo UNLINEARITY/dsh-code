@@ -29,4 +29,13 @@ describe('TUI startup modes', () => {
     expect(() => resolveTuiStartup({ theme: 'sepia' as ThemeName })).toThrow('--theme must be dark, light, or auto')
     expect(() => resolveTuiStartup({ theme: '' as ThemeName })).toThrow('--theme must be dark, light, or auto')
   })
+
+  it('carries an initial prompt and repeated image paths into every mode', () => {
+    expect(resolveTuiStartup({ prompt: '  inspect this  ', images: ['a.png', 'b.jpg'] })).toEqual({
+      kind: 'fresh', prompt: 'inspect this', images: ['a.png', 'b.jpg'],
+    })
+    expect(resolveTuiStartup({ resume: 'abc', prompt: 'continue', images: ['a.png'] })).toEqual({
+      kind: 'resume', sessionId: 'abc', prompt: 'continue', images: ['a.png'],
+    })
+  })
 })

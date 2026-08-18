@@ -49,7 +49,7 @@ describe('resolveTarget (CLI session policy)', () => {
   it('--continue picks the newest root session for the cwd, skipping subagents', async () => {
     const persistence = persistenceWith([
       header('old', 1, { cwd: CWD }),
-      header('child', 5, { cwd: CWD, parentSession: 'old' }),
+      header('child', 5, { cwd: CWD, parentSession: 'old', origin: 'subagent' }),
       header('newer', 3, { cwd: CWD }),
       header('other', 9, { cwd: 'C:/elsewhere' }),
     ])
@@ -59,7 +59,7 @@ describe('resolveTarget (CLI session policy)', () => {
 
   it('--continue fails when no root session pins the cwd (subagent-only directory included)', async () => {
     const subagentOnly = persistenceWith([
-      header('child', 1, { cwd: CWD, parentSession: 'root' }),
+      header('child', 1, { cwd: CWD, parentSession: 'root', origin: 'subagent' }),
     ])
     await expect(resolveTarget({ kind: 'latest' }, subagentOnly, CWD))
       .rejects.toThrow(/no persisted session for this directory/)

@@ -40,4 +40,17 @@ describe('buildExportMarkdown', () => {
     const view = { ...createTranscriptView(), entries: [{ kind: 'user', text: 'files changed', notice: true }] } as const
     expect(buildExportMarkdown(view, 's')).toContain('> ⤷ context: files changed')
   })
+
+  it('exports bounded image metadata without attachment ids', () => {
+    const view = {
+      ...createTranscriptView(),
+      entries: [{
+        kind: 'user', text: 'inspect', notice: false,
+        images: [{ attachmentId: 'secret-ref', mediaType: 'image/png', bytes: 42, width: 2, height: 3, name: 'plot.png' }],
+      }],
+    } as unknown as ReturnType<typeof createTranscriptView>
+    const markdown = buildExportMarkdown(view, 's')
+    expect(markdown).toContain('[image: plot.png · 2×3 · 42 B]')
+    expect(markdown).not.toContain('secret-ref')
+  })
 })

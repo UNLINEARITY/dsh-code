@@ -59,9 +59,9 @@ export interface SessionRow {
 /** Case-insensitive filesystems (Windows, macOS) compare paths by lowercased form. */
 const CASE_INSENSITIVE_FS = process.platform === 'win32' || process.platform === 'darwin'
 
-/** True when the header describes a subagent conversation (durable lineage). */
+/** True only for delegated subagents; ordinary forks also carry lineage. */
 export function isSubagentSession(header: SessionHeader): boolean {
-  return header.origin === 'subagent' || header.parentSession !== undefined
+  return header.origin === 'subagent'
 }
 
 function comparablePath(value: string): string {
