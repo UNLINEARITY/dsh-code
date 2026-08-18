@@ -73,6 +73,21 @@ export function textLines(text: string, columns: number, style: LineStyle = 'pla
   return styledLines([lineSegment(text, style)], columns)
 }
 
+/** Prefix every wrapped physical row without exceeding the column budget. */
+function prefixedStyledLines(segments: readonly StyledSegment[], columns: number, prefix: string, prefixStyle: LineStyle = 'plain'): readonly StyledLine[] {
+  const width = Math.max(1, Math.floor(columns))
+  const prefixWidth = Math.min(width, visibleColumns(prefix))
+  const bodyWidth = Math.max(1, width - prefixWidth)
+  return styledLines(segments, bodyWidth).map(line => ({
+    segments: [lineSegment(prefix, prefixStyle), ...line.segments],
+  }))
+}
+
+/** Text convenience for a tool row whose continuation must keep its gutter. */
+function prefixedTextLines(text: string, columns: number, prefix: string, style: LineStyle = 'plain'): readonly StyledLine[] {
+  return prefixedStyledLines([lineSegment(text, style)], columns, prefix, style)
+}
+
 /** Markdown rows re-hardened so a single long word cannot escape the budget. */
 export function markdownLines(text: string, columns: number): readonly StyledLine[] {
   const width = Math.max(1, Math.floor(columns))
@@ -108,41 +123,41 @@ function toolDetailLines(detail: ToolDetail, columns: number): readonly StyledLi
   switch (detail.kind) {
     case 'diff':
       return detail.diffs.flatMap(diff => [
-        ...styledLines([
-          lineSegment('  ── ', 'dim'),
-          lineSegment(diff.path, 'dim'),
-          lineSegment(diff.truncated ? ' (diff truncated)' : '', 'dim'),
-        ], columns),
-        ...diff.lines.flatMap(line => styledLines([
-          lineSegment(`  ${line.mark}${line.text}`, line.mark === '+' ? 'success' : line.mark === '-' ? 'error' : 'dim'),
-        ], columns)),
+        ...prefixedTextLines(`${diff.path}${diff.truncated ? ' (diff truncated)' : ''}`, columns, '  ── ', 'dim'),
+        ...diff.lines.flatMap(line => prefixedTextLines(
+          `${line.mark}${line.text}`,
+          columns,
+          '  ',
+          line.mark === '+' ? 'success' : line.mark === '-' ? 'error' : 'dim',
+        )),
       ])
     case 'read':
       return [
-        ...textLines(
-          `  ── ${detail.path} · lines ${detail.offset}-${detail.lines.length > 0 ? detail.lines[detail.lines.length - 1]!.number : detail.offset - 1} of ${detail.totalLines}${detail.truncated ? ' (window truncated)' : ''}`,
+        ...prefixedTextLines(
+          `${detail.path} · lines ${detail.offset}-${detail.lines.length > 0 ? detail.lines[detail.lines.length - 1]!.number : detail.offset - 1} of ${detail.totalLines}${detail.truncated ? ' (window truncated)' : ''}`,
           columns,
+          '  ── ',
           'dim',
         ),
-        ...detail.lines.flatMap(line => textLines(`  ${String(line.number).padStart(5, ' ')} | ${line.text}`, columns, 'dim')),
+        ...detail.lines.flatMap(line => prefixedTextLines(`${String(line.number).padStart(5, ' ')} | ${line.text}`, columns, '  ', 'dim')),
       ]
     case 'web-search':
       return [
         ...detail.sources.flatMap(source => [
-          ...styledLines([
-            lineSegment(`  ? ${source.title ?? source.url}`, 'brand'),
+          ...prefixedStyledLines([
+            lineSegment(source.title ?? source.url, 'brand'),
             lineSegment(` - ${source.url}`, 'dim'),
-          ], columns),
-          ...(source.snippet === '' ? [] : textLines(`    ${source.snippet}`, columns, 'dim')),
+          ], columns, '  ? '),
+          ...(source.snippet === '' ? [] : prefixedTextLines(source.snippet, columns, '    ', 'dim')),
         ]),
-        ...textLines(`  ${detail.sources.length} sources${detail.truncated ? ' (capped)' : ''}`, columns, 'dim'),
+        ...prefixedTextLines(`${detail.sources.length} sources${detail.truncated ? ' (capped)' : ''}`, columns, '  ', 'dim'),
       ]
     case 'web-fetch':
-      return textLines(`  ${detail.url} · HTTP ${detail.statusCode}`, columns, 'dim')
+      return prefixedTextLines(`${detail.url} · HTTP ${detail.statusCode}`, columns, '  ', 'dim')
     case 'raw':
       return [
-        ...textLines(`  ${detail.text}`, columns, 'dim'),
-        ...textLines(detail.truncated ? '  … (output truncated)' : '  (end of output)', columns, 'dim'),
+        ...prefixedTextLines(detail.text, columns, '  ', 'dim'),
+        ...prefixedTextLines(detail.truncated ? '… (output truncated)' : '(end of output)', columns, '  ', 'dim'),
       ]
     default: {
       const exhaustive: never = detail

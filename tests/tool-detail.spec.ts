@@ -1,9 +1,17 @@
 /** Verbose tool-card expansion: presentation-meta narrowing and diff rows. */
 
 import { describe, expect, it } from 'vitest'
+import { visibleColumns } from '../src/render/markdown.ts'
 import { diffRows, toolResultDetail } from '../src/render/tool-detail.ts'
 
 describe('diffRows', () => {
+  it('clips long CJK lines by terminal columns and keeps the ellipsis in budget', () => {
+    const result = diffRows(null, '甲'.repeat(200), 1)
+    expect(result.lines).toHaveLength(1)
+    expect(visibleColumns(result.lines[0]!.text)).toBeLessThanOrEqual(240)
+    expect(result.lines[0]!.text.endsWith('…')).toBe(true)
+  })
+
   it('renders a create as pure additions', () => {
     expect(diffRows(null, 'a\nb', 200)).toEqual({
       lines: [{ mark: '+', text: 'a' }, { mark: '+', text: 'b' }],

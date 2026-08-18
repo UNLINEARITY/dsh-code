@@ -11,6 +11,8 @@
  * @module @deepseek-ai/dsh-code/render/tool-detail
  */
 
+import { displayText, truncateColumns } from './text.ts'
+
 /** Budgets keeping one expanded card bounded on a terminal. */
 const MAX_DIFF_LINES = 200
 const MAX_READ_LINES = 120
@@ -67,7 +69,7 @@ export type ToolDetail =
 
 /** Truncate one line to the visible-column budget with an ellipsis marker. */
 function clipLine(text: string): string {
-  return text.length > MAX_LINE_COLUMNS ? `${text.slice(0, MAX_LINE_COLUMNS - 1)}…` : text
+  return truncateColumns(displayText(text), MAX_LINE_COLUMNS)
 }
 
 /** Split text into lines, dropping the trailing empty element of a final newline. */

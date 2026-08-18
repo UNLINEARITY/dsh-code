@@ -368,6 +368,7 @@ function buildCandidates(
   stats: TranscriptStats,
   busy: boolean,
   enabled: ReadonlySet<string>,
+  contextWidth: number,
 ): {
   left: { group: StatusGroup; rank: number; id: string }[]
   right: { span: StatusSpan; rank: number; id: string }[]
@@ -467,7 +468,7 @@ function buildCandidates(
       group: {
         spans: [
           { text: 'context ', tone: 'label' },
-          ...contextBar(stats.lastPromptTokens, stats.contextWindow, CONTEXT_BAR_WIDTH),
+          ...contextBar(stats.lastPromptTokens, stats.contextWindow, contextWidth),
         ],
       },
       rank: RANK_CONTEXT,
@@ -541,13 +542,17 @@ export function layoutStatusBar(
   facts: StatusFacts,
   stats: TranscriptStats,
   columns: number,
-  options: { busy?: boolean; items?: readonly string[] } = {},
+  options: { busy?: boolean; items?: readonly string[]; contextWidth?: number } = {},
 ): StatusLayout {
   const busy = options.busy === true
   const items = options.items ?? DEFAULT_STATUSLINE_ITEMS
   const enabled = new Set(items)
   const budget = Math.max(1, Math.floor(columns) - WIDTH_SAFETY)
-  const { left, right, badge, row2 } = buildCandidates(facts, stats, busy, enabled)
+  // The context meter shares the same measured width as the composer. Its
+  // initial width is a ceiling only; the drop ladder below shrinks it around
+  // the other status groups before dropping any group.
+  const maxContextWidth = Math.max(CONTEXT_MIN_WIDTH, Math.min(budget, Math.floor(options.contextWidth ?? CONTEXT_BAR_WIDTH)))
+  const { left, right, badge, row2 } = buildCandidates(facts, stats, busy, enabled, maxContextWidth)
   const groupSeparator = visibleColumns(STATUS_GROUP_SEPARATOR)
   const itemSeparator = visibleColumns(STATUS_ITEM_SEPARATOR)
 
@@ -567,7 +572,7 @@ export function layoutStatusBar(
   // Context shrink state: the bar starts at its full budget and is rebuilt at
   // ever narrower widths before the drop ladder is allowed to discard it.
   // Rebuilding replaces the group's spans in place so width() re-measures it.
-  let contextWidth = CONTEXT_BAR_WIDTH
+  let contextWidth = maxContextWidth
   const rebuildContext = (): void => {
     const index = leftKept.findIndex(entry => entry.id === 'context')
     if (index < 0) return
@@ -594,10 +599,8 @@ export function layoutStatusBar(
   }
 
   while (width() > budget) {
-    if (hint) {
-      hint = false
-      continue
-    }
+    // Context is the lowest-priority visual group. Shrink or remove it before
+    // sacrificing the permission badge or its Shift+Tab affordance.
     // Shrink the context bar instead of dropping it: reserve everything else
     // and hand the deficit to the bar, clamped to CONTEXT_MIN_WIDTH. The
     // fixed label ('context ') and the bar's own readout keep shrinking to
@@ -606,6 +609,30 @@ export function layoutStatusBar(
       const overflow = width() - budget
       contextWidth = Math.max(CONTEXT_MIN_WIDTH, contextWidth - overflow)
       rebuildContext()
+      continue
+    }
+    const contextIndex = leftKept.findIndex(entry => entry.id === 'context')
+    if (contextIndex >= 0) {
+      // Once the meter reaches its minimum useful width, remove the whole
+      // group before touching the permission badge or its keyboard hint.
+      leftKept.splice(contextIndex, 1)
+      continue
+    }
+    if (hint && rightKept.length > 0 && leftKept.length > 0) {
+      const identity = leftKept[0]
+      const identityText = identity.group.spans.map(span => span.text).join('')
+      const rightWidth = joinWidth(rightKept.map(entry => visibleColumns(entry.span.text)), itemSeparator)
+      const identityBudget = budget - rightWidth - LEFT_RIGHT_GAP - visibleColumns(STATUS_CYCLE_HINT)
+      if (identityBudget > 0 && visibleColumns(identityText) > identityBudget) {
+        leftKept[0] = {
+          ...identity,
+          group: { spans: [{ text: truncateColumns(identityText, identityBudget), tone: 'model' }] },
+        }
+        continue
+      }
+    }
+    if (hint) {
+      hint = false
       continue
     }
     let dropLeft = -1

@@ -152,6 +152,37 @@ describe('context progress bar', () => {
   })
 })
 
+describe('adaptive context layout', () => {
+  it('can grow the context meter to the measured composer width without wrapping', () => {
+    const layout = layoutStatusBar(
+      { ...baseFacts, model: 'm', cwd: 'r' },
+      {
+        ...emptyStats,
+        lastPromptTokens: 32_000,
+        contextWindow: 128_000,
+      },
+      120,
+      { items: ['model', 'cwd', 'context'], contextWidth: 80 },
+    )
+    const context = groupText(layout.row1).find(group => group.startsWith('context '))
+    expect(context).toBeDefined()
+    expect(visibleColumns(context!)).toBeGreaterThan(CONTEXT_BAR_WIDTH)
+    expect(visibleColumns(rowText(layout.row1))).toBeLessThanOrEqual(119)
+  })
+
+  it('drops the context meter before the permission badge and Shift+Tab hint', () => {
+    const layout = layoutStatusBar(
+      { ...baseFacts, model: 'm', cwd: 'r', permission: 'workspace-write' },
+      { ...emptyStats, lastPromptTokens: 96_000, contextWindow: 128_000 },
+      50,
+      { items: ['model', 'cwd', 'context', 'permission'], contextWidth: 44 },
+    )
+    expect(layout.row1.right).toEqual([{ text: 'workspace-write', tone: 'warn' }])
+    expect(layout.row1.hint).toBe(true)
+    expect(groupText(layout.row1).some(group => group.startsWith('context '))).toBe(false)
+  })
+})
+
 describe('status layout', () => {
   it('accents identity facts and trails the session label on row 1', () => {
     const layout = layoutStatusBar(
@@ -462,21 +493,21 @@ describe('status width degradation', () => {
   })
 
   it('keeps permission rightmost before the identity must ellipsize', () => {
-    // At 100 columns the hint drops first, then the context bar SHRINKS (not
-    // drops) to hand the deficit to the fixed badge: context survives as a
-    // bare-percent bar while the badge stays pinned.
+    // Context is now the lowest-priority group: it is removed before the
+    // fixed permission badge or its Shift+Tab hint.
     const withBadge = layoutStatusBar(richFacts, richStats, 100)
-    expect(withBadge.row1.left.map(group => group.spans.map(span => span.text).join(''))).toEqual([
-      '○ provider/model-name · repository · /mode code · ⑂ feature-branch',
-      'context ░░25%',
-    ])
+    const compactIdentity = withBadge.row1.left.map(group => group.spans.map(span => span.text).join(''))
+    expect(compactIdentity).toHaveLength(1)
+    expect(compactIdentity[0]).toMatch(/^○ provider\/model-name/u)
+    expect(compactIdentity[0]).toMatch(/…$/u)
     expect(withBadge.row1.right.map(span => span.text)).toEqual(['workspace-write'])
+    expect(withBadge.row1.hint).toBe(true)
     expect(visibleColumns(rowText(withBadge.row1))).toBeLessThanOrEqual(99)
     // Below the threshold where even the minimum bar fits, context drops as a
     // whole and the badge stays pinned.
     const identityAlone = layoutStatusBar(richFacts, richStats, 80)
     expect(identityAlone.row1.left).toHaveLength(1)
-    expect(identityAlone.row1.right).toEqual([])
+    expect(identityAlone.row1.right).toEqual([{ text: 'workspace-write', tone: 'warn' }])
     expect(visibleColumns(rowText(identityAlone.row1))).toBeLessThanOrEqual(79)
   })
 
@@ -490,12 +521,13 @@ describe('status width degradation', () => {
       const context = groups.find(text => text.startsWith('context '))
       const badge = layout.row1.right.map(span => span.text).join('')
       expect(visibleColumns(rowText(layout.row1))).toBeLessThanOrEqual(columns - 1)
-      // Identity never splits: the whole leading cluster survives at every width.
-      expect(groupText(layout.row1)[0]).toBe('○ provider/model-name · repository · /mode code · ⑂ feature-branch')
-      expect(badge).toBe(columns >= 84 ? 'workspace-write' : '')
-      // Context survives (shrunk) only where even the minimum 5-column bar
-      // still fits alongside the badge; below that it drops as a whole.
-      expect(context === undefined).toBe(columns < 100)
+      // Identity remains one bounded cluster; it may compact to preserve the
+      // permission badge and its keyboard affordance.
+      expect(groupText(layout.row1)[0]).toMatch(/^○ provider\/model-name/u)
+      expect(visibleColumns(groupText(layout.row1)[0]!)).toBeLessThanOrEqual(columns - 1)
+      expect(badge).toBe('workspace-write')
+      // Context survives only where the remaining budget can hold its minimum
+      // useful bar after the permission badge and hint have been protected.
       if (context !== undefined) {
         expect(visibleColumns(context)).toBeLessThanOrEqual(columns - 1)
         // The bar only regrows as columns grow; it never snaps back wider.

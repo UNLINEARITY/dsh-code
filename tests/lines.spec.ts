@@ -68,6 +68,28 @@ describe('styled terminal lines', () => {
     }
   })
 
+  it('keeps the tool gutter on every wrapped detail row', () => {
+    const raw = '甲'.repeat(300)
+    const entry: TranscriptEntry = {
+      kind: 'tool',
+      callId: 'call',
+      ordinal: 1,
+      name: 'shell_command',
+      arguments: '{}',
+      preview: '',
+      prompt: '',
+      state: 'done',
+      summary: 'done',
+      detail: { kind: 'raw', text: raw, truncated: false },
+    }
+    const lines = transcriptEntryLines(entry, 40)
+    expect(lines.length).toBeGreaterThan(10)
+    for (const line of lines.slice(2)) {
+      expect(line.segments.map(segment => segment.text).join('')).toMatch(/^  /u)
+      expect(visibleColumns(line.segments.map(segment => segment.text).join(''))).toBeLessThanOrEqual(40)
+    }
+  })
+
   it('does not impose the old forty-row display cap on retained raw tool output', () => {
     const raw = Array.from({ length: 60 }, (_, index) => `tool-${index}`).join('\n')
     const entry: TranscriptEntry = {
