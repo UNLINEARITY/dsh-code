@@ -462,13 +462,47 @@ describe('status width degradation', () => {
   })
 
   it('keeps permission rightmost before the identity must ellipsize', () => {
+    // At 100 columns the hint drops first, then the context bar SHRINKS (not
+    // drops) to hand the deficit to the fixed badge: context survives as a
+    // bare-percent bar while the badge stays pinned.
     const withBadge = layoutStatusBar(richFacts, richStats, 100)
-    expect(withBadge.row1.left).toHaveLength(1)
+    expect(withBadge.row1.left.map(group => group.spans.map(span => span.text).join(''))).toEqual([
+      '○ provider/model-name · repository · /mode code · ⑂ feature-branch',
+      'context ░░25%',
+    ])
     expect(withBadge.row1.right.map(span => span.text)).toEqual(['workspace-write'])
+    expect(visibleColumns(rowText(withBadge.row1))).toBeLessThanOrEqual(99)
+    // Below the threshold where even the minimum bar fits, context drops as a
+    // whole and the badge stays pinned.
     const identityAlone = layoutStatusBar(richFacts, richStats, 80)
     expect(identityAlone.row1.left).toHaveLength(1)
     expect(identityAlone.row1.right).toEqual([])
     expect(visibleColumns(rowText(identityAlone.row1))).toBeLessThanOrEqual(79)
+  })
+
+  it('shrinks the context bar before dropping it, without touching other segments', () => {
+    // Every width keeps the same identity — only the bar interior width
+    // changes while it survives, then the whole group drops below a floor.
+    let previousContextWidth = 0
+    for (let columns = 76; columns <= 140; columns += 2) {
+      const layout = layoutStatusBar(richFacts, richStats, columns)
+      const groups = keptGroups(layout)
+      const context = groups.find(text => text.startsWith('context '))
+      const badge = layout.row1.right.map(span => span.text).join('')
+      expect(visibleColumns(rowText(layout.row1))).toBeLessThanOrEqual(columns - 1)
+      // Identity never splits: the whole leading cluster survives at every width.
+      expect(groupText(layout.row1)[0]).toBe('○ provider/model-name · repository · /mode code · ⑂ feature-branch')
+      expect(badge).toBe(columns >= 84 ? 'workspace-write' : '')
+      // Context survives (shrunk) only where even the minimum 5-column bar
+      // still fits alongside the badge; below that it drops as a whole.
+      expect(context === undefined).toBe(columns < 100)
+      if (context !== undefined) {
+        expect(visibleColumns(context)).toBeLessThanOrEqual(columns - 1)
+        // The bar only regrows as columns grow; it never snaps back wider.
+        expect(visibleColumns(context)).toBeGreaterThanOrEqual(previousContextWidth)
+        previousContextWidth = visibleColumns(context)
+      }
+    }
   })
 
   it('ellipsizes the identity cluster instead of wrapping at extreme widths', () => {
@@ -496,8 +530,12 @@ describe('status width degradation', () => {
       }
       expect(layout.row1.left.length).toBeGreaterThanOrEqual(1)
       // The ellipsized identity is width-dependent by design; every whole
-      // span kept at a narrower width must survive a wider one.
-      const texts1 = layout.row1.left.flatMap(group => group.spans.map(span => span.text))
+      // span kept at a narrower width must survive a wider one. The context
+      // group is the one deliberate exception: its bar interior reshapes to
+      // fit tighter budgets (see the dedicated shrink regression), so only
+      // the remaining segments carry the strict monotonic contract.
+      const texts1 = layout.row1.left
+        .flatMap(group => group.spans[0]?.text === 'context ' ? [] : group.spans.map(span => span.text))
         .filter(candidate => !candidate.endsWith('…'))
       const texts2 = layout.row2.left.flatMap(group => group.spans.map(span => span.text))
       if (previousRow1 !== undefined) {

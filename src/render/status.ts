@@ -127,9 +127,10 @@ export const STATUS_CYCLE_HINT = ' (shift+tab to cycle)'
 
 /**
  * Interior columns of the segmented context bar (content-type segments plus
- * the free tail whose right edge carries the usage readout). Fixed so the
- * row-2 drop ladder can pre-measure the group; the bar shrinks its labels and
- * readout inside this budget rather than asking the layout for more room.
+ * the free tail whose right edge carries the usage readout). The layout
+ * starts every bar at this width so the drop ladder can pre-measure the
+ * group, then shrinks the bar inside a tighter budget before dropping it
+ * (see CONTEXT_MIN_WIDTH) rather than asking the layout for more room.
  */
 export const CONTEXT_BAR_WIDTH = 24
 /** Occupancy at which the usage readout flips from brand blue to amber. */
@@ -137,6 +138,12 @@ export const CONTEXT_WARN_PERCENT = 90
 /** Free-tail floor in columns: wide enough for the bare percent readout, so
  * the warning stays visible even at 100%+ occupancy. */
 const CONTEXT_MIN_FREE = 5
+/**
+ * Narrowest bar width the drop ladder tries before giving up on the context
+ * group: the bar shrinks inside its own budget first (a few columns still
+ * show the bare percent readout) and only then drops as a whole.
+ */
+export const CONTEXT_MIN_WIDTH = 5
 
 /**
  * Render context occupancy as ONE stepless bar: a solid DeepSeek-blue fill
@@ -557,6 +564,25 @@ export function layoutStatusBar(
   const leftKept = [...orderedLeft]
   const rightKept = [...orderedRight]
 
+  // Context shrink state: the bar starts at its full budget and is rebuilt at
+  // ever narrower widths before the drop ladder is allowed to discard it.
+  // Rebuilding replaces the group's spans in place so width() re-measures it.
+  let contextWidth = CONTEXT_BAR_WIDTH
+  const rebuildContext = (): void => {
+    const index = leftKept.findIndex(entry => entry.id === 'context')
+    if (index < 0) return
+    leftKept[index] = {
+      group: {
+        spans: [
+          { text: 'context ', tone: 'label' },
+          ...contextBar(stats.lastPromptTokens, stats.contextWindow, contextWidth),
+        ],
+      },
+      rank: RANK_CONTEXT,
+      id: 'context',
+    }
+  }
+
   const width = (): number => {
     const leftWidth = joinWidth(
       leftKept.map(entry => spansWidth(entry.group.spans)),
@@ -570,6 +596,16 @@ export function layoutStatusBar(
   while (width() > budget) {
     if (hint) {
       hint = false
+      continue
+    }
+    // Shrink the context bar instead of dropping it: reserve everything else
+    // and hand the deficit to the bar, clamped to CONTEXT_MIN_WIDTH. The
+    // fixed label ('context ') and the bar's own readout keep shrinking to
+    // the bare percent, so a tight terminal keeps context visible longer.
+    if (leftKept.some(entry => entry.id === 'context') && contextWidth > CONTEXT_MIN_WIDTH) {
+      const overflow = width() - budget
+      contextWidth = Math.max(CONTEXT_MIN_WIDTH, contextWidth - overflow)
+      rebuildContext()
       continue
     }
     let dropLeft = -1
