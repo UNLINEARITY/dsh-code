@@ -561,6 +561,9 @@ function EntryLine({ entry, showReasoning, verbose }: { entry: TranscriptEntry; 
     case 'tool': {
       // Claude-Code-style tool card: the invocation row plus a nested ⎿
       // result line, so the summary reads under its call instead of inline.
+      // The dim `[N]` badge is the GLOBAL call ordinal (never reset between
+      // turns); the error line below references the same number, so a failed
+      // call's message and its card always agree on which call N is.
       const mark = entry.state === 'running'
         ? createElement(Pulse)
         : entry.state === 'error'
@@ -574,6 +577,8 @@ function EntryLine({ entry, showReasoning, verbose }: { entry: TranscriptEntry; 
           { wrap: verbose ? 'truncate-end' : undefined },
           mark,
           ' ',
+          createElement(Text, { color: inkColor(getPalette().dim) }, `[${entry.ordinal}]`),
+          ' ',
           brand(displayText(entry.name)),
           entry.preview === '' ? '' : ` ${dim(displayText(entry.preview))}`,
         ),
@@ -582,7 +587,7 @@ function EntryLine({ entry, showReasoning, verbose }: { entry: TranscriptEntry; 
           : createElement(
             Text,
             { color: entry.state === 'error' ? inkColor(getPalette().error) : inkColor(getPalette().dim), wrap: verbose ? 'truncate-end' : undefined },
-            `  ⎿ ${displayText(entry.summary)}`,
+            `  ⎿ ${entry.state === 'error' ? `call ${entry.ordinal}: ` : ''}${displayText(entry.summary)}`,
           ),
         verbose && entry.detail !== undefined
           ? createElement(ToolDetailBody, { detail: entry.detail })
@@ -668,7 +673,7 @@ function Header({ resumed }: { resumed: boolean }): ReactElement {
   const hint = resumed ? 'resumed · /help · Esc interrupt' : '/help · Esc interrupt · Ctrl+C quit'
   const copyColumns = Math.max(visibleColumns(title), visibleColumns(slogan), visibleColumns(hint))
   const compact = `${title} · ${hint}`
-  if (rows < 20 || columns < WHALE_GLYPH_COLUMNS + copyColumns + 8) {
+  if (rows < 20 || columns < WHALE_GLYPH_COLUMNS + copyColumns + 10) {
     return createElement(
       Box,
       { width: Math.max(1, columns - 1), borderStyle: 'round', borderColor: inkColor(getPalette().brand), paddingX: 1 },
@@ -679,7 +684,10 @@ function Header({ resumed }: { resumed: boolean }): ReactElement {
     Box,
     // alignSelf shrinks the border to the whale-plus-copy content instead of
     // stretching across the terminal and stranding empty space on the right.
-    { flexDirection: 'row', gap: 2, borderStyle: 'round', borderColor: inkColor(getPalette().brand), paddingX: 1, alignSelf: 'flex-start' },
+    // paddingX: 2 keeps a comfortable margin between the border and both the
+    // whale on the left and the copy on the right (each side gains one
+    // column over the previous paddingX: 1) without changing row height.
+    { flexDirection: 'row', gap: 2, borderStyle: 'round', borderColor: inkColor(getPalette().brand), paddingX: 2, alignSelf: 'flex-start' },
     createElement(
       Box,
       { flexDirection: 'column', width: WHALE_GLYPH_COLUMNS, justifyContent: 'center' },
@@ -745,9 +753,73 @@ function TodoPanel({ todos }: { todos: readonly TodoItem[] }): ReactElement | un
       `todos ${completed}/${todos.length}`,
       createElement(Text, { dimColor: true }, ` · ${inProgress} active · ${pending} pending`),
       current === undefined ? '' : createElement(Text, { color: inkColor(getPalette().brandBright) }, ` · ${todoMark(current.status)} ${displayText(current.content)}`),
+      createElement(Text, { color: inkColor(getPalette().dim) }, ' · /todos'),
     ),
   )
 }
+
+/**
+ * The /todos subpage: the full todo list in one bounded, scrollable panel.
+ * The live tree's TodoPanel stays a one-row summary; this exclusive view
+ * shows EVERY item with its three-state mark inside the shared panel
+ * viewport (same contract as /help and Ctrl+O: border/title/body/footer all
+ * ride one height budget, the composer and status stay put below).
+ */
+function TodoListPanel({ todos, onClose }: { todos: readonly TodoItem[]; onClose: () => void }): ReactElement {
+  const stdout = useStdout().stdout
+  const columns = stdout?.columns ?? 80
+  const viewport = panelViewport(columns, stdout?.rows ?? 30)
+  const [scroll, setScroll] = useState(0)
+  const bodyColumns = Math.max(4, viewport.contentColumns - 4)
+  const completed = todos.filter(todo => todo.status === 'completed').length
+  const inProgress = todos.filter(todo => todo.status === 'in_progress').length
+  const pending = todos.length - completed - inProgress
+  const rows = todos.length === 0
+    ? [createElement(Text, { key: 'empty', dimColor: true, wrap: 'truncate-end' }, '  no todos yet')]
+    : todos.map(todo => createElement(
+      Text,
+      { key: todo.content, dimColor: true, wrap: 'truncate-end' },
+      `  ${todoMark(todo.status)} ${truncateColumns(displayText(todo.content), bodyColumns)}`,
+    ))
+  const visibleScroll = clampScroll(scroll, rows.length, viewport.bodyRows)
+  const scrollBy = (delta: number): void => {
+    setScroll(current => moveScroll(current, delta, rows.length, viewport.bodyRows))
+  }
+
+  useEffect(() => {
+    if (visibleScroll !== scroll) setScroll(visibleScroll)
+  }, [visibleScroll, scroll])
+
+  useInput((input, key) => {
+    if (key.escape || input === 'q') {
+      onClose()
+      return
+    }
+    if (key.upArrow) scrollBy(-1)
+    else if (key.downArrow) scrollBy(1)
+    else if (key.pageUp) scrollBy(-Math.max(1, viewport.bodyRows - 1))
+    else if (key.pageDown) scrollBy(Math.max(1, viewport.bodyRows - 1))
+    else if (input === 'g') setScroll(0)
+    else if (input === 'G') setScroll(Math.max(0, rows.length - viewport.bodyRows))
+  })
+
+  if (viewport.maxHeight === 0) return createElement(Box, { display: 'none' })
+  if (viewport.compact) {
+    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns('todos · esc/q close', viewport.contentColumns))
+  }
+
+  return createElement(
+    Box,
+    { flexDirection: 'column', width: viewport.outerColumns, paddingX: 1, borderStyle: 'round', borderColor: inkColor(getPalette().brand) },
+    createElement(Text, { color: inkColor(getPalette().brand), bold: true, wrap: 'truncate-end' }, truncateColumns(`todos · ${completed}/${todos.length} done · ${inProgress} active · ${pending} pending · rows ${rows.length === 0 ? 0 : visibleScroll + 1}-${Math.min(rows.length, visibleScroll + viewport.bodyRows)}/${rows.length}`, viewport.contentColumns)),
+    createElement(PanelGap, { visible: viewport.gapRows > 0 }),
+    ...rows.slice(visibleScroll, visibleScroll + viewport.bodyRows),
+    createElement(PanelGap, { visible: viewport.gapRows > 0 }),
+    createElement(Text, { dimColor: true, wrap: 'truncate-end' }, dim(truncateColumns('↑↓ scroll · pgup/pgdn page · g/G ends · esc/q close', viewport.contentColumns))),
+  )
+}
+
+const MemoTodoListPanel = memo(TodoListPanel)
 
 /**
  * Ink props for one status tone: the Codex status-line accent mapping over
@@ -1807,6 +1879,7 @@ function HelpPanel({ descriptors, skills, commandError, skillError, onClose }: {
     createElement(Box, { key: 'local-theme' }, row('/theme', 'switch the color theme')),
     createElement(Box, { key: 'local-history' }, row('/history', 'search and recall past prompts')),
     createElement(Box, { key: 'local-agents' }, row('/agents', 'inspect subagent sessions of this conversation')),
+    createElement(Box, { key: 'local-todos' }, row('/todos', 'inspect the full todo list')),
     createElement(Box, { key: 'local-subagent' }, row('/subagent', 'choose the model delegated subagents run on')),
     createElement(Box, { key: 'local-delete' }, row('/delete', 'delete a session and its subagent threads')),
     createElement(Box, { key: 'local-clear' }, row('/clear', 'clear the screen')),
@@ -2146,6 +2219,7 @@ export function completionCandidates(
     { label: '/theme', description: 'switch the color theme', origin: 'command' },
     { label: '/history', description: 'search and recall past prompts', origin: 'command' },
     { label: '/agents', description: 'inspect subagent sessions of this conversation', origin: 'command' },
+    { label: '/todos', description: 'inspect the full todo list', origin: 'command' },
     { label: '/subagent', description: 'choose the model delegated subagents run on', origin: 'command' },
     { label: '/delete', description: 'delete a session and its subagent threads', origin: 'command' },
     { label: '/clear', description: 'clear the screen', origin: 'command' },
@@ -2250,7 +2324,7 @@ function CompletionMenu({ active, mention, index, rows }: {
  * While a modal (approval / question / model panel) owns the keys, the
  * box passes every key through untouched.
  */
-function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openEffort, openHelp, openMode, openPermission, openResume, openPlugin, openStatusline, openTheme, openHistory, openAgents, openSubagent, openDelete, deleteConfirm, confirmDelete, cancelDelete, createSession, cancelSessionSwitch, notify, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, cyclePermission, exportTranscript, renameTitle, recallSpace, recordLocal, recordHistory, queued, cancelQueued, historyFill, historyConsumed, waveTier, waveStyle }: {
+function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openEffort, openHelp, openMode, openPermission, openResume, openPlugin, openStatusline, openTheme, openHistory, openAgents, openSubagent, openTodos, openDelete, deleteConfirm, confirmDelete, cancelDelete, createSession, cancelSessionSwitch, notify, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, cyclePermission, exportTranscript, renameTitle, recallSpace, recordLocal, recordHistory, queued, cancelQueued, historyFill, historyConsumed, waveTier, waveStyle }: {
   active: boolean
   frozen: boolean
   busy: boolean
@@ -2274,6 +2348,8 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   openAgents(): void
   /** Open the /subagent model panel. */
   openSubagent(): void
+  /** Open the /todos subpage (full todo list in one bounded panel). */
+  openTodos(): void
   /** Open the /resume picker in delete mode, optionally pre-armed on one id. */
   openDelete(id?: string): void
   /** The row id awaiting y/n in this box, when a deletion is pending. */
@@ -2660,6 +2736,10 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
       }
       if (text === '/agents') {
         openAgents()
+        return
+      }
+      if (text === '/todos') {
+        openTodos()
         return
       }
       if (text === '/subagent') {
@@ -3259,6 +3339,7 @@ export function App(props: AppProps): ReactElement {
   const [historyOpen, setHistoryOpen] = useState(false)
   const [agentsOpen, setAgentsOpen] = useState(false)
   const [subagentOpen, setSubagentOpen] = useState(false)
+  const [todosOpen, setTodosOpen] = useState(false)
   /** /delete state: delete-mode hint plus an optional pre-armed row id. */
   const [resumeDelete, setResumeDelete] = useState<{ mode: boolean; id?: string }>({ mode: false })
   /** The row id awaiting y/n in the COMPOSER (codex delete confirm): the
@@ -3330,7 +3411,7 @@ export function App(props: AppProps): ReactElement {
   // panel keypress.
   const inputActive = deleteConfirmId !== undefined
     ? !approvalPending && !questionPending
-    : !modelOpen && !helpOpen && !modeOpen && !permissionOpen && !resumeOpen && !pluginOpen && !statuslineOpen && !themeOpen && !historyOpen && !agentsOpen && !subagentOpen && !verboseOpen && !approvalPending && !questionPending
+    : !modelOpen && !helpOpen && !modeOpen && !permissionOpen && !resumeOpen && !pluginOpen && !statuslineOpen && !themeOpen && !historyOpen && !agentsOpen && !subagentOpen && !todosOpen && !verboseOpen && !approvalPending && !questionPending
 
   // Human questions outrank local inspectors. Close the lower modal instead
   // of leaving an approval/question visible but keyboard-locked behind it.
@@ -3350,6 +3431,7 @@ export function App(props: AppProps): ReactElement {
     setHistoryOpen(false)
     setAgentsOpen(false)
     setSubagentOpen(false)
+    setTodosOpen(false)
     setDeleteConfirmId(undefined)
     setVerboseOpen(false)
   }, [approvalPending, questionPending])
@@ -3454,16 +3536,36 @@ export function App(props: AppProps): ReactElement {
           ? Math.max(1, Math.floor(streamRows / 3))
           : 1
   const answerRows = view.streaming === '' ? 0 : Math.max(1, streamRows - reasoningRows)
-  const transcriptVisible = !modelOpen && !helpOpen && !modeOpen && !permissionOpen && !resumeOpen && !pluginOpen && !statuslineOpen && !themeOpen && !historyOpen && !agentsOpen && !subagentOpen && !verboseOpen && !approvalPending && !questionPending
+  const transcriptVisible = !modelOpen && !helpOpen && !modeOpen && !permissionOpen && !resumeOpen && !pluginOpen && !statuslineOpen && !themeOpen && !historyOpen && !agentsOpen && !subagentOpen && !todosOpen && !verboseOpen && !approvalPending && !questionPending
   const inspectorVisible = verboseOpen && !approvalPending && !questionPending
-  const modalVisible = modelOpen || helpOpen || modeOpen || permissionOpen || resumeOpen || pluginOpen || statuslineOpen || themeOpen || historyOpen || agentsOpen || subagentOpen || inspectorVisible || approvalPending || questionPending
+  const modalVisible = modelOpen || helpOpen || modeOpen || permissionOpen || resumeOpen || pluginOpen || statuslineOpen || themeOpen || historyOpen || agentsOpen || subagentOpen || todosOpen || inspectorVisible || approvalPending || questionPending
   const closeInspector = useCallback((): void => {
     setVerboseOpen(false)
   }, [])
   const refreshScreen = (): void => {
-    if (appStdout !== undefined) appStdout.write('\x1b[2J\x1b[3J\x1b[H')
+    // Same source-backed clear the resize path uses: reset the scroll region
+    // (`\x1b[r`) before wiping screen AND scrollback, then home the cursor.
+    // A bare `\x1b[2J\x1b[3J\x1b[H` leaves a previously set scroll region in
+    // place, so Ink's next repaint positions against stale bounds — the
+    // reported Ctrl+R "positioning" flicker where the screen keeps redrawing.
+    if (appStdout !== undefined) appStdout.write(RESIZE_REFLOW_CLEAR)
     setRefreshEpoch(epoch => epoch + 1)
   }
+  // Ctrl+R while a turn streams must NOT clear and remount the whole Static
+  // transcript mid-stream: the replay plus a growing reasoning tail pushes
+  // the dynamic total across the terminal height, and Ink then re-clears the
+  // screen on every frame — the constant flicker. The toggle flips the live
+  // reasoning region immediately and defers one source-backed replay until
+  // the stream settles. Ink's `<Static>` appends only by length, so the
+  // settled-row rebuild that `showReasoning` triggers stays invisible in
+  // scrollback until the deferred replay re-flushes it.
+  const deferredReasoningReplay = useRef(false)
+  useEffect(() => {
+    if (streamingActive || !deferredReasoningReplay.current) return
+    deferredReasoningReplay.current = false
+    if (appStdout !== undefined) appStdout.write(RESIZE_REFLOW_CLEAR)
+    setRefreshEpoch(epoch => epoch + 1)
+  }, [streamingActive])
 
   /** Apply one /model pick: record the selection, close the panel, report via notice. */
   const applyModel = (row: ModelRow, effortId: string | undefined): void => {
@@ -3633,6 +3735,14 @@ export function App(props: AppProps): ReactElement {
       : undefined,
     transcriptVisible ? createElement(TodoPanel, { todos: view.todos }) : undefined,
     transcriptVisible ? createElement(AgentsLine, { rows: agentRows }) : undefined,
+    todosOpen && !approvalPending && !questionPending
+      ? createElement(MemoTodoListPanel, {
+        todos: view.todos,
+        onClose: () => {
+          setTodosOpen(false)
+        },
+      })
+      : undefined,
     createElement(QuestionBar, { store: props.questions, snapshot: questionSnapshot, locked: false }),
     createElement(ApprovalBar, { snapshot: approvalSnapshot, locked: questionPending, notify }),
     modelSurface,
@@ -3849,6 +3959,7 @@ export function App(props: AppProps): ReactElement {
         openHistory: () => setHistoryOpen(true),
         openAgents: () => setAgentsOpen(true),
         openSubagent: () => setSubagentOpen(true),
+        openTodos: () => setTodosOpen(true),
         openDelete: (id?: string) => {
           const armed = id === undefined || id === '' ? undefined : id
           setResumeDelete({ mode: true, ...armed === undefined ? {} : { id: armed } })
@@ -3875,10 +3986,17 @@ export function App(props: AppProps): ReactElement {
         // Ctrl+R must re-render already-settled history too: settled rows
         // flush through <Static> once, so the toggle rides the same
         // source-backed clear+replay the resize path uses — one clear, one
-        // authoritative re-flush at the new visibility.
+        // authoritative re-flush at the new visibility. While a turn streams
+        // the replay is deferred (see deferredReasoningReplay) so the mid-
+        // stream clear+remount cannot push the live region into Ink's
+        // per-frame full-screen redraw loop.
         toggleReasoning: () => {
           setShowReasoning(current => !current)
-          refreshScreen()
+          if (streamingActive) {
+            deferredReasoningReplay.current = true
+          } else {
+            refreshScreen()
+          }
         },
         loadMentions: props.loadMentions,
         cyclePermission: props.cyclePermission,

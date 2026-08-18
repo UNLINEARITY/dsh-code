@@ -8,6 +8,7 @@ import {
   type CallId,
 } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import type { ToolEntry } from '../src/render/projection.ts'
 import {
   createReplayAccumulator,
   createTranscriptView,
@@ -166,9 +167,35 @@ describe('transcript projection', () => {
       toolResultEvent(callId.current, 'missing file', true, 4),
     ])
     expect(view.entries).toEqual([
-      { kind: 'tool', callId: 'c1', name: 'read_file', arguments: '{"path":"a.ts"}', preview: 'a.ts', prompt: '', state: 'error', summary: 'missing file', detail: { kind: 'raw', text: 'missing file', truncated: false } },
-      { kind: 'tool', callId: 'c2', name: 'bash', arguments: '{"path":"a.ts"}', preview: 'a.ts', prompt: '', state: 'done', summary: 'done', detail: { kind: 'raw', text: 'done', truncated: false } },
+      { kind: 'tool', callId: 'c1', ordinal: 1, name: 'read_file', arguments: '{"path":"a.ts"}', preview: 'a.ts', prompt: '', state: 'error', summary: 'missing file', detail: { kind: 'raw', text: 'missing file', truncated: false } },
+      { kind: 'tool', callId: 'c2', ordinal: 2, name: 'bash', arguments: '{"path":"a.ts"}', preview: 'a.ts', prompt: '', state: 'done', summary: 'done', detail: { kind: 'raw', text: 'done', truncated: false } },
     ])
+  })
+
+  it('numbers tool calls globally across turns so badges and errors never renounce', () => {
+    const callA = 'a' as CallId
+    const callB = 'b' as CallId
+    const callC = 'c' as CallId
+    const view = projectEvents([
+      { type: 'turn/start', seq: 1, time: 0, data: { turn: 1 } } as SessionEvent,
+      toolCallEvent('read', callA, 2),
+      toolResultEvent(callA, 'ok', false, 3),
+      { type: 'turn/end', seq: 4, time: 0, data: { turn: 1, reason: { kind: 'completed' } } } as SessionEvent,
+      { type: 'turn/start', seq: 5, time: 0, data: { turn: 2 } } as SessionEvent,
+      toolCallEvent('bash', callB, 6),
+      toolCallEvent('edit', callC, 7),
+      toolResultEvent(callB, 'boom', true, 8),
+      { type: 'turn/end', seq: 9, time: 0, data: { turn: 2, reason: { kind: 'completed' } } } as SessionEvent,
+    ])
+    const tools = view.entries.filter((entry): entry is ToolEntry => entry.kind === 'tool')
+    // The counter never resets between turns: 1, 2, 3 across the whole log.
+    expect(tools.map(tool => tool.ordinal)).toEqual([1, 2, 3])
+    // The failed call keeps the exact number its card badge shows; result
+    // folding never renumbers a settled entry.
+    const failed = tools.find(tool => tool.state === 'error')
+    expect(failed?.callId).toBe(callB)
+    expect(failed?.ordinal).toBe(2)
+    expect(view.toolCallOrdinal).toBe(3)
   })
 
   it('derives the verbose expansion from persisted diff presentation meta', () => {
@@ -184,6 +211,7 @@ describe('transcript projection', () => {
     expect(entry).toEqual({
       kind: 'tool',
       callId: 'c1',
+      ordinal: 1,
       name: 'edit',
       arguments: '{"path":"a.ts"}',
       preview: 'a.ts',

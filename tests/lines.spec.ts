@@ -73,6 +73,7 @@ describe('styled terminal lines', () => {
     const entry: TranscriptEntry = {
       kind: 'tool',
       callId: 'call',
+      ordinal: 1,
       name: 'shell_command',
       arguments: '{}',
       preview: '',
@@ -86,10 +87,31 @@ describe('styled terminal lines', () => {
     expect(text).toContain('tool-59')
   })
 
+  it('renders the global call ordinal in the badge and the error line alike', () => {
+    const entry: TranscriptEntry = {
+      kind: 'tool',
+      callId: 'call',
+      ordinal: 7,
+      name: 'bash',
+      arguments: '{}',
+      preview: '',
+      prompt: '',
+      state: 'error',
+      summary: 'command failed',
+      detail: undefined,
+    }
+    const text = textOf(transcriptEntryLines(entry, 80))
+    // The badge and the nested error line share one index: an error named
+    // "call 7" always points at the card that shows [7].
+    expect(text).toContain('[7] bash')
+    expect(text).toContain('⎿ call 7: command failed')
+  })
+
   it('sanitizes live tool and command names before physical-row rendering', () => {
     const tool: TranscriptEntry = {
       kind: 'tool',
       callId: 'call',
+      ordinal: 1,
       name: 'evil\x1b]0;pwned\x07fetch',
       arguments: '{}',
       preview: '',

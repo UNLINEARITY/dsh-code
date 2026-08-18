@@ -7,6 +7,7 @@ import { render } from 'ink'
 import { describe, expect, it, vi } from 'vitest'
 import { createAssistantMessage, createToolResultMessage, createUserMessage, type CallId } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import type { TodoItem } from '@deepseek-ai/dsh-session'
 import { App, computeSettledRows, type AppProps } from '../src/app.ts'
 import { createTranscriptStore } from '../src/store.ts'
 import type { TranscriptEntry } from '../src/render/projection.ts'
@@ -945,6 +946,148 @@ describe('Ctrl+R reasoning fold', () => {
       stdout.destroy()
     }
   })
+
+  it('defers the Ctrl+R replay while reasoning streams, then replays once it settles', async () => {
+    const { stdin, stdout, output } = createTty(100, 24)
+    const store = createTranscriptStore([
+      {
+        type: 'user/message',
+        seq: 1,
+        time: 1,
+        data: createUserMessage({ content: [{ type: 'text', text: 'go' }], source: { kind: 'user' } }),
+      } as SessionEvent,
+      {
+        type: 'assistant/message',
+        seq: 2,
+        time: 2,
+        data: {
+          turn: 1,
+          step: 1,
+          message: createAssistantMessage({
+            content: [
+              { type: 'reasoning', text: 'the hidden reasoning trace' },
+              { type: 'text', text: 'the visible answer' },
+            ],
+            source: { provider: 'p', model: 'm' },
+          }),
+        },
+      } as SessionEvent,
+    ])
+    const unsubscribe = (): void => {}
+    const noop = (): void => {}
+    const instance = render(createElement(App, {
+      store,
+      subagents: { subscribe: () => unsubscribe, getSnapshot: () => EMPTY_AGENTS },
+      approval: { subscribe: () => unsubscribe, getSnapshot: () => approvalSnapshot },
+      questions: {
+        subscribe: () => unsubscribe,
+        getSnapshot: () => questionSnapshot,
+        submit: noop,
+        cancel: noop,
+      },
+      commands: { descriptors: [], subscribe: () => unsubscribe },
+      skills: { rows: [], subscribe: () => unsubscribe },
+      model: 'test/model',
+      cwd: 'dsh-cli',
+      workspaceRoot: 'C:\\repo\\dsh-cli',
+      branch: 'main',
+      sessionId: '12345678',
+      resumed: false,
+      mode: 'standard',
+      permission: 'workspace-write',
+      dispatch: noop,
+      steer: noop,
+      interrupt: () => false,
+      quit: noop,
+      loadModels: async () => ({ rows: [], failures: [] }),
+      loadMentions: async () => [],
+      selectModel: () => 'test/model',
+      subagentModel: '',
+      setSubagentModel: () => '',
+      clearSubagentModel: noop,
+      deleteSession: async () => '',
+      cyclePermission: () => '',
+      setPermission: id => id,
+      exportTranscript: async () => {},
+      renameTitle: () => '',
+      loadPresets: async () => [],
+      loadPermissions: async () => [],
+      switchMode: async id => id,
+      createSession: noop,
+      loadSessions: async () => [],
+      loadSubagents: async () => [],
+      loadSessionTranscript: async () => '',
+      switchSession: noop,
+      cancelSessionSwitch: () => false,
+      loadPlugins: () => [],
+      statusline: DEFAULT_STATUSLINE_ITEMS,
+      saveStatusline: noop,
+      history: [],
+      recordHistory: noop,
+      cancelQueued: noop,
+      onBridgeReady: noop,
+    }), {
+      stdin,
+      stdout,
+      stderr: stdout,
+      exitOnCtrlC: false,
+      patchConsole: false,
+    })
+
+    try {
+      await wait()
+      // Start a fresh reasoning stream over the settled history.
+      store.apply({ type: 'turn/start', seq: 3, time: 3, data: { turn: 2 } } as SessionEvent)
+      store.apply({ type: 'step/start', seq: 4, time: 4, data: { turn: 2, step: 1 } } as SessionEvent)
+      for (let index = 0; index < 10; index += 1) {
+        store.apply({
+          type: 'assistant/chunk', seq: 5 + index, time: 5 + index,
+          data: { turn: 2, step: 1, chunk: { type: 'reasoning-delta', text: `stream-${index} ` } },
+        } as unknown as SessionEvent)
+      }
+      await wait()
+      let plain = output.text.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '')
+      expect(plain).toContain('Thinking')
+
+      // Ctrl+R mid-stream flips ONLY the live region: expanded reasoning
+      // appears and NO clear-and-replay touches the screen yet.
+      output.text = ''
+      stdin.write('\x12')
+      await wait()
+      plain = output.text.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '')
+      expect(plain).not.toContain('Thinking')
+      expect(plain).toContain('stream-9')
+      expect(output.text).not.toContain('\x1b[2J')
+
+      // The assembled message ends the stream: the deferred replay runs
+      // exactly once and re-flushes the settled history with reasoning
+      // expanded (and the screen clear resets the scroll region).
+      store.apply({
+        type: 'assistant/message',
+        seq: 200,
+        time: 30,
+        data: {
+          turn: 2,
+          step: 1,
+          message: createAssistantMessage({
+            content: [
+              { type: 'reasoning', text: 'the assembled trace' },
+              { type: 'text', text: 'the assembled answer' },
+            ],
+            source: { provider: 'p', model: 'm' },
+          }),
+        },
+      } as SessionEvent)
+      await wait()
+      expect(output.text.match(/\x1b\[2J/g)).toHaveLength(1)
+      expect(output.text).toContain('the assembled trace')
+      expect(output.text).toContain('the assembled answer')
+    } finally {
+      instance.unmount()
+      stdin.destroy()
+      stdout.destroy()
+    }
+  }, 20_000)
 })
 
 describe('deferred session remount', () => {
@@ -1836,6 +1979,69 @@ describe('/agents panel', () => {
       harness.stdin.write('q')
       await wait()
       expect(harness.output.text.lastIndexOf('type a message')).toBeGreaterThan(harness.output.text.lastIndexOf('/agents ·'))
+    } finally {
+      instance.unmount()
+      harness.stdin.destroy()
+      harness.stdout.destroy()
+    }
+  })
+})
+
+describe('/todos subpage', () => {
+  it('opens the full todo list in a bounded scrollable panel and closes on q', async () => {
+    const todos: TodoItem[] = Array.from({ length: 30 }, (_, index) => ({
+      content: `todo-${String(index).padStart(2, '0')}`,
+      status: index < 10 ? 'completed' : index < 20 ? 'in_progress' : 'pending',
+    }))
+    const store = createTranscriptStore([
+      {
+        type: 'user/message',
+        seq: 1,
+        time: 1,
+        data: createUserMessage({ content: [{ type: 'text', text: 'track work' }], source: { kind: 'user' } }),
+      } as SessionEvent,
+      { type: 'todo/write', seq: 2, time: 2, data: { todos } } as SessionEvent,
+    ])
+    const harness = createTty(100, 24)
+    const instance = renderApp(harness, appProps({ store }))
+    try {
+      await wait()
+      // The live summary line shows the counts and points at the subpage.
+      expect(harness.output.text).toContain('todos 10/30')
+      expect(harness.output.text).toContain('/todos')
+
+      harness.stdin.write('/todos')
+      await wait()
+      // Drop the keystroke frames so the newline count measures the panel's
+      // own frame only (same discipline as the Ctrl+O bounded-panel test).
+      harness.output.text = ''
+      harness.stdin.write('\r')
+      await wait()
+      const opened = harness.output.text
+      expect(opened).toContain('todos · 10/30 done · 10 active · 10 pending')
+      expect(opened).toContain('todo-00')
+      // The panel stays strictly below the terminal height (the shared
+      // viewport contract: at equality Ink clears and rewrites every frame),
+      // and opening it never clears or replays the screen.
+      const terminalRows = (harness.stdout as unknown as { rows?: number }).rows ?? 24
+      expect(opened.split('\n').length).toBeLessThan(terminalRows)
+      expect(opened).not.toContain('\x1b[2J')
+
+      // G jumps to the tail, g back to the head; both stay inside the panel.
+      harness.stdin.write('G')
+      await wait()
+      expect(harness.output.text).toContain('todo-29')
+      harness.stdin.write('g')
+      await wait()
+      expect(harness.output.text).toContain('todo-00')
+
+      // q closes the panel and the composer regains focus (the closing frame
+      // repaints the composer after the panel's last frame).
+      harness.stdin.write('q')
+      await wait()
+      expect(harness.output.text.lastIndexOf('type a message')).toBeGreaterThan(
+        harness.output.text.lastIndexOf('todos · 10/30 done · 10 active'),
+      )
     } finally {
       instance.unmount()
       harness.stdin.destroy()

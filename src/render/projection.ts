@@ -79,6 +79,13 @@ export interface ToolEntry {
   kind: 'tool'
   /** Correlation id shared with the matching `tool/result`. */
   callId: string
+  /**
+   * Global tool-call ordinal across the whole transcript (1, 2, 3…, never
+   * reset between turns). The tool-card badge and every error line that
+   * references the failed call share this number, so "call N" in an error
+   * always names the exact card the badge shows.
+   */
+  ordinal: number
   /** Tool name as the model addressed it. */
   name: string
   /** Raw arguments JSON string exactly as the model produced it. */
@@ -253,6 +260,12 @@ export interface TranscriptView {
   streamingReasoning: string
   /** Latest whole-list todo snapshot from `todo/write`, empty when none. */
   todos: readonly TodoItem[]
+  /**
+   * Global tool-call ordinal counter: the number the NEXT `tool/call` lands
+   * with (1-based). Never reset, so the counter and the badges/error lines
+   * stay consistent across turns and resumed sessions.
+   */
+  toolCallOrdinal: number
   /** True while a durable turn is open (`turn/start` … `turn/end`). */
   busy: boolean
   /** `turn/start` time of the open turn (0 while idle) — the web TurnStatus clock anchor. */
@@ -337,6 +350,7 @@ export function createTranscriptView(): TranscriptView {
     streaming: '',
     streamingReasoning: '',
     todos: [],
+    toolCallOrdinal: 0,
     busy: false,
     busySince: 0,
     model: '',
@@ -519,11 +533,14 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
       const turnTools = view.anchors.turnTools.get(data.turn) ?? new Set<string>()
       turnTools.add(data.callId)
       view.anchors.turnTools.set(data.turn, turnTools)
+      const ordinal = view.toolCallOrdinal + 1
       return {
         ...view,
+        toolCallOrdinal: ordinal,
         entries: [...view.entries, {
           kind: 'tool',
           callId: data.callId,
+          ordinal,
           name: data.name,
           arguments: data.arguments,
           preview: toolArgumentsPreview(data.arguments, data.name),
@@ -842,6 +859,8 @@ export interface ReplayAccumulator {
   streaming: string
   streamingReasoning: string
   todos: readonly TodoItem[]
+  /** Global tool-call ordinal counter (see `TranscriptView.toolCallOrdinal`). */
+  toolCallOrdinal: number
   busy: boolean
   busySince: number
   model: string
@@ -877,6 +896,7 @@ export function createReplayAccumulator(): ReplayAccumulator {
     streaming: '',
     streamingReasoning: '',
     todos: [],
+    toolCallOrdinal: 0,
     busy: false,
     busySince: 0,
     model: '',
@@ -1095,9 +1115,11 @@ export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent):
       const turnTools = acc.turnTools.get(data.turn) ?? new Set<string>()
       turnTools.add(data.callId)
       acc.turnTools.set(data.turn, turnTools)
+      acc.toolCallOrdinal += 1
       appendReplayEntry(acc, {
         kind: 'tool',
         callId: data.callId,
+        ordinal: acc.toolCallOrdinal,
         name: data.name,
         arguments: data.arguments,
         preview: toolArgumentsPreview(data.arguments, data.name),
@@ -1354,6 +1376,7 @@ export function finishReplay(acc: ReplayAccumulator): TranscriptView {
     streaming: acc.streaming,
     streamingReasoning: acc.streamingReasoning,
     todos: acc.todos,
+    toolCallOrdinal: acc.toolCallOrdinal,
     busy: acc.busy,
     busySince: acc.busySince,
     model: acc.model,

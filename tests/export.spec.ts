@@ -20,7 +20,7 @@ describe('buildExportMarkdown', () => {
       entries: [
         { kind: 'user', text: 'fix it', notice: false },
         { kind: 'assistant', text: 'doing it', reasoning: 'hmm' },
-        { kind: 'tool', callId: 'c1', name: 'edit', arguments: '{}', preview: 'a.ts', prompt: '', state: 'done', summary: 'Updated file', detail: undefined },
+        { kind: 'tool', callId: 'c1', ordinal: 1, name: 'edit', arguments: '{}', preview: 'a.ts', prompt: '', state: 'done', summary: 'Updated file', detail: undefined },
         { kind: 'turn-marker', text: 'turn cancelled by the user' },
         { kind: 'error', text: 'X: boom' },
       ] as const,

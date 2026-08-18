@@ -185,13 +185,15 @@ export function transcriptEntryLines(entry: TranscriptEntry, columns: number): r
       return [
         ...styledLines([
           lineSegment(`${mark} `, markStyle),
+          // Global call ordinal — the same number an error line references.
+          lineSegment(`[${entry.ordinal}] `, 'dim'),
           lineSegment(entry.name, 'brand'),
           lineSegment(entry.preview === '' ? '' : ` ${entry.preview}`, 'dim'),
         ], width),
         // A delegation card carries what the child was asked (Codex's
         // SpawnAgent prompt preview) while it runs, before any result.
         ...(entry.prompt === '' ? [] : textLines(`  └ ${entry.prompt}`, width, 'dim')),
-        ...(entry.summary === '' ? [] : textLines(`  ⎿ ${entry.summary}`, width, entry.state === 'error' ? 'error' : 'dim')),
+        ...(entry.summary === '' ? [] : textLines(`  ⎿ ${entry.state === 'error' ? `call ${entry.ordinal}: ` : ''}${entry.summary}`, width, entry.state === 'error' ? 'error' : 'dim')),
         ...(entry.detail === undefined ? [] : toolDetailLines(entry.detail, width)),
       ]
     }
