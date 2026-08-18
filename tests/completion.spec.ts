@@ -21,9 +21,9 @@ describe('completionCandidates', () => {
       skill('agentic-workflow'),
     ]
     const rows = completionCandidates('/', descriptors, skills)
-    // 27 local commands + 1 registry command + 1 unshadowed skill (/review is local).
-    expect(rows).toHaveLength(29)
-    expect(rows.filter(row => row.origin === 'command')).toHaveLength(28)
+    // 23 local commands + 1 registry command + 1 unshadowed skill (/review is local).
+    expect(rows).toHaveLength(25)
+    expect(rows.filter(row => row.origin === 'command')).toHaveLength(24)
     expect(rows.filter(row => row.origin === 'skill').map(row => row.label))
       .toEqual(['/agentic-workflow'])
     expect(rows[0]).toMatchObject({ label: '/help', origin: 'command' })
@@ -47,6 +47,11 @@ describe('completionCandidates', () => {
     for (const name of ['/help', '/quit', '/export', '/title', '/theme', '/mode', '/permission']) {
       expect(localNames).toContain(name)
     }
+  })
+
+  it('does not expose generic kernel-inspection commands as DSH-Code commands', () => {
+    const names = completionCandidates('/', [], []).map(row => row.label)
+    for (const name of ['/settings', '/mcp', '/hooks', '/jobs']) expect(names).not.toContain(name)
   })
 
   it('offers /permission before any session exists and shadows the registry child', () => {

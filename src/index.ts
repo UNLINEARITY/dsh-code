@@ -39,6 +39,7 @@ import {
   loadProviderSettings,
   removeProviderSettings,
   saveProviderCredential,
+  saveProviderConfiguration,
   subscribeProviderSettings,
   unsetProviderCredential,
 } from './provider-settings.ts'
@@ -52,7 +53,7 @@ import { watchSkills, type SkillsView } from './skills.ts'
 import { toolArgumentsPreview } from './render/tool-preview.ts'
 import { buildExportMarkdown } from './render/export.ts'
 import { saveImagePaths } from './attachments.ts'
-import { copyText, editTextInExternalEditor, latestAssistantText } from './editor.ts'
+import { copyText, latestAssistantText } from './editor.ts'
 import { selectForkSeed } from './fork.ts'
 import { buildReviewPrompt, loadGitDiff } from './git-workflow.ts'
 import type { TuiStartup } from './startup.ts'
@@ -1250,14 +1251,14 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   }
 
   const reviewChanges = (argument: string): void => {
-    void loadGitDiff(session?.header.cwd ?? cwd, argument).then(({ title, text }) => {
+    void loadGitDiff(session?.header.cwd ?? cwd, argument).then(({ title, files }) => {
       try {
         setPermissionAction('read-only')
       } catch (error: unknown) {
         bridge.notify(`review unavailable: ${error instanceof Error ? error.message : String(error)}`, 'error')
         return
       }
-      send(buildReviewPrompt(text === '(no changes)' ? '' : text, title), 'followup')
+      send(buildReviewPrompt(files.flatMap(file => file.lines).join('\n'), title), 'followup')
       bridge.notify('review started under read-only permissions')
     }, (error: unknown) => {
       bridge.notify(`review failed: ${error instanceof Error ? error.message : String(error)}`, 'error')
@@ -1306,35 +1307,6 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     return switchQueue.cancel()
   }
 
-  const loadOperationalView = async (kind: 'settings' | 'mcp' | 'hooks' | 'jobs'): Promise<{ title: string; text: string }> => {
-    if (kind === 'settings') {
-      const settings = ctx.get('settings') as unknown as {
-        describe(options: { redactSecrets: true }): Array<{ ns: string; applies: string; revision: number; value?: unknown; user?: unknown; secrets?: unknown }>
-      } | undefined
-      if (settings === undefined) throw new Error('settings service is not mounted')
-      const descriptors = settings.describe({ redactSecrets: true }).map(({ ns, applies, revision, value, user, secrets }) => ({
-        namespace: ns, applies, revision, value, user, secrets,
-      }))
-      return { title: 'Harness settings (redacted)', text: descriptors.length === 0 ? '(no registered namespaces)' : JSON.stringify(descriptors, null, 2) }
-    }
-    if (kind === 'jobs') {
-      const jobs = ctx.get('jobs') as unknown as {
-        list(caller?: Agent): Array<{ id: string; kind: string; label: string; status: string; startedAt: number; finishedAt?: number; reported: boolean }>
-      } | undefined
-      if (jobs === undefined) throw new Error('jobs service is not mounted')
-      const rows = jobs.list(agent).map(job => `${job.id}  ${job.status}  ${job.label}`)
-      return { title: 'background jobs', text: rows.length === 0 ? '(no jobs)' : rows.join('\n') }
-    }
-    const needle = kind === 'mcp' ? 'mcp' : 'hook'
-    const rows = listPluginRows(ctx).filter(row => `${row.entryId} ${row.moduleName}`.toLowerCase().includes(needle))
-    return {
-      title: kind === 'mcp' ? 'MCP composition' : 'hook composition',
-      text: rows.length === 0
-        ? `(no ${kind} plugins in this composition)`
-        : rows.map(row => `${row.enabled ? 'enabled ' : 'disabled'} ${row.phase ?? 'inactive'}  ${row.entryId}  ${row.moduleName}`).join('\n'),
-    }
-  }
-
   const appElement = (): ReturnType<typeof createElement> => {
     // A bare launch mounts with pending/default model, mode, and permission
     // facts until the first input composes the real session. These choices stay
@@ -1380,6 +1352,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       loadModelProviders: () => loadProviderSettings(ctx),
       subscribeModelProviders: listener => subscribeProviderSettings(ctx, listener),
       saveModelProviderCredential: (target, key) => saveProviderCredential(ctx, target, key),
+      saveModelProviderConfiguration: (target, configuration) => saveProviderConfiguration(ctx, target, configuration),
       unsetModelProviderCredential: target => unsetProviderCredential(ctx, target),
       removeModelProvider: target => removeProviderSettings(ctx, target),
       loadMentions: (query: string, signal?: AbortSignal) => mentions.candidates(query, signal),
@@ -1393,10 +1366,8 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       exportTranscript,
       renameTitle,
       copyLastResponse,
-      editDraft: editTextInExternalEditor,
       loadGitDiff: (argument: string) => loadGitDiff(session?.header.cwd ?? cwd, argument),
       reviewChanges,
-      loadOperationalView,
       loadPresets: () => presets.list(),
       switchMode: switchModeAction,
       loadPermissions: () => permissionPresets === undefined

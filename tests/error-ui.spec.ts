@@ -234,6 +234,7 @@ describe('/model provider credentials', () => {
     credentialRef: 'DEEPSEEK_API_KEY',
     suggestedRef: 'DEEPSEEK_OFFICIAL_API_KEY',
     credential: { kind: 'facts', configured: false, writable: true },
+    configuration: { models: [] },
     ...overrides,
   })
 
@@ -295,6 +296,64 @@ describe('/model provider credentials', () => {
     }
     await wait()
     expect(unsubscribed).toBe(true)
+  })
+
+  it('edits an explicit provider model allow-list and its token windows from the provider panel', async () => {
+    let saved: unknown
+    const app = renderApp({
+      loadModels: async () => ({
+        rows: [{ provider: 'deepseek-official', providerName: 'DeepSeek', model: 'flash', modelName: 'Flash' }],
+        failures: [],
+      }),
+      loadModelProviders: async () => ({ rows: [provider()], writable: true, failures: [] }),
+      saveModelProviderCredential: async () => {},
+      saveModelProviderConfiguration: async (_target, configuration) => { saved = configuration },
+      unsetModelProviderCredential: async () => {},
+      removeModelProvider: async () => {},
+    })
+    try {
+      await wait()
+      app.stdin.push('/model')
+      await wait()
+      app.stdin.push('\r')
+      await wait()
+      app.stdin.push('a')
+      await wait()
+      app.stdin.push('\t')
+      await wait()
+      expect(app.output()).toContain('DeepSeek configuration')
+      app.stdin.push('\t')
+      await wait()
+      app.stdin.push(' ')
+      await wait()
+      app.stdin.push('\t')
+      await wait()
+      app.stdin.push('1')
+      await wait()
+      app.stdin.push('2')
+      await wait()
+      app.stdin.push('8')
+      await wait()
+      app.stdin.push('0')
+      await wait()
+      app.stdin.push('0')
+      await wait()
+      app.stdin.push('\t')
+      await wait()
+      app.stdin.push('8')
+      await wait()
+      app.stdin.push('1')
+      await wait()
+      app.stdin.push('9')
+      await wait()
+      app.stdin.push('2')
+      await wait()
+      app.stdin.push('\r')
+      await wait()
+      expect(saved).toEqual({ models: [{ id: 'flash', name: 'Flash', contextWindow: 12800, maxTokens: 8192 }] })
+    } finally {
+      app.unmount()
+    }
   })
 
   it('keeps masked input and save failures inside the five-row panel budget', async () => {

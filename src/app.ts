@@ -18,7 +18,7 @@ import {
   createElement, memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactElement,
 } from 'react'
 import chalk from 'chalk'
-import { Box, Static, Text, useInput, useStdin, useStdout, type Key } from 'ink'
+import { Box, Static, Text, useInput, useStdout, type Key } from 'ink'
 import { assertNever } from '@deepseek-ai/dsh-llm'
 import type { CommandDescriptor } from '@deepseek-ai/dsh-commands'
 import type { TodoItem } from '@deepseek-ai/dsh-session'
@@ -64,7 +64,7 @@ import {
 import type { ApprovalSnapshot, ApprovalStore } from './approval.ts'
 import type { CommandsView } from './commands.ts'
 import type { ModelDirectory, ModelRow } from './models.ts'
-import type { ProviderSettingsDirectory, ProviderTargetView } from './provider-settings.ts'
+import type { ProviderConfiguration, ProviderSettingsDirectory, ProviderTargetView } from './provider-settings.ts'
 import type { QuestionSnapshot, QuestionStore } from './questions.ts'
 import type { SkillsView, SkillRow } from './skills.ts'
 import type { MentionCandidate } from './mentions.ts'
@@ -81,6 +81,7 @@ import {
   type RecallState,
 } from './history.ts'
 import type { SessionDirectoryOptions, SessionRow } from './session-directory.ts'
+import type { GitDiffView } from './git-workflow.ts'
 
 /** Match Codex's settled-resize window before rebuilding terminal scrollback. */
 const RESIZE_REFLOW_DELAY_MS = 75
@@ -194,6 +195,8 @@ export interface AppProps {
   unsetModelProviderCredential?(target: ProviderTargetView): Promise<void>
   /** Remove one user-owned provider profile and its page-managed credential. */
   removeModelProvider?(target: ProviderTargetView): Promise<void>
+  /** Save endpoint and explicit model capacities through the provider profile. */
+  saveModelProviderConfiguration?(target: ProviderTargetView, configuration: ProviderConfiguration): Promise<void>
   /** Cycle to the next permission preset (Shift+Tab); returns the new label. */
   cyclePermission(): string
   /** Select or inspect a permission preset without requiring a pre-existing session. */
@@ -204,14 +207,10 @@ export interface AppProps {
   renameTitle(argument: string): string
   /** Copy the latest complete assistant response; resolves to notice text. */
   copyLastResponse(): Promise<string>
-  /** Round-trip the current composer draft through a blocking external editor. */
-  editDraft(text: string): Promise<string>
-  /** Load a complete read-only Git diff for the bounded text panel. */
-  loadGitDiff(argument: string): Promise<{ title: string; text: string }>
+  /** Load a complete read-only Git diff for the file-oriented viewport. */
+  loadGitDiff(argument: string): Promise<GitDiffView>
   /** Start a model review after applying the read-only permission preset. */
   reviewChanges(argument: string): void
-  /** Load a read-only kernel operations view with secrets already redacted. */
-  loadOperationalView(kind: 'settings' | 'mcp' | 'hooks' | 'jobs'): Promise<{ title: string; text: string }>
   /** Preset/session/plugin kernel operations. */
   loadPresets(): Promise<readonly PresetRow[]>
   switchMode(id: string): Promise<string>
@@ -476,15 +475,35 @@ function StyledRows({ lines }: { lines: readonly StyledLine[] }): ReactElement {
   )
 }
 
-/** Generic full-content, bounded viewport for read-only command output. */
-function TextPanel({ title, text, onClose }: { title: string; text: string; onClose(): void }): ReactElement {
+/** File-oriented, color-coded unified diff viewport. */
+function DiffPanel({ view, onClose }: { view: GitDiffView; onClose(): void }): ReactElement {
   const stdout = useStdout().stdout
   const viewport = panelViewport(stdout?.columns ?? 80, stdout?.rows ?? 30)
-  const lines = useMemo(() => textLines(text, viewport.contentColumns), [text, viewport.contentColumns])
+  const [fileIndex, setFileIndex] = useState(0)
   const [scroll, setScroll] = useState(0)
+  const file = view.files[fileIndex]
+  const lines = useMemo(() => {
+    if (file === undefined) return textLines('  (no changes)', viewport.contentColumns, 'dim')
+    return file.lines.flatMap(line => styledLines([
+      lineSegment(line, line.startsWith('+') && !line.startsWith('+++')
+        ? 'success'
+        : line.startsWith('-') && !line.startsWith('---')
+          ? 'error'
+          : line.startsWith('@@') || line.startsWith('diff --git') || line.startsWith('index ')
+            ? 'brand'
+            : 'dim'),
+    ], viewport.contentColumns))
+  }, [file, viewport.contentColumns])
   const visibleScroll = clampScroll(scroll, lines.length, viewport.bodyRows)
   useInput((input, key) => {
     if (key.escape || input === 'q') onClose()
+    else if (key.leftArrow && view.files.length > 0) {
+      setFileIndex(current => (current + view.files.length - 1) % view.files.length)
+      setScroll(0)
+    } else if (key.rightArrow && view.files.length > 0) {
+      setFileIndex(current => (current + 1) % view.files.length)
+      setScroll(0)
+    }
     else if (input === 'g') setScroll(0)
     else if (input === 'G') setScroll(Math.max(0, lines.length - viewport.bodyRows))
     else if (key.upArrow) setScroll(current => moveScroll(current, -1, lines.length, viewport.bodyRows))
@@ -492,11 +511,11 @@ function TextPanel({ title, text, onClose }: { title: string; text: string; onCl
     else if (key.pageUp) setScroll(current => moveScroll(current, -viewport.bodyRows, lines.length, viewport.bodyRows))
     else if (key.pageDown) setScroll(current => moveScroll(current, viewport.bodyRows, lines.length, viewport.bodyRows))
   })
-  if (viewport.compact) return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(`${title} · esc/q close`, viewport.contentColumns))
+  if (viewport.compact) return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(`${view.title} · ${view.files.length} files · esc/q close`, viewport.contentColumns))
   return createElement(
     Box,
     { flexDirection: 'column', borderStyle: 'round', borderColor: inkColor(getPalette().dim), paddingX: 1 },
-    createElement(Text, { color: inkColor(getPalette().brand), bold: true, wrap: 'truncate-end' }, truncateColumns(`${title} · rows ${lines.length === 0 ? 0 : visibleScroll + 1}-${Math.min(lines.length, visibleScroll + viewport.bodyRows)}/${lines.length}`, viewport.contentColumns)),
+    createElement(Text, { color: inkColor(getPalette().brand), bold: true, wrap: 'truncate-end' }, truncateColumns(`${view.title} · ${view.files.length === 0 ? 'no files' : `${fileIndex + 1}/${view.files.length} ${file?.path ?? ''}`} · rows ${lines.length === 0 ? 0 : visibleScroll + 1}-${Math.min(lines.length, visibleScroll + viewport.bodyRows)}/${lines.length}`, viewport.contentColumns)),
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
     createElement(StyledRows, { lines: lines.slice(visibleScroll, visibleScroll + viewport.bodyRows) }),
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
@@ -1643,10 +1662,11 @@ function providerStateLabel(row: ProviderTargetView): string {
 }
 
 /** The provider-management stage reached from /model with `a`. */
-function ProviderPanel({ directory, error, onCredential, onUnset, onRemove, onRetry, onBack }: {
+function ProviderPanel({ directory, error, onCredential, onConfigure, onUnset, onRemove, onRetry, onBack }: {
   directory: ProviderSettingsDirectory | undefined
   error: string | undefined
   onCredential(target: ProviderTargetView): void
+  onConfigure(target: ProviderTargetView): void
   onUnset(target: ProviderTargetView): void
   onRemove(target: ProviderTargetView): void
   onRetry(): void
@@ -1699,6 +1719,11 @@ function ProviderPanel({ directory, error, onCredential, onUnset, onRemove, onRe
     }
     const target = rows[cursor]
     if (target === undefined) return
+    if (key.tab) {
+      if (target.settingsNs.length === 0) setActionError('this provider is not managed by Harness settings')
+      else onConfigure(target)
+      return
+    }
     if (input === 'd') {
       const facts = target.credential
       if (facts?.kind !== 'facts' || !facts.configured) {
@@ -1775,7 +1800,106 @@ function ProviderPanel({ directory, error, onCredential, onUnset, onRemove, onRe
       )
     }),
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
-    createElement(Text, { color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns('↑↓ move · enter add/update key · d remove key · x remove custom provider · r retry · esc back', viewport.contentColumns)),
+    createElement(Text, { color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns('↑↓ move · tab configure · enter add/update key · d remove key · x remove custom provider · r retry · esc back', viewport.contentColumns)),
+  )
+}
+
+/** Provider configuration editor: only explicit models are written to settings. */
+function ProviderConfigurationPanel({ target, catalog, save, done, back }: {
+  target: ProviderTargetView
+  catalog: readonly ModelRow[]
+  save(target: ProviderTargetView, configuration: ProviderConfiguration): Promise<void>
+  done(): void
+  back(): void
+}): ReactElement {
+  const stdout = useStdout().stdout
+  const viewport = panelViewport(stdout?.columns ?? 80, stdout?.rows ?? 30)
+  const [baseURL, setBaseURL] = useState(target.configuration.baseURL ?? '')
+  const [models, setModels] = useState<readonly ProviderConfiguration['models'][number][]>(target.configuration.models)
+  const [cursor, setCursor] = useState(0)
+  const [focus, setFocus] = useState<'url' | 'models' | 'context' | 'output'>('url')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | undefined>(undefined)
+  const choices = useMemo(() => {
+    const known = catalog.filter(row => row.provider === target.provider)
+    const ids = new Set(known.map(row => row.model))
+    return [
+      ...known.map(row => ({ id: row.model, name: row.modelName })),
+      ...models.filter(model => !ids.has(model.id)).map(model => ({ id: model.id, name: model.name ?? model.id })),
+    ]
+  }, [catalog, models, target.provider])
+  const selected = choices[cursor]
+  const selectedModel = selected === undefined ? undefined : models.find(model => model.id === selected.id)
+  const updateSelected = (change: Partial<ProviderConfiguration['models'][number]>): void => {
+    if (selected === undefined) return
+    setModels(current => current.some(model => model.id === selected.id)
+      ? current.map(model => model.id === selected.id ? { ...model, ...change } : model)
+      : [...current, { id: selected.id, name: selected.name, ...change }])
+  }
+  const submit = (): void => {
+    if (busy) return
+    setBusy(true)
+    setError(undefined)
+    void Promise.resolve().then(() => save(target, { ...(baseURL.trim() === '' ? {} : { baseURL }), models })).then(done, (reason: unknown) => {
+      setBusy(false)
+      setError(singleLineText(reason instanceof Error ? reason.message : String(reason)))
+    })
+  }
+  useStableInput((input, key) => {
+    if (busy) return
+    if (key.escape || input === 'q') { back(); return }
+    if (key.tab) {
+      setFocus(current => current === 'url' ? 'models' : current === 'models' ? 'context' : current === 'context' ? 'output' : 'url')
+      return
+    }
+    if (key.return) { submit(); return }
+    if (focus === 'url') {
+      if (key.backspace || key.delete) setBaseURL(current => current.slice(0, -1))
+      else if (!key.ctrl && !key.meta && input !== '') setBaseURL(current => current + input)
+      return
+    }
+    if (key.upArrow && choices.length > 0) { setCursor(current => Math.max(0, current - 1)); return }
+    if (key.downArrow && choices.length > 0) { setCursor(current => Math.min(choices.length - 1, current + 1)); return }
+    if (focus === 'models' && input === ' ') {
+      if (selectedModel === undefined) updateSelected({})
+      else setModels(current => current.filter(model => model.id !== selectedModel.id))
+      return
+    }
+    if ((focus === 'context' || focus === 'output') && selectedModel !== undefined) {
+      const field = focus === 'context' ? 'contextWindow' : 'maxTokens'
+      const current = String(selectedModel[field] ?? '')
+      if (key.backspace || key.delete) {
+        const next = current.slice(0, -1)
+        updateSelected({ [field]: next === '' ? undefined : Number(next) })
+      } else if (/^[0-9]$/u.test(input)) {
+        const next = `${current}${input}`
+        updateSelected({ [field]: Number(next) })
+      }
+    }
+  }, true)
+  if (viewport.maxHeight === 0) return createElement(Box, { display: 'none' })
+  const stateRows = error === undefined ? [] : [createElement(Text, { key: 'error', color: inkColor(getPalette().error), wrap: 'truncate-end' }, truncateColumns(`  ${error}`, viewport.contentColumns))]
+  const rowBudget = Math.max(0, viewport.bodyRows - stateRows.length - 1)
+  const first = selectionWindow(cursor, choices.length, rowBudget)
+  const visible = choices.slice(first, first + rowBudget)
+  return createElement(
+    Box,
+    { flexDirection: 'column', width: viewport.outerColumns, paddingX: 1, borderStyle: 'round', borderColor: inkColor(getPalette().brand) },
+    createElement(Text, { color: inkColor(getPalette().brand), bold: true, wrap: 'truncate-end' }, truncateColumns(`/model - ${target.displayName} configuration`, viewport.contentColumns)),
+    createElement(PanelGap, { visible: viewport.gapRows > 0 }),
+    createElement(Text, { color: focus === 'url' ? inkColor(getPalette().brandBright) : inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns(`  ${focus === 'url' ? '>' : ' '} endpoint: ${baseURL === '' ? '(adapter default)' : baseURL}`, viewport.contentColumns)),
+    ...stateRows,
+    ...visible.map((choice, index) => {
+      const absolute = first + index
+      const model = models.find(item => item.id === choice.id)
+      const selectedMark = model === undefined ? '[ ]' : '[x]'
+      const context = model?.contextWindow === undefined ? '-' : String(model.contextWindow)
+      const output = model?.maxTokens === undefined ? '-' : String(model.maxTokens)
+      const active = absolute === cursor && focus !== 'url'
+      return createElement(Text, { key: choice.id, color: active ? inkColor(getPalette().brandBright) : model === undefined ? inkColor(getPalette().dim) : inkColor(getPalette().success), wrap: 'truncate-end' }, truncateColumns(`${active ? '>' : ' '} ${selectedMark} ${choice.name}  in:${context} out:${output}`, viewport.contentColumns))
+    }),
+    createElement(PanelGap, { visible: viewport.gapRows > 0 }),
+    createElement(Text, { color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns('tab endpoint/models/input/output - space select - arrows model - digits set window - enter save - esc back', viewport.contentColumns)),
   )
 }
 
@@ -1951,7 +2075,7 @@ function HelpPanel({ descriptors, skills, commandError, skillError, onClose }: {
   const content: ReactElement[] = [
     createElement(Text, { key: 'keys-title', bold: true, wrap: 'truncate-end' }, ' keys'),
     createElement(Text, { key: 'key-submit', dimColor: true, wrap: 'truncate-end' }, '  enter submit · alt+enter / ctrl+j newline · up/down history · tab complete'),
-    createElement(Text, { key: 'key-mentions', dimColor: true, wrap: 'truncate-end' }, '  tab also completes bare workspace paths · @ mentions files and sessions'),
+    createElement(Text, { key: 'key-mentions', dimColor: true, wrap: 'truncate-end' }, '  @ mentions workspace files and sessions'),
     createElement(Text, { key: 'key-inspector', dimColor: true, wrap: 'truncate-end' }, '  ctrl+o history details · ctrl+r thinking · shift+tab permission preset'),
     createElement(Text, { key: 'key-cancel', dimColor: true, wrap: 'truncate-end' }, '  esc interrupt the running turn · ctrl+c cancel / clear / quit · ctrl+d exit'),
     createElement(Text, { key: 'key-queue', dimColor: true, wrap: 'truncate-end' }, '  delete on the empty composer cancels the newest queued message'),
@@ -1987,10 +2111,6 @@ function HelpPanel({ descriptors, skills, commandError, skillError, onClose }: {
     createElement(Box, { key: 'local-copy' }, row('/copy', 'copy the latest assistant response')),
     createElement(Box, { key: 'local-diff' }, row('/diff', 'inspect Git changes (/diff [--staged|ref])')),
     createElement(Box, { key: 'local-review' }, row('/review', 'review Git changes under read-only permissions')),
-    createElement(Box, { key: 'local-settings' }, row('/settings', 'inspect redacted Harness settings')),
-    createElement(Box, { key: 'local-mcp' }, row('/mcp', 'inspect MCP composition')),
-    createElement(Box, { key: 'local-hooks' }, row('/hooks', 'inspect hook composition')),
-    createElement(Box, { key: 'local-jobs' }, row('/jobs', 'inspect background jobs')),
     createElement(Box, { key: 'local-quit' }, row('/quit', 'exit')),
     ...descriptors.map(descriptor => createElement(
       Text,
@@ -2291,7 +2411,7 @@ interface CompletionCandidate {
   /** Human-readable description shown beside the label. */
   description: string
   /** Candidate origin; skills land the same literal text but route through the prompt. */
-  origin: 'command' | 'skill' | 'mention' | 'path'
+  origin: 'command' | 'skill' | 'mention'
 }
 
 /**
@@ -2335,10 +2455,6 @@ export function completionCandidates(
     { label: '/copy', description: 'copy the latest assistant response', origin: 'command' },
     { label: '/diff', description: 'inspect Git changes', origin: 'command' },
     { label: '/review', description: 'review changes read-only', origin: 'command' },
-    { label: '/settings', description: 'inspect redacted settings', origin: 'command' },
-    { label: '/mcp', description: 'inspect MCP composition', origin: 'command' },
-    { label: '/hooks', description: 'inspect hook composition', origin: 'command' },
-    { label: '/jobs', description: 'inspect background jobs', origin: 'command' },
     { label: '/quit', description: 'exit', origin: 'command' },
   ]
   // Local commands shadow registry names (e.g. the TUI-local /permission works
@@ -2397,7 +2513,11 @@ function CompletionMenu({ active, mention, index, rows }: {
   const terminalRows = stdout?.rows ?? 30
   if (!active) return undefined
   const contentColumns = Math.max(1, columns - 4)
-  const nameWidth = Math.min(18, Math.max(1, contentColumns - 2), Math.max(0, ...rows.map(row => visibleColumns(row.label))) + 2)
+  // File paths are the decision-making data in an @ menu. Give mentions the
+  // full available line and sacrifice their repetitive kind label first.
+  const nameWidth = mention
+    ? Math.max(1, contentColumns - 2)
+    : Math.min(18, Math.max(1, contentColumns - 2), Math.max(0, ...rows.map(row => visibleColumns(row.label))) + 2)
   const descBudget = Math.max(0, contentColumns - nameWidth - 2)
   const showFooter = terminalRows >= 12
   const spacious = terminalRows >= 14
@@ -2438,7 +2558,7 @@ function CompletionMenu({ active, mention, index, rows }: {
  * While a modal (approval / question / model panel) owns the keys, the
  * box passes every key through untouched.
  */
-function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openEffort, openHelp, openMode, openPermission, openResume, openPlugin, openStatusline, openTheme, openHistory, openAgents, openSubagent, openTodos, openDelete, openDiff, openOperations, reviewChanges, deleteConfirm, confirmDelete, cancelDelete, createSession, forkSession, cancelSessionSwitch, notify, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, cyclePermission, exportTranscript, renameTitle, copyLastResponse, editDraft, recallSpace, recordLocal, recordHistory, queued, cancelQueued, historyFill, historyConsumed, waveTier, waveStyle }: {
+function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openEffort, openHelp, openMode, openPermission, openResume, openPlugin, openStatusline, openTheme, openHistory, openAgents, openSubagent, openTodos, openDelete, openDiff, reviewChanges, deleteConfirm, confirmDelete, cancelDelete, createSession, forkSession, cancelSessionSwitch, notify, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, cyclePermission, exportTranscript, renameTitle, copyLastResponse, recallSpace, recordLocal, recordHistory, queued, cancelQueued, historyFill, historyConsumed, waveTier, waveStyle }: {
   active: boolean
   frozen: boolean
   busy: boolean
@@ -2467,7 +2587,6 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   /** Open the /resume picker in delete mode, optionally pre-armed on one id. */
   openDelete(id?: string): void
   openDiff(argument: string): void
-  openOperations(kind: 'settings' | 'mcp' | 'hooks' | 'jobs'): void
   reviewChanges(argument: string): void
   /** The row id awaiting y/n in this box, when a deletion is pending. */
   deleteConfirm?: string
@@ -2490,7 +2609,6 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   exportTranscript(argument: string): Promise<void>
   renameTitle(argument: string): string
   copyLastResponse(): Promise<string>
-  editDraft(text: string): Promise<string>
   /** Newest-first recall space (persistent + in-session, deduped). */
   recallSpace: readonly string[]
   /** Record one in-session submission (deduped, local only). */
@@ -2515,9 +2633,7 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   waveStyle: DeepseekWaveStyle | null
 }): ReactElement {
   const columns = useStdout().stdout?.columns ?? 80
-  const { setRawMode } = useStdin()
   const [value, setValue] = useState('')
-  const [editing, setEditing] = useState(false)
   const [cursor, setCursor] = useState(0)
   // Codex shell-style recall: the navigation cursor, the saved draft restored
   // on Down past the newest entry, and the boundary-gate anchor.
@@ -2563,35 +2679,6 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   const mentionActive = mentionToken !== undefined
   const [mentionRows, setMentionRows] = useState<readonly MentionCandidate[]>([])
 
-  // Bare path token: the last whitespace-delimited run on the cursor's line
-  // when it already looks like a path (Claude-Code bare Tab completion). A
-  // LEADING '/' is the command namespace, never a path — without this guard
-  // typing the bare '/' hijacked the menu into the workspace file scan and
-  // the slash-command candidates never appeared.
-  const bareTokenMatch = /([^\s]+)$/u.exec(lastLine)
-  const bareToken = bareTokenMatch === null ? '' : bareTokenMatch[1] ?? ''
-  const pathActive = !mentionActive
-    && !bareToken.startsWith('/')
-    && (bareToken.includes('/') || bareToken === '.' || bareToken === '..')
-  const pathTokenStart = beforeCursor.length - bareToken.length
-  const [pathRows, setPathRows] = useState<readonly MentionCandidate[]>([])
-
-  useEffect(() => {
-    if (!active || !pathActive) {
-      setPathRows([])
-      return
-    }
-    const controller = new AbortController()
-    setPathRows([])
-    loadMentions(bareToken, controller.signal).then(
-      rows => setPathRows(rows.filter(row => row.kind !== 'session')),
-      () => {},
-    )
-    return () => {
-      controller.abort()
-    }
-  }, [active, pathActive, bareToken])
-
   useEffect(() => {
     if (!active || !mentionActive) {
       setMentionRows([])
@@ -2611,7 +2698,7 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   // Codex routes keys to the topmost surface first. Completion therefore
   // remains available while a turn runs, and Esc dismisses it before the
   // same key is allowed to interrupt the turn.
-  const menuActive = (slashActive || mentionActive || pathActive) && dismissedMenuValue !== value
+  const menuActive = (slashActive || mentionActive) && dismissedMenuValue !== value
   const menuRows: readonly CompletionCandidate[] = mentionActive
     ? mentionRows.map(row => ({
       label: row.label.startsWith('@')
@@ -2620,13 +2707,7 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
       description: row.description,
       origin: 'mention',
     }))
-    : pathActive
-      ? pathRows.map(row => ({
-        label: row.label,
-        description: row.description,
-        origin: 'path',
-      }))
-      : candidates
+    : candidates
 
   /** Accept the highlighted completion-menu candidate into the draft. */
   const acceptMenuCandidate = (): void => {
@@ -2641,15 +2722,6 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
         setValue(value.slice(0, mentionToken.start) + insertion + value.slice(cursor))
         setCursor(mentionToken.start + insertion.length)
       }
-    } else if (pathActive) {
-      const row = pathRows[completionIndex % Math.max(1, pathRows.length)]
-      if (row !== undefined) {
-        // Bare path completion replaces the typed token with the chosen
-        // workspace path (directories keep their trailing slash).
-        const insertion = row.kind === 'directory' ? `${row.label}/` : row.label
-        setValue(value.slice(0, pathTokenStart) + insertion + value.slice(cursor))
-        setCursor(pathTokenStart + insertion.length)
-      }
     } else {
       const candidate = candidates[completionIndex % candidates.length]
       if (candidate !== undefined) {
@@ -2663,7 +2735,7 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
 
   useInput((input, key) => {
     // Modal ownership: approval/question/model dialogs consume all keys.
-    if (!active || editing) return
+    if (!active) return
     // Deletion confirm owns the box: y proceeds, anything else cancels.
     // Typed in the INPUT BOX (codex delete-confirm): the keystroke is echoed
     // as the box's own prompt, not an invisible panel keypress.
@@ -2756,7 +2828,7 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
       // exactly, in which case Enter submits it (typing a full "/effort" and
       // pressing return must run the command, not re-accept its own text).
       if (menuActive) {
-        const exactSlash = !mentionActive && !pathActive && candidates.some(candidate => candidate.label === value)
+        const exactSlash = !mentionActive && candidates.some(candidate => candidate.label === value)
         if (!exactSlash) {
           acceptMenuCandidate()
           return
@@ -2821,10 +2893,6 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
       }
       if (text === '/review' || text.startsWith('/review ')) {
         reviewChanges(text.slice(7))
-        return
-      }
-      if (text === '/settings' || text === '/mcp' || text === '/hooks' || text === '/jobs') {
-        openOperations(text.slice(1) as 'settings' | 'mcp' | 'hooks' | 'jobs')
         return
       }
       if (text === '/model' || text.startsWith('/model ')) {
@@ -2962,22 +3030,6 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
     }
     if (key.rightArrow) {
       setCursor(Math.min(value.length, cursor + 1))
-      return
-    }
-    if (key.ctrl && input === 'g') {
-      setEditing(true)
-      setRawMode(false)
-      void editDraft(value).then((edited) => {
-        setValue(edited)
-        setCursor(edited.length)
-        setDismissedMenuValue(undefined)
-      }, (error: unknown) => {
-        notify(`editor failed: ${error instanceof Error ? error.message : String(error)}`, 'error')
-      }).finally(() => {
-        setRawMode(true)
-        setEditing(false)
-        refresh()
-      })
       return
     }
     if (key.ctrl && input === 'u') {
@@ -3385,7 +3437,7 @@ export function App(props: AppProps): ReactElement {
   /** Nested /model stages; only one owns terminal input at a time. */
   const [providerOpen, setProviderOpen] = useState(false)
   const [providerAction, setProviderAction] = useState<{
-    kind: 'credential' | 'unset' | 'remove'
+    kind: 'credential' | 'configure' | 'unset' | 'remove'
     target: ProviderTargetView
   } | undefined>(undefined)
   /** The model row whose effort levels the /model stage lists; undefined shows the model list. */
@@ -3492,7 +3544,7 @@ export function App(props: AppProps): ReactElement {
   const busy = view.busy
   const [showReasoning, setShowReasoning] = useState(false)
   const [verboseOpen, setVerboseOpen] = useState(false)
-  const [textPanel, setTextPanel] = useState<{ title: string; text: string } | undefined>(undefined)
+  const [diffView, setDiffView] = useState<GitDiffView | undefined>(undefined)
   const [helpOpen, setHelpOpen] = useState(false)
   const [modeOpen, setModeOpen] = useState(false)
   const [permissionOpen, setPermissionOpen] = useState(false)
@@ -3577,7 +3629,7 @@ export function App(props: AppProps): ReactElement {
   // panel keypress.
   const inputActive = deleteConfirmId !== undefined
     ? !approvalPending && !questionPending
-    : !modelOpen && !helpOpen && !modeOpen && !permissionOpen && !resumeOpen && !pluginOpen && !statuslineOpen && !themeOpen && !historyOpen && !agentsOpen && !subagentOpen && !todosOpen && !verboseOpen && textPanel === undefined && !approvalPending && !questionPending
+    : !modelOpen && !helpOpen && !modeOpen && !permissionOpen && !resumeOpen && !pluginOpen && !statuslineOpen && !themeOpen && !historyOpen && !agentsOpen && !subagentOpen && !todosOpen && !verboseOpen && diffView === undefined && !approvalPending && !questionPending
 
   // Human questions outrank local inspectors. Close the lower modal instead
   // of leaving an approval/question visible but keyboard-locked behind it.
@@ -3600,7 +3652,7 @@ export function App(props: AppProps): ReactElement {
     setTodosOpen(false)
     setDeleteConfirmId(undefined)
     setVerboseOpen(false)
-    setTextPanel(undefined)
+    setDiffView(undefined)
   }, [approvalPending, questionPending])
 
   // Append-only transcript: everything up to the first still-mutable entry
@@ -3710,9 +3762,9 @@ export function App(props: AppProps): ReactElement {
           ? Math.max(1, Math.floor(streamRows / 3))
           : 1
   const answerRows = view.streaming === '' ? 0 : Math.max(1, streamRows - reasoningRows)
-  const transcriptVisible = !modelOpen && !helpOpen && !modeOpen && !permissionOpen && !resumeOpen && !pluginOpen && !statuslineOpen && !themeOpen && !historyOpen && !agentsOpen && !subagentOpen && !todosOpen && !verboseOpen && textPanel === undefined && !approvalPending && !questionPending
+  const transcriptVisible = !modelOpen && !helpOpen && !modeOpen && !permissionOpen && !resumeOpen && !pluginOpen && !statuslineOpen && !themeOpen && !historyOpen && !agentsOpen && !subagentOpen && !todosOpen && !verboseOpen && diffView === undefined && !approvalPending && !questionPending
   const inspectorVisible = verboseOpen && !approvalPending && !questionPending
-  const modalVisible = modelOpen || helpOpen || modeOpen || permissionOpen || resumeOpen || pluginOpen || statuslineOpen || themeOpen || historyOpen || agentsOpen || subagentOpen || todosOpen || inspectorVisible || textPanel !== undefined || approvalPending || questionPending
+  const modalVisible = modelOpen || helpOpen || modeOpen || permissionOpen || resumeOpen || pluginOpen || statuslineOpen || themeOpen || historyOpen || agentsOpen || subagentOpen || todosOpen || inspectorVisible || diffView !== undefined || approvalPending || questionPending
   const closeInspector = useCallback((): void => {
     setVerboseOpen(false)
   }, [])
@@ -3766,7 +3818,21 @@ export function App(props: AppProps): ReactElement {
   }
   let modelSurface: ReactElement | undefined
   if (modelOpen && !approvalPending && !questionPending) {
-    if (providerAction?.kind === 'credential' && props.saveModelProviderCredential !== undefined) {
+    if (providerAction?.kind === 'configure' && props.saveModelProviderConfiguration !== undefined) {
+      modelSurface = createElement(ProviderConfigurationPanel, {
+        target: providerAction.target,
+        catalog: directory?.rows ?? [],
+        save: props.saveModelProviderConfiguration,
+        done: () => {
+          const target = providerAction.target
+          setProviderAction(undefined)
+          setProviderOpen(true)
+          reloadModelSurfaces()
+          notify(`provider configuration saved: ${target.displayName}`)
+        },
+        back: () => setProviderAction(undefined),
+      })
+    } else if (providerAction?.kind === 'credential' && props.saveModelProviderCredential !== undefined) {
       modelSurface = createElement(ProviderCredentialPanel, {
         target: providerAction.target,
         save: props.saveModelProviderCredential,
@@ -3817,6 +3883,13 @@ export function App(props: AppProps): ReactElement {
             return
           }
           setProviderAction({ kind: 'credential', target })
+        },
+        onConfigure: (target: ProviderTargetView) => {
+          if (props.saveModelProviderConfiguration === undefined) {
+            notify('provider configuration is unavailable in this profile', 'warning')
+            return
+          }
+          setProviderAction({ kind: 'configure', target })
         },
         onUnset: (target: ProviderTargetView) => {
           if (props.unsetModelProviderCredential === undefined) {
@@ -3929,11 +4002,10 @@ export function App(props: AppProps): ReactElement {
         },
       })
       : undefined,
-    textPanel !== undefined && !approvalPending && !questionPending
-      ? createElement(TextPanel, {
-        title: textPanel.title,
-        text: textPanel.text,
-        onClose: () => setTextPanel(undefined),
+    diffView !== undefined && !approvalPending && !questionPending
+      ? createElement(DiffPanel, {
+        view: diffView,
+        onClose: () => setDiffView(undefined),
       })
       : undefined,
     verboseOpen && !approvalPending && !questionPending
@@ -4146,13 +4218,8 @@ export function App(props: AppProps): ReactElement {
           setResumeOpen(true)
         },
         openDiff: (argument: string) => {
-          void props.loadGitDiff(argument).then(setTextPanel, (error: unknown) => {
+          void props.loadGitDiff(argument).then(setDiffView, (error: unknown) => {
             notify(`diff failed: ${error instanceof Error ? error.message : String(error)}`, 'error')
-          })
-        },
-        openOperations: (kind: 'settings' | 'mcp' | 'hooks' | 'jobs') => {
-          void props.loadOperationalView(kind).then(setTextPanel, (error: unknown) => {
-            notify(`${kind} unavailable: ${error instanceof Error ? error.message : String(error)}`, 'error')
           })
         },
         reviewChanges: props.reviewChanges,
@@ -4186,7 +4253,6 @@ export function App(props: AppProps): ReactElement {
         exportTranscript: props.exportTranscript,
         renameTitle: props.renameTitle,
         copyLastResponse: props.copyLastResponse,
-        editDraft: props.editDraft,
         recallSpace,
         recordLocal,
         recordHistory: props.recordHistory,

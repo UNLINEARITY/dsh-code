@@ -129,6 +129,28 @@ function profileRefOf(profile: unknown): string | undefined {
   return typeof ref === 'string' && ref.length > 0 ? ref : undefined
 }
 
+/** Extract only fields the terminal can round-trip without touching provider-specific extras. */
+function configurationOf(profile: unknown): ProviderConfiguration {
+  if (typeof profile !== 'object' || profile === null) return { models: [] }
+  const record = profile as Record<string, unknown>
+  const source = Array.isArray(record.models) ? record.models : []
+  const models = source.flatMap((value): ProviderModelSettings[] => {
+    if (typeof value !== 'object' || value === null) return []
+    const entry = value as Record<string, unknown>
+    if (typeof entry.id !== 'string' || entry.id.trim() === '') return []
+    return [{
+      id: entry.id,
+      ...(typeof entry.name === 'string' && entry.name.trim() !== '' ? { name: entry.name } : {}),
+      ...(typeof entry.contextWindow === 'number' && Number.isFinite(entry.contextWindow) ? { contextWindow: entry.contextWindow } : {}),
+      ...(typeof entry.maxTokens === 'number' && Number.isFinite(entry.maxTokens) ? { maxTokens: entry.maxTokens } : {}),
+    }]
+  })
+  return {
+    ...(typeof record.baseURL === 'string' && record.baseURL.trim() !== '' ? { baseURL: record.baseURL } : {}),
+    models,
+  }
+}
+
 /* ------------------------------------------------------------------ *
  * Exported contracts.
  * ------------------------------------------------------------------ */
@@ -166,6 +188,20 @@ export type ProviderCredentialView =
   | ({ readonly kind: 'facts' } & ProviderCredentialFacts)
   | { readonly kind: 'error'; readonly message: string }
 
+/** One explicit model enabled for a provider profile. */
+export interface ProviderModelSettings {
+  readonly id: string
+  readonly name?: string
+  readonly contextWindow?: number
+  readonly maxTokens?: number
+}
+
+/** The small, portable subset of a provider profile the terminal edits. */
+export interface ProviderConfiguration {
+  readonly baseURL?: string
+  readonly models: readonly ProviderModelSettings[]
+}
+
 /**
  * One provider row in the TUI provider-management panel: the configurable
  * directory entry joined with its settings profile and credential facts.
@@ -195,6 +231,8 @@ export interface ProviderTargetView {
   readonly suggestedRef: string
   /** Credential facts, a bounded describe error, or undefined when there is no ref to describe. */
   readonly credential: ProviderCredentialView | undefined
+  /** Endpoint and explicit model overrides visible to the provider editor. */
+  readonly configuration: ProviderConfiguration
   /** The owning adapter reports this route as hand-declared (absent when it draws no distinction). */
   readonly declared?: boolean
 }
@@ -339,6 +377,7 @@ export async function loadProviderSettings(ctx: Context): Promise<ProviderSettin
       settingsRevision: namespace?.revision ?? 0,
       configured,
       removable,
+      configuration: configurationOf(profile),
       ...credentialRef === undefined ? {} : { credentialRef },
       suggestedRef: deriveCredentialRef(base.provider),
       ...base.declared === undefined ? {} : { declared: base.declared },
@@ -438,6 +477,61 @@ export async function saveProviderCredential(ctx: Context, target: ProviderTarge
     await credentials.set(ref, checked.value)
   } catch (error) {
     throw new ProviderSettingsError(credentialWriteMessage(error, checked.value))
+  }
+}
+
+/** Save the endpoint and an explicit model allow-list without rebuilding the profile. */
+export async function saveProviderConfiguration(
+  ctx: Context,
+  target: ProviderTargetView,
+  configuration: ProviderConfiguration,
+): Promise<void> {
+  if (target.settingsNs.length === 0) {
+    throw new ProviderSettingsError(`provider "${target.provider}" has no managed settings namespace; configure it in settings.yaml`)
+  }
+  const settings = ctx.get('settings') as SettingsFace | undefined
+  if (settings === undefined || settings.writable !== true) {
+    throw new ProviderSettingsError('settings are read-only; provider configuration cannot be changed here')
+  }
+  const baseURL = configuration.baseURL?.trim()
+  if (baseURL !== undefined && baseURL !== '') {
+    try {
+      const parsed = new URL(baseURL)
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') throw new Error('unsupported protocol')
+    } catch {
+      throw new ProviderSettingsError('base URL must be an absolute http or https URL')
+    }
+  }
+  const seen = new Set<string>()
+  const models = configuration.models.map((model) => {
+    const id = model.id.trim()
+    if (id === '' || seen.has(id)) throw new ProviderSettingsError('each selected model must have a unique non-empty id')
+    seen.add(id)
+    for (const [label, value] of [['context window', model.contextWindow], ['output window', model.maxTokens]] as const) {
+      if (value !== undefined && (!Number.isSafeInteger(value) || value <= 0)) {
+        throw new ProviderSettingsError(`${label} must be a positive integer`)
+      }
+    }
+    return {
+      id,
+      ...(model.name === undefined || model.name.trim() === '' ? {} : { name: model.name.trim() }),
+      ...(model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow }),
+      ...(model.maxTokens === undefined ? {} : { maxTokens: model.maxTokens }),
+    }
+  })
+  const root = target.settingsPath
+  const ops: SettingsPathOpFace[] = [
+    baseURL === undefined || baseURL === ''
+      ? { op: 'unset', path: [...root, 'baseURL'] }
+      : { op: 'set', path: [...root, 'baseURL'], value: baseURL },
+    // An explicit empty list is deliberate: it prevents a provider's shipped
+    // catalog from silently becoming the active selection.
+    { op: 'set', path: [...root, 'models'], value: models },
+  ]
+  try {
+    await settings.mutate(target.settingsNs, ops, target.settingsRevision)
+  } catch (error) {
+    throw new ProviderSettingsError(singleLine(messageOf(error)))
   }
 }
 

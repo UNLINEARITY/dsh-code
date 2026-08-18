@@ -1,9 +1,6 @@
 /** Host editor and clipboard adapters used by the terminal surface. */
 
 import { spawn } from 'node:child_process'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import type { TranscriptView } from './render/projection.ts'
 
 function waitForProcess(command: string, args: readonly string[], input?: string): Promise<void> {
@@ -23,31 +20,18 @@ function waitForProcess(command: string, args: readonly string[], input?: string
   })
 }
 
-/** Open a temporary Markdown draft in the configured blocking editor. */
-export async function editTextInExternalEditor(initial: string): Promise<string> {
-  const directory = await mkdtemp(join(tmpdir(), 'dsh-editor-'))
-  const path = join(directory, 'prompt.md')
-  try {
-    await writeFile(path, initial, 'utf8')
-    const editor = process.env.VISUAL?.trim() || process.env.EDITOR?.trim()
-    if (editor === undefined || editor === '') {
-      await waitForProcess(process.platform === 'win32' ? 'notepad.exe' : 'vi', [path])
-    } else {
-      const quotedPath = `"${path.replaceAll('"', '\\"')}"`
-      await waitForProcess(process.platform === 'win32' ? 'cmd.exe' : '/bin/sh', process.platform === 'win32'
-        ? ['/d', '/s', '/c', `${editor} ${quotedPath}`]
-        : ['-c', `${editor} ${quotedPath}`])
-    }
-    return (await readFile(path, 'utf8')).replace(/\r?\n$/u, '')
-  } finally {
-    await rm(directory, { recursive: true, force: true })
-  }
-}
-
 /** Copy UTF-8 text through the platform clipboard command. */
 export async function copyText(text: string): Promise<void> {
   if (process.platform === 'win32') {
-    await waitForProcess('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', '$input | Set-Clipboard'], text)
+    // Windows PowerShell 5 reads redirected stdin using the active console
+    // code page by default. Node writes UTF-8, so CJK copied through `$input`
+    // became mojibake. Set the pipe encoding before reading it.
+    await waitForProcess('powershell.exe', [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      '[Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false); Set-Clipboard -Value ([Console]::In.ReadToEnd())',
+    ], text)
     return
   }
   if (process.platform === 'darwin') {

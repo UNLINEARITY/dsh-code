@@ -10,6 +10,7 @@ import {
   deriveCredentialRef,
   loadProviderSettings,
   removeProviderSettings,
+  saveProviderConfiguration,
   saveProviderCredential,
   subscribeProviderSettings,
   unsetProviderCredential,
@@ -253,6 +254,35 @@ describe('loadProviderSettings', () => {
   it('returns an empty directory when the llm service is unavailable', async () => {
     const directory = await loadProviderSettings(fakeCtx({}))
     expect(directory).toEqual({ rows: [], writable: false, failures: [] })
+  })
+})
+
+describe('saveProviderConfiguration', () => {
+  const target: ProviderTargetView = {
+    provider: 'pi-ai', displayName: 'PI AI', active: true,
+    settingsNs: 'llm-pi-ai', settingsPath: ['providers', 'pi-ai'], settingsRevision: 7,
+    configured: true, removable: false, suggestedRef: 'PI_AI_API_KEY', credential: undefined,
+    configuration: { models: [] },
+  }
+
+  it('writes only endpoint and an explicit model allow-list with capacities', async () => {
+    const settings = { writable: true, mutate: vi.fn(async () => undefined) }
+    await saveProviderConfiguration(fakeCtx({ settings }), target, {
+      baseURL: 'https://gateway.example/v1',
+      models: [{ id: 'model-a', name: 'Model A', contextWindow: 128_000, maxTokens: 8_192 }],
+    })
+    expect(settings.mutate).toHaveBeenCalledWith('llm-pi-ai', [
+      { op: 'set', path: ['providers', 'pi-ai', 'baseURL'], value: 'https://gateway.example/v1' },
+      { op: 'set', path: ['providers', 'pi-ai', 'models'], value: [{ id: 'model-a', name: 'Model A', contextWindow: 128_000, maxTokens: 8_192 }] },
+    ], 7)
+  })
+
+  it('rejects invalid endpoints and never invokes settings mutation', async () => {
+    const settings = { writable: true, mutate: vi.fn(async () => undefined) }
+    await expect(saveProviderConfiguration(fakeCtx({ settings }), target, {
+      baseURL: 'file:///not-a-provider', models: [],
+    })).rejects.toBeInstanceOf(ProviderSettingsError)
+    expect(settings.mutate).not.toHaveBeenCalled()
   })
 })
 
