@@ -24,6 +24,27 @@ describe('renderMarkdown', () => {
     expect(text(renderMarkdown('first\nsecond', 80))).toEqual(['first second'])
   })
 
+  it('keeps prose as one logical row when physical wrapping is delegated', () => {
+    const paragraph = '科学视角：大脑释放的多巴胺、催产素，一段演化挑选出来的连接机制。'
+    expect(text(renderMarkdown(paragraph, 20, { physicalWrap: false }))).toEqual([paragraph])
+  })
+
+  it('keeps a logical list marker attached to its item text', () => {
+    expect(text(renderMarkdown('- 希腊人给爱分了四种词', 10, { physicalWrap: false })))
+      .toEqual(['• 希腊人给爱分了四种词'])
+  })
+
+  it('reflows CJK prose within the width without orphaning punctuation', () => {
+    const lines = renderMarkdown(
+      '科学视角：大脑释放多巴胺、催产素。哲学视角：柏拉图说爱情是灵魂对美的回忆。成长视角：爱情像一面镜子。',
+      20,
+    )
+    for (const line of lines) expect(visibleColumns(text([line])[0]!)).toBeLessThanOrEqual(20)
+    expect(text(lines).some(line => /^[，。！？：；、）》」』】]/u.test(line))).toBe(false)
+    expect(text(lines).join('')).toContain('哲学视角：')
+    expect(text(lines).join('')).toContain('成长视角：')
+  })
+
   it('preserves one breathing row between paragraphs', () => {
     expect(text(renderMarkdown('first paragraph\n\n\nsecond paragraph', 80))).toEqual([
       'first paragraph',

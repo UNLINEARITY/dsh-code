@@ -114,6 +114,7 @@ describe('streaming token bursts', () => {
       // adapter delivers when it flushes its token buffer (dt 0-2ms). The
       // store must coalesce this into a single re-render; per-event
       // notification cascades past React's 50-nested-passive-update guard.
+      const beforeThinking = read()
       for (let index = 0; index < 120; index += 1) {
         store.apply({
           type: 'assistant/chunk', seq: 5 + index, time: 5 + (index % 3),
@@ -121,6 +122,8 @@ describe('streaming token bursts', () => {
         } as unknown as SessionEvent)
       }
       await wait()
+      // Starting the thinking tail must not trigger a source-backed screen clear.
+      expect(read().slice(beforeThinking.length)).not.toContain('\x1b[2J')
       // A second drain still renders clean (the guard counts consecutive
       // cascades, so the regression must hold across bursts too).
       for (let index = 0; index < 120; index += 1) {

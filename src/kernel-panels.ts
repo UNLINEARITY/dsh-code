@@ -10,7 +10,7 @@ import type { PluginRow } from './plugin-inventory.ts'
 import type { SessionDirectoryOptions, SessionRow } from './session-directory.ts'
 import { formatRelativeTime } from './session-directory.ts'
 import { panelViewport, revealRow } from './render/inspector.ts'
-import { textLines } from './render/lines.ts'
+import { markdownLines, textLines, type LineStyle, type StyledLine } from './render/lines.ts'
 import { DEFAULT_STATUSLINE_ITEMS, STATUS_ITEMS, type StatusItemId } from './render/status.ts'
 import { singleLineText, truncateColumns } from './render/text.ts'
 import { getPalette, inkColor } from './theme.ts'
@@ -303,6 +303,43 @@ export function ResumePanel({ currentCwd, load, readTranscript, select, requestD
   })
 }
 
+function documentStyleProps(style: LineStyle): { color?: string; bold?: boolean; italic?: boolean; strikethrough?: boolean } {
+  switch (style) {
+    case 'accent':
+      return { color: inkColor(getPalette().brandBright) }
+    case 'accentBold':
+      return { color: inkColor(getPalette().brandBright), bold: true }
+    case 'code':
+      return { color: inkColor(getPalette().code) }
+    case 'dim':
+      return { color: inkColor(getPalette().dim) }
+    case 'bold':
+      return { bold: true }
+    case 'italic':
+      return { italic: true }
+    case 'boldItalic':
+      return { bold: true, italic: true }
+    case 'strike':
+      return { color: inkColor(getPalette().dim), strikethrough: true }
+    default:
+      return {}
+  }
+}
+
+function DocumentRows({ lines }: { lines: readonly StyledLine[] }): ReactElement {
+  return createElement(
+    Box,
+    { flexDirection: 'column' },
+    ...lines.map((line, index) => createElement(
+      Text,
+      { key: index, wrap: 'truncate-end' },
+      line.segments.length === 0
+        ? ' '
+        : line.segments.map((segment, at) => createElement(Text, { key: at, ...documentStyleProps(segment.style) }, segment.text)),
+    )),
+  )
+}
+
 function DocumentPanel({ title, text, error, close }: {
   title: string
   text?: string
@@ -312,7 +349,7 @@ function DocumentPanel({ title, text, error, close }: {
   const stdout = useStdout().stdout
   const viewport = panelViewport(stdout?.columns ?? 80, stdout?.rows ?? 30)
   const [scroll, setScroll] = useState(0)
-  const lines = useMemo(() => text === undefined ? [] : textLines(text, viewport.contentColumns).map(line => line.segments.map(segment => segment.text).join('')), [text, viewport.contentColumns])
+  const lines = useMemo(() => text === undefined ? [] : markdownLines(text, viewport.contentColumns), [text, viewport.contentColumns])
   useInput((input, key) => {
     if (key.escape || input === 'q' || input === 't') return close()
     if (key.upArrow) return setScroll(value => Math.max(0, value - 1))
@@ -323,16 +360,16 @@ function DocumentPanel({ title, text, error, close }: {
     if (input === 'G') return setScroll(Math.max(0, lines.length - viewport.bodyRows))
   })
   if (viewport.compact) return createElement(Text, { wrap: 'truncate-end' }, truncateColumns('transcript · esc close', viewport.contentColumns))
-  const body = error !== undefined
-    ? [`error: ${singleLineText(error)}`]
+  const body: readonly StyledLine[] = error !== undefined
+    ? textLines(`error: ${singleLineText(error)}`, viewport.contentColumns, 'error')
     : text === undefined
-      ? ['loading transcript…']
+      ? textLines('loading transcript…', viewport.contentColumns, 'dim')
       : lines.slice(scroll, scroll + viewport.bodyRows)
   return createElement(
     Box,
     { width: viewport.outerColumns, borderStyle: 'round', borderColor: inkColor(getPalette().dim), flexDirection: 'column', paddingX: 1 },
     createElement(Text, { color: inkColor(getPalette().brandBright), wrap: 'truncate-end' }, truncateColumns(singleLineText(title), viewport.contentColumns)),
-    ...body.map((line, index) => createElement(Text, { key: `${scroll}-${index}`, wrap: 'truncate-end' }, truncateColumns(line, viewport.contentColumns))),
+    createElement(DocumentRows, { lines: body }),
     createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns(`lines ${lines.length === 0 ? 0 : scroll + 1}-${Math.min(lines.length, scroll + viewport.bodyRows)}/${lines.length} · ↑↓/pg/g/G · t/esc close`, viewport.contentColumns)),
   )
 }

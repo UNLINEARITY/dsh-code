@@ -40,34 +40,98 @@ export function visibleColumns(text: string): number {
   return columns
 }
 
-/** Walk a segment list, breaking it into lines that fit `width` columns. */
-function wrapSegments(segments: readonly MdSegment[], width: number): readonly MdSegment[][] {
-  const lines: MdSegment[][] = []
-  let current: MdSegment[] = []
-  let used = 0
+interface WrapUnit {
+  text: string
+  style: MdStyle
+}
+
+/** Punctuation that should not become the first visible glyph of a row. */
+function isClosingPunctuation(text: string): boolean {
+  return /^[,.;:!?%、。，．！？：；％）》」』】〕〉》”’]/u.test(text)
+}
+
+/**
+ * Split prose into soft-wrap units: ASCII words stay intact, while wide CJK
+ * glyphs become individual break opportunities. This keeps ordinary prose
+ * readable without allowing a Chinese paragraph to become one overlong word.
+ */
+function wrapUnits(segments: readonly MdSegment[]): readonly WrapUnit[] {
+  const units: WrapUnit[] = []
   for (const segment of segments) {
-    // Break the segment at spaces into words so long runs wrap mid-text.
-    const words = segment.text.split(/( )/u)
-    for (const word of words) {
-      if (word === '') continue
-      const columns = visibleColumns(word)
-      if (used + columns > width && used > 0) {
-        lines.push(current)
-        current = []
-        used = 0
+    let word = ''
+    const flushWord = (): void => {
+      if (word !== '') units.push({ text: word, style: segment.style })
+      word = ''
+    }
+    for (const char of segment.text) {
+      if (char === ' ') {
+        flushWord()
+        units.push({ text: char, style: segment.style })
+      } else if (visibleColumns(char) > 1) {
+        flushWord()
+        units.push({ text: char, style: segment.style })
+      } else {
+        word += char
       }
-      // A single word wider than the line still goes on its own line.
-      current.push({ text: word, style: segment.style })
+    }
+    flushWord()
+  }
+  return units
+}
+
+/** Walk styled units, keeping logical rows within the physical column budget. */
+function wrapSegments(segments: readonly MdSegment[], width: number): readonly (readonly MdSegment[])[] {
+  const limit = Math.max(1, Math.floor(width))
+  const lines: (readonly MdSegment[])[] = []
+  let current: WrapUnit[] = []
+  let used = 0
+  const flush = (): void => {
+    while (current.at(-1)?.text === ' ') {
+      used -= visibleColumns(current.pop()!.text)
+    }
+    if (current.length > 0) lines.push(merge(current))
+    current = []
+    used = 0
+  }
+  const appendAtom = (unit: WrapUnit): void => {
+    const columns = visibleColumns(unit.text)
+    if (used > 0 && used + columns > limit) flush()
+    current.push(unit)
+    used += columns
+  }
+  const append = (unit: WrapUnit): void => {
+    const columns = visibleColumns(unit.text)
+    if (used === 0 && columns > limit) {
+      for (const char of unit.text) appendAtom({ text: char, style: unit.style })
+      return
+    }
+    if (used + columns <= limit || current.length === 0) {
+      current.push(unit)
       used += columns
+      return
+    }
+    // Keep full-width punctuation attached to the preceding CJK glyph. If
+    // the row is full, move that glyph with the punctuation instead of
+    // producing a visually orphaned line beginning with '：' or '。'.
+    const previous = current.at(-1)
+    if (isClosingPunctuation(unit.text) && previous !== undefined && visibleColumns(previous.text) > 1) {
+      current.pop()
+      used -= visibleColumns(previous.text)
+      flush()
+      appendAtom(previous)
+      appendAtom(unit)
+      return
+    }
+    flush()
+    if (columns > limit) {
+      for (const char of unit.text) appendAtom({ text: char, style: unit.style })
+    } else {
+      appendAtom(unit)
     }
   }
-  if (current.length > 0) lines.push(current)
-  // Drop the trailing space a wrapped line picked up before the break.
-  return lines.map(line => {
-    const last = line[line.length - 1]
-    if (last !== undefined && last.text === ' ' && line.length > 1) return line.slice(0, -1)
-    return line
-  })
+  for (const unit of wrapUnits(segments)) append(unit)
+  flush()
+  return lines
 }
 
 /** Join adjacent same-style runs so the app renders fewer elements. */
@@ -448,10 +512,18 @@ function renderTableRecords(table: ParsedTable, width: number): readonly MdLine[
 }
 
 /** Render markdown text into styled lines of at most `width` columns. */
-export function renderMarkdown(text: string, width: number): readonly MdLine[] {
+export function renderMarkdown(
+  text: string,
+  width: number,
+  options: { physicalWrap?: boolean } = {},
+): readonly MdLine[] {
   const lines: MdLine[] = []
   let separatorPending = false
   const push = (segments: readonly MdSegment[]): void => {
+    if (options.physicalWrap === false) {
+      lines.push({ segments: merge(segments) })
+      return
+    }
     for (const wrapped of wrapSegments(segments, Math.max(10, width))) {
       lines.push({ segments: merge(wrapped) })
     }
@@ -520,12 +592,13 @@ export function renderMarkdown(text: string, width: number): readonly MdLine[] {
     }
     const ordered = ORDERED.exec(line)
     if (ordered !== null) {
-      push([seg(`  ${ordered[1] ?? ''}. `, 'accent'), ...parseInline(ordered[2] ?? '').map(run => seg(run.text, run.style))])
+      const prefix = options.physicalWrap === false ? `${ordered[1] ?? ''}. ` : `  ${ordered[1] ?? ''}. `
+      push([seg(prefix, 'accent'), ...parseInline(ordered[2] ?? '').map(run => seg(run.text, run.style))])
       continue
     }
     const unordered = UNORDERED.exec(line)
     if (unordered !== null) {
-      push([seg('  • ', 'accent'), ...parseInline(unordered[1] ?? '').map(run => seg(run.text, run.style))])
+      push([seg(options.physicalWrap === false ? '• ' : '  • ', 'accent'), ...parseInline(unordered[1] ?? '').map(run => seg(run.text, run.style))])
       continue
     }
 

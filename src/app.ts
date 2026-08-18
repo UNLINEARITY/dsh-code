@@ -17,6 +17,7 @@
 import {
   createElement, memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactElement,
 } from 'react'
+import chalk from 'chalk'
 import { Box, Static, Text, useInput, useStdout, type Key } from 'ink'
 import { assertNever } from '@deepseek-ai/dsh-llm'
 import type { CommandDescriptor } from '@deepseek-ai/dsh-commands'
@@ -86,6 +87,10 @@ const RESIZE_REFLOW_DELAY_MS = 75
 
 /** Reset region/style, clear the visible screen and scrollback, then home. */
 const RESIZE_REFLOW_CLEAR = '\x1b[r\x1b[0m\x1b[H\x1b[2J\x1b[3J\x1b[H'
+/** Ask terminals supporting DEC synchronized updates to hold the frame. */
+const SYNCHRONIZED_UPDATE_BEGIN = '\x1b[?2026h'
+/** Release the held frame after Ink has replayed the source-backed Static rows. */
+const SYNCHRONIZED_UPDATE_END = '\x1b[?2026l'
 import {
   formatTokens,
   layoutStatusBar,
@@ -391,6 +396,31 @@ function segmentProps(style: MdSegment['style']): {
   }
 }
 
+/** Paint one Markdown segment before joining it into a single wrapping Text node. */
+function paintMarkdownSegment(segment: MdSegment): string {
+  const text = segment.text
+  switch (segment.style) {
+    case 'accent':
+      return chalk.rgb(...getPalette().brandBright)(text)
+    case 'accentBold':
+      return chalk.rgb(...getPalette().brandBright).bold(text)
+    case 'code':
+      return chalk.rgb(...getPalette().code)(text)
+    case 'dim':
+      return chalk.rgb(...getPalette().dim)(text)
+    case 'bold':
+      return chalk.bold(text)
+    case 'italic':
+      return chalk.italic(text)
+    case 'boldItalic':
+      return chalk.bold.italic(text)
+    case 'strike':
+      return chalk.rgb(...getPalette().dim).strikethrough(text)
+    default:
+      return text
+  }
+}
+
 /** Ink props for the richer line model used by bounded scrolling panels. */
 function lineStyleProps(style: LineStyle): {
   color: string | undefined
@@ -446,19 +476,24 @@ function MarkdownBody({ text, indent = 0 }: { text: string; indent?: number }): 
   // The indent participates in the wrap budget so padded replies never
   // double-wrap inside the padded box.
   const lines = useMemo(
-    () => renderMarkdown(displayText(text), Math.max(20, columns - 2 - indent)),
+    // Keep prose as one logical Markdown row. Ink/terminal reflows it at the
+    // current viewport width; no width-derived newline is baked into history.
+    () => renderMarkdown(displayText(text), Math.max(20, columns - 2 - indent), { physicalWrap: false }),
     [text, columns, indent],
   )
   return createElement(
     Box,
     { flexDirection: 'column', paddingLeft: indent },
-    ...lines.map((line, index) => createElement(
-      Text,
-      { key: index },
-      line.segments.length === 0
+    ...lines.map((line, index) => {
+      const logicalText = line.segments.length === 0
         ? ' '
-        : line.segments.map((segment, at) => createElement(Text, { key: at, ...segmentProps(segment.style) }, segment.text)),
-    )),
+        : line.segments.map(paintMarkdownSegment).join('')
+      return createElement(
+        Text,
+        { key: index, wrap: 'wrap' },
+        logicalText,
+      )
+    }),
   )
 }
 
@@ -908,7 +943,30 @@ function StatusLine({ facts, stats, busy, columns, items }: {
   columns: number
   items: readonly string[]
 }): ReactElement {
-  const layout = layoutStatusBar(facts, stats, Math.max(8, columns - 2), { busy, items })
+  const layout = useMemo(() => layoutStatusBar(facts, stats, Math.max(8, columns - 2), {
+    busy,
+    items,
+    // Match the composer content budget: border + horizontal padding are
+    // already excluded, and layoutStatusBar shrinks this ceiling as needed.
+    contextWidth: Math.max(5, columns - 6),
+  }), [
+    facts.model,
+    facts.mode,
+    facts.cwd,
+    facts.branch,
+    facts.sessionId,
+    facts.title,
+    facts.sandbox,
+    facts.plan,
+    facts.permission,
+    facts.goal?.phase,
+    facts.goal?.rounds,
+    facts.goal?.max,
+    stats,
+    busy,
+    columns,
+    items,
+  ])
 
   const renderRow = (row: { left: readonly StatusGroup[]; right: readonly StatusSpan[]; hint: boolean }, key: string, indent = 0): ReactElement => {
     const leftParts: ReactElement[] = []
@@ -2614,11 +2672,15 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
       cancelQueued(queued[queued.length - 1]!.messageId)
       return
     }
-    if (key.return) {
-      // Multi-line editing: most terminals send the same byte for
-      // shift+enter as enter, so newline insertion rides alt/meta+enter
-      // and ctrl+j (the two distinguishable bindings); a bare return submits.
-      if (key.meta || (key.ctrl && input === 'j')) {
+    // Ink 5's parser strips the leading escape from some enhanced-key
+    // sequences instead of setting key.shift. Normalize those exact Shift+Enter
+    // forms before treating the input as ordinary draft text.
+    const shiftEnterSequence = input === '[13;2u' || input === '[27;2;13~'
+    if (shiftEnterSequence || key.return) {
+      // Keep plain Enter for submission. Enhanced terminals expose Shift+Enter
+      // as a distinct key; alt/meta+Enter and Ctrl+J remain compatibility
+      // bindings for terminals that cannot report the Shift modifier.
+      if (shiftEnterSequence || key.shift || key.meta || (key.ctrl && input === 'j')) {
         setValue(value.slice(0, cursor) + '\n' + value.slice(cursor))
         setCursor(cursor + 1)
         setDismissedMenuValue(undefined)
@@ -3473,6 +3535,9 @@ export function App(props: AppProps): ReactElement {
     rows: appStdout?.rows ?? 30,
   }))
   const terminalSizeRef = useRef(terminalSize)
+  // One pending synchronized frame covers a debounced resize or explicit
+  // source-backed replay. It is closed after the corresponding React commit.
+  const synchronizedReplayPending = useRef(false)
   useEffect(() => {
     if (appStdout === undefined) return
     let replayTimer: ReturnType<typeof setTimeout> | undefined
@@ -3493,7 +3558,8 @@ export function App(props: AppProps): ReactElement {
       setTerminalSize(next)
       if (replayTimer !== undefined) clearTimeout(replayTimer)
       replayTimer = setTimeout(() => {
-        appStdout.write(RESIZE_REFLOW_CLEAR)
+        synchronizedReplayPending.current = true
+        appStdout.write(SYNCHRONIZED_UPDATE_BEGIN + RESIZE_REFLOW_CLEAR)
         setRefreshEpoch(epoch => epoch + 1)
       }, RESIZE_REFLOW_DELAY_MS)
     }
@@ -3515,7 +3581,10 @@ export function App(props: AppProps): ReactElement {
     () => view.entries.slice(settled).flatMap(entry => transcriptEntryLines(entry, Math.max(1, terminalColumns - 2))),
     [view.entries, settled, terminalColumns],
   )
-  const liveBudget = streamingActive
+  // Reserve the same stream slice from the moment a turn becomes busy. This
+  // keeps the first thinking frame from changing the dynamic-tree geometry
+  // underneath Ink's cursor ledger and avoids a start-of-thinking flash.
+  const liveBudget = busy || streamingActive
     ? Math.max(1, Math.floor(dynamicRows / 3))
     : Math.max(0, dynamicRows - (deepDivingVisible ? 1 : 0))
   const visibleLiveLines = liveBudget === 0 ? [] : allLiveLines.slice(-liveBudget)
@@ -3548,24 +3617,22 @@ export function App(props: AppProps): ReactElement {
     // A bare `\x1b[2J\x1b[3J\x1b[H` leaves a previously set scroll region in
     // place, so Ink's next repaint positions against stale bounds — the
     // reported Ctrl+R "positioning" flicker where the screen keeps redrawing.
-    if (appStdout !== undefined) appStdout.write(RESIZE_REFLOW_CLEAR)
+    if (appStdout !== undefined) {
+      synchronizedReplayPending.current = true
+      appStdout.write(SYNCHRONIZED_UPDATE_BEGIN + RESIZE_REFLOW_CLEAR)
+    }
     setRefreshEpoch(epoch => epoch + 1)
   }
-  // Ctrl+R while a turn streams must NOT clear and remount the whole Static
-  // transcript mid-stream: the replay plus a growing reasoning tail pushes
-  // the dynamic total across the terminal height, and Ink then re-clears the
-  // screen on every frame — the constant flicker. The toggle flips the live
-  // reasoning region immediately and defers one source-backed replay until
-  // the stream settles. Ink's `<Static>` appends only by length, so the
-  // settled-row rebuild that `showReasoning` triggers stays invisible in
-  // scrollback until the deferred replay re-flushes it.
-  const deferredReasoningReplay = useRef(false)
   useEffect(() => {
-    if (streamingActive || !deferredReasoningReplay.current) return
-    deferredReasoningReplay.current = false
-    if (appStdout !== undefined) appStdout.write(RESIZE_REFLOW_CLEAR)
-    setRefreshEpoch(epoch => epoch + 1)
-  }, [streamingActive])
+    if (!synchronizedReplayPending.current || appStdout === undefined) return
+    synchronizedReplayPending.current = false
+    appStdout.write(SYNCHRONIZED_UPDATE_END)
+  }, [appStdout, refreshEpoch])
+  // Ctrl+R while a turn streams changes only the live reasoning region. A
+  // source-backed Static replay at the stream boundary would clear the entire
+  // terminal exactly when thinking hands off to the answer, which is the
+  // reported full-screen flash. Settled history is refreshed by the explicit
+  // idle toggle, resize, or Ctrl+L paths instead.
 
   /** Apply one /model pick: record the selection, close the panel, report via notice. */
   const applyModel = (row: ModelRow, effortId: string | undefined): void => {
@@ -3983,20 +4050,12 @@ export function App(props: AppProps): ReactElement {
           props.store.reset()
         },
         refresh: refreshScreen,
-        // Ctrl+R must re-render already-settled history too: settled rows
-        // flush through <Static> once, so the toggle rides the same
-        // source-backed clear+replay the resize path uses — one clear, one
-        // authoritative re-flush at the new visibility. While a turn streams
-        // the replay is deferred (see deferredReasoningReplay) so the mid-
-        // stream clear+remount cannot push the live region into Ink's
-        // per-frame full-screen redraw loop.
+        // Ctrl+R re-renders settled history only while idle. During a live
+        // turn it must stay within the dynamic region; clearing and replaying
+        // Static at the reasoning-to-answer boundary causes a full-screen flash.
         toggleReasoning: () => {
           setShowReasoning(current => !current)
-          if (streamingActive) {
-            deferredReasoningReplay.current = true
-          } else {
-            refreshScreen()
-          }
+          if (!streamingActive) refreshScreen()
         },
         loadMentions: props.loadMentions,
         cyclePermission: props.cyclePermission,

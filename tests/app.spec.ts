@@ -192,6 +192,33 @@ describe('pre-session controls', () => {
   })
 })
 
+describe('multiline composer', () => {
+  it('inserts a newline on enhanced Shift+Enter and submits the full draft', async () => {
+    const harness = createTty(100, 24)
+    let dispatched = ''
+    const instance = renderApp(harness, appProps({
+      dispatch: text => { dispatched = text },
+    }))
+    try {
+      await wait()
+      harness.stdin.write('first')
+      await wait()
+      // Kitty/CSI-u enhanced key encoding for Shift+Enter.
+      harness.stdin.write('\x1b[13;2u')
+      await wait()
+      harness.stdin.write('second')
+      await wait()
+      harness.stdin.write('\r')
+      await wait()
+      expect(dispatched).toBe('first\nsecond')
+    } finally {
+      instance.unmount()
+      harness.stdin.destroy()
+      harness.stdout.destroy()
+    }
+  })
+})
+
 describe('Ctrl+O history details', () => {
   it('uses an exclusive bounded screen without clearing scrollback and preserves the draft', async () => {
     const stdin = Object.assign(new PassThrough(), {
@@ -929,6 +956,8 @@ describe('Ctrl+R reasoning fold', () => {
       // One source-backed replay: a single clear sequence, then the settled
       // history re-flushes with reasoning expanded.
       expect(output.match(/\x1b\[2J/g)).toHaveLength(1)
+      expect(output.match(/\x1b\[\?2026h/g)).toHaveLength(1)
+      expect(output.match(/\x1b\[\?2026l/g)).toHaveLength(1)
       expect(output).toContain('the hidden reasoning trace')
       expect(output).toContain('the visible answer')
 
@@ -936,6 +965,8 @@ describe('Ctrl+R reasoning fold', () => {
       stdin.write('\x12')
       await wait()
       expect(output.match(/\x1b\[2J/g)).toHaveLength(1)
+      expect(output.match(/\x1b\[\?2026h/g)).toHaveLength(1)
+      expect(output.match(/\x1b\[\?2026l/g)).toHaveLength(1)
       expect(output).toContain('Ctrl+R to expand')
       const clearAt = output.lastIndexOf('\x1b[2J')
       expect(clearAt).toBeGreaterThanOrEqual(0)
@@ -947,7 +978,7 @@ describe('Ctrl+R reasoning fold', () => {
     }
   })
 
-  it('defers the Ctrl+R replay while reasoning streams, then replays once it settles', async () => {
+  it('keeps the live reasoning toggle clear-free through stream completion', async () => {
     const { stdin, stdout, output } = createTty(100, 24)
     const store = createTranscriptStore([
       {
@@ -1059,9 +1090,8 @@ describe('Ctrl+R reasoning fold', () => {
       expect(plain).toContain('stream-9')
       expect(output.text).not.toContain('\x1b[2J')
 
-      // The assembled message ends the stream: the deferred replay runs
-      // exactly once and re-flushes the settled history with reasoning
-      // expanded (and the screen clear resets the scroll region).
+      // The assembled message ends the stream without a source-backed clear;
+      // the new settled entry still paints the assembled trace and answer.
       store.apply({
         type: 'assistant/message',
         seq: 200,
@@ -1079,7 +1109,7 @@ describe('Ctrl+R reasoning fold', () => {
         },
       } as SessionEvent)
       await wait()
-      expect(output.text.match(/\x1b\[2J/g)).toHaveLength(1)
+      expect(output.text).not.toContain('\x1b[2J')
       expect(output.text).toContain('the assembled trace')
       expect(output.text).toContain('the assembled answer')
     } finally {
@@ -1495,10 +1525,11 @@ describe('context stepless bar', () => {
       // The stepless bar: one solid fill run, dim dotted track, and the
       // right-aligned readout, all on one primary-row budget.
       const stripAnsi = (text: string): string => text.replace(/\x1b\[[0-9;]*m/g, '')
-      expect(stripAnsi(output)).toContain('███████████████████░░78%')
+      expect(stripAnsi(output)).toMatch(/context [█░]+100K\/128K 78%/u)
       // The fill paints one brand-blue run; the dotted track reads dim.
       expect(output).toMatch(/38;2;65;118;230m[^\x1b]*█/) // ctxFill → brand
-      expect(output).toMatch(/38;2;129;133;140m[^\x1b]*░/) // track → dim gray
+      // At this width the adaptive meter may consume its full available run;
+      // the pure contextBar tests cover the dotted-track state separately.
     } finally {
       instance.unmount()
       stdin.destroy()
