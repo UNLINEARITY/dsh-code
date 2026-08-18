@@ -36,6 +36,8 @@ DSH-Code 保留这套结构，并补充适合编码任务的终端工作流。
 
 需要 Node `^22.19 || >=24` 和预览版 `dsh` CLI。`DEEPSEEK_API_KEY` 不是启动前置条件：未配置时仍可进入 TUI、查看会话和使用非模型功能；在 `/model` 中按 `a` 可通过 Harness credentials 服务添加 API key。
 
+### 1. 初次安装
+
 ```sh
 npm install -g @deepseek-ai/dsh dsh-code
 npm install -g pnpm
@@ -44,17 +46,19 @@ dsh plugin --profile cli add dsh-code@0.9.1
 
 > 提示：pnpm 会忽略发布不足 24 小时的包，因此发布首日请使用精确版本 `dsh-code@0.9.1`；24 小时后可省略版本号。npm 安装不受此限制。
 
-### 更新版本
+### 2. 已有 DSH 或更新版本
 
 ```sh
 npm install -g dsh-code@0.9.1
 dsh plugin --profile cli add dsh-code@0.9.1
 ```
 
+### 3. 启动指令
+
 可用的启动指令：
 ```sh
-deepseek
 dsh --profile cli
+deepseek
 dsh-code
 ```
 
