@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildReviewPrompt, parseGitDiffSpec } from '../src/git-workflow.ts'
+import { buildReviewPrompt, parseGitDiffFiles, parseGitDiffSpec } from '../src/git-workflow.ts'
 
 describe('Git workflow', () => {
   it('parses default, staged, and ref diffs without option injection', () => {
@@ -15,5 +15,24 @@ describe('Git workflow', () => {
     expect(prompt).toContain('Do not modify files')
     expect(prompt).toContain('diff truncated by CLI')
     expect(prompt).toContain('xxxxxxxx\n```')
+  })
+
+  it('keeps unified patches grouped by file for the terminal diff picker', () => {
+    const files = parseGitDiffFiles([
+      'diff --git a/src/a.ts b/src/a.ts',
+      'index 0000000..1111111 100644',
+      '--- a/src/a.ts',
+      '+++ b/src/a.ts',
+      '@@ -1 +1 @@',
+      '-old',
+      '+new',
+      'diff --git a/src/b.ts b/src/b.ts',
+      '--- a/src/b.ts',
+      '+++ b/src/b.ts',
+      '+added',
+    ].join('\n'))
+    expect(files.map(file => file.path)).toEqual(['src/a.ts', 'src/b.ts'])
+    expect(files[0]?.lines).toContain('-old')
+    expect(files[1]?.lines).toContain('+added')
   })
 })

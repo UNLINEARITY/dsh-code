@@ -7,6 +7,32 @@ export interface GitDiffSpec {
   readonly args: readonly string[]
 }
 
+/** One file section from a unified diff, retained in source order. */
+export interface GitDiffFile {
+  readonly path: string
+  readonly lines: readonly string[]
+}
+
+/** A parsed diff ready for a file-oriented terminal viewport. */
+export interface GitDiffView {
+  readonly title: string
+  readonly files: readonly GitDiffFile[]
+}
+
+/** Split Git's stable `diff --git` framing without interpreting patch content. */
+export function parseGitDiffFiles(text: string): readonly GitDiffFile[] {
+  if (text === '') return []
+  const chunks = text.split(/(?=^diff --git )/mu).filter(chunk => chunk !== '')
+  return chunks.map((chunk, index) => {
+    const lines = chunk.replace(/\n$/u, '').split('\n')
+    const plus = lines.find(line => line.startsWith('+++ b/'))
+    const minus = lines.find(line => line.startsWith('--- a/'))
+    const header = /^diff --git a\/(.+) b\/(.+)$/u.exec(lines[0] ?? '')
+    const path = plus?.slice(6) || minus?.slice(6) || header?.[2] || header?.[1] || `file ${index + 1}`
+    return { path, lines }
+  })
+}
+
 /** Parse the intentionally small, option-safe /diff argument vocabulary. */
 export function parseGitDiffSpec(argument: string): GitDiffSpec {
   const value = argument.trim()
@@ -31,17 +57,17 @@ function executeGit(cwd: string, args: readonly string[]): Promise<string> {
 }
 
 /** Load one complete textual diff without invoking external diff drivers. */
-export async function loadGitDiff(cwd: string, argument: string): Promise<{ title: string; text: string }> {
+export async function loadGitDiff(cwd: string, argument: string): Promise<GitDiffView> {
   const spec = parseGitDiffSpec(argument)
   try {
     const text = await executeGit(cwd, spec.args)
-    return { title: `git diff - ${spec.label}`, text: text === '' ? '(no changes)' : text }
+    return { title: `git diff - ${spec.label}`, files: parseGitDiffFiles(text) }
   } catch (error: unknown) {
     // An unborn repository has no HEAD. Preserve useful unstaged output for
     // the default form while still surfacing all other Git failures.
     if (argument.trim() !== '') throw error
     const text = await executeGit(cwd, ['diff', '--no-ext-diff', '--unified=3', '--'])
-    return { title: 'git diff - working tree', text: text === '' ? '(no changes)' : text }
+    return { title: 'git diff - working tree', files: parseGitDiffFiles(text) }
   }
 }
 
