@@ -221,6 +221,267 @@ describe('multiline composer', () => {
       harness.stdout.destroy()
     }
   })
+
+  it('moves by word and line with Codex editor keys and yanks kills', async () => {
+    const harness = createTty(60, 24)
+    let dispatched = ''
+    const instance = renderApp(harness, appProps({
+      dispatch: text => { dispatched = text },
+    }))
+    try {
+      await wait()
+      harness.stdin.write('hello world')
+      await wait()
+      harness.stdin.write('[1;5D') // Ctrl+Left: word left
+      await wait()
+      harness.stdin.write('b') // Alt+B: word left again (to start)
+      await wait()
+      harness.stdin.write(String.fromCharCode(11)) // Ctrl+K kills to line end
+      await wait()
+      harness.stdin.write(String.fromCharCode(25)) // Ctrl+Y yanks the kill back
+      await wait()
+      harness.stdin.write('[H') // Home
+      await wait()
+      harness.stdin.write('[3~') // Delete forward removes 'h'
+      await wait()
+      harness.stdin.write(String.fromCharCode(13))
+      await wait()
+      expect(dispatched).toBe('ello world')
+    } finally {
+      instance.unmount()
+      harness.stdin.destroy()
+      harness.stdout.destroy()
+    }
+  })
+
+  it('hard-wraps a long CJK draft into multiple composer rows before submission', async () => {
+    const harness = createTty(40, 30)
+    let dispatched = ''
+    const instance = renderApp(harness, appProps({
+      dispatch: text => { dispatched = text },
+    }))
+    try {
+      await wait()
+      const draft = '一二三四五六七八九十'.repeat(2)
+      harness.stdin.write(draft)
+      await wait()
+      harness.stdin.write(String.fromCharCode(13))
+      await wait()
+      expect(dispatched).toBe(draft)
+    } finally {
+      instance.unmount()
+      harness.stdin.destroy()
+      harness.stdout.destroy()
+    }
+  })
+
+  it('keeps Up as caret movement inside a multiline draft instead of history recall', async () => {
+    const harness = createTty(80, 24)
+    let dispatched = ''
+    const instance = renderApp(harness, appProps({
+      dispatch: text => { dispatched = text },
+      history: ['older entry'],
+    }))
+    try {
+      await wait()
+      harness.stdin.write('first')
+      await wait()
+      harness.stdin.write('[13;2u') // Shift+Enter
+      await wait()
+      harness.stdin.write('second')
+      await wait()
+      harness.stdin.write('[A') // Up: caret to line 1 end, not recall
+      await wait()
+      harness.stdin.write('X')
+      await wait()
+      harness.stdin.write(String.fromCharCode(13))
+      await wait()
+      expect(dispatched).toBe('firstX\nsecond')
+      expect(dispatched).not.toContain('older entry')
+    } finally {
+      instance.unmount()
+      harness.stdin.destroy()
+      harness.stdout.destroy()
+    }
+  })
+})
+
+describe('keyboard protocol and transcript alignment', () => {
+  it('routes enhanced Ctrl+C through the busy interrupt contract', async () => {
+    const harness = createTty(100, 24)
+    const interrupt = vi.fn(() => true)
+    const quit = vi.fn()
+    const store = createTranscriptStore([
+      { type: 'turn/start', seq: 1, time: 1, data: { turn: 1 } } as SessionEvent,
+      { type: 'step/start', seq: 2, time: 2, data: { turn: 1, step: 1 } } as SessionEvent,
+    ])
+    const instance = renderApp(harness, appProps({ store, interrupt, quit }))
+    try {
+      await wait()
+      harness.output.text = ''
+      harness.stdin.write('\x1b[99;5u')
+      await wait()
+      expect(interrupt).toHaveBeenCalledTimes(1)
+      expect(quit).not.toHaveBeenCalled()
+      expect(harness.output.text).not.toContain('[99;5u')
+    } finally {
+      instance.unmount()
+      harness.stdin.destroy()
+      harness.stdout.destroy()
+    }
+  })
+
+  it('clears a draft on enhanced Ctrl+C before a second press quits', async () => {
+    const harness = createTty(100, 24)
+    const quit = vi.fn()
+    const instance = renderApp(harness, appProps({ quit }))
+    try {
+      await wait()
+      harness.stdin.write('draft')
+      await wait()
+      harness.stdin.write('\x1b[99;5u')
+      await wait()
+      expect(quit).not.toHaveBeenCalled()
+
+      harness.output.text = ''
+      harness.stdin.write('\x1b[99;5u')
+      await wait()
+      expect(quit).toHaveBeenCalledTimes(1)
+      expect(harness.output.text).not.toContain('[99;5u')
+    } finally {
+      instance.unmount()
+      harness.stdin.destroy()
+      harness.stdout.destroy()
+    }
+  })
+
+  it('decodes kitty CSI-u keys: ctrl+r toggles the reasoning fold, Esc keeps its meaning', async () => {
+    const harness = createTty(100, 24)
+    const { stdin, output } = harness
+    const interrupt = vi.fn(() => true)
+    const store = createTranscriptStore([
+      {
+        type: 'user/message',
+        seq: 1,
+        time: 1,
+        data: createUserMessage({ content: [{ type: 'text', text: 'go' }], source: { kind: 'user' } }),
+      } as SessionEvent,
+      {
+        type: 'turn/start',
+        seq: 2,
+        time: 2,
+        data: { turn: 1 },
+      } as SessionEvent,
+      {
+        type: 'step/start',
+        seq: 3,
+        time: 3,
+        data: { turn: 1, step: 1 },
+      } as SessionEvent,
+      {
+        type: 'assistant/chunk',
+        seq: 4,
+        time: 4,
+        data: {
+          turn: 1,
+          step: 1,
+          chunk: { type: 'reasoning-delta', index: 0, text: 'the hidden reasoning trace' },
+        },
+      } as SessionEvent,
+    ])
+    const instance = renderApp(harness, appProps({ store, interrupt }))
+    try {
+      await wait()
+      expect(output.text).toContain('Thinking')
+      expect(output.text).not.toContain('the hidden reasoning trace')
+      // The kitty CSI-u form of Ctrl+R decodes to the legacy control byte
+      // before Ink parses it, so the fold opens without touching the draft.
+      output.text = ''
+      stdin.write('[114;5u')
+      await wait()
+      expect(output.text).not.toContain('[114;5u')
+      // The fold opened in the live region without a source-backed replay.
+      expect(output.text).toContain('the hidden reasoning trace')
+      expect(output.text).not.toContain('\x1b[2J')
+
+      output.text = ''
+      stdin.write('[114;5u')
+      await wait()
+      expect(output.text).toContain('Thinking')
+      expect(output.text).not.toContain('the hidden reasoning trace')
+      expect(output.text).not.toContain('\x1b[2J')
+
+      stdin.write('\x1b')
+      await wait()
+      expect(interrupt).toHaveBeenCalledTimes(1)
+    } finally {
+      instance.unmount()
+      harness.stdin.destroy()
+      harness.stdout.destroy()
+    }
+  })
+
+  it('hangs wrapped tool summaries under the card instead of column zero', async () => {
+    const harness = createTty(40, 30)
+    const { stdin, output } = harness
+    const callId = 'wide-tool' as CallId
+    const store = createTranscriptStore([
+      { type: 'turn/start', seq: 1, time: 1, data: { turn: 1 } } as SessionEvent,
+      { type: 'tool/call', seq: 2, time: 2, data: { turn: 1, step: 1, callId, name: 'run_code', arguments: '{}' } } as SessionEvent,
+      {
+        type: 'tool/result',
+        seq: 3,
+        time: 3,
+        data: {
+          turn: 1,
+          step: 1,
+          message: createToolResultMessage({
+            callId,
+            content: [{ type: 'text', text: 'summary '.repeat(12) }],
+            isError: false,
+          }),
+        },
+      } as SessionEvent,
+      { type: 'turn/end', seq: 4, time: 4, data: { turn: 1, reason: { kind: 'completed' } } } as SessionEvent,
+    ])
+    const instance = renderApp(harness, appProps({ store }))
+    try {
+      await wait()
+      // The settled card's ⎿ row wraps; every continuation line starts with
+      // the four-space hanging indent, never at column zero.
+      const lines = output.text.split('\n')
+      const arrow = lines.findIndex(line => line.includes('\u23bf'))
+      expect(arrow).toBeGreaterThanOrEqual(0)
+      const continuations = lines.slice(arrow + 1).filter(line => line.trim() !== '' && line.includes('summary'))
+      expect(continuations.length).toBeGreaterThan(0)
+      for (const line of continuations) {
+        expect(line.startsWith('    ')).toBe(true)
+      }
+    } finally {
+      instance.unmount()
+      stdin.destroy()
+      harness.stdout.destroy()
+    }
+  })
+
+  it('leaves stdout frame ownership with Ink', async () => {
+    const harness = createTty(80, 24)
+    const { stdin } = harness
+    const originalWrite = harness.stdout.write
+    const instance = renderApp(harness, appProps())
+    try {
+      await wait()
+      stdin.write('ab')
+      await wait()
+      // App must not replace stdout.write to inject cursor movement after
+      // Ink's frame. Doing so splits the terminal cursor from Ink's ledger.
+      expect(harness.stdout.write).toBe(originalWrite)
+    } finally {
+      instance.unmount()
+      stdin.destroy()
+      harness.stdout.destroy()
+    }
+  })
 })
 
 describe('Ctrl+O history details', () => {
@@ -843,7 +1104,7 @@ describe('DeepSeek model-switch easter egg', () => {
 })
 
 describe('Ctrl+R reasoning fold', () => {
-  it('re-renders settled history through one clear-and-replay on toggle', async () => {
+  it('does not clear or rewrite settled native scrollback on an idle toggle', async () => {
     const stdin = Object.assign(new PassThrough(), {
       isTTY: true,
       isRaw: false,
@@ -951,30 +1212,29 @@ describe('Ctrl+R reasoning fold', () => {
     try {
       await wait()
       // Settled reasoning collapses behind the fold marker.
-      expect(output).toContain('Ctrl+R to expand')
+      expect(output).toContain('Thinking (')
+      expect(output).not.toContain('Ctrl+R to expand')
       expect(output).not.toContain('the hidden reasoning trace')
 
       output = ''
       stdin.write('\x12')
       await wait()
-      // One source-backed replay: a single clear sequence, then the settled
-      // history re-flushes with reasoning expanded.
-      expect(output.match(/\x1b\[2J/g)).toHaveLength(1)
-      expect(output.match(/\x1b\[\?2026h/g)).toHaveLength(1)
-      expect(output.match(/\x1b\[\?2026l/g)).toHaveLength(1)
-      expect(output).toContain('the hidden reasoning trace')
-      expect(output).toContain('the visible answer')
+      // Native scrollback is immutable: the toggle changes the live mode for
+      // the current/future response, but never clears or replays old rows.
+      expect(output).not.toContain('\x1b[2J')
+      expect(output).not.toContain('\x1b[?2026h')
+      expect(output).not.toContain('\x1b[?2026l')
+      expect(output).not.toContain('DeepSeek Harness')
+      expect(output).not.toContain('the hidden reasoning trace')
 
       output = ''
       stdin.write('\x12')
       await wait()
-      expect(output.match(/\x1b\[2J/g)).toHaveLength(1)
-      expect(output.match(/\x1b\[\?2026h/g)).toHaveLength(1)
-      expect(output.match(/\x1b\[\?2026l/g)).toHaveLength(1)
-      expect(output).toContain('Ctrl+R to expand')
-      const clearAt = output.lastIndexOf('\x1b[2J')
-      expect(clearAt).toBeGreaterThanOrEqual(0)
-      expect(output.slice(clearAt).includes('the hidden reasoning trace')).toBe(false)
+      expect(output).not.toContain('\x1b[2J')
+      expect(output).not.toContain('\x1b[?2026h')
+      expect(output).not.toContain('\x1b[?2026l')
+      expect(output).not.toContain('DeepSeek Harness')
+      expect(output).not.toContain('the hidden reasoning trace')
     } finally {
       instance.unmount()
       stdin.destroy()
@@ -1116,6 +1376,107 @@ describe('Ctrl+R reasoning fold', () => {
       expect(output.text).not.toContain('\x1b[2J')
       expect(output.text).toContain('the assembled trace')
       expect(output.text).toContain('the assembled answer')
+    } finally {
+      instance.unmount()
+      stdin.destroy()
+      stdout.destroy()
+    }
+  }, 20_000)
+
+  it('keeps expanded reasoning beside the streaming answer without a clear', async () => {
+    const { stdin, stdout, output } = createTty(100, 24)
+    const store = createTranscriptStore()
+    const unsubscribe = (): void => {}
+    const noop = (): void => {}
+    const instance = render(createElement(App, {
+      store,
+      subagents: { subscribe: () => unsubscribe, getSnapshot: () => EMPTY_AGENTS },
+      approval: { subscribe: () => unsubscribe, getSnapshot: () => approvalSnapshot },
+      questions: {
+        subscribe: () => unsubscribe,
+        getSnapshot: () => questionSnapshot,
+        submit: noop,
+        cancel: noop,
+      },
+      commands: { descriptors: [], subscribe: () => unsubscribe },
+      skills: { rows: [], subscribe: () => unsubscribe },
+      model: 'test/model',
+      cwd: 'dsh-cli',
+      workspaceRoot: 'C:\\repo\\dsh-cli',
+      branch: 'main',
+      sessionId: '12345678',
+      resumed: false,
+      mode: 'standard',
+      permission: 'workspace-write',
+      dispatch: noop,
+      steer: noop,
+      interrupt: () => false,
+      quit: noop,
+      loadModels: async () => ({ rows: [], failures: [] }),
+      loadMentions: async () => [],
+      selectModel: () => 'test/model',
+      subagentModel: '',
+      setSubagentModel: () => '',
+      clearSubagentModel: noop,
+      deleteSession: async () => '',
+      cyclePermission: () => '',
+      setPermission: id => id,
+      exportTranscript: async () => {},
+      renameTitle: () => '',
+      loadPresets: async () => [],
+      loadPermissions: async () => [],
+      switchMode: async id => id,
+      createSession: noop,
+      loadSessions: async () => [],
+      loadSubagents: async () => [],
+      loadSessionTranscript: async () => '',
+      switchSession: noop,
+      cancelSessionSwitch: () => false,
+      loadPlugins: () => [],
+      statusline: DEFAULT_STATUSLINE_ITEMS,
+      saveStatusline: noop,
+      history: [],
+      recordHistory: noop,
+      cancelQueued: noop,
+      onBridgeReady: noop,
+    }), {
+      stdin,
+      stdout,
+      stderr: stdout,
+      exitOnCtrlC: false,
+      patchConsole: false,
+    })
+
+    try {
+      await wait()
+      // Expand before the stream starts; the toggle itself stays clear-free.
+      stdin.write('\x12')
+      await wait()
+      output.text = ''
+      // A fresh reasoning stream.
+      store.apply({ type: 'turn/start', seq: 1, time: 1, data: { turn: 1 } } as SessionEvent)
+      store.apply({ type: 'step/start', seq: 2, time: 2, data: { turn: 1, step: 1 } } as SessionEvent)
+      for (let index = 0; index < 10; index += 1) {
+        store.apply({
+          type: 'assistant/chunk', seq: 3 + index, time: 3 + index,
+          data: { turn: 1, step: 1, chunk: { type: 'reasoning-delta', text: `stream-${index} ` } },
+        } as unknown as SessionEvent)
+      }
+      await wait()
+      // The first text delta keeps reasoning and answer together in the live
+      // region. Nothing is promoted into Static before assistant/message.
+      store.apply({
+        type: 'assistant/chunk', seq: 13, time: 13,
+        data: { turn: 1, step: 1, chunk: { type: 'text-delta', text: 'the visible answer' } },
+      } as unknown as SessionEvent)
+      await wait()
+      const plain = output.text.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')
+      expect(store.getView().entries).toEqual([])
+      expect(store.getView().streamingReasoning).toContain('stream-9')
+      expect(output.text).not.toContain('\x1b[2J')
+      expect(plain).toContain('stream-0')
+      expect(plain).toContain('stream-9')
+      expect(plain).toContain('the visible answer')
     } finally {
       instance.unmount()
       stdin.destroy()
@@ -1652,17 +2013,20 @@ describe('light theme rendering', () => {
 })
 
 describe('settledRows incremental cache (pure)', () => {
-  it('appends only the new suffix after a long history, reuses elements, and rebuilds targeted rows on toggle/replay', () => {
-    // 120 settled assistant rows; every 10th carries reasoning (12 sensitive).
-    const base = Array.from({ length: 120 }, (_, index) => assistantEntry(`msg-${index}`, index % 10 === 0 ? 'trace' : ''))
-    let result = computeSettledRows(undefined, base, 120, false, false, 0)
-    expect(result.built).toBe(120)
+  it('appends only the new suffix, keeps idle toggles clear-free, and rebuilds once on replay', () => {
+    // 120 settled assistant rows, every 10th carrying reasoning.
+    const base: TranscriptEntry[] = []
+    for (let index = 0; index < 120; index++) {
+      base.push(assistantEntry(`msg-${index}`, index % 10 === 0 ? 'trace' : ''))
+    }
+    let result = computeSettledRows(undefined, base, base.length, false, false, 0)
+    expect(result.built).toBe(base.length)
     const firstFlat = result.cache.flat
 
-    // Appending one settled row builds ONLY that row — the 120-row prefix is
-    // never rescanned or rebuilt, and every existing element keeps identity.
+    // Appending one settled row builds ONLY that row — the prefix is never
+    // rescanned or rebuilt, and every existing element keeps identity.
     const grown = [...base, assistantEntry('msg-120')]
-    result = computeSettledRows(result.cache, grown, 121, false, false, 0)
+    result = computeSettledRows(result.cache, grown, grown.length, false, false, 0)
     expect(result.built).toBe(1)
     expect(result.cache.flat).not.toBe(firstFlat)
     for (let index = 0; index < firstFlat.length; index++) {
@@ -1671,17 +2035,37 @@ describe('settledRows incremental cache (pure)', () => {
 
     // No boundary change: the same flat identity is returned (Static skips).
     const flatBefore = result.cache.flat
-    result = computeSettledRows(result.cache, grown, 121, false, false, 0)
+    result = computeSettledRows(result.cache, grown, grown.length, false, false, 0)
     expect(result.built).toBe(0)
     expect(result.cache.flat).toBe(flatBefore)
 
-    // Reasoning toggle: only the 12 sensitive rows rebuild.
-    result = computeSettledRows(result.cache, grown, 121, true, false, 0)
-    expect(result.built).toBe(12)
+    // Reasoning toggle never rewrites rows already emitted to native
+    // scrollback; the same Static element list remains intact.
+    const flatBeforeToggle = result.cache.flat
+    result = computeSettledRows(result.cache, grown, grown.length, true, false, 0)
+    expect(result.built).toBe(0)
+    expect(result.cache.flat).toBe(flatBeforeToggle)
+
+    // A newly settled reasoning row captures the new mode.
+    const expanded = [...grown, assistantEntry('msg-121', 'new trace')]
+    result = computeSettledRows(result.cache, expanded, expanded.length, true, false, 0)
+    expect(result.built).toBe(1)
+    expect(result.cache.records.get(expanded.at(-1)!)?.showReasoning).toBe(true)
+
+    // Width changes update live geometry first; Static waits for the debounced
+    // source-backed replay instead of rebuilding at an intermediate width.
+    const flatBeforeResize = result.cache.flat
+    result = computeSettledRows(result.cache, expanded, expanded.length, true, false, 0, 100)
+    expect(result.built).toBe(0)
+    expect(result.cache.flat).toBe(flatBeforeResize)
+    expect(result.cache.columns).toBe(80)
 
     // Source-backed replay (epoch bump): full rebuild of the current rows.
-    result = computeSettledRows(result.cache, grown, 121, true, false, 1)
-    expect(result.built).toBe(121)
+    result = computeSettledRows(result.cache, expanded, expanded.length, true, false, 1, 100)
+    expect(result.built).toBe(expanded.length)
+    expect(result.cache.columns).toBe(100)
+    expect(result.cache.records.get(base[0]!)?.showReasoning).toBe(false)
+    expect(result.cache.records.get(expanded.at(-1)!)?.showReasoning).toBe(true)
 
     // Shrink (store.reset): the prefix truncates to empty.
     result = computeSettledRows(result.cache, [], 0, true, false, 1)

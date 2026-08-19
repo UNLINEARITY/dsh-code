@@ -4,7 +4,7 @@ import { promptDisplayText, type TranscriptEntry } from './projection.ts'
 import type { ToolDetail } from './tool-detail.ts'
 import { renderMarkdown, visibleColumns, type MdStyle } from './markdown.ts'
 import { formatTokens } from './status.ts'
-import { displayText } from './text.ts'
+import { displayText, truncateColumns } from './text.ts'
 
 /** Presentation classes mapped to Ink colors by the app boundary. */
 export type LineStyle = MdStyle | 'brand' | 'success' | 'error' | 'warn' | 'dimItalic'
@@ -88,6 +88,70 @@ function prefixedTextLines(text: string, columns: number, prefix: string, style:
   return prefixedStyledLines([lineSegment(text, style)], columns, prefix, style)
 }
 
+/**
+ * Wrap styled segments with a hanging indent: the first physical row carries
+ * `firstPrefix` (often a marker plus gutter) and every wrapped continuation
+ * carries the narrower `contPrefix`, so long tool summaries and prompts
+ * align under their card instead of falling back to column zero. The first
+ * row may hold one prefix-width more than the continuations.
+ */
+export function hangingStyledLines(
+  segments: readonly StyledSegment[],
+  columns: number,
+  firstPrefix: string,
+  firstStyle: LineStyle,
+  contPrefix: string,
+  contStyle: LineStyle = firstStyle,
+): readonly StyledLine[] {
+  const width = Math.max(2, Math.floor(columns))
+  const firstPrefixText = truncateColumns(firstPrefix, Math.max(1, width - 1))
+  const contPrefixText = truncateColumns(contPrefix, Math.max(1, width - 1))
+  const firstBudget = Math.max(1, width - visibleColumns(firstPrefixText))
+  const contBudget = Math.max(1, width - visibleColumns(contPrefixText))
+  const lines: StyledLine[] = []
+  let current: StyledSegment[] = []
+  let used = 0
+  let budget = firstBudget
+  const flush = (): void => {
+    lines.push({ segments: current })
+    current = []
+    used = 0
+    budget = contBudget
+  }
+  for (const segment of segments) {
+    const safe = displayText(segment.text).replaceAll('\t', '  ').replaceAll('\r', '')
+    for (const char of safe) {
+      if (char === '\n') {
+        flush()
+        continue
+      }
+      const cells = visibleColumns(char)
+      if (used > 0 && used + cells > budget) flush()
+      appendSegment(current, char, segment.style)
+      used += cells
+    }
+  }
+  if (current.length > 0 || lines.length === 0) flush()
+  return lines.map((line, index) => ({
+    segments: [
+      lineSegment(index === 0 ? firstPrefixText : contPrefixText, index === 0 ? firstStyle : contStyle),
+      ...line.segments,
+    ],
+  }))
+}
+
+/** Plain-text convenience over {@link hangingStyledLines}. */
+export function hangingTextLines(
+  text: string,
+  columns: number,
+  firstPrefix: string,
+  firstStyle: LineStyle = 'plain',
+  contPrefix = '  ',
+  contStyle: LineStyle = firstStyle,
+): readonly StyledLine[] {
+  return hangingStyledLines([lineSegment(text, firstStyle)], columns, firstPrefix, firstStyle, contPrefix, contStyle)
+}
+
 /** Markdown rows re-hardened so a single long word cannot escape the budget. */
 export function markdownLines(text: string, columns: number): readonly StyledLine[] {
   const width = Math.max(1, Math.floor(columns))
@@ -169,24 +233,31 @@ function toolDetailLines(detail: ToolDetail, columns: number): readonly StyledLi
 /**
  * Convert one durable transcript entry to its complete scrollable row model.
  * The source entry stays intact; only the caller's visible slice is rendered.
+ * Wrapped continuations keep a hanging indent aligned under each row's
+ * content (Codex history-cell alignment) instead of resetting to column 0.
  */
-export function transcriptEntryLines(entry: TranscriptEntry, columns: number): readonly StyledLine[] {
+export function transcriptEntryLines(
+  entry: TranscriptEntry,
+  columns: number,
+  showReasoning = true,
+  reasoningToggleHint = true,
+): readonly StyledLine[] {
   const width = Math.max(1, Math.floor(columns))
   switch (entry.kind) {
     case 'user':
-      return styledLines([
-        lineSegment(entry.notice ? '⤷ ' : '❯ ', entry.notice ? 'dim' : 'brand'),
-        lineSegment(promptDisplayText(entry), entry.notice ? 'dim' : 'plain'),
-      ], width)
+      return entry.notice
+        ? hangingStyledLines([lineSegment(promptDisplayText(entry), 'dim')], width, '⤷ ', 'dim', '  ', 'dim')
+        : hangingStyledLines([lineSegment(promptDisplayText(entry), 'plain')], width, '❯ ', 'brand', '  ', 'plain')
     case 'pending':
       // Codex PendingSteer: a queued prompt renders exactly like an ordinary
       // user row, so the durable user/message retires it without any flicker.
-      return styledLines([
-        lineSegment('❯ ', 'brand'),
-        lineSegment(promptDisplayText(entry), 'plain'),
-      ], width)
+      return hangingStyledLines([lineSegment(promptDisplayText(entry), 'plain')], width, '❯ ', 'brand', '  ', 'plain')
     case 'assistant': {
-      const reasoning = entry.reasoning === '' ? [] : reasoningLines(entry.reasoning, width)
+      const reasoning = entry.reasoning === ''
+        ? []
+        : showReasoning
+          ? reasoningLines(entry.reasoning, width)
+          : textLines(`✻ Thinking (${entry.reasoning.length} chars${reasoningToggleHint ? ', Ctrl+R to expand' : ''})`, width, 'dim')
       // Every reply row carries the composer's two-column gutter, so reply
       // text aligns with the input cursor (Codex LIVE_PREFIX alignment); the
       // wrap budget shrinks by the same amount so no line double-wraps.
@@ -197,31 +268,35 @@ export function transcriptEntryLines(entry: TranscriptEntry, columns: number): r
     case 'tool': {
       const mark = entry.state === 'running' ? '●' : entry.state === 'error' ? '⨯' : '⏺'
       const markStyle: LineStyle = entry.state === 'running' ? 'brand' : entry.state === 'error' ? 'error' : 'success'
+      const summaryStyle: LineStyle = entry.state === 'error' ? 'error' : 'dim'
       return [
-        ...styledLines([
-          lineSegment(`${mark} `, markStyle),
+        // The invocation row hangs wrapped previews under the call badge.
+        ...hangingStyledLines([
           // Global call ordinal — the same number an error line references.
           lineSegment(`[${entry.ordinal}] `, 'dim'),
           lineSegment(entry.name, 'brand'),
           lineSegment(entry.preview === '' ? '' : ` ${entry.preview}`, 'dim'),
-        ], width),
+        ], width, `${mark} `, markStyle, '  ', 'plain'),
         // A delegation card carries what the child was asked (Codex's
         // SpawnAgent prompt preview) while it runs, before any result.
-        ...(entry.prompt === '' ? [] : textLines(`  └ ${entry.prompt}`, width, 'dim')),
-        ...(entry.summary === '' ? [] : textLines(`  ⎿ ${entry.state === 'error' ? `call ${entry.ordinal}: ` : ''}${entry.summary}`, width, entry.state === 'error' ? 'error' : 'dim')),
+        ...(entry.prompt === '' ? [] : hangingTextLines(entry.prompt, width, '  └ ', 'dim', '    ')),
+        ...(entry.summary === '' ? [] : hangingTextLines(
+          entry.state === 'error' ? `call ${entry.ordinal}: ${entry.summary}` : entry.summary,
+          width, '  ⎿ ', summaryStyle, '    ', summaryStyle,
+        )),
         ...(entry.detail === undefined ? [] : toolDetailLines(entry.detail, width)),
       ]
     }
     case 'command': {
       const mark = entry.state === 'running' ? '●' : entry.state === 'error' ? '⨯' : '⏺'
       const markStyle: LineStyle = entry.state === 'running' ? 'brand' : entry.state === 'error' ? 'error' : 'success'
+      const summaryStyle: LineStyle = entry.state === 'error' ? 'error' : 'dim'
       return [
-        ...styledLines([
-          lineSegment(`${mark} `, markStyle),
+        ...hangingStyledLines([
           lineSegment(`/${entry.name}`, 'brand'),
           lineSegment(entry.args === '' ? '' : ` ${entry.args}`, 'dim'),
-        ], width),
-        ...(entry.summary === '' ? [] : textLines(`  ⎿ ${entry.summary}`, width, entry.state === 'error' ? 'error' : 'dim')),
+        ], width, `${mark} `, markStyle, '  ', 'plain'),
+        ...(entry.summary === '' ? [] : hangingTextLines(entry.summary, width, '  ⎿ ', summaryStyle, '    ', summaryStyle)),
       ]
     }
     case 'turn-marker':
@@ -241,7 +316,7 @@ export function transcriptEntryLines(entry: TranscriptEntry, columns: number): r
         ? textLines('  ⎄ no changed files', width, 'dim')
         : [
           ...textLines(`  ⎄ ${entry.paths.length} changed file${entry.paths.length === 1 ? '' : 's'}`, width, 'dim'),
-          ...entry.paths.flatMap(path => textLines(`    ${path}`, width, 'dim')),
+          ...entry.paths.flatMap(path => hangingTextLines(path, width, '    ', 'dim', '    ')),
         ]
     case 'error':
       return textLines(entry.text, width, 'error')
@@ -250,4 +325,9 @@ export function transcriptEntryLines(entry: TranscriptEntry, columns: number): r
       return exhaustive
     }
   }
+}
+
+/** Settled-history variant carrying the Ctrl+R reasoning fold. */
+export function settledEntryLines(entry: TranscriptEntry, columns: number, showReasoning: boolean): readonly StyledLine[] {
+  return transcriptEntryLines(entry, columns, showReasoning, false)
 }

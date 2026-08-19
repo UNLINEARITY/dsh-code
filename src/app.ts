@@ -17,16 +17,12 @@
 import {
   createElement, memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactElement,
 } from 'react'
-import chalk from 'chalk'
-import { Box, Static, Text, useInput, useStdout, type Key } from 'ink'
-import { assertNever } from '@deepseek-ai/dsh-llm'
+import { Box, Static, Text, useInput, useStdin, useStdout, type Key } from 'ink'
 import type { CommandDescriptor } from '@deepseek-ai/dsh-commands'
 import type { TodoItem } from '@deepseek-ai/dsh-session'
 import type { AskUserQuestionAnswerItem } from '@deepseek-ai/dsh-user-questions'
 import {
-  brand,
   dim,
-  error as paintError,
   getPalette,
   getTheme,
   inkColor,
@@ -38,9 +34,8 @@ import { ThemePanel } from './theme-panel.ts'
 import { WHALE_GLYPH, WHALE_GLYPH_COLUMNS } from './whale-glyph.ts'
 import { DSH_CODE_VERSION } from './version.ts'
 import type { TranscriptStore } from './store.ts'
-import { promptDisplayText, settledEntryCount, type TranscriptEntry } from './render/projection.ts'
-import { renderMarkdown, type MdSegment, visibleColumns } from './render/markdown.ts'
-import type { ToolDetail } from './render/tool-detail.ts'
+import { settledEntryCount, type TranscriptEntry } from './render/projection.ts'
+import { type MdSegment, visibleColumns } from './render/markdown.ts'
 import {
   busyChaseFrame,
   caretVisible,
@@ -55,7 +50,6 @@ import {
   deepseekWaveWordVisible,
   effortAboveHigh,
   isOfficialDeepSeekLabel,
-  pulseFrame,
   WAVE_BASE_DARK,
   WAVE_BASE_LIGHT,
   type DeepseekWaveStyle,
@@ -93,7 +87,6 @@ const SYNCHRONIZED_UPDATE_BEGIN = '\x1b[?2026h'
 /** Release the held frame after Ink has replayed the source-backed Static rows. */
 const SYNCHRONIZED_UPDATE_END = '\x1b[?2026l'
 import {
-  formatTokens,
   layoutStatusBar,
   parseStatuslineItems,
   STATUS_CYCLE_HINT,
@@ -107,6 +100,7 @@ import {
   type StatusTone,
 } from './render/status.ts'
 import { displayTail, displayText, singleLineText, truncateColumns } from './render/text.ts'
+import { normalizeKeyboardChunk } from './keyboard.ts'
 import {
   clampScroll,
   followInspectorCursor,
@@ -120,13 +114,34 @@ import {
 import {
   lineSegment,
   markdownLines,
-  reasoningLines,
+  settledEntryLines,
   styledLines,
   textLines,
   transcriptEntryLines,
   type LineStyle,
   type StyledLine,
 } from './render/lines.ts'
+import {
+  caretSite,
+  clampCursor,
+  composerMaxRows,
+  deleteBackward,
+  deleteForward,
+  deleteWordBackward,
+  deleteWordForward,
+  editorModel,
+  insertText,
+  type EditResult,
+  killToLineEnd,
+  killToLineStart,
+  lineBounds,
+  moveCursorBy,
+  moveCursorVertically,
+  moveWordLeft,
+  moveWordRight,
+  sanitizeDraftText,
+  shouldRecallNavigate,
+} from './render/editor.ts'
 
 /** Visual priority for one bounded local notice. */
 export type NoticeTone = 'info' | 'warning' | 'error'
@@ -275,12 +290,6 @@ function useStableInput(handler: (input: string, key: Key) => void, active: bool
   useInput(stableHandler, { isActive: active })
 }
 
-/** Single-cell stepped pulse: the web's 125ms flat-hold brightness steps over 1s. */
-function Pulse(): ReactElement {
-  const tick = useFrames(125)
-  return createElement(Text, { color: inkColor(getPalette().brandBright) }, pulseFrame(tick))
-}
-
 /**
  * The web StateDot "ongoing" chase in terminal form: three cells of the 3×3
  * ring trail clockwise around the eight outer positions (8 frames × 125ms =
@@ -407,31 +416,6 @@ function segmentProps(style: MdSegment['style']): {
   }
 }
 
-/** Paint one Markdown segment before joining it into a single wrapping Text node. */
-function paintMarkdownSegment(segment: MdSegment): string {
-  const text = segment.text
-  switch (segment.style) {
-    case 'accent':
-      return chalk.rgb(...getPalette().brandBright)(text)
-    case 'accentBold':
-      return chalk.rgb(...getPalette().brandBright).bold(text)
-    case 'code':
-      return chalk.rgb(...getPalette().code)(text)
-    case 'dim':
-      return chalk.rgb(...getPalette().dim)(text)
-    case 'bold':
-      return chalk.bold(text)
-    case 'italic':
-      return chalk.italic(text)
-    case 'boldItalic':
-      return chalk.bold.italic(text)
-    case 'strike':
-      return chalk.rgb(...getPalette().dim).strikethrough(text)
-    default:
-      return text
-  }
-}
-
 /** Ink props for the richer line model used by bounded scrolling panels. */
 function lineStyleProps(style: LineStyle): {
   color: string | undefined
@@ -528,229 +512,6 @@ function PanelGap({ visible }: { visible: boolean }): ReactElement | undefined {
   return visible ? createElement(Text, null, ' ') : undefined
 }
 
-/** One settled markdown document rendered as styled lines at the terminal width. */
-function MarkdownBody({ text, indent = 0 }: { text: string; indent?: number }): ReactElement {
-  const columns = useStdout().stdout?.columns ?? 80
-  // Cached by (text, width): settled replies re-layout only when either moves.
-  // The indent participates in the wrap budget so padded replies never
-  // double-wrap inside the padded box.
-  const lines = useMemo(
-    // Keep prose as one logical Markdown row. Ink/terminal reflows it at the
-    // current viewport width; no width-derived newline is baked into history.
-    () => renderMarkdown(displayText(text), Math.max(20, columns - 2 - indent), { physicalWrap: false }),
-    [text, columns, indent],
-  )
-  return createElement(
-    Box,
-    { flexDirection: 'column', paddingLeft: indent },
-    ...lines.map((line, index) => {
-      const logicalText = line.segments.length === 0
-        ? ' '
-        : line.segments.map(paintMarkdownSegment).join('')
-      return createElement(
-        Text,
-        { key: index, wrap: 'wrap' },
-        logicalText,
-      )
-    }),
-  )
-}
-
-/** Expanded reasoning with the same two-column content edge as the reply. */
-function ReasoningBody({ text }: { text: string }): ReactElement {
-  const columns = useStdout().stdout?.columns ?? 80
-  const lines = useMemo(() => reasoningLines(text, Math.max(10, columns - 2)), [text, columns])
-  return createElement(StyledRows, { lines })
-}
-
-/**
- * One expanded tool-card body for the verbose transcript (Ctrl+O): the
- * presentation contract's structured cards — inline diffs, read windows,
- * web sources — rendered as plain terminal rows, degradation-safe against
- * replayed metadata.
- */
-function ToolDetailBody({ detail }: { detail: ToolDetail }): ReactElement {
-  switch (detail.kind) {
-    case 'diff':
-      return createElement(
-        Box,
-        { flexDirection: 'column' },
-        ...detail.diffs.map((diff, index) => createElement(
-          Box,
-          { key: index, flexDirection: 'column' },
-          createElement(Text, { dimColor: true, wrap: 'truncate-end' }, `  ── ${displayText(diff.path)}${diff.truncated ? ' (diff truncated)' : ''}`),
-          ...diff.lines.map((line, at) => createElement(
-            Text,
-              {
-                key: at,
-                color: line.mark === '+' ? inkColor(getPalette().success) : line.mark === '-' ? inkColor(getPalette().error) : inkColor(getPalette().dim),
-                wrap: 'truncate-end',
-              },
-            `  ${line.mark}${displayText(line.text)}`,
-          )),
-        )),
-      )
-    case 'read':
-      return createElement(
-        Box,
-        { flexDirection: 'column' },
-        createElement(Text, { dimColor: true, wrap: 'truncate-end' }, `  ── ${displayText(detail.path)} · lines ${detail.offset}-${detail.lines.length > 0 ? detail.lines[detail.lines.length - 1]!.number : detail.offset - 1} of ${detail.totalLines}${detail.truncated ? ' (window truncated)' : ''}`),
-        ...detail.lines.map((line, at) => createElement(
-          Text,
-          { key: at, dimColor: true, wrap: 'truncate-end' },
-          `  ${String(line.number).padStart(5, ' ')} | ${displayText(line.text)}`,
-        )),
-      )
-    case 'web-search':
-      return createElement(
-        Box,
-        { flexDirection: 'column' },
-        ...detail.sources.map((source, at) => createElement(
-          Text,
-            { key: at, wrap: 'truncate-end' },
-          brand(`  ? ${displayText(source.title === undefined ? source.url : source.title)}`),
-          createElement(Text, { dimColor: true }, dim(` - ${displayText(source.url)}`)),
-        )),
-        createElement(Text, { dimColor: true }, dim(`  ${detail.sources.length} sources${detail.truncated ? ' (capped)' : ''}`)),
-      )
-    case 'web-fetch':
-      return createElement(Text, { dimColor: true, wrap: 'truncate-end' }, dim(`  ${displayText(detail.url)} · HTTP ${detail.statusCode}`))
-    case 'raw':
-      return createElement(
-        Box,
-        { flexDirection: 'column' },
-        ...displayText(detail.text).split('\n').slice(0, 40).map((line, at) => createElement(Text, { key: at, dimColor: true, wrap: 'truncate-end' }, `  ${line}`)),
-        createElement(Text, { dimColor: true }, detail.truncated ? '  … (output truncated)' : '  (end of output)'),
-      )
-    default:
-      return assertNever(detail, 'tool detail kind')
-  }
-}
-/** One settled transcript row. */
-function EntryLine({ entry, showReasoning, verbose }: { entry: TranscriptEntry; showReasoning: boolean; verbose: boolean }): ReactElement {
-  switch (entry.kind) {
-    case 'user':
-      // Collapsed injected context reads as a dim ↳ row; only direct human
-      // prompts get the brand ❯ (they are different surfaces, not the same).
-      return entry.notice
-        ? createElement(Text, { dimColor: true }, `⤷ ${displayText(promptDisplayText(entry))}`)
-        : createElement(Text, null, brand('❯ '), displayText(promptDisplayText(entry)))
-    case 'assistant':
-      // Claude-Code-style thinking: a dim ✻ marker collapsed, the reasoning
-      // text dim-italic expanded (Ctrl+R toggles globally). The collapsed
-      // row is static — an animated counter inside the text would jitter the
-      // line width every frame. The reply body carries the same two-column
-      // gutter as the composer, so reply text aligns with the input cursor
-      // (Codex LIVE_PREFIX alignment).
-      return createElement(
-        Box,
-        { flexDirection: 'column' },
-        entry.reasoning === ''
-          ? undefined
-          : showReasoning
-            ? createElement(ReasoningBody, { text: entry.reasoning })
-            : createElement(Text, { color: inkColor(getPalette().dim) }, `✻ Thinking (${entry.reasoning.length} chars, Ctrl+R to expand)`),
-        createElement(MarkdownBody, { text: entry.text, indent: 2 }),
-      )
-    case 'tool': {
-      // Claude-Code-style tool card: the invocation row plus a nested ⎿
-      // result line, so the summary reads under its call instead of inline.
-      // The dim `[N]` badge is the GLOBAL call ordinal (never reset between
-      // turns); the error line below references the same number, so a failed
-      // call's message and its card always agree on which call N is.
-      const mark = entry.state === 'running'
-        ? createElement(Pulse)
-        : entry.state === 'error'
-          ? createElement(Text, { color: inkColor(getPalette().error) }, '⨯')
-          : createElement(Text, { color: inkColor(getPalette().success) }, '⏺')
-      return createElement(
-        Box,
-        { flexDirection: 'column' },
-        createElement(
-          Text,
-          { wrap: verbose ? 'truncate-end' : undefined },
-          mark,
-          ' ',
-          createElement(Text, { color: inkColor(getPalette().dim) }, `[${entry.ordinal}]`),
-          ' ',
-          brand(displayText(entry.name)),
-          entry.preview === '' ? '' : ` ${dim(displayText(entry.preview))}`,
-        ),
-        entry.summary === ''
-          ? undefined
-          : createElement(
-            Text,
-            { color: entry.state === 'error' ? inkColor(getPalette().error) : inkColor(getPalette().dim), wrap: verbose ? 'truncate-end' : undefined },
-            `  ⎿ ${entry.state === 'error' ? `call ${entry.ordinal}: ` : ''}${displayText(entry.summary)}`,
-          ),
-        verbose && entry.detail !== undefined
-          ? createElement(ToolDetailBody, { detail: entry.detail })
-          : undefined,
-      )
-    }
-    case 'command': {
-      const mark = entry.state === 'running'
-        ? createElement(Pulse)
-        : entry.state === 'error'
-          ? createElement(Text, { color: inkColor(getPalette().error) }, '⨯')
-          : createElement(Text, { color: inkColor(getPalette().success) }, '⏺')
-      return createElement(
-        Box,
-        { flexDirection: 'column' },
-        createElement(
-          Text,
-          { wrap: verbose ? 'truncate-end' : undefined },
-          mark,
-          ' ',
-          brand(displayText(`/${entry.name}`)),
-          entry.args === '' ? '' : ` ${dim(displayText(entry.args))}`,
-        ),
-        entry.summary === ''
-          ? undefined
-          : createElement(Text, { color: inkColor(getPalette().dim), wrap: verbose ? 'truncate-end' : undefined }, `  ⎿ ${displayText(entry.summary)}`),
-      )
-    }
-    case 'turn-marker':
-      // Non-error turn outcomes (cancel, ceiling, interruption) as dim rows.
-      return createElement(Text, { dimColor: true, wrap: verbose ? 'truncate-end' : undefined }, `  ⏹ ${displayText(entry.text)}`)
-    case 'compaction':
-      // Completed compaction lifecycle: what it reclaimed, or why it failed.
-      return createElement(
-        Text,
-        { dimColor: true, wrap: verbose ? 'truncate-end' : undefined },
-        entry.ok
-          ? `  ⧉ compacted ~${formatTokens(entry.tokens)} tokens`
-          : `  ⧉ compaction failed: ${displayText(entry.error)}`,
-      )
-    case 'retry':
-      // Provider-routed retry: amber while the backoff waits, dim once the
-      // next attempt is underway.
-      return createElement(
-        Text,
-        { color: entry.state === 'running' ? inkColor(getPalette().warn) : inkColor(getPalette().dim), wrap: verbose ? 'truncate-end' : undefined },
-        `  ↻ retry ${entry.attempt}/${entry.max} · ${displayText(entry.code)} · ${Math.round(entry.delayMs / 100) / 10}s`,
-      )
-    case 'files': {
-      // Turn-tail deliverables: the turn's mutated files (web turnTail chips).
-      const shown = entry.paths.slice(0, 3).map(path => displayText(path)).join(' · ')
-      const more = entry.paths.length > 3 ? ` (+${entry.paths.length - 3} more)` : ''
-      return createElement(Text, { dimColor: true, wrap: verbose ? 'truncate-end' : undefined }, `  ⎄ ${shown}${more}`)
-    }
-    case 'pending':
-      // Codex PendingSteer: queued prompts render as ordinary user rows; the
-      // durable user/message retires them seamlessly.
-      return createElement(
-        Text,
-        { wrap: verbose ? 'truncate-end' : undefined },
-        brand('❯ '),
-        displayText(entry.text),
-      )
-    case 'error':
-      return createElement(Text, { wrap: verbose ? 'truncate-end' : undefined }, paintError(displayText(entry.text)))
-    default:
-      return assertNever(entry, 'transcript entry kind')
-  }
-}
 
 /**
  * The whale header with a compact three-line copy lockup. The title, bilingual
@@ -2179,6 +1940,52 @@ function verboseLine(text: string, columns: number): string {
   return truncateColumns(displayText(text).replace(/\n/gu, ' ↵ ').replace(/\t/gu, '  '), Math.max(1, columns))
 }
 
+/**
+ * Keys Ink 5's parser cannot express at the useInput boundary: Home/End
+ * arrive with `input === ''` and no flag, and Backspace vs Delete both
+ * collapse onto `key.delete`. The composer patches `stdin.read` — the one
+ * choke point every Ink input chunk already passes through — and annotates
+ * the exact sequences the editor must own; Ink's own view of the same chunk
+ * is a no-op for every one of them.
+ */
+type RawKeyAnnotation =
+  | 'home'
+  | 'end'
+  | 'delete-backward'
+  | 'delete-word-backward'
+  | 'delete-forward'
+  | 'delete-word-forward'
+  | undefined
+
+/** Identify one whole-chunk key sequence Ink drops or blurs. */
+function annotateRawKey(chunk: string): RawKeyAnnotation {
+  switch (chunk) {
+    case '':
+      return 'delete-backward'
+    case '':
+    case '':
+      return 'delete-word-backward'
+    case '[3~':
+    case '[3;2~':
+      return 'delete-forward'
+    case '[3;3~':
+    case '[3;5~':
+      return 'delete-word-forward'
+    case '[H':
+    case '[1~':
+    case '[7~':
+    case 'OH':
+      return 'home'
+    case '[F':
+    case '[4~':
+    case '[8~':
+    case 'OF':
+      return 'end'
+    default:
+      return undefined
+  }
+}
+
 /** One-row editor window keeping the logical cursor visible in long drafts. */
 function editorWindow(value: string, cursor: number, columns: number): { before: string; caret: string; after: string } {
   const width = Math.max(1, columns)
@@ -2558,7 +2365,7 @@ function CompletionMenu({ active, mention, index, rows }: {
  * While a modal (approval / question / model panel) owns the keys, the
  * box passes every key through untouched.
  */
-function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openEffort, openHelp, openMode, openPermission, openResume, openPlugin, openStatusline, openTheme, openHistory, openAgents, openSubagent, openTodos, openDelete, openDiff, reviewChanges, deleteConfirm, confirmDelete, cancelDelete, createSession, forkSession, cancelSessionSwitch, notify, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, cyclePermission, exportTranscript, renameTitle, copyLastResponse, recallSpace, recordLocal, recordHistory, queued, cancelQueued, historyFill, historyConsumed, waveTier, waveStyle }: {
+function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openEffort, openHelp, openMode, openPermission, openResume, openPlugin, openStatusline, openTheme, openHistory, openAgents, openSubagent, openTodos, openDelete, openDiff, reviewChanges, deleteConfirm, confirmDelete, cancelDelete, createSession, forkSession, cancelSessionSwitch, notify, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, cyclePermission, exportTranscript, renameTitle, copyLastResponse, recallSpace, recordLocal, recordHistory, queued, cancelQueued, historyFill, historyConsumed, waveTier, waveStyle, maxRows, onEditorRows }: {
   active: boolean
   frozen: boolean
   busy: boolean
@@ -2631,29 +2438,71 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   waveTier: DeepseekWaveTier | null
   /** The ignition style running, if any: Wave / Aurora / Pulse. */
   waveStyle: DeepseekWaveStyle | null
+  /** Maximum physical editor rows the composer may occupy (see composerMaxRows). */
+  maxRows: number
+  /** Reports the editor's current physical row count so the live budget stays exact. */
+  onEditorRows(rows: number): void
 }): ReactElement {
   const columns = useStdout().stdout?.columns ?? 80
+  const stdin = useStdin().stdin
   const [value, setValue] = useState('')
   const [cursor, setCursor] = useState(0)
+  // Codex textarea editing state: a single-entry kill buffer, the vertical
+  // move's preferred display column, the editor's scroll window, and the
+  // bracketed-paste marker state. All of it is editor-local; nothing here
+  // ever reaches the App.
+  const killRef = useRef('')
+  const preferredColumnRef = useRef<number | null>(null)
+  const editorScrollRef = useRef(0)
+  const pasteBracketRef = useRef(false)
+  /** Annotation of the stdin chunk Ink is about to deliver to useInput. */
+  const rawAnnotation = useRef<RawKeyAnnotation>(undefined)
   // Codex shell-style recall: the navigation cursor, the saved draft restored
   // on Down past the newest entry, and the boundary-gate anchor.
   const recall = useRef<RecallState>({ entries: [], index: null, savedDraft: '', lastRecalled: null })
 
-  // A /history panel acceptance lands as a fill: place the text at the end of
-  // the composer and resume recall from that entry.
+  // A /history panel acceptance lands as a fill: place the sanitized text at
+  // the end of the composer and resume recall from that entry.
   useEffect(() => {
     if (historyFill === undefined) return
-    setValue(historyFill.text)
-    setCursor(historyFill.text.length)
+    const safe = sanitizeDraftText(historyFill.text)
+    setValue(safe)
+    setCursor(safe.length)
+    preferredColumnRef.current = null
     setDismissedMenuValue(undefined)
     recall.current = {
       entries: recallSpace,
       index: historyFill.index,
-      savedDraft: historyFill.text,
-      lastRecalled: historyFill.text,
+      savedDraft: safe,
+      lastRecalled: safe,
     }
     historyConsumed()
   }, [historyFill, recallSpace, historyConsumed])
+
+  // Home/End and the Backspace-vs-Delete family never survive Ink's parser
+  // as distinct keys, and kitty CSI-u forms (pushed at mount so Shift+Enter
+  // is reportable) parse as unnamed junk Ink would insert as draft text.
+  // Patch stdin.read — the single choke point Ink's input loop pulls every
+  // chunk through — to first rewrite decodable CSI-u sequences to their
+  // legacy bytes, then annotate the resulting chunk before Ink emits the
+  // matching 'input' event, so the useInput handler below reads the
+  // annotation for exactly the chunk it is processing. Ink receives and
+  // parses the normalized string; every other byte passes through untouched.
+  useEffect(() => {
+    if (stdin === undefined) return
+    const originalRead = stdin.read.bind(stdin)
+    const patchedRead = function patchedRead(this: typeof stdin, ...args: Parameters<typeof originalRead>) {
+      const chunk = originalRead(...args)
+      if (chunk === null) return chunk
+      const normalized = normalizeKeyboardChunk(typeof chunk === 'string' ? chunk : String(chunk))
+      rawAnnotation.current = annotateRawKey(normalized)
+      return normalized
+    } as typeof stdin.read
+    stdin.read = patchedRead
+    return () => {
+      stdin.read = originalRead as typeof stdin.read
+    }
+  }, [stdin])
 
   // Keep the navigation's recall space fresh while browsing state survives
   // (new local submissions extend the space; the index stays valid unless
@@ -2733,6 +2582,23 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
     setDismissedMenuValue(undefined)
   }
 
+  /** Apply one editor edit: draft, cursor, kill buffer, menu reset. */
+  const applyEdit = (edit: EditResult): void => {
+    if (edit.killed !== undefined && edit.killed !== '') killRef.current = edit.killed
+    setValue(edit.value)
+    setCursor(edit.cursor)
+    preferredColumnRef.current = null
+    setCompletionIndex(0)
+    setDismissedMenuValue(undefined)
+  }
+
+  /** Move the cursor without editing; horizontal moves clear the column preference. */
+  const moveCursorTo = (next: number): void => {
+    if (next === cursor) return
+    setCursor(next)
+    preferredColumnRef.current = null
+  }
+
   useInput((input, key) => {
     // Modal ownership: approval/question/model dialogs consume all keys.
     if (!active) return
@@ -2786,6 +2652,12 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
       return
     }
     if (key.ctrl && input === 'd') {
+      // Codex: Ctrl+D deletes forward while a draft exists; the app-level
+      // exit only fires from an empty composer.
+      if (value !== '') {
+        applyEdit(deleteForward(value, cursor))
+        return
+      }
       if (busy) notify('cancel the running turn before exiting (Esc or Ctrl+C)', 'warning')
       else quit()
       return
@@ -2813,6 +2685,11 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
     // forms before treating the input as ordinary draft text.
     const shiftEnterSequence = input === '[13;2u' || input === '[27;2;13~'
     if (shiftEnterSequence || key.return) {
+      // A newline inside an open bracketed paste inserts; it never submits.
+      if (pasteBracketRef.current) {
+        applyEdit(insertText(value, cursor, '\n'))
+        return
+      }
       // Keep plain Enter for submission. Enhanced terminals expose Shift+Enter
       // as a distinct key; alt/meta+Enter and Ctrl+J remain compatibility
       // bindings for terminals that cannot report the Shift modifier.
@@ -2985,29 +2862,66 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
       setCompletionIndex(index => (index + 1) % menuRows.length)
       return
     }
-    if (key.upArrow) {
-      // Claude-Code shell recall: Up always walks the global history (the
-      // current draft is saved for Down-past-newest restore); the boundary
-      // gate from Codex only blocks interior multiline movement, which the
-      // user experience here deliberately skips.
-      if (recall.current.entries.length === 0) return
-      const step = recallOlder(recall.current, value)
-      recall.current = step.state
-      if (step.entry !== undefined) {
-        setValue(step.entry)
-        setCursor(step.entry.length)
-        setDismissedMenuValue(undefined)
+    // Raw-annotated keys (Home/End, the delete family): Ink's own flags for
+    // the same chunk are blank or blurred, so the read-patch annotation is
+    // authoritative whenever it is set.
+    const rawKey = rawAnnotation.current
+    if (rawKey !== undefined) {
+      if (rawKey === 'home') moveCursorTo(lineBounds(value, cursor).start)
+      else if (rawKey === 'end') moveCursorTo(lineBounds(value, cursor).end)
+      else if (rawKey === 'delete-backward') applyEdit(deleteBackward(value, cursor))
+      else if (rawKey === 'delete-word-backward') applyEdit(deleteWordBackward(value, cursor))
+      else if (rawKey === 'delete-forward') applyEdit(deleteForward(value, cursor))
+      else applyEdit(deleteWordForward(value, cursor))
+      return
+    }
+    if (key.upArrow || key.downArrow) {
+      // Codex boundary gate: shell recall runs from an empty draft, or from
+      // a boundary of a draft that still matches the last recalled entry;
+      // every interior Up/Down moves the caret across the multiline draft.
+      if (recall.current.entries.length > 0 && shouldRecallNavigate(value, cursor, recall.current.lastRecalled)) {
+        const step = key.upArrow ? recallOlder(recall.current, value) : recallNewer(recall.current)
+        recall.current = step.state
+        if (step.entry !== undefined) {
+          const safe = sanitizeDraftText(step.entry)
+          setValue(safe)
+          setCursor(safe.length)
+          preferredColumnRef.current = null
+          setDismissedMenuValue(undefined)
+        }
+        return
+      }
+      const model = editorModel(value, Math.max(1, columns - 6))
+      const preferred = preferredColumnRef.current ?? caretSite(model, cursor).column
+      const next = moveCursorVertically(model, cursor, preferred, key.upArrow ? -1 : 1)
+      if (next !== cursor) {
+        setCursor(next)
+        preferredColumnRef.current = preferred
       }
       return
     }
-    if (key.downArrow) {
-      if (recall.current.entries.length === 0) return
-      const step = recallNewer(recall.current)
-      recall.current = step.state
-      if (step.entry !== undefined) {
-        setValue(step.entry)
-        setCursor(step.entry.length)
-        setDismissedMenuValue(undefined)
+    // Ctrl+P / Ctrl+N share the Up/Down contract (Codex binds them to
+    // move_up/move_down, so the history gate applies first).
+    if (key.ctrl && (input === 'p' || input === 'n')) {
+      const up = input === 'p'
+      if (recall.current.entries.length > 0 && shouldRecallNavigate(value, cursor, recall.current.lastRecalled)) {
+        const step = up ? recallOlder(recall.current, value) : recallNewer(recall.current)
+        recall.current = step.state
+        if (step.entry !== undefined) {
+          const safe = sanitizeDraftText(step.entry)
+          setValue(safe)
+          setCursor(safe.length)
+          preferredColumnRef.current = null
+          setDismissedMenuValue(undefined)
+        }
+        return
+      }
+      const model = editorModel(value, Math.max(1, columns - 6))
+      const preferred = preferredColumnRef.current ?? caretSite(model, cursor).column
+      const next = moveCursorVertically(model, cursor, preferred, up ? -1 : 1)
+      if (next !== cursor) {
+        setCursor(next)
+        preferredColumnRef.current = preferred
       }
       return
     }
@@ -3015,33 +2929,68 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
       acceptMenuCandidate()
       return
     }
-    if (key.backspace || key.delete) {
-      if (cursor > 0) {
-        setValue(value.slice(0, cursor - 1) + value.slice(cursor))
-        setCursor(cursor - 1)
-        setCompletionIndex(0)
-        setDismissedMenuValue(undefined)
-      }
-      return
-    }
+    // Codex editor keymap: Alt/Ctrl+arrows and Alt+B/F move by word pieces;
+    // plain arrows and Ctrl+B/F move by grapheme.
     if (key.leftArrow) {
-      setCursor(Math.max(0, cursor - 1))
+      moveCursorTo(key.meta || key.ctrl ? moveWordLeft(value, cursor) : moveCursorBy(value, cursor, -1))
       return
     }
     if (key.rightArrow) {
-      setCursor(Math.min(value.length, cursor + 1))
+      moveCursorTo(key.meta || key.ctrl ? moveWordRight(value, cursor) : moveCursorBy(value, cursor, 1))
+      return
+    }
+    if (key.meta && input === 'b') {
+      moveCursorTo(moveWordLeft(value, cursor))
+      return
+    }
+    if (key.meta && input === 'f') {
+      moveCursorTo(moveWordRight(value, cursor))
+      return
+    }
+    if (key.ctrl && input === 'b') {
+      moveCursorTo(moveCursorBy(value, cursor, -1))
+      return
+    }
+    if (key.ctrl && input === 'f') {
+      moveCursorTo(moveCursorBy(value, cursor, 1))
+      return
+    }
+    // Ctrl+W and Alt+Backspace delete the previous word piece into the kill
+    // buffer; Alt+D and the raw Ctrl/Alt+Delete variants kill forward.
+    if (key.ctrl && input === 'w') {
+      applyEdit(deleteWordBackward(value, cursor))
+      return
+    }
+    if (key.meta && input === 'd') {
+      applyEdit(deleteWordForward(value, cursor))
+      return
+    }
+    // Un-annotated backspace/delete (Ink maps both  and  here):
+    // delete the grapheme before the cursor.
+    if (key.backspace || key.delete) {
+      applyEdit(deleteBackward(value, cursor))
+      return
+    }
+    // Readline parity over the LOGICAL line: A/E to its ends, U/K kill to
+    // them (filling the single kill buffer), Y yanks it back.
+    if (key.ctrl && input === 'a') {
+      moveCursorTo(lineBounds(value, cursor).start)
+      return
+    }
+    if (key.ctrl && input === 'e') {
+      moveCursorTo(lineBounds(value, cursor).end)
       return
     }
     if (key.ctrl && input === 'u') {
-      setValue('')
-      setCursor(0)
-      setDismissedMenuValue(undefined)
+      applyEdit(killToLineStart(value, cursor))
       return
     }
-    // Readline parity: Ctrl+K cuts from the cursor to the end of the line.
     if (key.ctrl && input === 'k') {
-      setValue(value.slice(0, cursor))
-      setDismissedMenuValue(undefined)
+      applyEdit(killToLineEnd(value, cursor))
+      return
+    }
+    if (key.ctrl && input === 'y') {
+      if (killRef.current !== '') applyEdit(insertText(value, cursor, killRef.current))
       return
     }
     // Ctrl+L refreshes the screen (readline convention): raw ANSI clear
@@ -3051,19 +3000,22 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
       refresh()
       return
     }
-    if (key.ctrl && input === 'a') {
-      setCursor(0)
-      return
-    }
-    if (key.ctrl && input === 'e') {
-      setCursor(value.length)
-      return
-    }
     if (input !== '' && !key.ctrl && !key.meta) {
-      setValue(value.slice(0, cursor) + input + value.slice(cursor))
-      setCursor(cursor + input.length)
-      setCompletionIndex(0)
-      setDismissedMenuValue(undefined)
+      // Bracketed-paste wrappers arrive as unknown escape sequences stripped
+      // of their ESC. Markers may ride their own chunk or the edges of a
+      // content chunk; strip every occurrence and track the open-paste flag
+      // so a chunk that is exactly LF inserts instead of submitting.
+      let text = input
+      if (text.includes('[200~')) {
+        pasteBracketRef.current = true
+        text = text.replaceAll('[200~', '')
+      }
+      if (text.includes('[201~')) {
+        pasteBracketRef.current = false
+        text = text.replaceAll('[201~', '')
+      }
+      if (text === '') return
+      applyEdit(insertText(value, cursor, text))
     }
   })
 
@@ -3109,6 +3061,29 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   const tierHues = waveTier === null ? null : deepseekWaveHues(waveTier)
   const promptColor = tierHues === null ? inkColor(getPalette().brand) : inkColor(tierHues[0])
   const promptGlyph = waveTier === 'flash' ? '›' : waveTier === 'deepseek' ? '»' : '❯'
+  // The multiline editor model: the sanitized draft hard-wrapped into
+  // column-safe physical rows, with the caret mapped to its exact row and
+  // column. Computed before the frozen path so the row report below runs
+  // unconditionally.
+  const editorColumns = Math.max(1, columns - 6)
+  const editorViewModel = editorModel(value, editorColumns)
+  const clampedCursor = clampCursor(value, cursor)
+  const caret = caretSite(editorViewModel, clampedCursor)
+  const editorWindowRows = Math.min(editorViewModel.rows.length, Math.max(1, maxRows))
+  const maxEditorScroll = Math.max(0, editorViewModel.rows.length - editorWindowRows)
+  const currentEditorScroll = Math.min(Math.max(0, editorScrollRef.current), maxEditorScroll)
+  // Codex effective_scroll: no scrolling while the rows fit; otherwise the
+  // window follows the caret row with as little movement as possible.
+  const editorWindowStart = caret.row < currentEditorScroll
+    ? caret.row
+    : caret.row >= currentEditorScroll + editorWindowRows
+      ? caret.row - editorWindowRows + 1
+      : currentEditorScroll
+  editorScrollRef.current = editorWindowStart
+  const editorRowCount = frozen ? 1 : editorWindowRows
+  useEffect(() => {
+    onEditorRows(editorRowCount)
+  }, [editorRowCount, onEditorRows])
   if (frozen) {
     // A pending deletion turns the box into the confirm prompt: the y/n is
     // typed HERE, with a readable warn-styled hint instead of a dim footer.
@@ -3154,22 +3129,41 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
     rows: menuRows,
   })
 
-  // Static row (idle, busy, or after the wave): prompt + editor window. The
-  // prompt marker keeps the tier accent while an official DeepSeek model is
-  // applied, restoring the static brand ❯ on any other route.
-  const editor = editorWindow(value, cursor, Math.max(1, columns - 6))
-  const staticRow = createElement(
-    Text,
-    { wrap: 'truncate-end' },
-    busy
-      ? createElement(BusyChase)
-      : createElement(Text, { color: promptColor, bold: tierActive ? true : undefined }, `${promptGlyph} `),
-    value === '' ? undefined : editor.before,
-    createElement(CursorBlock, { char: editor.caret }),
-    value === '' && !busy
-      ? createElement(Text, { dimColor: true }, COMPOSER_PLACEHOLDER)
-      : editor.after,
-  )
+  // The multiline editor (idle, busy, or after the wave): every visible
+  // physical row renders inside the frame, the prompt marker leading the
+  // first and a two-space indent aligning continuations under the text
+  // column — the same gutter reply rows use. The caret is the inverse block
+  // on its exact grapheme, so wide CJK cells and emoji clusters position the
+  // block precisely. The prompt marker keeps the tier accent while an
+  // official DeepSeek model is applied, restoring the static brand ❯ on any
+  // other route.
+  const editorRows: ReactElement[] = []
+  for (let index = editorWindowStart; index < Math.min(editorViewModel.rows.length, editorWindowStart + editorWindowRows); index += 1) {
+    const row = editorViewModel.rows[index]!
+    const caretAt = index === caret.row ? row.offsets.indexOf(clampedCursor) : -1
+    const before = caretAt > 0 ? row.text.slice(0, row.cuts[caretAt]!) : ''
+    const caretChar = caretAt >= 0 && caretAt < row.cuts.length - 1 ? row.text.slice(row.cuts[caretAt]!, row.cuts[caretAt + 1]!) : ' '
+    const after = caretAt < 0
+      ? row.text
+      : caretAt < row.cuts.length - 1
+        ? row.text.slice(row.cuts[caretAt + 1]!)
+        : ''
+    editorRows.push(createElement(
+      Text,
+      { key: index, wrap: 'truncate-end' },
+      index === 0
+        ? busy
+          ? createElement(BusyChase)
+          : createElement(Text, { color: promptColor, bold: tierActive ? true : undefined }, `${promptGlyph} `)
+        : '  ',
+      before,
+      createElement(CursorBlock, { key: 'caret', char: caretChar }),
+      index === 0 && value === '' && !busy
+        ? createElement(Text, { dimColor: true }, COMPOSER_PLACEHOLDER)
+        : after,
+    ))
+  }
+  const staticEditor = createElement(Box, { flexDirection: 'column' }, ...editorRows)
 
   // Wave row: the input row assembled column by column, each cell carrying
   // the sampled wave `backgroundColor` (null outside the crest → transparent),
@@ -3250,7 +3244,7 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
     Box,
     { flexDirection: 'column' },
     menu,
-    waveTick !== null && waveTier !== null && !busy ? waveRow() : frame(staticRow),
+    waveTick !== null && waveTier !== null && !busy ? waveRow() : frame(staticEditor),
   )
 }
 
@@ -3283,6 +3277,8 @@ interface SettledRowsCache {
   showReasoning: boolean
   /** The refreshEpoch the rows were built for; a bump forces a full rebuild. */
   epoch: number
+  /** The terminal width the rows were wrapped for; a change forces a rebuild. */
+  columns: number
   /** The flat row list (header + per-entry before/box/after). */
   flat: ReactElement[]
 }
@@ -3294,12 +3290,21 @@ interface SettledRowsResult {
   built: number
 }
 
+/** Wrap the settled row model in the shared two-column transcript gutter. */
+function settledRowBox(entry: TranscriptEntry, index: number, showReasoning: boolean, columns: number): ReactElement {
+  // The SAME physical-row pipeline as the live tail (settledEntryLines),
+  // rendered at the SAME gutter (paddingX 2, budget columns-4): a row
+  // looks identical the moment it settles, and wrapped continuations keep
+  // their hanging indent instead of resetting to column zero.
+  const row = createElement(StyledRows, { lines: settledEntryLines(entry, Math.max(10, columns - 4), showReasoning) })
+  return createElement(Box, { key: index, paddingX: 2 }, row)
+}
+
 /** Build one settled row (row Box plus its roomy-prompt spacers). */
-function buildSettledRow(entry: TranscriptEntry, index: number, showReasoning: boolean): SettledRowRecord {
-  const row = createElement(EntryLine, { entry, showReasoning, verbose: false })
+function buildSettledRow(entry: TranscriptEntry, index: number, showReasoning: boolean, columns: number): SettledRowRecord {
   const roomyPrompt = entry.kind === 'user' && !entry.notice
   return {
-    box: createElement(Box, { key: index, paddingX: 1 }, row),
+    box: settledRowBox(entry, index, showReasoning, columns),
     before: roomyPrompt
       ? createElement(Box, { key: `prompt-before-${index}`, paddingX: 1 }, createElement(Text, null, ' '))
       : undefined,
@@ -3325,10 +3330,11 @@ function buildSettledRow(entry: TranscriptEntry, index: number, showReasoning: b
  * on the append/toggle paths to stay O(delta).
  *
  * Full rebuilds run only on the rare, deliberate paths: no cache yet, a
- * source-backed replay (`epoch` bump: resize / Ctrl+L / Ctrl+R remounts
+ * source-backed replay (`epoch` bump: resize / Ctrl+L remounts
  * `<Static>` and must re-flush the CURRENT rows), a `resumed` change, or a shrink
- * (`store.reset`). A reasoning toggle rebuilds only the rows whose text
- * depends on it, preserving the other rows' element identity.
+ * (`store.reset`). Ctrl+R never rewrites rows already emitted to native
+ * scrollback; it changes the live stream and the presentation captured by
+ * assistant entries that settle afterward.
  */
 export function computeSettledRows(
   previous: SettledRowsCache | undefined,
@@ -3337,6 +3343,7 @@ export function computeSettledRows(
   showReasoning: boolean,
   resumed: boolean,
   epoch: number,
+  columns = 80,
 ): SettledRowsResult {
   if (previous === undefined || previous.epoch !== epoch || previous.resumed !== resumed
     || settled < previous.entries.length) {
@@ -3345,42 +3352,22 @@ export function computeSettledRows(
     const flat: ReactElement[] = [createElement(Header, { key: 'header', resumed })]
     for (let index = 0; index < settled; index++) {
       const entry = entries[index]
-      const record = buildSettledRow(entry, index, showReasoning)
+      const rowReasoning = previous?.records.get(entry)?.showReasoning ?? showReasoning
+      const record = buildSettledRow(entry, index, rowReasoning, columns)
       records.set(entry, record)
       if (record.before !== undefined) flat.push(record.before)
       flat.push(record.box)
       if (record.after !== undefined) flat.push(record.after)
     }
     return {
-      cache: { entries: entries.slice(0, settled), records, header: flat[0]!, resumed, showReasoning, epoch, flat },
+      cache: { entries: entries.slice(0, settled), records, header: flat[0]!, resumed, showReasoning, epoch, columns, flat },
       built: settled,
     }
   }
   if (previous.showReasoning !== showReasoning) {
-    // Reasoning toggle: only rows whose text depends on it rebuild; spacers
-    // and the other rows keep their element identity.
-    const records = previous.records
-    const flat: ReactElement[] = [previous.header]
-    let built = 0
-    for (let index = 0; index < previous.entries.length; index++) {
-      const entry = previous.entries[index]
-      const record = records.get(entry)!
-      const current = record.reasonSensitive
-        ? {
-          ...record,
-          box: createElement(Box, { key: index, paddingX: 1 }, createElement(EntryLine, { entry, showReasoning, verbose: false })),
-          showReasoning,
-        }
-        : record
-      if (current !== record) {
-        records.set(entry, current)
-        built += 1
-      }
-      if (current.before !== undefined) flat.push(current.before)
-      flat.push(current.box)
-      if (current.after !== undefined) flat.push(current.after)
-    }
-    return { cache: { ...previous, records, showReasoning, flat }, built }
+    // Native scrollback is immutable. Record only the mode future settled
+    // entries will capture; the existing flat row identity stays untouched.
+    return { cache: { ...previous, showReasoning }, built: 0 }
   }
   if (settled === previous.entries.length) {
     // Nothing below the boundary changed (a pending retirement above it, a
@@ -3394,7 +3381,7 @@ export function computeSettledRows(
   const added: ReactElement[] = []
   for (let index = previous.entries.length; index < settled; index++) {
     const entry = entries[index]
-    const record = buildSettledRow(entry, index, showReasoning)
+    const record = buildSettledRow(entry, index, showReasoning, previous.columns)
     records.set(entry, record)
     suffix.push(entry)
     if (record.before !== undefined) added.push(record.before)
@@ -3409,6 +3396,7 @@ export function computeSettledRows(
       resumed: previous.resumed,
       showReasoning,
       epoch: previous.epoch,
+      columns: previous.columns,
       flat: previous.flat.concat(added),
     },
     built: settled - previous.entries.length,
@@ -3667,9 +3655,17 @@ export function App(props: AppProps): ReactElement {
   // settled prefix is permanently final, so a grown boundary builds ONLY the
   // newly settled suffix and reuses every cached element — long histories
   // stop re-creating rows (and re-parsing MarkdownBody) on every durable
-  // event. A source-backed replay (`refreshEpoch` bump: resize / Ctrl+L /
-  // Ctrl+R remounts `<Static>`) rebuilds the CURRENT row set from index 0,
+  // event. A source-backed replay (`refreshEpoch` bump: resize / Ctrl+L)
+  // rebuilds the CURRENT row set from index 0,
   // so the replay stays complete and never ghosts a pending/running tail.
+  // Hook order is unconditional. Its dimensions drive every live-region
+  // budget before any dynamic rows are constructed.
+  const appStdout = useStdout().stdout
+  const [terminalSize, setTerminalSize] = useState(() => ({
+    columns: appStdout?.columns ?? 80,
+    rows: appStdout?.rows ?? 30,
+  }))
+  const terminalSizeRef = useRef(terminalSize)
   const settledRowsCache = useRef<SettledRowsCache | undefined>(undefined)
   const settledRows = useMemo(() => {
     const result = computeSettledRows(
@@ -3679,19 +3675,12 @@ export function App(props: AppProps): ReactElement {
       showReasoning,
       props.resumed,
       refreshEpoch,
+      terminalSize.columns,
     )
     settledRowsCache.current = result.cache
     return result.cache.flat
-  }, [view.entries, settled, showReasoning, props.resumed, refreshEpoch])
+  }, [view.entries, settled, showReasoning, props.resumed, refreshEpoch, terminalSize.columns])
 
-  // Hook order is unconditional. Its dimensions drive every live-region
-  // budget before any dynamic rows are constructed.
-  const appStdout = useStdout().stdout
-  const [terminalSize, setTerminalSize] = useState(() => ({
-    columns: appStdout?.columns ?? 80,
-    rows: appStdout?.rows ?? 30,
-  }))
-  const terminalSizeRef = useRef(terminalSize)
   // One pending synchronized frame covers a debounced resize or explicit
   // source-backed replay. It is closed after the corresponding React commit.
   const synchronizedReplayPending = useRef(false)
@@ -3729,13 +3718,22 @@ export function App(props: AppProps): ReactElement {
   const terminalRows = terminalSize.rows
   const terminalColumns = terminalSize.columns
   const composerGutterRows = layoutGutterRows(terminalRows)
-  // Bottom chrome is now composer (3) + status (up to 2 rows); the budget
-  // keeps the live/streaming area strictly below the terminal height.
-  const dynamicRows = Math.max(1, terminalRows - 13 - composerGutterRows)
+  // The composer's live row count, reported one-way by the editor itself
+  // (frozen modals report 1). This keeps the live/streaming budget exact as
+  // a multiline draft grows, without lifting any editor state into the App.
+  const [composerRows, setComposerRows] = useState(1)
+  const handleEditorRows = useCallback((rows: number): void => {
+    setComposerRows(current => (current === rows ? current : rows))
+  }, [])
+  const composerEditorCap = composerMaxRows(terminalRows)
+  // Bottom chrome is composer (2 borders + composerRows) + menu + status
+  // (up to 2 rows); the budget keeps the live/streaming area strictly below
+  // the terminal height as the editor grows.
+  const dynamicRows = Math.max(1, terminalRows - 13 - composerGutterRows - (composerRows - 1))
   const streamingActive = view.streaming !== '' || view.streamingReasoning !== ''
   const deepDivingVisible = busy && !streamingActive
   const allLiveLines = useMemo(
-    () => view.entries.slice(settled).flatMap(entry => transcriptEntryLines(entry, Math.max(1, terminalColumns - 2))),
+    () => view.entries.slice(settled).flatMap(entry => transcriptEntryLines(entry, Math.max(10, terminalColumns - 4))),
     [view.entries, settled, terminalColumns],
   )
   // Reserve the same stream slice from the moment a turn becomes busy. This
@@ -3773,7 +3771,7 @@ export function App(props: AppProps): ReactElement {
     // (`\x1b[r`) before wiping screen AND scrollback, then home the cursor.
     // A bare `\x1b[2J\x1b[3J\x1b[H` leaves a previously set scroll region in
     // place, so Ink's next repaint positions against stale bounds — the
-    // reported Ctrl+R "positioning" flicker where the screen keeps redrawing.
+    // stale-position flicker where the screen keeps redrawing.
     if (appStdout !== undefined) {
       synchronizedReplayPending.current = true
       appStdout.write(SYNCHRONIZED_UPDATE_BEGIN + RESIZE_REFLOW_CLEAR)
@@ -3785,11 +3783,8 @@ export function App(props: AppProps): ReactElement {
     synchronizedReplayPending.current = false
     appStdout.write(SYNCHRONIZED_UPDATE_END)
   }, [appStdout, refreshEpoch])
-  // Ctrl+R while a turn streams changes only the live reasoning region. A
-  // source-backed Static replay at the stream boundary would clear the entire
-  // terminal exactly when thinking hands off to the answer, which is the
-  // reported full-screen flash. Settled history is refreshed by the explicit
-  // idle toggle, resize, or Ctrl+L paths instead.
+  // Ctrl+R never enters this replay path. Only resize and explicit Ctrl+L
+  // rebuild native scrollback from source.
 
   /** Apply one /model pick: record the selection, close the panel, report via notice. */
   const applyModel = (row: ModelRow, effortId: string | undefined): void => {
@@ -3959,7 +3954,7 @@ export function App(props: AppProps): ReactElement {
         visibleLiveLines.length === 0 ? undefined : createElement(StyledRows, { lines: visibleLiveLines }),
         view.streamingReasoning !== '' && reasoningRows > 0
           ? createElement(StreamTail, {
-            text: showReasoning ? view.streamingReasoning : 'Thinking…',
+            text: showReasoning ? view.streamingReasoning : 'Thinking… (Ctrl+R to expand)',
             prefix: '✻ ',
             continuationPrefix: '  ',
             dim: true,
@@ -4241,12 +4236,11 @@ export function App(props: AppProps): ReactElement {
           props.store.reset()
         },
         refresh: refreshScreen,
-        // Ctrl+R re-renders settled history only while idle. During a live
-        // turn it must stay within the dynamic region; clearing and replaying
-        // Static at the reasoning-to-answer boundary causes a full-screen flash.
+        // Ctrl+R owns only mutable presentation: the current stream and
+        // assistant messages that settle after the toggle. Rows already
+        // emitted through Static are native scrollback and never rewritten.
         toggleReasoning: () => {
           setShowReasoning(current => !current)
-          if (!streamingActive) refreshScreen()
         },
         loadMentions: props.loadMentions,
         cyclePermission: props.cyclePermission,
@@ -4262,6 +4256,8 @@ export function App(props: AppProps): ReactElement {
         historyConsumed,
         waveTier,
         waveStyle,
+        maxRows: composerEditorCap,
+        onEditorRows: handleEditorRows,
       }),
       createElement(StatusLine, {
         facts: {

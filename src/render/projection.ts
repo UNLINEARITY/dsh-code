@@ -69,12 +69,12 @@ export interface PendingEntry {
   images?: readonly ImageBlock['attachment'][]
 }
 
-/** One assembled assistant reply. */
+/** One authoritative assembled assistant reply. */
 export interface AssistantEntry {
   kind: 'assistant'
   /** Joined text blocks of the assistant message. */
   text: string
-  /** Joined reasoning blocks of the same message, empty when the model thought out loud. */
+  /** Joined reasoning blocks from the same assembled message. */
   reasoning: string
 }
 
@@ -500,10 +500,18 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
         }
       }
       if (chunk.type === 'text-delta') {
-        return { ...view, streaming: appendStreamingTail(view.streaming, chunk.text), stats }
+        return {
+          ...view,
+          streaming: appendStreamingTail(view.streaming, chunk.text),
+          stats,
+        }
       }
       if (chunk.type === 'reasoning-delta') {
-        return { ...view, streamingReasoning: appendStreamingTail(view.streamingReasoning, chunk.text), stats }
+        return {
+          ...view,
+          streamingReasoning: appendStreamingTail(view.streamingReasoning, chunk.text),
+          stats,
+        }
       }
       return view
     }
@@ -525,11 +533,7 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
         ...view,
         streaming: '',
         streamingReasoning: '',
-        entries: [...view.entries, {
-          kind: 'assistant',
-          text,
-          reasoning,
-        }],
+        entries: [...view.entries, { kind: 'assistant', text, reasoning }],
         stats: {
           ...view.stats,
           llmMs: view.stats.llmMs + (started === undefined ? 0 : Math.max(0, event.time - started)),
@@ -564,8 +568,10 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
       return {
         ...view,
         toolCallOrdinal: ordinal,
-        entries: [...view.entries, {
-          kind: 'tool',
+        entries: [
+          ...view.entries,
+          {
+            kind: 'tool',
           callId: data.callId,
           ordinal,
           name: data.name,
@@ -651,7 +657,12 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
       }
       view.anchors.turnSteps.set(event.data.turn, key)
       view.anchors.stepStart.set(key, event.time)
-      return { ...view, stats: { ...view.stats, steps: view.stats.steps + 1 } }
+      return {
+        ...view,
+        streaming: '',
+        streamingReasoning: '',
+        stats: { ...view.stats, steps: view.stats.steps + 1 },
+      }
     }
     case 'turn/end': {
       const reason = event.data.reason
@@ -695,13 +706,24 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
         for (const callId of turnToolSet) view.anchors.toolStart.delete(callId)
         view.anchors.turnTools.delete(event.data.turn)
       }
-      if (appended.length === 0) return { ...view, busy: false, busySince: 0 }
-      return { ...view, busy: false, busySince: 0, entries: [...view.entries, ...appended] }
+      if (appended.length === 0) {
+        return { ...view, busy: false, busySince: 0, streaming: '', streamingReasoning: '' }
+      }
+      return {
+        ...view,
+        busy: false,
+        busySince: 0,
+        streaming: '',
+        streamingReasoning: '',
+        entries: [...view.entries, ...appended],
+      }
     }
     case 'llm/retry': {
       const data = event.data
       return {
         ...view,
+        streaming: '',
+        streamingReasoning: '',
         entries: [...view.entries, {
           kind: 'retry',
           retryId: data.retryId,
@@ -1224,12 +1246,16 @@ export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent):
       }
       acc.turnSteps.set(event.data.turn, key)
       acc.stepStart.set(key, event.time)
+      acc.streaming = ''
+      acc.streamingReasoning = ''
       acc.stats = { ...acc.stats, steps: acc.stats.steps + 1 }
       return
     }
     case 'turn/end': {
       const reason = event.data.reason
       const appended: TranscriptEntry[] = []
+      acc.streamingReasoning = ''
+      acc.streaming = ''
       if (reason.kind === 'error') {
         const recovery = reason.error.code === 'MISSING_CREDENTIAL'
           ? ' · open /model to add an API key'
@@ -1268,6 +1294,8 @@ export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent):
     }
     case 'llm/retry': {
       const data = event.data
+      acc.streaming = ''
+      acc.streamingReasoning = ''
       appendReplayEntry(acc, {
         kind: 'retry',
         retryId: data.retryId,

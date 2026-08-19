@@ -147,4 +147,104 @@ describe('streaming token bursts', () => {
       errorSpy.mockRestore()
     }
   })
+
+  it('renders sustained microtask-spaced token batches without nested-update warnings', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { stdin, stdout, read } = tty(140, 30)
+    const store = createTranscriptStore()
+    const approvalSnapshot = frozen({ pending: undefined, answered: false, queued: 0 })
+    const questionSnapshot = frozen({ pending: undefined })
+
+    const props: AppProps = {
+      store,
+      subagents: { subscribe: () => unsubscribe, getSnapshot: () => EMPTY_AGENTS },
+      approval: { subscribe: () => unsubscribe, getSnapshot: () => approvalSnapshot },
+      questions: { subscribe: () => unsubscribe, getSnapshot: () => questionSnapshot, submit: noop, cancel: noop },
+      commands: { descriptors: [], subscribe: () => unsubscribe },
+      skills: { rows: [], subscribe: () => unsubscribe },
+      model: 'zai/glm-5.2',
+      effort: '',
+      cwd: 'dsh-cli',
+      workspaceRoot: 'C:\\repo\\dsh-cli',
+      branch: 'main',
+      sessionId: 'ab12cd34',
+      resumed: false,
+      mode: 'standard',
+      permission: 'workspace-write',
+      dispatch: noop,
+      steer: noop,
+      interrupt: () => false,
+      quit: noop,
+      loadModels: async () => ({ rows: [], failures: [] }),
+      loadMentions: async () => [],
+      selectModel: () => 'zai/glm-5.2',
+      subagentModel: '',
+      setSubagentModel: () => '',
+      clearSubagentModel: noop,
+      deleteSession: async () => '',
+      cyclePermission: () => '',
+      setPermission: id => id,
+      exportTranscript: async () => {},
+      renameTitle: () => '',
+      loadPresets: async () => [],
+      loadPermissions: async () => [],
+      switchMode: async id => id,
+      createSession: noop,
+      loadSessions: async () => [],
+      loadSubagents: async () => [],
+      loadSessionTranscript: async () => '',
+      switchSession: noop,
+      cancelSessionSwitch: () => false,
+      loadPlugins: () => [],
+      statusline: DEFAULT_STATUSLINE_ITEMS,
+      saveStatusline: noop,
+      history: [],
+      recordHistory: noop,
+      cancelQueued: noop,
+      onBridgeReady: noop,
+    }
+
+    const instance = render(createElement(App, props), {
+      stdin,
+      stdout,
+      stderr: stdout,
+      exitOnCtrlC: false,
+      patchConsole: false,
+    })
+
+    try {
+      store.apply({ type: 'turn/start', seq: 1, time: 1, data: { turn: 1 } } as SessionEvent)
+      store.apply({ type: 'step/start', seq: 2, time: 2, data: { turn: 1, step: 1 } } as SessionEvent)
+      await wait()
+
+      // The adapter's REAL sustained shape: 150 sub-millisecond batches, each
+      // its own microtask — not one synchronous drain. A microtask-spaced
+      // notification chain once raced SyncLane uETS rerenders across batches
+      // past React's 50-deep nested-update guard; the setImmediate boundary
+      // lets every render finish before the next notification fires.
+      let seq = 10
+      for (let index = 0; index < 150; index += 1) {
+        store.apply({
+          type: 'assistant/chunk', seq: seq++, time: 3,
+          data: { turn: 1, step: 1, chunk: { type: 'reasoning-delta', text: `r${index} ` } },
+        } as unknown as SessionEvent)
+        store.apply({
+          type: 'assistant/chunk', seq: seq++, time: 3,
+          data: { turn: 1, step: 1, chunk: { type: 'reasoning-delta', text: `r${index}b ` } },
+        } as unknown as SessionEvent)
+        await Promise.resolve()
+        await Promise.resolve()
+      }
+      await wait()
+
+      const calls = errorSpy.mock.calls.flat().join(' ')
+      expect(calls).not.toContain('Maximum update depth exceeded')
+      // The macrotask-coalesced renders still paint the thinking tail.
+      const plain = read().replace(/\x1b\[[0-9;]*[A-Za-z]/g, '')
+      expect(plain).toContain('Thinking')
+    } finally {
+      instance.unmount()
+      errorSpy.mockRestore()
+    }
+  })
 })

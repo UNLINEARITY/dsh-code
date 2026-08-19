@@ -61,11 +61,11 @@ describe('createSubagentFeed', () => {
     const feed = createSubagentFeed()
     feed.apply('a', event('request/header', {}, 1))
     feed.apply('b', event('tool/call', { name: 'grep' }, 2))
-    await Promise.resolve()
+    await new Promise<void>(resolve => setTimeout(resolve, 25))
     expect(feed.getSnapshot().map(row => row.id)).toEqual(['a', 'b'])
     expect(feed.getSnapshot()[1]!.activity).toBe('tool grep')
     feed.reset()
-    await Promise.resolve()
+    await new Promise<void>(resolve => setTimeout(resolve, 25))
     expect(feed.getSnapshot()).toEqual([])
   })
 
@@ -79,7 +79,7 @@ describe('createSubagentFeed', () => {
     feed.apply('a', event('assistant/chunk', { chunk: { type: 'text-delta', text: 'x' } }, 2))
     feed.apply('a', event('assistant/chunk', { chunk: { type: 'text-delta', text: 'y' } }, 3))
     expect(notified).toBe(0)
-    await Promise.resolve()
+    await new Promise<void>(resolve => setTimeout(resolve, 25))
     expect(notified).toBe(1)
     // The snapshot itself folded every event (view reads stay synchronous).
     expect(feed.getSnapshot()[0]!.activity).toBe('thinking…')

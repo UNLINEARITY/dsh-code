@@ -39,6 +39,15 @@ function chunkEvent(text: string, seq: number): SessionEvent {
   } as SessionEvent
 }
 
+function reasoningChunkEvent(text: string, seq: number): SessionEvent {
+  return {
+    type: 'assistant/chunk',
+    seq,
+    time: 0,
+    data: { turn: 1, step: 1, chunk: { type: 'reasoning-delta', index: 0, text } },
+  } as SessionEvent
+}
+
 function assistantEvent(text: string, seq: number): SessionEvent {
   return {
     type: 'assistant/message',
@@ -133,14 +142,8 @@ describe('transcript projection', () => {
     ])
   })
 
-  it('accumulates reasoning deltas into the thinking buffer and folds them into the assembled entry', () => {
-    const reasoningDelta = (text: string, seq: number): SessionEvent => ({
-      type: 'assistant/chunk',
-      seq,
-      time: seq,
-      data: { turn: 1, step: 1, chunk: { type: 'reasoning-delta', index: 0, text } },
-    } as unknown as SessionEvent)
-    let view = projectEvents([reasoningDelta('let me', 1), reasoningDelta(' think', 2)])
+  it('settles reasoning and answer as one authoritative assistant entry', () => {
+    let view = projectEvents([reasoningChunkEvent('let me', 1), reasoningChunkEvent(' think', 2)])
     expect(view.streamingReasoning).toBe('let me think')
     view = projectEvent(view, {
       type: 'assistant/message',
@@ -158,8 +161,11 @@ describe('transcript projection', () => {
       },
     } as unknown as SessionEvent)
     expect(view.streamingReasoning).toBe('')
-    const last = view.entries[view.entries.length - 1]
-    expect(last).toEqual({ kind: 'assistant', text: 'here is the answer', reasoning: 'let me think' })
+    expect(view.entries).toEqual([{
+      kind: 'assistant',
+      text: 'here is the answer',
+      reasoning: 'let me think',
+    }])
   })
 
   it('bounds the in-flight reasoning duplicate while keeping the newest tail', () => {
@@ -177,6 +183,142 @@ describe('transcript projection', () => {
     ] as unknown as readonly SessionEvent[])
     expect(view.streamingReasoning.length).toBeLessThanOrEqual(65_536)
     expect(view.streamingReasoning.endsWith(suffix)).toBe(true)
+  })
+
+  it('resets both preview channels when a new step supersedes the old one', () => {
+    const view = projectEvents([
+      { type: 'step/start', seq: 1, time: 1, data: { turn: 1, step: 1 } } as SessionEvent,
+      reasoningChunkEvent('old reasoning', 2),
+      chunkEvent('old answer', 3),
+      { type: 'step/start', seq: 4, time: 4, data: { turn: 1, step: 2 } } as SessionEvent,
+    ])
+    expect(view.streamingReasoning).toBe('')
+    expect(view.streaming).toBe('')
+  })
+
+  it('keeps reasoning live through the thinking-to-answer handoff', () => {
+    let view = projectEvents([reasoningChunkEvent('think ', 1), reasoningChunkEvent('hard', 2), chunkEvent('the answer', 3)])
+    // The first text delta is only a presentation handoff; neither preview is
+    // durable until the assembled assistant message arrives.
+    expect(view.entries).toEqual([])
+    expect(view.streamingReasoning).toBe('think hard')
+    expect(view.streaming).toBe('the answer')
+    // Later deltas keep the entries identity (no duplicate flush).
+    const entriesBefore = view.entries
+    view = projectEvent(view, chunkEvent(' continues', 4))
+    expect(view.entries).toBe(entriesBefore)
+    // Settlement appends one assistant entry from the assembled message.
+    view = projectEvent(view, {
+      type: 'assistant/message', seq: 5, time: 0,
+      data: {
+        turn: 1,
+        step: 1,
+        message: createAssistantMessage({
+          content: [
+            { type: 'reasoning', text: 'think harder' },
+            { type: 'text', text: 'the answer continues' },
+          ],
+          source: { provider: 'p', model: 'm' },
+        }),
+      },
+    } as SessionEvent)
+    expect(view.entries).toEqual([{
+      kind: 'assistant',
+      text: 'the answer continues',
+      reasoning: 'think harder',
+    }])
+  })
+
+  it('does not manufacture a reasoning entry before a tool call', () => {
+    const view = projectEvents([reasoningChunkEvent('plan the edit', 1), toolCallEvent('edit', callId.current, 2)])
+    expect(view.entries.map(entry => entry.kind)).toEqual(['tool'])
+    expect(view.streamingReasoning).toBe('plan the edit')
+  })
+
+  it('joins interleaved assembled reasoning blocks into the assistant entry', () => {
+    const view = projectEvents([
+      reasoningChunkEvent('first segment', 1),
+      chunkEvent('partial', 2),
+      reasoningChunkEvent('second segment', 3),
+      {
+        type: 'assistant/message',
+        seq: 4,
+        time: 0,
+        data: {
+          turn: 1,
+          step: 1,
+          message: createAssistantMessage({
+            content: [
+              { type: 'reasoning', text: 'first segment' },
+              { type: 'text', text: 'partial' },
+              { type: 'reasoning', text: 'second segment' },
+            ],
+          }),
+        },
+      } as unknown as SessionEvent,
+    ])
+    expect(view.entries).toEqual([{
+      kind: 'assistant',
+      text: 'partial',
+      reasoning: 'first segmentsecond segment',
+    }])
+  })
+
+  it('bounds only the live preview and keeps the full assembled reasoning', () => {
+    const huge = 'x'.repeat(70_000)
+    let view = projectEvents([reasoningChunkEvent(huge, 1), chunkEvent('answer', 2)])
+    expect(view.streamingReasoning.length).toBeLessThanOrEqual(65_536)
+    view = projectEvent(view, {
+      type: 'assistant/message', seq: 3, time: 0,
+      data: {
+        turn: 1,
+        step: 1,
+        message: createAssistantMessage({
+          content: [{ type: 'reasoning', text: huge }, { type: 'text', text: 'answer' }],
+          source: { provider: 'p', model: 'm' },
+        }),
+      },
+    } as SessionEvent)
+    expect(view.entries[0]).toEqual({ kind: 'assistant', text: 'answer', reasoning: huge })
+  })
+
+  it('clears an unassembled reasoning preview when the turn aborts', () => {
+    const view = projectEvents([
+      reasoningChunkEvent('half a thought', 1),
+      { type: 'turn/end', seq: 2, time: 0, data: { turn: 1, reason: { kind: 'aborted', reason: { kind: 'user' } } } } as SessionEvent,
+    ])
+    expect(view.entries).toEqual([{ kind: 'turn-marker', text: 'turn cancelled by the user' }])
+    expect(view.streamingReasoning).toBe('')
+  })
+
+  it('replays authoritative assistant reasoning identically from the durable event log', () => {
+    const events: readonly SessionEvent[] = [
+      reasoningChunkEvent('trace ', 1),
+      reasoningChunkEvent('body', 2),
+      chunkEvent('answer', 3),
+      {
+        type: 'assistant/message', seq: 4, time: 0,
+        data: {
+          turn: 1,
+          step: 1,
+          message: createAssistantMessage({
+            content: [
+              { type: 'reasoning', text: 'trace body (assembled)' },
+              { type: 'text', text: 'answer' },
+            ],
+            source: { provider: 'p', model: 'm' },
+          }),
+        },
+      } as SessionEvent,
+    ]
+    let sequential = createTranscriptView()
+    for (const event of events) sequential = projectEvent(sequential, event)
+    expect(sequential).toEqual(projectEvents(events))
+    expect(sequential.entries).toEqual([{
+      kind: 'assistant',
+      text: 'answer',
+      reasoning: 'trace body (assembled)',
+    }])
   })
 
   it('pairs tool calls with their results by call id', () => {
@@ -459,8 +601,9 @@ describe('transcript projection', () => {
   })
 
   it('folds the llm retry pair from scheduled to started', () => {
-    let view = projectEvent(createTranscriptView(), {
-      type: 'llm/retry', seq: 1, time: 0,
+    let view = projectEvents([reasoningChunkEvent('failed reasoning', 1), chunkEvent('failed answer', 2)])
+    view = projectEvent(view, {
+      type: 'llm/retry', seq: 3, time: 0,
       data: {
         retryId: 'r1' as never, turn: 1, step: 1, provider: 'p', mode: 'normal',
         policyKey: 'k', retry: 2, maxRetries: 4, delayMs: 1_500,
@@ -470,8 +613,10 @@ describe('transcript projection', () => {
     expect(view.entries).toEqual([{
       kind: 'retry', retryId: 'r1', attempt: 2, max: 4, code: 'SERVER', delayMs: 1_500, state: 'running',
     }])
+    expect(view.streamingReasoning).toBe('')
+    expect(view.streaming).toBe('')
     view = projectEvent(view, {
-      type: 'llm/retry-started', seq: 2, time: 1_600,
+      type: 'llm/retry-started', seq: 4, time: 1_600,
       data: { retryId: 'r1' as never, turn: 1, step: 1, retry: 2 },
     } as unknown as SessionEvent)
     expect(view.entries[0]).toMatchObject({ kind: 'retry', state: 'done' })

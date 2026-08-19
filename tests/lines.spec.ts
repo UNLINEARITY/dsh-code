@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from 'vitest'
 import { visibleColumns } from '../src/render/markdown.ts'
-import { styledLines, lineSegment, reasoningLines, transcriptEntryLines } from '../src/render/lines.ts'
+import { settledEntryLines, styledLines, lineSegment, reasoningLines, transcriptEntryLines } from '../src/render/lines.ts'
 import type { TranscriptEntry } from '../src/render/projection.ts'
 
 const textOf = (lines: ReturnType<typeof styledLines>): string => lines
@@ -23,8 +23,7 @@ describe('styled terminal lines', () => {
   it('keeps every retained assistant line available to the scrolling caller', () => {
     const reasoning = Array.from({ length: 80 }, (_, index) => `reason-${index}`).join('\n')
     const answer = Array.from({ length: 80 }, (_, index) => `answer-${index}`).join('\n')
-    const entry: TranscriptEntry = { kind: 'assistant', reasoning, text: answer }
-    const lines = transcriptEntryLines(entry, 40)
+    const lines = transcriptEntryLines({ kind: 'assistant', reasoning, text: answer } satisfies TranscriptEntry, 40)
     const text = textOf(lines)
     expect(lines.length).toBeGreaterThanOrEqual(100)
     expect(text).toContain('reason-0')
@@ -49,9 +48,20 @@ describe('styled terminal lines', () => {
     }
   })
 
+  it('does not advertise a live Ctrl+R action on immutable settled scrollback', () => {
+    const lines = settledEntryLines({ kind: 'assistant', reasoning: 'trace', text: 'answer' }, 40, false)
+    const text = textOf(lines)
+    expect(text).toContain('Thinking (5 chars)')
+    expect(text).not.toContain('Ctrl+R to expand')
+  })
+
   it('gives reasoning a Codex-style hanging indent aligned with reply text', () => {
-    const entry: TranscriptEntry = { kind: 'assistant', reasoning: 'first thought\nsecond thought', text: 'answer' }
-    expect(textOf(transcriptEntryLines(entry, 40)).split('\n')).toEqual([
+    const lines = transcriptEntryLines({
+      kind: 'assistant',
+      reasoning: 'first thought\nsecond thought',
+      text: 'answer',
+    } satisfies TranscriptEntry, 40)
+    expect(lines.map(line => textOf([line]))).toEqual([
       '✻ first thought',
       '  second thought',
       '  answer',

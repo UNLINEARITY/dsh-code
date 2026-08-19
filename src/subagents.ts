@@ -9,9 +9,9 @@
  * running state, bounded last-activity text), capped at
  * {@link MAX_SUBAGENT_ROWS}. Rows are advisory display state, rebuilt from
  * live events; nothing here persists or replays. Notification is coalesced
- * to one microtask per delivery burst, mirroring the transcript store's
- * contract (per-token synchronous notify once cascaded past React's nested
- * update limit on the GLM thinking path).
+ * by the same ~16ms frame throttle as the transcript store (per-burst
+ * microtask notify chained SyncLane rerenders past React's nested update
+ * limit; a bare macrotask merge repaints a whole turn's bursts at once).
  *
  * @module @deepseek-ai/dsh-code/subagents
  */
@@ -20,6 +20,9 @@ import type { SessionEvent } from '@deepseek-ai/dsh-session'
 
 /** Hard row cap: a fan-out larger than this stays summarized by the head. */
 export const MAX_SUBAGENT_ROWS = 8
+
+/** Render frame budget: the notification cadence's upper bound. */
+const NOTIFY_FRAME_MS = 16
 
 /** Bounded last-activity text (plain characters, display-sliced later). */
 const MAX_ACTIVITY_CHARS = 80
@@ -129,13 +132,18 @@ export function createSubagentFeed(): SubagentFeedView & {
   let rows: readonly SubagentRow[] = Object.freeze([])
   const listeners = new Set<() => void>()
   let scheduled = false
+  let lastNotifyAt = 0
   const notify = (): void => {
     if (scheduled) return
     scheduled = true
-    queueMicrotask(() => {
+    const wait = NOTIFY_FRAME_MS - (Date.now() - lastNotifyAt)
+    const dispatch = (): void => {
       scheduled = false
+      lastNotifyAt = Date.now()
       for (const listener of listeners) listener()
-    })
+    }
+    if (wait <= 0) setImmediate(dispatch)
+    else setTimeout(dispatch, wait)
   }
   return {
     apply(sessionId: string, event: SessionEvent): void {

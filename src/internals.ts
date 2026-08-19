@@ -8,6 +8,7 @@
 
 import { render } from 'ink'
 import type { ReactElement } from 'react'
+import { BRACKETED_PASTE_DISABLE, BRACKETED_PASTE_ENABLE, KEYBOARD_ENHANCE_DISABLE, KEYBOARD_ENHANCE_ENABLE } from './keyboard.ts'
 
 /** A mounted terminal app instance; the runner owns unmount ordering. */
 export interface TuiMount {
@@ -28,13 +29,25 @@ export const internals: {
   stderr: { write(chunk: string): unknown }
 } = {
   mount: (element: ReactElement): TuiMount => {
-    const instance = render(element)
+    // Codex keyboard_modes parity: push the kitty keyboard protocol so
+    // Shift+Enter arrives as CSI 13;2u instead of a bare CR, and enable
+    // bracketed paste so pasted newlines insert instead of submitting. Both
+    // are inert in terminals without support.
+    process.stdout.write(KEYBOARD_ENHANCE_ENABLE + BRACKETED_PASTE_ENABLE)
+    // App owns Ctrl+C's deliberate three-state contract (interrupt, clear
+    // draft, quit). Ink's default `exitOnCtrlC: true` would intercept the
+    // normalized control byte first, unmount only its renderer, and leave the
+    // Harness runner plus the pushed keyboard protocol alive.
+    const instance = render(element, { exitOnCtrlC: false })
     return {
       rerender(element: ReactElement): void {
         instance.rerender(element)
       },
       unmount(): void {
         instance.unmount()
+        // Pop the stack so the parent shell does not inherit enhanced key
+        // reporting (Codex resets even harder on forced exit).
+        process.stdout.write(KEYBOARD_ENHANCE_DISABLE + BRACKETED_PASTE_DISABLE)
       },
     }
   },

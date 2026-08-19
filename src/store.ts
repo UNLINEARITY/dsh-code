@@ -5,21 +5,26 @@
  *
  * Notification coalescing: the fold stays synchronous — `getView()` always
  * returns the latest state the moment `apply` returns — but listener
- * notification is scheduled on a microtask and deduplicated, so N events
- * delivered inside one synchronous drain (the zai/GLM adapter drains its
- * token buffer in sub-millisecond bursts) produce ONE React re-render.
- * Synchronous per-event notification instead cascades one
- * `useSyncExternalStore` force-update per token inside a single flush; the
- * reconciler counts those as nested passive updates and floods React's
- * "Maximum update depth exceeded" warning past 50 events, besides rendering
- * the whole live tree once per token. A microtask keeps latency within the
- * same macrotask, before Ink's throttled paint.
+ * notification is frame-throttled (~16ms) and deduplicated. The zai/GLM
+ * adapter delivers tokens as a sustained stream of sub-millisecond,
+ * microtask-spaced bursts: per-burst notification renders at microtask
+ * cadence, which chained SyncLane `useSyncExternalStore` rerenders past
+ * React's nested-update limit ("Maximum update depth exceeded"), while a
+ * bare `setImmediate` merges a whole macrotask turn's bursts into one
+ * chunky repaint (streaming text visibly staggers). The frame budget gives
+ * both: an event ≥16ms after the last paint notifies via `setImmediate`
+ * (sub-millisecond latency for sparse/first tokens), and anything denser
+ * defers to the next 16ms boundary — a 60fps render cap that also breaks
+ * the nesting chain by construction.
  *
  * @module @deepseek-ai/dsh-tui/store
  */
 
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { createTranscriptView, projectEvent, projectEvents, type TranscriptView } from './render/projection.ts'
+
+/** Render frame budget: the notification cadence's upper bound. */
+const NOTIFY_FRAME_MS = 16
 
 /** The externally readable, event-fed transcript store for one session. */
 export interface TranscriptStore {
@@ -47,15 +52,22 @@ export function createTranscriptStore(replay?: readonly SessionEvent[]): Transcr
   let view = replay === undefined ? createTranscriptView() : projectEvents(replay)
   const listeners = new Set<() => void>()
   let scheduled = false
+  let lastNotifyAt = 0
   const notify = (): void => {
     if (scheduled) return
     scheduled = true
-    queueMicrotask(() => {
+    const wait = NOTIFY_FRAME_MS - (Date.now() - lastNotifyAt)
+    const dispatch = (): void => {
       scheduled = false
+      lastNotifyAt = Date.now()
       for (const listener of listeners) {
         listener()
       }
-    })
+    }
+    // Sparse streams paint with setImmediate latency; a denser burst defers
+    // to the next frame boundary instead of repainting per microtask batch.
+    if (wait <= 0) setImmediate(dispatch)
+    else setTimeout(dispatch, wait)
   }
   return {
     getView: () => view,
