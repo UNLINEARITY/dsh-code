@@ -11,6 +11,8 @@ import type { SessionDirectoryOptions, SessionRow } from './session-directory.ts
 import { formatRelativeTime } from './session-directory.ts'
 import { panelViewport, revealRow } from './render/inspector.ts'
 import { markdownLines, textLines, type LineStyle, type StyledLine } from './render/lines.ts'
+import { deleteLastGrapheme } from './render/editor.ts'
+import { stripPasteMarkers } from './keyboard.ts'
 import { DEFAULT_STATUSLINE_ITEMS, STATUS_ITEMS, type StatusItemId } from './render/status.ts'
 import { singleLineText, truncateColumns } from './render/text.ts'
 import { getPalette, inkColor } from './theme.ts'
@@ -78,9 +80,15 @@ function ListFrame(props: ListFrameProps): ReactElement {
   )
 }
 
-function editQuery(query: string, input: string, key: { backspace?: boolean; delete?: boolean }): string | undefined {
-  if (key.backspace || key.delete) return query.slice(0, -1)
-  if (input.length === 1 && input >= ' ' && input !== '\x7f') return query + input
+/**
+ * Apply one keystroke to a panel search query. IME commits arrive as one
+ * multi-character chunk, so the whole printable run is appended; paste
+ * markers are stripped and control-laden chunks are ignored.
+ */
+export function editQuery(query: string, input: string, key: { backspace?: boolean; delete?: boolean }): string | undefined {
+  if (key.backspace || key.delete) return deleteLastGrapheme(query)
+  const text = stripPasteMarkers(input)
+  if (text !== '' && !/[\u0000-\u001f\u007f]/u.test(text)) return query + text
   return undefined
 }
 
@@ -404,13 +412,16 @@ export function HistoryPanel({ entries, fill, close }: {
     if (input === 'g') return setCursor(0)
     if (input === 'G') return setCursor(matches.length - 1)
     if (key.backspace) {
-      setQuery(current => current.slice(0, -1))
+      setQuery(current => deleteLastGrapheme(current))
       setCursor(0)
       return
     }
     if (input !== '' && !key.ctrl && !key.meta && !key.shift) {
-      setQuery(current => (current + input).slice(0, 120))
-      setCursor(0)
+      const text = stripPasteMarkers(input)
+      if (text !== '') {
+        setQuery(current => (current + text).slice(0, 120))
+        setCursor(0)
+      }
     }
   })
   const stdout = useStdout().stdout

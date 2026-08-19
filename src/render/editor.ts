@@ -80,6 +80,17 @@ export function clampCursor(value: string, offset: number): number {
 }
 
 /**
+ * Delete the final grapheme cluster (append-only drafts without a cursor).
+ * Surrogate pairs and multi-codepoint emoji stay whole instead of leaving a
+ * lone trailing code unit behind.
+ */
+export function deleteLastGrapheme(text: string): string {
+  if (text === '') return ''
+  const spans = splitGraphemes(text)
+  return text.slice(0, spans[spans.length - 1]!.start)
+}
+
+/**
  * Step the cursor by whole graphemes (negative steps left). The cursor is
  * assumed to sit on a boundary; any drift is clamped first.
  */

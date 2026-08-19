@@ -8,7 +8,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { createAssistantMessage, createToolResultMessage, createUserMessage, type CallId } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type { TodoItem } from '@deepseek-ai/dsh-session'
-import { App, computeSettledRows, type AppProps } from '../src/app.ts'
+import { App, computeSettledRows, editorWindow, type AppProps } from '../src/app.ts'
 import { createTranscriptStore } from '../src/store.ts'
 import type { TranscriptEntry } from '../src/render/projection.ts'
 import { DEFAULT_STATUSLINE_ITEMS } from '../src/render/status.ts'
@@ -1103,8 +1103,101 @@ describe('DeepSeek model-switch easter egg', () => {
   }, 20_000)
 })
 
+describe('bracketed paste safety', () => {
+  it('recovers Enter submission after a lost paste end marker', async () => {
+    const { stdin, stdout, output } = createTty(100, 24)
+    const store = createTranscriptStore()
+    const dispatched: string[] = []
+    const unsubscribe = (): void => {}
+    const noop = (): void => {}
+    const instance = render(createElement(App, {
+      store,
+      subagents: { subscribe: () => unsubscribe, getSnapshot: () => EMPTY_AGENTS },
+      approval: { subscribe: () => unsubscribe, getSnapshot: () => approvalSnapshot },
+      questions: {
+        subscribe: () => unsubscribe,
+        getSnapshot: () => questionSnapshot,
+        submit: noop,
+        cancel: noop,
+      },
+      commands: { descriptors: [], subscribe: () => unsubscribe },
+      skills: { rows: [], subscribe: () => unsubscribe },
+      model: 'test/model',
+      cwd: 'dsh-cli',
+      workspaceRoot: 'C:\\repo\\dsh-cli',
+      branch: 'main',
+      sessionId: '12345678',
+      resumed: false,
+      mode: 'standard',
+      permission: 'workspace-write',
+      dispatch: text => {
+        dispatched.push(text)
+      },
+      steer: noop,
+      interrupt: () => false,
+      quit: noop,
+      loadModels: async () => ({ rows: [], failures: [] }),
+      loadMentions: async () => [],
+      selectModel: () => 'test/model',
+      subagentModel: '',
+      setSubagentModel: () => '',
+      clearSubagentModel: noop,
+      deleteSession: async () => '',
+      cyclePermission: () => '',
+      setPermission: id => id,
+      exportTranscript: async () => {},
+      renameTitle: () => '',
+      loadPresets: async () => [],
+      loadPermissions: async () => [],
+      switchMode: async id => id,
+      createSession: noop,
+      loadSessions: async () => [],
+      loadSubagents: async () => [],
+      loadSessionTranscript: async () => '',
+      switchSession: noop,
+      cancelSessionSwitch: () => false,
+      loadPlugins: () => [],
+      statusline: DEFAULT_STATUSLINE_ITEMS,
+      saveStatusline: noop,
+      history: [],
+      recordHistory: noop,
+      cancelQueued: noop,
+      onBridgeReady: noop,
+    }), {
+      stdin,
+      stdout,
+      stderr: stdout,
+      exitOnCtrlC: false,
+      patchConsole: false,
+    })
+
+    try {
+      await wait()
+      // A paste start marker arrives (ESC already stripped by Ink) but its
+      // end marker never does.
+      stdin.write('[200~hi')
+      await wait()
+      // While the paste is "open", Enter inserts a newline rather than submit.
+      stdin.write('\r')
+      await wait()
+      expect(dispatched).toEqual([])
+
+      // Past the lost-marker safety window the flag resets: Enter submits.
+      await new Promise(resolve => setTimeout(resolve, 1_200))
+      stdin.write('\r')
+      await wait()
+      expect(dispatched).toEqual(['hi'])
+      expect(output.text).not.toContain('[200~')
+    } finally {
+      instance.unmount()
+      stdin.destroy()
+      stdout.destroy()
+    }
+  }, 20_000)
+})
+
 describe('Ctrl+R reasoning fold', () => {
-  it('does not clear or rewrite settled native scrollback on an idle toggle', async () => {
+  it('repaints the settled fold through one source-backed replay on an idle toggle', async () => {
     const stdin = Object.assign(new PassThrough(), {
       isTTY: true,
       isRaw: false,
@@ -1219,28 +1312,154 @@ describe('Ctrl+R reasoning fold', () => {
       output = ''
       stdin.write('\x12')
       await wait()
-      // Native scrollback is immutable: the toggle changes the live mode for
-      // the current/future response, but never clears or replays old rows.
-      expect(output).not.toContain('\x1b[2J')
-      expect(output).not.toContain('\x1b[?2026h')
-      expect(output).not.toContain('\x1b[?2026l')
-      expect(output).not.toContain('DeepSeek Harness')
-      expect(output).not.toContain('the hidden reasoning trace')
+      // An idle toggle must be VISIBLE: one source-backed replay repaints the
+      // settled transcript with the expanded reasoning, exactly one clear.
+      expect(output).toContain('the hidden reasoning trace')
+      expect(output.match(/\x1b\[2J/gu)?.length).toBe(1)
+      expect(output).toContain('DeepSeek Harness')
 
       output = ''
       stdin.write('\x12')
       await wait()
-      expect(output).not.toContain('\x1b[2J')
-      expect(output).not.toContain('\x1b[?2026h')
-      expect(output).not.toContain('\x1b[?2026l')
-      expect(output).not.toContain('DeepSeek Harness')
+      // Toggling back folds again through the same single-replay contract.
+      expect(output).toContain('Thinking (')
       expect(output).not.toContain('the hidden reasoning trace')
+      expect(output.match(/\x1b\[2J/gu)?.length).toBe(1)
     } finally {
       instance.unmount()
       stdin.destroy()
       stdout.destroy()
     }
   })
+
+  it('folds a live-region assistant entry trapped behind a running tool', async () => {
+    const { stdin, stdout, output } = createTty(100, 24)
+    const store = createTranscriptStore([
+      {
+        type: 'user/message',
+        seq: 1,
+        time: 1,
+        data: createUserMessage({ content: [{ type: 'text', text: 'go' }], source: { kind: 'user' } }),
+      } as SessionEvent,
+      {
+        type: 'turn/start',
+        seq: 2,
+        time: 2,
+        data: { turn: 1 },
+      } as SessionEvent,
+      {
+        type: 'tool/call',
+        seq: 3,
+        time: 3,
+        data: { turn: 1, step: 1, callId: 'call-trap', name: 'run_code', arguments: '{}' },
+      } as SessionEvent,
+      {
+        type: 'assistant/message',
+        seq: 4,
+        time: 4,
+        data: {
+          turn: 1,
+          step: 2,
+          message: createAssistantMessage({
+            content: [
+              { type: 'reasoning', text: 'the trapped reasoning trace' },
+              { type: 'text', text: 'the trapped answer' },
+            ],
+            source: { provider: 'p', model: 'm' },
+          }),
+        },
+      } as SessionEvent,
+    ])
+    const unsubscribe = (): void => {}
+    const noop = (): void => {}
+    const instance = render(createElement(App, {
+      store,
+      subagents: { subscribe: () => unsubscribe, getSnapshot: () => EMPTY_AGENTS },
+      approval: { subscribe: () => unsubscribe, getSnapshot: () => approvalSnapshot },
+      questions: {
+        subscribe: () => unsubscribe,
+        getSnapshot: () => questionSnapshot,
+        submit: noop,
+        cancel: noop,
+      },
+      commands: { descriptors: [], subscribe: () => unsubscribe },
+      skills: { rows: [], subscribe: () => unsubscribe },
+      model: 'test/model',
+      cwd: 'dsh-cli',
+      workspaceRoot: 'C:\\repo\\dsh-cli',
+      branch: 'main',
+      sessionId: '12345678',
+      resumed: false,
+      mode: 'standard',
+      permission: 'workspace-write',
+      dispatch: noop,
+      steer: noop,
+      interrupt: () => false,
+      quit: noop,
+      loadModels: async () => ({ rows: [], failures: [] }),
+      loadMentions: async () => [],
+      selectModel: () => 'test/model',
+      subagentModel: '',
+      setSubagentModel: () => '',
+      clearSubagentModel: noop,
+      deleteSession: async () => '',
+      cyclePermission: () => '',
+      setPermission: id => id,
+      exportTranscript: async () => {},
+      renameTitle: () => '',
+      loadPresets: async () => [],
+      loadPermissions: async () => [],
+      switchMode: async id => id,
+      createSession: noop,
+      loadSessions: async () => [],
+      loadSubagents: async () => [],
+      loadSessionTranscript: async () => '',
+      switchSession: noop,
+      cancelSessionSwitch: () => false,
+      loadPlugins: () => [],
+      statusline: DEFAULT_STATUSLINE_ITEMS,
+      saveStatusline: noop,
+      history: [],
+      recordHistory: noop,
+      cancelQueued: noop,
+      onBridgeReady: noop,
+    }), {
+      stdin,
+      stdout,
+      stderr: stdout,
+      exitOnCtrlC: false,
+      patchConsole: false,
+    })
+
+    try {
+      await wait()
+      // The running tool keeps the assembled assistant entry in the live
+      // region, which must still respect the default fold: marker only.
+      let plain = output.text.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '')
+      expect(plain).toContain('Thinking (')
+      expect(plain).not.toContain('the trapped reasoning trace')
+      expect(plain).toContain('the trapped answer')
+
+      output.text = ''
+      stdin.write('\x12')
+      await wait()
+      // Ctrl+R flips the live entry too, without a source-backed clear.
+      plain = output.text.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '')
+      expect(plain).toContain('the trapped reasoning trace')
+      expect(output.text).not.toContain('\x1b[2J')
+
+      output.text = ''
+      stdin.write('\x12')
+      await wait()
+      plain = output.text.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '')
+      expect(plain).toContain('Thinking (')
+      expect(plain).not.toContain('the trapped reasoning trace')
+    } finally {
+      instance.unmount()
+      stdin.destroy()
+      stdout.destroy()
+    }
+  }, 20_000)
 
   it('keeps the live reasoning toggle clear-free through stream completion', async () => {
     const { stdin, stdout, output } = createTty(100, 24)
@@ -2039,18 +2258,17 @@ describe('settledRows incremental cache (pure)', () => {
     expect(result.built).toBe(0)
     expect(result.cache.flat).toBe(flatBefore)
 
-    // Reasoning toggle never rewrites rows already emitted to native
-    // scrollback; the same Static element list remains intact.
+    // The pure toggle step stays inert (App decides whether to trigger a
+    // replay): the same Static element list remains intact.
     const flatBeforeToggle = result.cache.flat
     result = computeSettledRows(result.cache, grown, grown.length, true, false, 0)
     expect(result.built).toBe(0)
     expect(result.cache.flat).toBe(flatBeforeToggle)
 
-    // A newly settled reasoning row captures the new mode.
+    // A newly settled reasoning row captures the current mode.
     const expanded = [...grown, assistantEntry('msg-121', 'new trace')]
     result = computeSettledRows(result.cache, expanded, expanded.length, true, false, 0)
     expect(result.built).toBe(1)
-    expect(result.cache.records.get(expanded.at(-1)!)?.showReasoning).toBe(true)
 
     // Width changes update live geometry first; Static waits for the debounced
     // source-backed replay instead of rebuilding at an intermediate width.
@@ -2060,12 +2278,13 @@ describe('settledRows incremental cache (pure)', () => {
     expect(result.cache.flat).toBe(flatBeforeResize)
     expect(result.cache.columns).toBe(80)
 
-    // Source-backed replay (epoch bump): full rebuild of the current rows.
+    // Source-backed replay (epoch bump — resize, Ctrl+L, or an idle Ctrl+R):
+    // full rebuild of the current rows UNIFORMLY at the current fold state.
     result = computeSettledRows(result.cache, expanded, expanded.length, true, false, 1, 100)
     expect(result.built).toBe(expanded.length)
     expect(result.cache.columns).toBe(100)
-    expect(result.cache.records.get(base[0]!)?.showReasoning).toBe(false)
-    expect(result.cache.records.get(expanded.at(-1)!)?.showReasoning).toBe(true)
+    expect(result.cache.showReasoning).toBe(true)
+    expect(result.cache.flat.length).toBeGreaterThan(0)
 
     // Shrink (store.reset): the prefix truncates to empty.
     result = computeSettledRows(result.cache, [], 0, true, false, 1)
@@ -2633,5 +2852,24 @@ describe('/delete and /subagent', () => {
       harness.stdin.destroy()
       harness.stdout.destroy()
     }
+  })
+})
+
+describe('editorWindow caret grapheme safety', () => {
+  it('keeps a star-plane emoji family whole under the caret', () => {
+    const win = editorWindow('👨‍👩‍👦x', 0, 20)
+    expect(win.caret).toBe('👨‍👩‍👦')
+    expect(win.after).toContain('x')
+  })
+  it('clamps a mid-cluster cursor onto the grapheme boundary', () => {
+    const win = editorWindow('a👨‍👩‍👦', 2, 20)
+    expect(win.before).toContain('a')
+    expect(win.caret).toBe('👨‍👩‍👦')
+  })
+  it('renders a blank caret past the end and clamps huge offsets', () => {
+    const win = editorWindow('ab', 99, 20)
+    expect(win.caret).toBe(' ')
+    expect(win.before).toContain('b')
+    expect(win.after).toBe('')
   })
 })

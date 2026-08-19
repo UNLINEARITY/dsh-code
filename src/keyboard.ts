@@ -30,6 +30,19 @@ export const BRACKETED_PASTE_ENABLE = '\x1b[?2004h'
 /** Disable bracketed paste reporting. */
 export const BRACKETED_PASTE_DISABLE = '\x1b[?2004l'
 
+/** Bracketed paste markers as Ink delivers them (it strips the leading ESC). */
+export const PASTE_START_MARKER = '[200~'
+export const PASTE_END_MARKER = '[201~'
+
+/**
+ * Remove bracketed paste markers from one input chunk. Panel drafts accept raw
+ * `input` text, where an unhandled paste would otherwise persist the literal
+ * "[200~"/"[201~" markers Ink leaves after stripping the ESC byte.
+ */
+export function stripPasteMarkers(text: string): string {
+  return text.replaceAll(PASTE_START_MARKER, '').replaceAll(PASTE_END_MARKER, '')
+}
+
 /** One decoded CSI-u keypress: key code, 1-based modifier param, alternate code. */
 interface CsiUKey {
   code: number
@@ -57,6 +70,20 @@ function legacyForKey(key: CsiUKey): string | undefined {
   if (key.code === 27) return '\x1b'
   if (key.code === 9) return shift ? '\x1b[Z' : '\t'
   if (key.code === 127) return alt || ctrl ? '\x1b\x7f' : '\x7f'
+  // Kitty disambiguate mode reports the six legacy functional keys as CSI u
+  // codes 1-6 (Home, Insert, Delete, End, PageUp, PageDown). Ink 5 cannot
+  // parse these forms and would insert literal "[3u" text into the draft, so
+  // rewrite them to the legacy sequences the input layer already annotates.
+  // The modifier parameter passes through: kitty and xterm share the same
+  // 1+bit-field encoding (shift 2, alt 3, ctrl 5, ...). Lock-key bits are
+  // dropped because the legacy sequences cannot express them.
+  if (key.code >= 1 && key.code <= 6) {
+    const mask = (shift ? 1 : 0) + (alt ? 2 : 0) + (ctrl ? 4 : 0)
+    const mods = mask === 0 ? '' : `;${mask + 1}`
+    if (key.code === 1) return mods === '' ? '\x1b[H' : `\x1b[1${mods}H`
+    if (key.code === 4) return mods === '' ? '\x1b[F' : `\x1b[1${mods}F`
+    return `\x1b[${key.code}${mods}~`
+  }
   if (key.code >= 97 && key.code <= 122) {
     const letter = String.fromCodePoint(key.code)
     if (ctrl) return String.fromCodePoint(key.code - 96)

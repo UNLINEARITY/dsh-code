@@ -8,6 +8,7 @@ import {
   composerMaxRows,
   deleteBackward,
   deleteForward,
+  deleteLastGrapheme,
   deleteWordBackward,
   deleteWordForward,
   editorModel,
@@ -184,5 +185,16 @@ describe('shouldRecallNavigate (boundary gate)', () => {
     expect(shouldRecallNavigate('old', 0, 'old')).toBe(true)
     expect(shouldRecallNavigate('old', 1, 'old')).toBe(false)
     expect(shouldRecallNavigate('new', 3, 'old')).toBe(false)
+  })
+})
+
+describe('deleteLastGrapheme', () => {
+  it('deletes whole graphemes including surrogate pairs and ZWJ families', () => {
+    expect(deleteLastGrapheme('a👨‍👩‍👦')).toBe('a')
+    expect(deleteLastGrapheme('你好')).toBe('你')
+    expect(deleteLastGrapheme('ab')).toBe('a')
+  })
+  it('returns empty for empty drafts', () => {
+    expect(deleteLastGrapheme('')).toBe('')
   })
 })

@@ -7,6 +7,7 @@ import {
   KEYBOARD_ENHANCE_DISABLE,
   KEYBOARD_ENHANCE_ENABLE,
   normalizeKeyboardChunk,
+  stripPasteMarkers,
 } from '../src/keyboard.ts'
 
 describe('protocol constants', () => {
@@ -56,7 +57,35 @@ describe('normalizeKeyboardChunk', () => {
   it('decodes sequences embedded in larger chunks and leaves the rest intact', () => {
     expect(normalizeKeyboardChunk('a\x1b[99;5u b'.replace('\x1b[99;5u', '\x1b[99;5u'))).toBe('a\x03 b')
   })
+  it('maps kitty disambiguate functional keys to legacy forms Ink annotates', () => {
+    expect(normalizeKeyboardChunk('\x1b[1u')).toBe('\x1b[H')
+    expect(normalizeKeyboardChunk('\x1b[2u')).toBe('\x1b[2~')
+    expect(normalizeKeyboardChunk('\x1b[3u')).toBe('\x1b[3~')
+    expect(normalizeKeyboardChunk('\x1b[4u')).toBe('\x1b[F')
+    expect(normalizeKeyboardChunk('\x1b[5u')).toBe('\x1b[5~')
+    expect(normalizeKeyboardChunk('\x1b[6u')).toBe('\x1b[6~')
+  })
+  it('preserves shift/alt/ctrl modifiers on kitty functional keys', () => {
+    expect(normalizeKeyboardChunk('\x1b[3;2u')).toBe('\x1b[3;2~')
+    expect(normalizeKeyboardChunk('\x1b[3;3u')).toBe('\x1b[3;3~')
+    expect(normalizeKeyboardChunk('\x1b[3;5u')).toBe('\x1b[3;5~')
+    expect(normalizeKeyboardChunk('\x1b[1;5u')).toBe('\x1b[1;5H')
+    expect(normalizeKeyboardChunk('\x1b[4;3u')).toBe('\x1b[1;3F')
+    expect(normalizeKeyboardChunk('\x1b[6;2u')).toBe('\x1b[6;2~')
+  })
   it('passes undecodable CSI-u codes through unchanged', () => {
     expect(normalizeKeyboardChunk('\x1b[57441u')).toBe('\x1b[57441u')
+  })
+})
+
+describe('stripPasteMarkers', () => {
+  it('removes start and end markers from pasted chunks', () => {
+    expect(stripPasteMarkers('[200~hello[201~')).toBe('hello')
+    expect(stripPasteMarkers('[200~')).toBe('')
+    expect(stripPasteMarkers('[201~')).toBe('')
+  })
+  it('leaves clean text untouched', () => {
+    expect(stripPasteMarkers('plain [200 text')).toBe('plain [200 text')
+    expect(stripPasteMarkers('')).toBe('')
   })
 })

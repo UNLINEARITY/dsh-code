@@ -5,7 +5,7 @@ import { createElement } from 'react'
 import { render } from 'ink'
 import { describe, expect, it, vi } from 'vitest'
 import { App } from '../src/app.ts'
-import { HistoryPanel, ModePanel, PermissionPanel, ResumePanel } from '../src/kernel-panels.ts'
+import { editQuery, HistoryPanel, ModePanel, PermissionPanel, ResumePanel } from '../src/kernel-panels.ts'
 import { createTranscriptStore } from '../src/store.ts'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { DEFAULT_STATUSLINE_ITEMS } from '../src/render/status.ts'
@@ -1354,5 +1354,24 @@ describe('panel row sanitization', () => {
       stdin.destroy()
       stdout.destroy()
     }
+  })
+})
+
+describe('panel search query editing', () => {
+  it('accepts multi-character IME commits', () => {
+    expect(editQuery('', '你好', {})).toBe('你好')
+    expect(editQuery('mo', 'de', {})).toBe('mode')
+  })
+  it('strips bracketed paste markers instead of persisting them', () => {
+    expect(editQuery('', '[200~query[201~', {})).toBe('query')
+  })
+  it('deletes whole graphemes, never splitting surrogate pairs', () => {
+    expect(editQuery('a👨‍👩‍👦', '', { backspace: true })).toBe('a')
+    expect(editQuery('你好', '', { delete: true })).toBe('你')
+    expect(editQuery('', '', { backspace: true })).toBe('')
+  })
+  it('ignores control-laden and empty chunks', () => {
+    expect(editQuery('q', '[A', {})).toBeUndefined()
+    expect(editQuery('q', '', {})).toBeUndefined()
   })
 })

@@ -80,6 +80,13 @@ import type { GitDiffView } from './git-workflow.ts'
 /** Match Codex's settled-resize window before rebuilding terminal scrollback. */
 const RESIZE_REFLOW_DELAY_MS = 75
 
+/**
+ * Safety net for a bracketed paste whose end marker never arrives (terminal
+ * defect or crash mid-paste): past this window the open-paste flag resets so
+ * Enter submits again instead of inserting newlines forever.
+ */
+const PASTE_BRACKET_TIMEOUT_MS = 1_000
+
 /** Reset region/style, clear the visible screen and scrollback, then home. */
 const RESIZE_REFLOW_CLEAR = '\x1b[r\x1b[0m\x1b[H\x1b[2J\x1b[3J\x1b[H'
 /** Ask terminals supporting DEC synchronized updates to hold the frame. */
@@ -100,7 +107,7 @@ import {
   type StatusTone,
 } from './render/status.ts'
 import { displayTail, displayText, singleLineText, truncateColumns } from './render/text.ts'
-import { normalizeKeyboardChunk } from './keyboard.ts'
+import { normalizeKeyboardChunk, PASTE_END_MARKER, PASTE_START_MARKER, stripPasteMarkers } from './keyboard.ts'
 import {
   clampScroll,
   followInspectorCursor,
@@ -127,6 +134,7 @@ import {
   composerMaxRows,
   deleteBackward,
   deleteForward,
+  deleteLastGrapheme,
   deleteWordBackward,
   deleteWordForward,
   editorModel,
@@ -141,6 +149,7 @@ import {
   moveWordRight,
   sanitizeDraftText,
   shouldRecallNavigate,
+  splitGraphemes,
 } from './render/editor.ts'
 
 /** Visual priority for one bounded local notice. */
@@ -1208,11 +1217,14 @@ function QuestionBar({ store, snapshot, locked }: { store: QuestionStore; snapsh
           returnToOptions()
           return
         }
-        setCustom(current => current.slice(0, -1))
+        setCustom(current => deleteLastGrapheme(current))
         return
       }
       if (input !== '' && !key.ctrl && !key.meta) {
-        setCustom(current => current + input)
+        // Panel drafts see paste markers as literal text (Ink strips only the
+        // leading ESC); strip them so a pasted answer never persists "[200~".
+        const text = stripPasteMarkers(input)
+        if (text !== '') setCustom(current => current + text)
       }
       return
     }
@@ -1615,8 +1627,8 @@ function ProviderConfigurationPanel({ target, catalog, save, done, back }: {
     }
     if (key.return) { submit(); return }
     if (focus === 'url') {
-      if (key.backspace || key.delete) setBaseURL(current => current.slice(0, -1))
-      else if (!key.ctrl && !key.meta && input !== '') setBaseURL(current => current + input)
+      if (key.backspace || key.delete) setBaseURL(current => deleteLastGrapheme(current))
+      else if (!key.ctrl && !key.meta && input !== '') setBaseURL(current => current + stripPasteMarkers(input))
       return
     }
     if (key.upArrow && choices.length > 0) { setCursor(current => Math.max(0, current - 1)); return }
@@ -1632,9 +1644,14 @@ function ProviderConfigurationPanel({ target, catalog, save, done, back }: {
       if (key.backspace || key.delete) {
         const next = current.slice(0, -1)
         updateSelected({ [field]: next === '' ? undefined : Number(next) })
-      } else if (/^[0-9]$/u.test(input)) {
-        const next = `${current}${input}`
-        updateSelected({ [field]: Number(next) })
+      } else {
+        // A pasted number arrives as one multi-character chunk; accept the
+        // whole digit run instead of the single-character path only.
+        const digits = stripPasteMarkers(input)
+        if (/^[0-9]+$/u.test(digits)) {
+          const next = `${current}${digits}`
+          updateSelected({ [field]: Number(next) })
+        }
       }
     }
   }, true)
@@ -1712,7 +1729,7 @@ function ProviderCredentialPanel({ target, save, done, back }: {
       return
     }
     if (key.ctrl || key.meta || input.length === 0) return
-    const next = draft + input
+    const next = draft + stripPasteMarkers(input)
     if (next.length > 4096) {
       setError('API key input is too long')
       return
@@ -1986,21 +2003,28 @@ function annotateRawKey(chunk: string): RawKeyAnnotation {
   }
 }
 
-/** One-row editor window keeping the logical cursor visible in long drafts. */
-function editorWindow(value: string, cursor: number, columns: number): { before: string; caret: string; after: string } {
+/**
+ * One-row editor window keeping the logical cursor visible in long drafts.
+ * The caret and its surroundings slice at grapheme boundaries: splitting a
+ * star-plane surrogate pair would render an isolated half under the block
+ * caret with a width the terminal never draws.
+ */
+export function editorWindow(value: string, cursor: number, columns: number): { before: string; caret: string; after: string } {
   const width = Math.max(1, columns)
   const normalize = (text: string): string => displayText(text).replace(/\n/gu, '↵').replace(/\t/gu, '  ')
-  const caretSource = value.slice(cursor, cursor + 1)
-  const caret = caretSource === '' ? ' ' : normalize(caretSource)
+  const site = clampCursor(value, cursor)
+  const caretSpan = splitGraphemes(value).find(span => span.start === site)
+  const caret = caretSpan === undefined ? ' ' : normalize(caretSpan.text)
+  const rest = value.slice(caretSpan === undefined ? site : caretSpan.end)
   const remaining = Math.max(0, width - visibleColumns(caret))
-  const afterBudget = Math.min(Math.floor(remaining / 3), visibleColumns(normalize(value.slice(cursor + 1))))
+  const afterBudget = Math.min(Math.floor(remaining / 3), visibleColumns(normalize(rest)))
   const beforeBudget = Math.max(0, remaining - afterBudget)
   const before = beforeBudget === 0
     ? ''
-    : displayTail(normalize(value.slice(0, cursor)), beforeBudget, 1).text
+    : displayTail(normalize(value.slice(0, site)), beforeBudget, 1).text
   const after = afterBudget === 0
     ? ''
-    : truncateColumns(normalize(value.slice(cursor + 1)), afterBudget)
+    : truncateColumns(normalize(rest), afterBudget)
   return { before, caret, after }
 }
 
@@ -2455,6 +2479,8 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   const preferredColumnRef = useRef<number | null>(null)
   const editorScrollRef = useRef(0)
   const pasteBracketRef = useRef(false)
+  /** Cancels the pending lost-paste safety timer (undefined when disarmed). */
+  const pasteBracketCancelRef = useRef<(() => void) | undefined>(undefined)
   /** Annotation of the stdin chunk Ink is about to deliver to useInput. */
   const rawAnnotation = useRef<RawKeyAnnotation>(undefined)
   // Codex shell-style recall: the navigation cursor, the saved draft restored
@@ -3006,13 +3032,25 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
       // content chunk; strip every occurrence and track the open-paste flag
       // so a chunk that is exactly LF inserts instead of submitting.
       let text = input
-      if (text.includes('[200~')) {
+      if (text.includes(PASTE_START_MARKER)) {
         pasteBracketRef.current = true
-        text = text.replaceAll('[200~', '')
+        // Arm the lost-marker safety net: one timer per open paste, re-armed
+        // if a second start marker rides the same burst.
+        pasteBracketCancelRef.current?.()
+        const timer = setTimeout(() => {
+          pasteBracketRef.current = false
+          pasteBracketCancelRef.current = undefined
+        }, PASTE_BRACKET_TIMEOUT_MS)
+        pasteBracketCancelRef.current = () => {
+          clearTimeout(timer)
+          pasteBracketCancelRef.current = undefined
+        }
+        text = text.replaceAll(PASTE_START_MARKER, '')
       }
-      if (text.includes('[201~')) {
+      if (text.includes(PASTE_END_MARKER)) {
         pasteBracketRef.current = false
-        text = text.replaceAll('[201~', '')
+        pasteBracketCancelRef.current?.()
+        text = text.replaceAll(PASTE_END_MARKER, '')
       }
       if (text === '') return
       applyEdit(insertText(value, cursor, text))
@@ -3256,10 +3294,6 @@ interface SettledRowRecord {
   before: ReactElement | undefined
   /** The roomy-prompt spacer AFTER the row, or undefined. */
   after: ReactElement | undefined
-  /** Whether the row's text depends on the reasoning toggle (Ctrl+R). */
-  reasonSensitive: boolean
-  /** The toggle state the row was built with. */
-  showReasoning: boolean
 }
 
 /** The incremental settled-history cache (see `computeSettledRows`). */
@@ -3311,8 +3345,6 @@ function buildSettledRow(entry: TranscriptEntry, index: number, showReasoning: b
     after: roomyPrompt
       ? createElement(Box, { key: `prompt-after-${index}`, paddingX: 1 }, createElement(Text, null, ' '))
       : undefined,
-    reasonSensitive: entry.kind === 'assistant' && entry.reasoning !== '',
-    showReasoning,
   }
 }
 
@@ -3330,11 +3362,11 @@ function buildSettledRow(entry: TranscriptEntry, index: number, showReasoning: b
  * on the append/toggle paths to stay O(delta).
  *
  * Full rebuilds run only on the rare, deliberate paths: no cache yet, a
- * source-backed replay (`epoch` bump: resize / Ctrl+L remounts
- * `<Static>` and must re-flush the CURRENT rows), a `resumed` change, or a shrink
- * (`store.reset`). Ctrl+R never rewrites rows already emitted to native
- * scrollback; it changes the live stream and the presentation captured by
- * assistant entries that settle afterward.
+ * source-backed replay (`epoch` bump: resize / Ctrl+L / an idle Ctrl+R fold
+ * toggle remounts `<Static>` and must re-flush the CURRENT rows at the CURRENT
+ * fold state), a `resumed` change, or a shrink (`store.reset`). While a turn is
+ * busy or streaming, Ctrl+R only flips the live region; rows already emitted
+ * to native scrollback change exclusively through those rebuilds.
  */
 export function computeSettledRows(
   previous: SettledRowsCache | undefined,
@@ -3347,13 +3379,14 @@ export function computeSettledRows(
 ): SettledRowsResult {
   if (previous === undefined || previous.epoch !== epoch || previous.resumed !== resumed
     || settled < previous.entries.length) {
-    // Full rebuild from the current settled prefix.
+    // Full rebuild from the current settled prefix, all rows at the CURRENT
+    // fold state: an epoch bump (resize, Ctrl+L, or an idle Ctrl+R toggle)
+    // repaints a uniform transcript instead of preserving per-entry modes.
     const records = new Map<TranscriptEntry, SettledRowRecord>()
     const flat: ReactElement[] = [createElement(Header, { key: 'header', resumed })]
     for (let index = 0; index < settled; index++) {
       const entry = entries[index]
-      const rowReasoning = previous?.records.get(entry)?.showReasoning ?? showReasoning
-      const record = buildSettledRow(entry, index, rowReasoning, columns)
+      const record = buildSettledRow(entry, index, showReasoning, columns)
       records.set(entry, record)
       if (record.before !== undefined) flat.push(record.before)
       flat.push(record.box)
@@ -3733,8 +3766,10 @@ export function App(props: AppProps): ReactElement {
   const streamingActive = view.streaming !== '' || view.streamingReasoning !== ''
   const deepDivingVisible = busy && !streamingActive
   const allLiveLines = useMemo(
-    () => view.entries.slice(settled).flatMap(entry => transcriptEntryLines(entry, Math.max(10, terminalColumns - 4))),
-    [view.entries, settled, terminalColumns],
+    () => view.entries.slice(settled).flatMap(
+      entry => transcriptEntryLines(entry, Math.max(10, terminalColumns - 4), showReasoning),
+    ),
+    [view.entries, settled, terminalColumns, showReasoning],
   )
   // Reserve the same stream slice from the moment a turn becomes busy. This
   // keeps the first thinking frame from changing the dynamic-tree geometry
@@ -3783,8 +3818,8 @@ export function App(props: AppProps): ReactElement {
     synchronizedReplayPending.current = false
     appStdout.write(SYNCHRONIZED_UPDATE_END)
   }, [appStdout, refreshEpoch])
-  // Ctrl+R never enters this replay path. Only resize and explicit Ctrl+L
-  // rebuild native scrollback from source.
+  // An idle Ctrl+R fold toggle joins resize and explicit Ctrl+L as a deliberate
+  // source-backed rebuild of native scrollback; busy turns never do.
 
   /** Apply one /model pick: record the selection, close the panel, report via notice. */
   const applyModel = (row: ModelRow, effortId: string | undefined): void => {
@@ -4236,11 +4271,15 @@ export function App(props: AppProps): ReactElement {
           props.store.reset()
         },
         refresh: refreshScreen,
-        // Ctrl+R owns only mutable presentation: the current stream and
-        // assistant messages that settle after the toggle. Rows already
-        // emitted through Static are native scrollback and never rewritten.
+        // Ctrl+R flips the reasoning fold. Idle toggles must be visible: rows
+        // already emitted through Static are native scrollback, so the fold
+        // state of past entries can only change through the source-backed
+        // replay (one clear + rebuild, wrapped in a synchronized frame). A
+        // busy/streaming turn stays calm: the live region flips alone and the
+        // entries that settle afterward capture the mode.
         toggleReasoning: () => {
           setShowReasoning(current => !current)
+          if (!busy && !streamingActive) refreshScreen()
         },
         loadMentions: props.loadMentions,
         cyclePermission: props.cyclePermission,
