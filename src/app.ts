@@ -1875,7 +1875,7 @@ function HelpPanel({ descriptors, skills, commandError, skillError, onClose }: {
   )
   const content: ReactElement[] = [
     createElement(Text, { key: 'keys-title', bold: true, wrap: 'truncate-end' }, ' keys'),
-    createElement(Text, { key: 'key-submit', dimColor: true, wrap: 'truncate-end' }, '  enter submit · alt+enter / ctrl+j newline · up/down history · tab complete'),
+    createElement(Text, { key: 'key-submit', dimColor: true, wrap: 'truncate-end' }, '  enter submit · up/down history · tab complete'),
     createElement(Text, { key: 'key-mentions', dimColor: true, wrap: 'truncate-end' }, '  @ mentions workspace files and sessions'),
     createElement(Text, { key: 'key-inspector', dimColor: true, wrap: 'truncate-end' }, '  ctrl+o history details · ctrl+r thinking · shift+tab permission preset'),
     createElement(Text, { key: 'key-cancel', dimColor: true, wrap: 'truncate-end' }, '  esc interrupt the running turn · ctrl+c cancel / clear / quit · ctrl+d exit'),
@@ -2532,8 +2532,8 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   }, [historyFill, recallSpace, historyConsumed])
 
   // Home/End and the Backspace-vs-Delete family never survive Ink's parser
-  // as distinct keys, and kitty CSI-u forms (pushed at mount so Shift+Enter
-  // is reportable) parse as unnamed junk Ink would insert as draft text.
+  // as distinct keys, and kitty CSI-u forms parse as unnamed junk Ink would
+  // insert as draft text.
   // Patch stdin.read — the single choke point Ink's input loop pulls every
   // chunk through — to first rewrite decodable CSI-u sequences to their
   // legacy bytes, then annotate the resulting chunk before Ink emits the
@@ -2732,23 +2732,10 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
       cancelQueued(queued[queued.length - 1]!.messageId)
       return
     }
-    // Ink 5's parser strips the leading escape from some enhanced-key
-    // sequences instead of setting key.shift. Normalize those exact Shift+Enter
-    // forms before treating the input as ordinary draft text.
-    const shiftEnterSequence = input === '[13;2u' || input === '[27;2;13~'
-    if (shiftEnterSequence || key.return) {
+    if (key.return) {
       // A newline inside an open bracketed paste inserts; it never submits.
       if (pasteBracketRef.current) {
         applyEdit(insertText(value, cursor, '\n'))
-        return
-      }
-      // Keep plain Enter for submission. Enhanced terminals expose Shift+Enter
-      // as a distinct key; alt/meta+Enter and Ctrl+J remain compatibility
-      // bindings for terminals that cannot report the Shift modifier.
-      if (shiftEnterSequence || key.shift || key.meta || (key.ctrl && input === 'j')) {
-        setValue(value.slice(0, cursor) + '\n' + value.slice(cursor))
-        setCursor(cursor + 1)
-        setDismissedMenuValue(undefined)
         return
       }
       // Enter on an open completion menu accepts the highlighted candidate
@@ -2910,6 +2897,9 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
       dispatch(text)
       return
     }
+    // Ink exposes Ctrl+J as a bare LF and Alt+Enter as a bare CR after
+    // stripping the leading escape. Neither is a multiline shortcut.
+    if (input === '\n' || input === '\r') return
     if (menuActive && key.upArrow) {
       setCompletionIndex(index => (index + menuRows.length - 1) % menuRows.length)
       return

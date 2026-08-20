@@ -32,7 +32,7 @@ describe('normalizeKeyboardChunk', () => {
   })
   it('maps Enter family to canonical forms', () => {
     expect(normalizeKeyboardChunk('\x1b[13u')).toBe('\r')
-    expect(normalizeKeyboardChunk('\x1b[13;2u')).toBe('\x1b[13;2u')
+    expect(normalizeKeyboardChunk('\x1b[13;2u')).toBe('\r')
     expect(normalizeKeyboardChunk('\x1b[13;5u')).toBe('\n')
     expect(normalizeKeyboardChunk('\x1b[13;3u')).toBe('\x1b\r')
   })

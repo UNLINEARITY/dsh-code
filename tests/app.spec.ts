@@ -206,24 +206,24 @@ describe('pre-session controls', () => {
 })
 
 describe('multiline composer', () => {
-  it('inserts a newline on enhanced Shift+Enter and submits the full draft', async () => {
+  it('treats enhanced modified Enter as ordinary Enter', async () => {
     const harness = createTty(100, 24)
-    let dispatched = ''
+    const dispatched: string[] = []
     const instance = renderApp(harness, appProps({
-      dispatch: text => { dispatched = text },
+      dispatch: text => { dispatched.push(text) },
     }))
     try {
       await wait()
       harness.stdin.write('first')
       await wait()
-      // Kitty/CSI-u enhanced key encoding for Shift+Enter.
       harness.stdin.write('\x1b[13;2u')
       await wait()
+      expect(dispatched).toEqual(['first'])
       harness.stdin.write('second')
       await wait()
       harness.stdin.write('\r')
       await wait()
-      expect(dispatched).toBe('first\nsecond')
+      expect(dispatched).toEqual(['first', 'second'])
     } finally {
       instance.unmount()
       harness.stdin.destroy()
@@ -293,11 +293,11 @@ describe('multiline composer', () => {
     }))
     try {
       await wait()
-      harness.stdin.write('first')
+      harness.stdin.write('[200~first')
       await wait()
-      harness.stdin.write('[13;2u') // Shift+Enter
+      harness.stdin.write('\r')
       await wait()
-      harness.stdin.write('second')
+      harness.stdin.write('second[201~')
       await wait()
       harness.stdin.write('[A') // Up: caret to line 1 end, not recall
       await wait()

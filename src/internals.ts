@@ -30,9 +30,9 @@ export const internals: {
 } = {
   mount: (element: ReactElement): TuiMount => {
     // Codex keyboard_modes parity: push the kitty keyboard protocol so
-    // Shift+Enter arrives as CSI 13;2u instead of a bare CR, and enable
-    // bracketed paste so pasted newlines insert instead of submitting. Both
-    // are inert in terminals without support.
+    // modified controls remain distinguishable, and enable bracketed paste so
+    // pasted newlines insert instead of submitting. Both are inert in
+    // terminals without support.
     process.stdout.write(KEYBOARD_ENHANCE_ENABLE + BRACKETED_PASTE_ENABLE)
     // App owns Ctrl+C's deliberate three-state contract (interrupt, clear
     // draft, quit). Ink's default `exitOnCtrlC: true` would intercept the

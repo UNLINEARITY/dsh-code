@@ -3,8 +3,7 @@
  * kitty CSI-u normalization layer.
  *
  * The TUI pushes the kitty keyboard protocol with DISAMBIGUATE_ESCAPE_CODES
- * and REPORT_ALTERNATE_KEYS (flags 1|4 = `\x1b[>5u`), which makes terminals
- * report Shift+Enter as `CSI 13;2u` instead of a bare CR. Event types are
+ * and REPORT_ALTERNATE_KEYS (flags 1|4 = `\x1b[>5u`). Event types are
  * deliberately NOT requested: Ink 5's parser cannot decode the
  * `:event-type` suffix, and repeat/release reporting buys this surface
  * nothing.
@@ -14,7 +13,6 @@
  * stdin read patch therefore rewrites every CSI-u form it can decode back
  * to the legacy byte or canonical sequence the existing key handling
  * already understands, before Ink ever parses the chunk.
- *
  * @module @deepseek-ai/dsh-code/keyboard
  */
 
@@ -60,9 +58,8 @@ function legacyForKey(key: CsiUKey): string | undefined {
   const alt = (bits & 2) !== 0
   const ctrl = (bits & 4) !== 0
   if (key.code === 13) {
-    // Enter: shift keeps the canonical enhanced form the composer detects;
-    // ctrl maps to LF (the Ctrl+J newline binding), alt to ESC+CR.
-    if (shift) return '\x1b[13;2u'
+    // Modified Enter has no dedicated composer behavior. Preserve the legacy
+    // Ctrl/Alt bytes and collapse every other form to ordinary Enter.
     if (ctrl) return '\n'
     if (alt) return '\x1b\r'
     return '\r'
