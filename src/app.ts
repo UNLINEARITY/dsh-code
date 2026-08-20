@@ -361,11 +361,11 @@ function StreamTail({ text, dim, maxRows, prefix = '', continuationPrefix = pref
 }): ReactElement {
   const columns = useStdout().stdout?.columns ?? 80
   const safeRows = Math.max(1, maxRows)
-  // App padding consumes two columns; the final extra column keeps a caret
-  // from wrapping onto an unbudgeted row. Both prefixes participate because
-  // every physical row now repeats its hanging indent.
+  // The final extra column keeps a caret from wrapping onto an unbudgeted
+  // row. Both prefixes participate because every physical row repeats its
+  // hanging indent.
   const prefixColumns = Math.max(visibleColumns(prefix), visibleColumns(continuationPrefix))
-  const contentColumns = Math.max(10, columns - 3 - prefixColumns)
+  const contentColumns = Math.max(10, columns - 1 - prefixColumns)
   const initial = displayTail(text, contentColumns, safeRows)
   // Reserve one row for the omission marker only when a marker is needed.
   const tail = initial.truncated && safeRows > 1
@@ -3352,14 +3352,15 @@ interface SettledRowsResult {
   built: number
 }
 
-/** Wrap the settled row model in the shared two-column transcript gutter. */
+/** Wrap the settled row model; the row's own prefix IS the transcript gutter. */
 function settledRowBox(entry: TranscriptEntry, index: number, showReasoning: boolean, columns: number): ReactElement {
-  // The SAME physical-row pipeline as the live tail (settledEntryLines),
-  // rendered at the SAME gutter (paddingX 2, budget columns-4): a row
-  // looks identical the moment it settles, and wrapped continuations keep
-  // their hanging indent instead of resetting to column zero.
-  const row = createElement(StyledRows, { lines: settledEntryLines(entry, Math.max(10, columns - 4), showReasoning) })
-  return createElement(Box, { key: index, paddingX: 2 }, row)
+  // The SAME physical-row pipeline as the live tail (settledEntryLines).
+  // Every row carries its own two-column prefix (user ❯, reply body, tool
+  // cards), which is the whole gutter: no extra container padding, so reply
+  // text starts at the same column as the composer's input text and wrapped
+  // continuations keep their hanging indent instead of resetting to column 0.
+  const row = createElement(StyledRows, { lines: settledEntryLines(entry, Math.max(10, columns - 2), showReasoning) })
+  return createElement(Box, { key: index }, row)
 }
 
 /** Build one settled row (row Box plus its roomy-prompt spacers). */
@@ -3796,7 +3797,7 @@ export function App(props: AppProps): ReactElement {
   const deepDivingVisible = busy && !streamingActive
   const allLiveLines = useMemo(
     () => view.entries.slice(settled).flatMap(
-      entry => transcriptEntryLines(entry, Math.max(10, terminalColumns - 4), showReasoning),
+      entry => transcriptEntryLines(entry, Math.max(10, terminalColumns - 2), showReasoning),
     ),
     [view.entries, settled, terminalColumns, showReasoning],
   )
@@ -4012,9 +4013,10 @@ export function App(props: AppProps): ReactElement {
     transcriptVisible
       ? createElement(
         Box,
-        // The two-column gutter matches the composer's border + padding, so
-        // message text aligns with the input cursor (Codex LIVE_PREFIX).
-        { flexDirection: 'column', paddingX: 2 },
+        // No container padding: every live row carries its own two-column
+        // prefix, so streaming text lands exactly where the composer's input
+        // text and the settled reply both render (Codex LIVE_PREFIX).
+        { flexDirection: 'column' },
         visibleLiveLines.length === 0 ? undefined : createElement(StyledRows, { lines: visibleLiveLines }),
         view.streamingReasoning !== '' && reasoningRows > 0
           ? createElement(StreamTail, {

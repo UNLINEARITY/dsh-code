@@ -78,7 +78,7 @@ describe('styled terminal lines', () => {
     }
   })
 
-  it('keeps the tool gutter on every wrapped detail row', () => {
+  it('keeps the tool gutter on every wrapped detail row, aligned with the summary hanging indent', () => {
     const raw = '甲'.repeat(300)
     const entry: TranscriptEntry = {
       kind: 'tool',
@@ -95,7 +95,9 @@ describe('styled terminal lines', () => {
     const lines = transcriptEntryLines(entry, 40)
     expect(lines.length).toBeGreaterThan(10)
     for (const line of lines.slice(2)) {
-      expect(line.segments.map(segment => segment.text).join('')).toMatch(/^  /u)
+      // Detail rows share the ⎿/└ four-column hanging gutter — never the
+      // shallower two-column prefix that made cards read as unindented.
+      expect(line.segments.map(segment => segment.text).join('')).toMatch(/^    /u)
       expect(visibleColumns(line.segments.map(segment => segment.text).join(''))).toBeLessThanOrEqual(40)
     }
   })

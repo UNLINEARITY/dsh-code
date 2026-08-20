@@ -183,15 +183,21 @@ export function reasoningLines(text: string, columns: number): readonly StyledLi
 }
 
 /** Expanded structured tool detail as scrollable, width-safe rows. */
+/**
+ * Detail rows share the tool card's four-column hanging gutter: the summary
+ * (⎿) and delegation prompt (└) continuations already sit at four columns, so
+ * diff/read/web/raw rows align under them instead of floating two columns
+ * shallower.
+ */
 function toolDetailLines(detail: ToolDetail, columns: number): readonly StyledLine[] {
   switch (detail.kind) {
     case 'diff':
       return detail.diffs.flatMap(diff => [
-        ...prefixedTextLines(`${diff.path}${diff.truncated ? ' (diff truncated)' : ''}`, columns, '  ── ', 'dim'),
+        ...prefixedTextLines(`${diff.path}${diff.truncated ? ' (diff truncated)' : ''}`, columns, '    ── ', 'dim'),
         ...diff.lines.flatMap(line => prefixedTextLines(
           `${line.mark}${line.text}`,
           columns,
-          '  ',
+          '    ',
           line.mark === '+' ? 'success' : line.mark === '-' ? 'error' : 'dim',
         )),
       ])
@@ -200,10 +206,10 @@ function toolDetailLines(detail: ToolDetail, columns: number): readonly StyledLi
         ...prefixedTextLines(
           `${detail.path} · lines ${detail.offset}-${detail.lines.length > 0 ? detail.lines[detail.lines.length - 1]!.number : detail.offset - 1} of ${detail.totalLines}${detail.truncated ? ' (window truncated)' : ''}`,
           columns,
-          '  ── ',
+          '    ── ',
           'dim',
         ),
-        ...detail.lines.flatMap(line => prefixedTextLines(`${String(line.number).padStart(5, ' ')} | ${line.text}`, columns, '  ', 'dim')),
+        ...detail.lines.flatMap(line => prefixedTextLines(`${String(line.number).padStart(5, ' ')} | ${line.text}`, columns, '    ', 'dim')),
       ]
     case 'web-search':
       return [
@@ -211,17 +217,17 @@ function toolDetailLines(detail: ToolDetail, columns: number): readonly StyledLi
           ...prefixedStyledLines([
             lineSegment(source.title ?? source.url, 'brand'),
             lineSegment(` - ${source.url}`, 'dim'),
-          ], columns, '  ? '),
-          ...(source.snippet === '' ? [] : prefixedTextLines(source.snippet, columns, '    ', 'dim')),
+          ], columns, '    ? '),
+          ...(source.snippet === '' ? [] : prefixedTextLines(source.snippet, columns, '      ', 'dim')),
         ]),
-        ...prefixedTextLines(`${detail.sources.length} sources${detail.truncated ? ' (capped)' : ''}`, columns, '  ', 'dim'),
+        ...prefixedTextLines(`${detail.sources.length} sources${detail.truncated ? ' (capped)' : ''}`, columns, '    ', 'dim'),
       ]
     case 'web-fetch':
-      return prefixedTextLines(`${detail.url} · HTTP ${detail.statusCode}`, columns, '  ', 'dim')
+      return prefixedTextLines(`${detail.url} · HTTP ${detail.statusCode}`, columns, '    ', 'dim')
     case 'raw':
       return [
-        ...prefixedTextLines(detail.text, columns, '  ', 'dim'),
-        ...prefixedTextLines(detail.truncated ? '… (output truncated)' : '(end of output)', columns, '  ', 'dim'),
+        ...prefixedTextLines(detail.text, columns, '    ', 'dim'),
+        ...prefixedTextLines(detail.truncated ? '… (output truncated)' : '(end of output)', columns, '    ', 'dim'),
       ]
     default: {
       const exhaustive: never = detail
