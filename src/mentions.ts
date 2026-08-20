@@ -1,25 +1,33 @@
 /**
- * Workspace @mention support: file and directory candidates from a bounded
- * async scan of the session cwd, session candidates from the opt-in
- * `sessionReferenceResolver` service, and submission preparation through its
- * `prepare()` API. Picked session mentions land as canonical
- * `@[label](dsh-session:…)` tokens; on submit the text is parsed back into
- * readable `@label` text plus structured references, snapshots are injected
- * via `agent.inject()` before the readable message wakes the driver
+ * Workspace @mention support: file and directory candidates from the
+ * `fileReferences` service (dsh-file-reference-local), session candidates
+ * from the opt-in `sessionReferenceResolver` service, and submission
+ * preparation through its `prepare()` API. Picked session mentions land as
+ * canonical `@[label](dsh-session:…)` tokens; on submit the text is parsed
+ * back into readable `@label` text plus structured references, snapshots are
+ * injected via `agent.inject()` before the readable message wakes the driver
  * (`followup` idle, `steer` running) — exactly the upstream README's wiring.
  *
- * Harness exposes no workspace-file mention service (only session references
- * plus a post-hoc produced-file linker), so the file index is the lightweight
- * bounded scan below, kept deliberately smaller than Codex's streaming
- * gitignore-aware walker.
+ * File discovery lives entirely in the Harness service (per-agent bounded
+ * index, `@dir/` listing, symlink guards, tool/result invalidation); this
+ * module only maps candidates to menu rows and never re-implements scanning.
+ * The service is agent-scoped (the agent supplies the session cwd and the
+ * cache key), so before the first session creates an agent the SAME official
+ * search class runs against the launch cwd — @ file completion works on a
+ * bare launch, model- and session-independent, and the agent-scoped service
+ * takes over once a session exists.
  *
  * @module @deepseek-ai/dsh-code/mentions
  */
 
-import { readdir } from 'node:fs/promises'
-import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
+import {
+  DEFAULT_FILE_SEARCH_EXCLUDED_DIRECTORIES,
+  DEFAULT_FILE_SEARCH_MAX_ENTRIES,
+  DEFAULT_FILE_SEARCH_MAX_RESULTS,
+  WorkspaceFileSearch,
+} from '@deepseek-ai/dsh-file-reference-local'
 import {
   formatSessionReferenceMention,
   parseSessionReferenceText,
@@ -29,14 +37,6 @@ import {
 
 /** Parsed submission text: readable text plus structured references. */
 type ParsedSessionReferenceText = ReturnType<typeof parseSessionReferenceText>
-
-/** One filesystem entry the @ menu can complete. */
-export interface FileCandidate {
-  /** Workspace-relative path with forward slashes. */
-  path: string
-  /** Entry kind; directories insert with a trailing slash. */
-  kind: 'file' | 'directory'
-}
 
 /** One merged menu candidate (files and sessions, already ranked). */
 export interface MentionCandidate {
@@ -58,76 +58,22 @@ export interface PreparedMention {
   additionalContext?: import('@deepseek-ai/dsh-session').UserMessage
 }
 
-/** Directories never entered and files never listed during the scan. */
-const SKIP_DIRS = new Set(['.git', 'node_modules', 'lib', 'dist', 'out', '.omc', 'coverage'])
-const MAX_FILES = 4000
-const MAX_DEPTH = 12
-/** Empty-query default rows: proves the index exists without typing (Codex's
- * popups show something on a bare sigil too). */
-const EMPTY_QUERY_ROWS = 20
-
-/**
- * Bounded async BFS scan of a workspace; unreadable entries are skipped.
- * Both files and directories are indexed (directories insert with a trailing
- * slash), mirroring Codex's `MatchType::{File,Directory}` index. Dotfiles and
- * the {@link SKIP_DIRS} list are excluded, which is a coarser filter than
- * Codex's gitignore-aware walker but stays dependency-free and bounded.
- */
-export async function scanWorkspaceFiles(root: string, signal?: AbortSignal): Promise<readonly FileCandidate[]> {
-  const found: FileCandidate[] = []
-  const pending: Array<{ absolute: string; relative: string; depth: number }> = [{ absolute: root, relative: '', depth: 0 }]
-  const aborted = (): boolean => signal?.aborted === true
-  while (pending.length > 0 && found.length < MAX_FILES && !aborted()) {
-    const current = pending.shift()
-    if (current === undefined) break
-    let entries
-    try {
-      entries = await readdir(current.absolute, { withFileTypes: true })
-    } catch {
-      continue
-    }
-    for (const entry of entries) {
-      if (found.length >= MAX_FILES || aborted()) return found
-      if (entry.name.startsWith('.')) continue
-      const relative = current.relative === '' ? entry.name : `${current.relative}/${entry.name}`
-      if (entry.isDirectory()) {
-        if (SKIP_DIRS.has(entry.name) || current.depth + 1 > MAX_DEPTH) continue
-        found.push({ path: relative, kind: 'directory' })
-        pending.push({ absolute: join(current.absolute, entry.name), relative, depth: current.depth + 1 })
-      } else if (entry.isFile()) {
-        found.push({ path: relative, kind: 'file' })
-      }
-    }
-  }
-  return found.sort((left, right) => left.path < right.path ? -1 : 1)
+/** One path candidate the `ctx.fileReferences` service returns. */
+interface ServiceFileCandidate {
+  readonly path: string
+  readonly kind: 'file' | 'directory'
 }
 
-/** True when every query character appears in order in the haystack. */
-function isSubsequence(query: string, haystack: string): boolean {
-  let at = 0
-  for (const char of haystack) {
-    if (char === query[at]) at += 1
-    if (at >= query.length) return true
-  }
-  return at >= query.length
+/** The `ctx.fileReferences` service face (dsh-file-reference-local). */
+interface FileReferenceServiceLike {
+  list(agent: Agent, query: string, signal: AbortSignal): Promise<readonly ServiceFileCandidate[]>
 }
 
-/** Rank one file path against the typed query (community-TUI scoring shape). */
-function scoreFile(path: string, query: string): number {
-  const name = path.slice(path.lastIndexOf('/') + 1)
-  if (query === '') return 0
-  if (name === query) return 1000
-  if (name.startsWith(query)) return 900
-  if (name.includes(query)) return 700
-  if (path.includes(query)) return 500
-  if (isSubsequence(query, name)) return 300
-  return 0
-}
+/** Menu cap on file rows; the service owns ranking and default rows. */
+const MAX_FILE_ROWS = 20
 
 /** The mention API the input editor and the runner share. */
 export interface MentionsApi {
-  /** Scanned workspace files and directories, cached across one session. */
-  files(): Promise<readonly FileCandidate[]>
   /** Ranked menu candidates for the typed `@` query. */
   candidates(query: string, signal?: AbortSignal): Promise<readonly MentionCandidate[]>
   /** Parse submission text into readable text plus structured references. */
@@ -143,53 +89,62 @@ export interface MentionsApi {
 
 /**
  * Create the mention API for one agent's workspace. A missing
- * session-reference service degrades to file mentions only (the scan still
- * works); `prepare` then passes text through untouched. An undefined agent
- * (a bare launch before any session exists) also degrades to file-only
- * mentions, so `@` file completion works before the first message.
+ * `fileReferences` service (with an agent present) or `sessionReferenceResolver`
+ * degrades that half to empty rows; `prepare` passes text through untouched
+ * without references. An undefined agent (a bare launch before any session
+ * exists) runs the official WorkspaceFileSearch over the launch cwd — the
+ * same class the mounted service uses per agent — so `@` file completion
+ * works from the first keystroke; session references wait for the session.
  *
- * `files` is hoisted into the closure so `candidates` never reaches for
- * `this` — the runner hands `mentions.candidates` to the input editor as a
- * detached callback, and a `this`-bound method would throw on every `@` key.
- * @param ctx - context carrying the optional `sessionReferenceResolver`.
- * @param agent - the session owner; excluded from its own candidates.
- * @param cwd - workspace root to scan.
+ * `candidates` never reaches for `this` — the runner hands it to the input
+ * editor as a detached callback, and a `this`-bound method would throw on
+ * every `@` key.
+ * @param ctx - context carrying the optional `fileReferences` and
+ * `sessionReferenceResolver` services.
+ * @param agent - the session owner; excluded from its own session candidates.
+ * @param cwd - launch working directory; bounds the pre-session search.
  */
 export function createMentions(ctx: Context, agent: Agent | undefined, cwd: string): MentionsApi {
   const resolver = ctx.get('sessionReferenceResolver')
+  const fileReferences = (ctx as unknown as { get(name: string): unknown }).get('fileReferences') as
+    | FileReferenceServiceLike
+    | undefined
   const sessionCapable = agent !== undefined && resolver !== undefined
-  let filesPromise: Promise<readonly FileCandidate[]> | undefined
-  const files = (): Promise<readonly FileCandidate[]> => {
-    filesPromise ??= scanWorkspaceFiles(cwd)
-    return filesPromise
+  // Pre-session fallback: one lazily built search over the launch cwd with
+  // the official defaults — pure in-memory index, no handles to release.
+  let preSessionSearch: WorkspaceFileSearch | undefined
+  const preSessionFiles = (query: string, signal?: AbortSignal): Promise<readonly ServiceFileCandidate[]> => {
+    preSessionSearch ??= new WorkspaceFileSearch(cwd, {
+      maxResults: DEFAULT_FILE_SEARCH_MAX_RESULTS,
+      maxEntries: DEFAULT_FILE_SEARCH_MAX_ENTRIES,
+      excludedDirectories: [...DEFAULT_FILE_SEARCH_EXCLUDED_DIRECTORIES],
+    })
+    return preSessionSearch.list(query, signal ?? new AbortController().signal)
   }
 
   return {
-    files,
     async candidates(query: string, signal?: AbortSignal): Promise<readonly MentionCandidate[]> {
       const needle = query.trim()
-      const [scanned, sessions] = await Promise.all([
-        files(),
+      const [files, sessions] = await Promise.all([
+        agent !== undefined && fileReferences !== undefined
+          ? fileReferences
+            .list(agent, needle, signal ?? new AbortController().signal)
+            .catch(() => [] as readonly ServiceFileCandidate[])
+          : agent === undefined
+            ? preSessionFiles(needle, signal).catch(() => [] as readonly ServiceFileCandidate[])
+            : Promise.resolve([] as readonly ServiceFileCandidate[]),
         sessionCapable && needle !== '' && agent !== undefined
           ? resolver!.listCandidates(agent, needle, 10, signal).catch(() => [] as readonly SessionReferenceCandidate[])
           : Promise.resolve([] as readonly SessionReferenceCandidate[]),
       ])
-      // A bare `@` lists the first path-sorted entries so the menu is live
-      // before any typing; a non-empty needle ranks by the Codex-shaped score.
-      const fileRows: MentionCandidate[] = (needle === ''
-        ? scanned.slice(0, EMPTY_QUERY_ROWS)
-        : scanned
-          .filter(candidate => scoreFile(candidate.path, needle) > 0)
-          .sort((left, right) => scoreFile(right.path, needle) - scoreFile(left.path, needle))
-          .slice(0, 20))
-        .map(candidate => ({
-          label: candidate.path,
-          description: candidate.kind === 'directory' ? 'Folder' : 'File',
-          kind: candidate.kind,
-        }))
-      // Sessions join only with a typed needle and always AFTER the file
-      // rows: `@` is a file mention first (Codex's semantics), and session
-      // references are the secondary vocabulary.
+      // The service owns ranking (and the bare-@ default rows); the menu caps
+      // file rows and always places sessions after files — `@` is a file
+      // mention first (Codex's semantics), session references second.
+      const fileRows: MentionCandidate[] = files.slice(0, MAX_FILE_ROWS).map(candidate => ({
+        label: candidate.path,
+        description: candidate.kind === 'directory' ? 'Folder' : 'File',
+        kind: candidate.kind,
+      }))
       const sessionRows: MentionCandidate[] = sessions.map(candidate => ({
         label: formatSessionReferenceMention(candidate),
         description: `Session · ${candidate.cwd ?? '(no cwd)'}`,

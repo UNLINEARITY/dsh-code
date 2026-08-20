@@ -95,7 +95,7 @@ function prefixedTextLines(text: string, columns: number, prefix: string, style:
  * align under their card instead of falling back to column zero. The first
  * row may hold one prefix-width more than the continuations.
  */
-export function hangingStyledLines(
+function hangingStyledLines(
   segments: readonly StyledSegment[],
   columns: number,
   firstPrefix: string,
@@ -141,7 +141,7 @@ export function hangingStyledLines(
 }
 
 /** Plain-text convenience over {@link hangingStyledLines}. */
-export function hangingTextLines(
+function hangingTextLines(
   text: string,
   columns: number,
   firstPrefix: string,
@@ -263,7 +263,10 @@ export function transcriptEntryLines(
       // wrap budget shrinks by the same amount so no line double-wraps.
       const body = markdownLines(entry.text, Math.max(10, width - 2))
         .map(line => ({ segments: [{ text: '  ', style: 'plain' as const }, ...line.segments] }))
-      return [...reasoning, ...body]
+      // A cancelled stream's delivered prefix settles as this entry; one
+      // bounded dim marker row distinguishes it from a completed reply.
+      const interrupted = entry.interrupted === true ? textLines('  ⏹ interrupted', width, 'dim') : []
+      return [...reasoning, ...body, ...interrupted]
     }
     case 'tool': {
       const mark = entry.state === 'running' ? '●' : entry.state === 'error' ? '⨯' : '⏺'

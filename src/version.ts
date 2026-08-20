@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 
 /** Read one package manifest version without making terminal startup depend on it. */
-export function readPackageVersion(manifest = new URL('../package.json', import.meta.url)): string {
+function readPackageVersion(manifest = new URL('../package.json', import.meta.url)): string {
   try {
     const parsed = JSON.parse(readFileSync(manifest, 'utf8')) as { version?: unknown }
     return typeof parsed.version === 'string' && parsed.version.length > 0 ? parsed.version : '0.0.0'

@@ -118,6 +118,47 @@ function fail(io: TuiIo, error: unknown): void {
   io.exit(1)
 }
 
+/** The `ctx.jobs` registry face (dsh-jobs-local behind the base patch row). */
+interface JobsServiceLike {
+  list(caller?: Agent): ReadonlyArray<{
+    id: string
+    kind: string
+    label: string
+    status: 'running' | 'stopping' | 'completed' | 'killed' | 'failed'
+    detail?: string
+    startedAt: number
+    finishedAt?: number
+  }>
+}
+
+/**
+ * Snapshot caller-visible background jobs for the /jobs panel. Jobs the agent
+ * started through run_in_background are fenced by their owner, so the CURRENT
+ * agent is the caller. A missing registry is a harmless absence (the base
+ * composition may not mount one) and collapses to the empty panel state —
+ * the documented degradation for harmless probes, not an error.
+ * @param ctx - context carrying the optional `jobs` registry.
+ * @param caller - the active agent (undefined sees only unowned jobs).
+ * @returns job rows in registration order; never throws.
+ */
+function listJobs(ctx: Context, caller: Agent | undefined): readonly import('./kernel-panels.ts').JobRow[] {
+  const jobs = (ctx as unknown as { get(name: string): unknown }).get('jobs') as JobsServiceLike | undefined
+  if (jobs === undefined) return []
+  try {
+    return jobs.list(caller).map(job => ({
+      id: job.id,
+      kind: job.kind,
+      label: job.label,
+      status: job.status,
+      detail: job.detail,
+      startedAt: job.startedAt,
+      finishedAt: job.finishedAt,
+    }))
+  } catch {
+    return []
+  }
+}
+
 /**
  * Resolve the working directory's git branch for the status line.
  * @param cwd - the session's working directory.
@@ -370,13 +411,12 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     if (!next.resume && permissionPresets !== undefined) {
       applyPendingPermission(permissionPresets, session, pendingPermission)
     }
-    const sessionCwd = session.header.cwd ?? nextCwd
     return {
       handle,
       agent: handle.agent,
       session,
       store: createTranscriptStore(session.events),
-      mentions: createMentions(ctx, handle.agent, sessionCwd),
+      mentions: createMentions(ctx, handle.agent, session.header.cwd ?? nextCwd),
       mode: mode ?? 'standard',
       selection: selectionState,
       resumed: next.resume,
@@ -390,9 +430,9 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   // Live subagent activity (child sessions of the current root): one bounded
   // row per child, folded from the same event bus the transcript feeds on.
   const subagents: SubagentFeedView & { apply(sessionId: string, event: SessionEvent): void; reset(): void } = createSubagentFeed()
-  // File-only mentions from the start: `@` completion works on a bare launch
-  // (no session yet); the prepare/activate paths replace this with the full
-  // agent-scoped instance that also resolves session references.
+  // Pre-session @file completion runs the official search over the launch
+  // cwd (model- and session-independent); the prepare/activate paths replace
+  // this with the agent-scoped instance once a session exists.
   let mentions: MentionsApi = createMentions(ctx, undefined, cwd)
   /** Explicit model pick made before any session exists (a bare launch). */
   let pendingSelection: ModelSelection | undefined
@@ -1389,6 +1429,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       switchSession,
       cancelSessionSwitch,
       loadPlugins: () => listPluginRows(ctx),
+      loadJobs: () => listJobs(ctx, active?.agent),
       statusline: statuslineItems,
       saveStatusline,
       saveTheme,

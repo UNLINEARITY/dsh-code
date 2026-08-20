@@ -46,7 +46,7 @@ export function formatDuration(ms: number): string {
  * @param n - tokens per second.
  * @returns display string.
  */
-export function formatRate(n: number): string {
+function formatRate(n: number): string {
   if (n < 100) return String(Math.round(n * 10) / 10)
   if (n < 1_000) return String(Math.round(n))
   return String(Math.round(n / 100) / 10) + 'K'
@@ -134,7 +134,7 @@ export const STATUS_CYCLE_HINT = ' (shift+tab to cycle)'
  */
 export const CONTEXT_BAR_WIDTH = 24
 /** Occupancy at which the usage readout flips from brand blue to amber. */
-export const CONTEXT_WARN_PERCENT = 90
+const CONTEXT_WARN_PERCENT = 90
 /** Free-tail floor in columns: wide enough for the bare percent readout, so
  * the warning stays visible even at 100%+ occupancy. */
 const CONTEXT_MIN_FREE = 5
@@ -143,7 +143,7 @@ const CONTEXT_MIN_FREE = 5
  * group: the bar shrinks inside its own budget first (a few columns still
  * show the bare percent readout) and only then drops as a whole.
  */
-export const CONTEXT_MIN_WIDTH = 5
+const CONTEXT_MIN_WIDTH = 5
 
 /**
  * Render context occupancy as ONE stepless bar: a solid DeepSeek-blue fill

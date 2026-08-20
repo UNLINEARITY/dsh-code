@@ -76,6 +76,9 @@ export interface AssistantEntry {
   text: string
   /** Joined reasoning blocks from the same assembled message. */
   reasoning: string
+  /** True when a cancelled stream's delivered prefix was finalized as this
+   * entry (rc.8 `assistant/message.interrupted`) — rendered with a marker. */
+  interrupted?: true
 }
 
 /** One model-requested tool invocation and its settled state. */
@@ -533,7 +536,7 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
         ...view,
         streaming: '',
         streamingReasoning: '',
-        entries: [...view.entries, { kind: 'assistant', text, reasoning }],
+        entries: [...view.entries, { kind: 'assistant', text, reasoning, interrupted: event.data.interrupted === true ? true : undefined }],
         stats: {
           ...view.stats,
           llmMs: view.stats.llmMs + (started === undefined ? 0 : Math.max(0, event.time - started)),
@@ -1139,7 +1142,7 @@ export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent):
       const reasoning = reasoningOf(event.data.message.content)
       acc.streaming = ''
       acc.streamingReasoning = ''
-      appendReplayEntry(acc, { kind: 'assistant', text, reasoning })
+      appendReplayEntry(acc, { kind: 'assistant', text, reasoning, interrupted: event.data.interrupted === true ? true : undefined })
       acc.stats = {
         ...acc.stats,
         llmMs: acc.stats.llmMs + (started === undefined ? 0 : Math.max(0, event.time - started)),

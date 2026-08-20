@@ -1467,3 +1467,49 @@ describe('settledEntryCount tail invariant', () => {
     expect(settledEntryCount(done.entries)).toBe(2)
   })
 })
+
+describe('assistant/message interrupted marker (rc.8)', () => {
+  const interruptedEvent = {
+    type: 'assistant/message',
+    seq: 2,
+    time: 0,
+    data: {
+      turn: 1,
+      step: 1,
+      message: createAssistantMessage({
+        content: [{ type: 'text', text: 'partial answer' }],
+        source: { provider: 'p', model: 'm' },
+      }),
+      interrupted: true,
+    },
+  } as SessionEvent
+
+  it('folds the interrupted flag onto the entry in both the live and replay paths', () => {
+    const live = projectEvent(createTranscriptView(), { type: 'turn/start', seq: 1, time: 0, data: { turn: 1 } } as SessionEvent)
+    const settledLive = projectEvent(live, interruptedEvent)
+    const liveEntry = settledLive.entries[settledLive.entries.length - 1]
+    expect(liveEntry).toMatchObject({ kind: 'assistant', text: 'partial answer', interrupted: true })
+
+    const acc = createReplayAccumulator()
+    replayProjectEvent(acc, { type: 'turn/start', seq: 1, time: 0, data: { turn: 1 } } as SessionEvent)
+    replayProjectEvent(acc, interruptedEvent)
+    const replayed = finishReplay(acc)
+    const replayEntry = replayed.entries[replayed.entries.length - 1]
+    expect(replayEntry).toMatchObject({ kind: 'assistant', interrupted: true })
+  })
+
+  it('leaves completed replies unmarked and renders the marker as one dim row', async () => {
+    const plain = projectEvent(createTranscriptView(), assistantEvent('done', 2))
+    const plainEntry = plain.entries[plain.entries.length - 1]
+    expect(plainEntry).toMatchObject({ kind: 'assistant' })
+    expect((plainEntry as { interrupted?: boolean }).interrupted).toBeUndefined()
+
+    const { transcriptEntryLines } = await import('../src/render/lines.ts')
+    const rows = transcriptEntryLines({ kind: 'assistant', text: 'partial answer', reasoning: '', interrupted: true }, 80)
+    const flat = rows.map(row => row.segments.map(segment => segment.text).join('')).join('\n')
+    expect(flat).toContain('partial answer')
+    expect(flat).toContain('⏹ interrupted')
+    const plainRows = transcriptEntryLines({ kind: 'assistant', text: 'done', reasoning: '' }, 80)
+    expect(plainRows.map(row => row.segments.map(segment => segment.text).join('')).join('\n')).not.toContain('⏹')
+  })
+})

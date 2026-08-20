@@ -60,11 +60,12 @@ import type { QuestionSnapshot, QuestionStore } from './questions.ts'
 import type { SkillsView, SkillRow } from './skills.ts'
 import type { MentionCandidate } from './mentions.ts'
 import type { SubagentFeedView, SubagentRow } from './subagents.ts'
-import { AgentsPanel, EffortPanel, ModePanel, HistoryPanel, PermissionPanel, PluginPanel, ResumePanel, StatuslinePanel, SubagentPanel } from './kernel-panels.ts'
+import { AgentsPanel, EffortPanel, HistoryPanel, JobsPanel, ModePanel, PermissionPanel, PluginPanel, ResumePanel, StatuslinePanel, runClock, SubagentPanel, type JobRow } from './kernel-panels.ts'
 import type { PresetRow } from './presets.ts'
 import type { PermissionRow } from './permissions.ts'
 import type { PluginRow } from './plugin-inventory.ts'
 import {
+  beginRecall,
   recallEntries,
   recallNewer,
   recallOlder,
@@ -247,6 +248,8 @@ export interface AppProps {
   switchSession(row: SessionRow): void
   cancelSessionSwitch(): boolean
   loadPlugins(): readonly PluginRow[]
+  /** Caller-visible background jobs (the host jobs registry, read-only). */
+  loadJobs(): readonly JobRow[]
   /** Registers the app's notice channel with the runner (called once on mount). */
   onBridgeReady(bridge: { notify(text: string, tone?: NoticeTone): void }): void
   /** Ordered enabled status items (/statusline config); the runner owns persistence. */
@@ -317,14 +320,6 @@ function Caret(): ReactElement {
 function CursorBlock({ char }: { char: string }): ReactElement {
   const tick = useFrames(530)
   return createElement(Text, { inverse: caretVisible(tick) || undefined }, char)
-}
-
-/** Web TurnStatus elapsed format: `45s` under a minute, `2m03s` beyond. */
-function runClock(ms: number): string {
-  const total = Math.max(0, Math.floor(ms / 1000))
-  const minutes = Math.floor(total / 60)
-  const seconds = total % 60
-  return minutes > 0 ? `${minutes}m${String(seconds).padStart(2, '0')}s` : `${seconds}s`
 }
 
 /**
@@ -1884,6 +1879,7 @@ function HelpPanel({ descriptors, skills, commandError, skillError, onClose }: {
     createElement(Box, { key: 'local-fork' }, row('/fork', 'fork at the latest completed turn (/fork [event-seq])')),
     createElement(Box, { key: 'local-resume' }, row('/resume', 'browse or switch root sessions (/resume [id|prefix])')),
     createElement(Box, { key: 'local-plugin' }, row('/plugin', 'inspect the live plugin composition')),
+    createElement(Box, { key: 'local-jobs' }, row('/jobs', 'inspect background jobs')),
     createElement(Box, { key: 'local-statusline' }, row('/statusline', 'customize the status line items')),
     createElement(Box, { key: 'local-theme' }, row('/theme', 'switch the color theme')),
     createElement(Box, { key: 'local-history' }, row('/history', 'search and recall past prompts')),
@@ -2281,6 +2277,7 @@ export function completionCandidates(
     { label: '/fork', description: 'fork at a completed turn', origin: 'command' },
     { label: '/resume', description: 'browse or switch sessions', origin: 'command' },
     { label: '/plugin', description: 'inspect the plugin composition', origin: 'command' },
+    { label: '/jobs', description: 'inspect background jobs', origin: 'command' },
     { label: '/statusline', description: 'customize the status line', origin: 'command' },
     { label: '/theme', description: 'switch the color theme', origin: 'command' },
     { label: '/history', description: 'search and recall past prompts', origin: 'command' },
@@ -2397,7 +2394,7 @@ function CompletionMenu({ active, mention, index, rows }: {
  * While a modal (approval / question / model panel) owns the keys, the
  * box passes every key through untouched.
  */
-function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openEffort, openHelp, openMode, openPermission, openResume, openPlugin, openStatusline, openTheme, openHistory, openAgents, openSubagent, openTodos, openDelete, openDiff, reviewChanges, deleteConfirm, confirmDelete, cancelDelete, createSession, forkSession, cancelSessionSwitch, notify, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, cyclePermission, exportTranscript, renameTitle, copyLastResponse, recallSpace, recordLocal, recordHistory, queued, cancelQueued, historyFill, historyConsumed, waveTier, waveStyle, maxRows, onEditorRows }: {
+function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openEffort, openHelp, openMode, openPermission, openResume, openPlugin, openJobs, openStatusline, openTheme, openHistory, openAgents, openSubagent, openTodos, openDelete, openDiff, reviewChanges, deleteConfirm, confirmDelete, cancelDelete, createSession, forkSession, cancelSessionSwitch, notify, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, cyclePermission, exportTranscript, renameTitle, copyLastResponse, recallSpace, recordLocal, recordHistory, queued, cancelQueued, historyFill, historyConsumed, waveTier, waveStyle, maxRows, onEditorRows }: {
   active: boolean
   frozen: boolean
   busy: boolean
@@ -2414,6 +2411,7 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   openPermission(): void
   openResume(): void
   openPlugin(query?: string): void
+  openJobs(): void
   openStatusline(): void
   openTheme(): void
   openHistory(): void
@@ -2493,7 +2491,7 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   const rawAnnotation = useRef<RawKeyAnnotation>(undefined)
   // Codex shell-style recall: the navigation cursor, the saved draft restored
   // on Down past the newest entry, and the boundary-gate anchor.
-  const recall = useRef<RecallState>({ entries: [], index: null, savedDraft: '', lastRecalled: null })
+  const recall = useRef<RecallState>(beginRecall([], ''))
 
   // A /history panel acceptance lands as a fill: place the sanitized text at
   // the end of the composer and resume recall from that entry.
@@ -2759,7 +2757,7 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
         recordLocal(text)
         recordHistory(text)
       }
-      recall.current = { entries: recallSpace, index: null, savedDraft: '', lastRecalled: null }
+      recall.current = beginRecall(recallSpace, '')
       if (text === '/quit') {
         quit()
         return
@@ -2848,6 +2846,10 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
       }
       if (text === '/plugin' || text.startsWith('/plugin ')) {
         openPlugin(text.slice(7).trim())
+        return
+      }
+      if (text === '/jobs' || text.startsWith('/jobs ')) {
+        openJobs()
         return
       }
       if (text === '/statusline') {
@@ -3598,6 +3600,7 @@ export function App(props: AppProps): ReactElement {
   const [resumeOpen, setResumeOpen] = useState(false)
   const [pluginOpen, setPluginOpen] = useState(false)
   const [pluginQuery, setPluginQuery] = useState('')
+  const [jobsOpen, setJobsOpen] = useState(false)
   const [statuslineOpen, setStatuslineOpen] = useState(false)
   const [statuslineItems, setStatuslineItems] = useState<readonly StatusItemId[]>(() => parseStatuslineItems(props.statusline))
   const [themeOpen, setThemeOpen] = useState(false)
@@ -3676,7 +3679,7 @@ export function App(props: AppProps): ReactElement {
   // panel keypress.
   const inputActive = deleteConfirmId !== undefined
     ? !approvalPending && !questionPending
-    : !modelOpen && !helpOpen && !modeOpen && !permissionOpen && !resumeOpen && !pluginOpen && !statuslineOpen && !themeOpen && !historyOpen && !agentsOpen && !subagentOpen && !todosOpen && !verboseOpen && diffView === undefined && !approvalPending && !questionPending
+    : !modelOpen && !helpOpen && !modeOpen && !permissionOpen && !resumeOpen && !pluginOpen && !jobsOpen && !statuslineOpen && !themeOpen && !historyOpen && !agentsOpen && !subagentOpen && !todosOpen && !verboseOpen && diffView === undefined && !approvalPending && !questionPending
 
   // Human questions outrank local inspectors. Close the lower modal instead
   // of leaving an approval/question visible but keyboard-locked behind it.
@@ -3821,9 +3824,9 @@ export function App(props: AppProps): ReactElement {
           ? Math.max(1, Math.floor(streamRows / 3))
           : 1
   const answerRows = view.streaming === '' ? 0 : Math.max(1, streamRows - reasoningRows)
-  const transcriptVisible = !modelOpen && !helpOpen && !modeOpen && !permissionOpen && !resumeOpen && !pluginOpen && !statuslineOpen && !themeOpen && !historyOpen && !agentsOpen && !subagentOpen && !todosOpen && !verboseOpen && diffView === undefined && !approvalPending && !questionPending
+  const transcriptVisible = !modelOpen && !helpOpen && !modeOpen && !permissionOpen && !resumeOpen && !pluginOpen && !jobsOpen && !statuslineOpen && !themeOpen && !historyOpen && !agentsOpen && !subagentOpen && !todosOpen && !verboseOpen && diffView === undefined && !approvalPending && !questionPending
   const inspectorVisible = verboseOpen && !approvalPending && !questionPending
-  const modalVisible = modelOpen || helpOpen || modeOpen || permissionOpen || resumeOpen || pluginOpen || statuslineOpen || themeOpen || historyOpen || agentsOpen || subagentOpen || todosOpen || inspectorVisible || diffView !== undefined || approvalPending || questionPending
+  const modalVisible = modelOpen || helpOpen || modeOpen || permissionOpen || resumeOpen || pluginOpen || jobsOpen || statuslineOpen || themeOpen || historyOpen || agentsOpen || subagentOpen || todosOpen || inspectorVisible || diffView !== undefined || approvalPending || questionPending
   const closeInspector = useCallback((): void => {
     setVerboseOpen(false)
   }, [])
@@ -4115,6 +4118,9 @@ export function App(props: AppProps): ReactElement {
     pluginOpen && !approvalPending && !questionPending
       ? createElement(PluginPanel, { load: props.loadPlugins, initialQuery: pluginQuery, close: () => setPluginOpen(false) })
       : undefined,
+    jobsOpen && !approvalPending && !questionPending
+      ? createElement(JobsPanel, { load: props.loadJobs, close: () => setJobsOpen(false) })
+      : undefined,
     statuslineOpen && !approvalPending && !questionPending
       ? createElement(StatuslinePanel, {
         enabled: statuslineItems,
@@ -4261,6 +4267,7 @@ export function App(props: AppProps): ReactElement {
         openPermission: () => setPermissionOpen(true),
         openResume: () => { setResumeDelete({ mode: false }); setResumeOpen(true) },
         openPlugin: (query = '') => { setPluginQuery(query); setPluginOpen(true) },
+        openJobs: () => setJobsOpen(true),
         openStatusline: () => setStatuslineOpen(true),
         openTheme: () => setThemeOpen(true),
         openHistory: () => setHistoryOpen(true),

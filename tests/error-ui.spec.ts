@@ -92,6 +92,7 @@ function renderApp(
     switchSession: noop,
     cancelSessionSwitch: () => false,
     loadPlugins: () => [],
+    loadJobs: () => [],
     statusline: DEFAULT_STATUSLINE_ITEMS,
     saveStatusline: noop,
     history: [],

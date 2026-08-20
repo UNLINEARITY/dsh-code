@@ -190,6 +190,74 @@ export function PluginPanel({ load, close, initialQuery = '' }: { load(): readon
   })
 }
 
+/** One background job snapshot for the /jobs panel (the registry's read-only view). */
+export interface JobRow {
+  /** The registry-issued id (`<kind>-N`). */
+  readonly id: string
+  /** Producer kind (bash, subagent, …). */
+  readonly kind: string
+  /** One-line model-facing label (the command; the delegation description). */
+  readonly label: string
+  /** Lifecycle state. */
+  readonly status: 'running' | 'stopping' | 'completed' | 'killed' | 'failed'
+  /** Kind-specific status detail once the producer supplied one. */
+  readonly detail?: string
+  /** Epoch ms when the job was registered. */
+  readonly startedAt: number
+  /** Epoch ms when the job settled; absent while running/stopping. */
+  readonly finishedAt?: number
+}
+
+/** Web TurnStatus elapsed format: `45s` under a minute, `2m03s` beyond. */
+export function runClock(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000))
+  const minutes = Math.floor(total / 60)
+  const seconds = total % 60
+  return minutes > 0 ? `${minutes}m${String(seconds).padStart(2, '0')}s` : `${seconds}s`
+}
+
+/** Status glyph per job lifecycle state. */
+const JOB_MARK: Record<JobRow['status'], string> = {
+  running: '●',
+  stopping: '⏸',
+  completed: '✓',
+  killed: '⊘',
+  failed: '✗',
+}
+
+/**
+ * The read-only background-job panel: caller-owned and unowned jobs from the
+ * host `jobs` registry in registration order, with a local second-hand while
+ * the panel is open (elapsed clocks advance and the snapshot re-reads; the
+ * interval dies with the panel). Cancel stays upstream-only; an absent
+ * registry renders as the plain empty state (a harmless missing service).
+ */
+export function JobsPanel({ load, close }: { load(): readonly JobRow[]; close(): void }): ReactElement {
+  const [, setRefresh] = useState(0)
+  const [cursor, setCursor] = useState(0)
+  const [, setTick] = useState(0)
+  useEffect(() => {
+    const id = setInterval(() => setTick(value => value + 1), 1_000)
+    return () => clearInterval(id)
+  }, [])
+  const rows = load()
+  useInput((input, key) => {
+    if (key.escape || input === 'q') return close()
+    if (input === 'r') return setRefresh(value => value + 1)
+    if (key.upArrow) return setCursor(value => rows.length === 0 ? 0 : (value + rows.length - 1) % rows.length)
+    if (key.downArrow) return setCursor(value => rows.length === 0 ? 0 : (value + 1) % rows.length)
+  })
+  useEffect(() => setCursor(value => Math.min(value, Math.max(0, rows.length - 1))), [rows.length])
+  return createElement(ListFrame, {
+    title: `/jobs · background tasks · ${rows.length}`,
+    rows: rows.map(row => ({
+      key: row.id,
+      text: `${JOB_MARK[row.status]} ${row.id} · ${singleLineText(row.label)} · ${runClock((row.finishedAt ?? Date.now()) - row.startedAt)}${row.detail === undefined ? '' : ` · ${singleLineText(row.detail)}`}`,
+    })),
+    cursor, loading: false, query: '', searching: false, footer: '↑↓ inspect · r refresh · esc close',
+  })
+}
+
 export function ResumePanel({ currentCwd, load, readTranscript, select, requestDelete, deleteConfirmId, reloadToken = 0, deleteMode = false, close }: {
   currentCwd: string
   load(options: SessionDirectoryOptions, signal?: AbortSignal): Promise<readonly SessionRow[]>

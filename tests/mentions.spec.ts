@@ -1,4 +1,4 @@
-/** Workspace file scan, mention candidate ranking, and the detached-callback contract. */
+/** @mention candidates over the fileReferences service, the pre-session official-search fallback, and the detached-callback contract. */
 
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -6,7 +6,8 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import { createMentions, scanWorkspaceFiles } from '../src/mentions.ts'
+import type { SessionReferenceCandidate } from '@deepseek-ai/dsh-session-reference'
+import { createMentions } from '../src/mentions.ts'
 
 /** One temporary workspace tree; auto-removed. */
 function fixture(entries: readonly string[]): string {
@@ -23,113 +24,115 @@ function fixture(entries: readonly string[]): string {
   return root
 }
 
-describe('scanWorkspaceFiles', () => {
-  it('lists files and directories as forward-slash relative paths, sorted', async () => {
-    const root = fixture(['src/a.ts', 'src/deep/b.ts', 'README.md'])
-    try {
-      const files = await scanWorkspaceFiles(root)
-      expect(files).toEqual([
-        { path: 'README.md', kind: 'file' },
-        { path: 'src', kind: 'directory' },
-        { path: 'src/a.ts', kind: 'file' },
-        { path: 'src/deep', kind: 'directory' },
-        { path: 'src/deep/b.ts', kind: 'file' },
-      ])
-    } finally {
-      rmSync(root, { recursive: true, force: true })
-    }
-  })
+/** One path candidate shape the service returns. */
+interface ServiceRow {
+  readonly path: string
+  readonly kind: 'file' | 'directory'
+}
 
-  it('skips git, node_modules, build output, and dotfiles', async () => {
-    const root = fixture(['.git/config', 'node_modules/x/y.js', 'lib/out.mjs', '.secret', 'keep.ts'])
-    try {
-      const files = await scanWorkspaceFiles(root)
-      expect(files.map(file => file.path)).toEqual(['keep.ts'])
-    } finally {
-      rmSync(root, { recursive: true, force: true })
-    }
-  })
+/** Context double exposing a canned `fileReferences.list` (and optionally sessions). */
+function serviceContext(
+  rows: readonly ServiceRow[] | Error,
+  options: { queries?: string[]; sessions?: readonly SessionReferenceCandidate[] } = {},
+): Context {
+  return {
+    get: (name: string): unknown => {
+      if (name === 'fileReferences') {
+        return {
+          list: async (_agent: Agent, query: string): Promise<readonly ServiceRow[]> => {
+            options.queries?.push(query)
+            if (rows instanceof Error) throw rows
+            return rows
+          },
+        }
+      }
+      if (name === 'sessionReferenceResolver') {
+        return {
+          listCandidates: async (): Promise<readonly SessionReferenceCandidate[]> => options.sessions ?? [],
+          prepare: async (_agent: unknown, content: unknown) => ({ content, additionalContext: undefined }),
+        }
+      }
+      return undefined
+    },
+  } as unknown as Context
+}
 
-  it('honours abort during the scan', async () => {
-    const entries = Array.from({ length: 200 }, (_, index) => `dir/a${index}.ts`)
-    const root = fixture(entries)
-    try {
-      const controller = new AbortController()
-      const pending = scanWorkspaceFiles(root, controller.signal)
-      controller.abort()
-      await expect(pending).resolves.toEqual([])
-    } finally {
-      rmSync(root, { recursive: true, force: true })
-    }
-  })
-
-  it('never throws on unreadable entries', async () => {
-    await expect(scanWorkspaceFiles(join(tmpdir(), 'dsh-code-no-such-dir-9f8e'))).resolves.toEqual([])
-  })
-})
-
-/** Context double without any optional service: file mentions only. */
+/** Context double without any service. */
 function bareContext(): Context {
   return { get: (): undefined => undefined } as unknown as Context
 }
 
 const agent = { id: 'a' } as unknown as Agent
+const nowhere = join(tmpdir(), 'dsh-code-mentions-no-cwd')
 
-describe('createMentions.candidates', () => {
+describe('createMentions.candidates (fileReferences service)', () => {
   it('works when the callback is detached from the API object', async () => {
     // The runner hands `mentions.candidates` to the input editor as a bare
     // function; a `this`-bound implementation threw on every @ keystroke and
     // the menu sat at "searching…" forever.
-    const root = fixture(['alpha.ts', 'beta.md'])
+    const api = createMentions(serviceContext([
+      { path: 'alpha.ts', kind: 'file' },
+      { path: 'src', kind: 'directory' },
+    ]), agent, nowhere)
+    const detached = api.candidates
+    await expect(detached('')).resolves.toEqual([
+      { label: 'alpha.ts', description: 'File', kind: 'file' },
+      { label: 'src', description: 'Folder', kind: 'directory' },
+    ])
+  })
+
+  it('passes the trimmed query through and caps the menu at twenty file rows', async () => {
+    const queries: string[] = []
+    const rows: ServiceRow[] = Array.from({ length: 25 }, (_, index) => ({ path: `f${index}.ts`, kind: 'file' as const }))
+    const api = createMentions(serviceContext(rows, { queries }), agent, nowhere)
+    const menu = await api.candidates('  app  ')
+    expect(queries).toEqual(['app'])
+    expect(menu).toHaveLength(20)
+    expect(menu[0]).toEqual({ label: 'f0.ts', description: 'File', kind: 'file' })
+  })
+
+  it('returns empty file rows without the service (agent present) or on service failure', async () => {
+    await expect(createMentions(bareContext(), agent, nowhere).candidates('app')).resolves.toEqual([])
+    await expect(createMentions(serviceContext(new Error('index unavailable')), agent, nowhere).candidates('app')).resolves.toEqual([])
+  })
+
+  it('falls back to the official search over the launch cwd before any session exists', async () => {
+    // The service is agent-scoped, but @ file completion is session-
+    // independent: with no agent yet the SAME official WorkspaceFileSearch
+    // runs against the launch cwd — even when the service is mounted (its
+    // list() never runs without an agent) and when it is absent.
+    const root = fixture(['alpha.ts', 'nested/beta.md'])
     try {
-      const api = createMentions(bareContext(), agent, root)
-      const detached = api.candidates
-      await expect(detached('')).resolves.toEqual([
-        { label: 'alpha.ts', description: 'File', kind: 'file' },
-        { label: 'beta.md', description: 'File', kind: 'file' },
-      ])
+      for (const ctx of [serviceContext([{ path: 'decoy.ts', kind: 'file' }]), bareContext()]) {
+        const rows = await createMentions(ctx, undefined, root).candidates('alpha')
+        expect(rows.map(row => row.label)).toContain('alpha.ts')
+        expect(rows.map(row => row.label)).not.toContain('decoy.ts')
+        for (const row of rows) {
+          expect(['file', 'directory']).toContain(row.kind)
+        }
+      }
+      // A bare @ lists default rows too — the menu is live before typing.
+      const bare = await createMentions(bareContext(), undefined, root).candidates('')
+      expect(bare.length).toBeGreaterThan(0)
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
   })
 
-  it('lists the first path-sorted entries for a bare @ (empty query)', async () => {
-    const root = fixture(['zeta.txt', 'alpha.txt', 'mid/beta.txt'])
-    try {
-      const api = createMentions(bareContext(), agent, root)
-      const rows = await api.candidates('')
-      expect(rows.map(row => row.label)).toEqual(['alpha.txt', 'mid', 'mid/beta.txt', 'zeta.txt'])
-    } finally {
-      rmSync(root, { recursive: true, force: true })
-    }
-  })
-
-  it('ranks by name-exact, then prefix, then path, then subsequence', async () => {
-    const root = fixture(['app.ts', 'apps/web.ts', 'src/app/util.ts', 'wrap.ts'])
-    try {
-      const api = createMentions(bareContext(), agent, root)
-      const rows = await api.candidates('app')
-      // `src/app` matches the name exactly, `app.ts`/`apps` by name prefix,
-      // then paths containing the query; `wrap.ts` matches nothing.
-      expect(rows.map(row => row.label)).toEqual([
-        'src/app',
-        'app.ts',
-        'apps',
-        'apps/web.ts',
-        'src/app/util.ts',
-      ])
-    } finally {
-      rmSync(root, { recursive: true, force: true })
-    }
-  })
-
-  it('returns no file rows when nothing matches', async () => {
-    const root = fixture(['alpha.ts'])
-    try {
-      const api = createMentions(bareContext(), agent, root)
-      await expect(api.candidates('zzz')).resolves.toEqual([])
-    } finally {
-      rmSync(root, { recursive: true, force: true })
-    }
+  it('places session rows after file rows once a needle is typed', async () => {
+    const sessions: readonly SessionReferenceCandidate[] = [{
+      sessionId: 'session-1234' as never,
+      label: 'prior work',
+      cwd: '/repo',
+    } as unknown as SessionReferenceCandidate]
+    const api = createMentions(serviceContext(
+      [{ path: 'app.ts', kind: 'file' }],
+      { sessions },
+    ), agent, nowhere)
+    const rows = await api.candidates('app')
+    expect(rows.map(row => row.kind)).toEqual(['file', 'session'])
+    expect(rows[1]!.description).toBe('Session · /repo')
+    // A bare `@` never queries sessions.
+    await expect(createMentions(serviceContext([], { sessions }), agent, nowhere).candidates('')).resolves.toEqual([])
   })
 })

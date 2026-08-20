@@ -79,7 +79,7 @@ function comparablePath(value: string): string {
 }
 
 /** Platform-consistent path equality for session cwd comparisons. */
-export function samePath(left: string | undefined, right: string): boolean {
+function samePath(left: string | undefined, right: string): boolean {
   if (left === undefined) return false
   return comparablePath(left) === comparablePath(right)
 }

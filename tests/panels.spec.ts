@@ -5,7 +5,7 @@ import { createElement } from 'react'
 import { render } from 'ink'
 import { describe, expect, it, vi } from 'vitest'
 import { App } from '../src/app.ts'
-import { editQuery, HistoryPanel, ModePanel, PermissionPanel, ResumePanel } from '../src/kernel-panels.ts'
+import { editQuery, HistoryPanel, JobsPanel, ModePanel, PermissionPanel, ResumePanel, type JobRow } from '../src/kernel-panels.ts'
 import { createTranscriptStore } from '../src/store.ts'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { DEFAULT_STATUSLINE_ITEMS } from '../src/render/status.ts'
@@ -361,6 +361,7 @@ describe('exclusive panel height budgets', () => {
       switchSession: noop,
       cancelSessionSwitch: () => false,
       loadPlugins: () => [],
+      loadJobs: () => [],
       statusline: currentItems,
       saveStatusline: items => {
         currentItems = items
@@ -532,6 +533,7 @@ describe('queued messages and global recall', () => {
       switchSession: noop,
       cancelSessionSwitch: () => false,
       loadPlugins: () => [],
+      loadJobs: () => [],
       statusline: DEFAULT_STATUSLINE_ITEMS,
       saveStatusline: noop,
       history: [],
@@ -652,6 +654,7 @@ describe('queued messages and global recall', () => {
       switchSession: noop,
       cancelSessionSwitch: () => false,
       loadPlugins: () => [],
+      loadJobs: () => [],
       statusline: DEFAULT_STATUSLINE_ITEMS,
       saveStatusline: noop,
       history: ['fix the login bug', 'bump the package version'],
@@ -779,6 +782,7 @@ describe('queued messages and global recall', () => {
       switchSession: noop,
       cancelSessionSwitch: () => false,
       loadPlugins: () => [],
+      loadJobs: () => [],
       statusline: DEFAULT_STATUSLINE_ITEMS,
       saveStatusline: noop,
       history: [],
@@ -925,6 +929,7 @@ describe('/model effort stage', () => {
       switchSession: noop,
       cancelSessionSwitch: () => false,
       loadPlugins: () => [],
+      loadJobs: () => [],
       statusline: DEFAULT_STATUSLINE_ITEMS,
       saveStatusline: noop,
       history: [],
@@ -1147,6 +1152,7 @@ describe('/effort command', () => {
       switchSession: noop,
       cancelSessionSwitch: () => false,
       loadPlugins: () => [],
+      loadJobs: () => [],
       statusline: DEFAULT_STATUSLINE_ITEMS,
       saveStatusline: noop,
       history: [],
@@ -1373,5 +1379,59 @@ describe('panel search query editing', () => {
   it('ignores control-laden and empty chunks', () => {
     expect(editQuery('q', '[A', {})).toBeUndefined()
     expect(editQuery('q', '', {})).toBeUndefined()
+  })
+})
+
+describe('/jobs panel', () => {
+  it('lists background jobs with status marks and elapsed clocks, closes on esc', async () => {
+    const stdin = Object.assign(new PassThrough(), {
+      isTTY: true,
+      isRaw: false,
+      setRawMode(value: boolean) {
+        this.isRaw = value
+        return this
+      },
+      ref() {},
+      unref() {},
+    }) as unknown as NodeJS.ReadStream
+    const stdout = Object.assign(new PassThrough(), {
+      isTTY: true,
+      columns: 80,
+      rows: 24,
+    }) as unknown as NodeJS.WriteStream
+    let output = ''
+    stdout.on('data', chunk => {
+      output += chunk.toString()
+    })
+    let closed = false
+    const rows: readonly JobRow[] = [
+      { id: 'bash-1', kind: 'bash', label: 'pnpm test', status: 'running', startedAt: Date.now() - 65_000 },
+      { id: 'bash-2', kind: 'bash', label: 'build docs', status: 'completed', detail: 'exit code: 0', startedAt: Date.now() - 120_000, finishedAt: Date.now() - 61_000 },
+    ]
+    const instance = render(createElement(JobsPanel, {
+      load: () => rows,
+      close: () => {
+        closed = true
+      },
+    }), {
+      stdin,
+      stdout,
+      stderr: stdout,
+      exitOnCtrlC: false,
+      patchConsole: false,
+    })
+    try {
+      await wait()
+      expect(output).toContain('/jobs · background tasks · 2')
+      expect(output).toContain('● bash-1 · pnpm test · 1m05s')
+      expect(output).toContain('✓ bash-2 · build docs · 59s · exit code: 0')
+      stdin.write('')
+      await wait()
+      expect(closed).toBe(true)
+    } finally {
+      instance.unmount()
+      stdin.destroy()
+      stdout.destroy()
+    }
   })
 })

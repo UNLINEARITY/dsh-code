@@ -89,6 +89,13 @@
     - id: session-reference
       name: '@deepseek-ai/dsh-session-reference'
 
+    # Workspace @file mention discovery: a bounded per-agent fuzzy index over
+    # the session cwd (directory listing, symlink guards, tool/result
+    # invalidation). The TUI's @ completion consumes ctx.fileReferences
+    # instead of running its own workspace scan.
+    - id: file-reference-local
+      name: '@deepseek-ai/dsh-file-reference-local'
+
     # The launcher supplies the shipped preset root beside its own config and
     # the service also discovers the user's local preset root.
     - id: agent-presets

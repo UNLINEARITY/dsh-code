@@ -1,9 +1,9 @@
 /**
  * Terminal animation frame tables derived from the web design language:
  * the StateDot "ongoing" pixel chase (3×3 ring, 125ms flat-hold brightness
- * steps, 1s cycle) becomes the single-cell stepped pulse below and the
- * full-ring clockwise braille chase in {@link BUSY_CHASE_FRAMES}, and the
- * streaming caret blink is the Claude-Code convention.
+ * steps, 1s cycle) becomes the full-ring clockwise braille chase in
+ * {@link BUSY_CHASE_FRAMES}, and the streaming caret blink is the
+ * Claude-Code convention.
  *
  * The DeepSeek model-switch easter egg ports Codex's effort-ignition "Wave"
  * style (`codex-rs/tui/src/bottom_pane/effort_ignition_styles.rs`): switching
@@ -18,14 +18,6 @@
  */
 
 import type { RgbTriple } from '../theme.ts'
-
-/** Single-cell stepped pulse: flat holds mirroring the web's 125ms keyframes. */
-export const PULSE_FRAMES = ['█', '█', '▆', '▃', '▁', '▃', '▆', '█'] as const
-
-/** Pulse frame for a monotonic tick. */
-export function pulseFrame(tick: number): string {
-  return PULSE_FRAMES[tick % PULSE_FRAMES.length] ?? PULSE_FRAMES[0]
-}
 
 /**
  * The web StateDot "ongoing" chase in terminal form: three cells of the 3×3
@@ -76,18 +68,18 @@ export type DeepseekWaveTier = 'flash' | 'deepseek' | 'unknown'
  */
 export type DeepseekWaveStyle = 'wave' | 'aurora' | 'pulse'
 
-/** All styles in canonical order, for random selection and tests. */
-export const DEEPSEEK_WAVE_STYLES: readonly DeepseekWaveStyle[] = ['wave', 'aurora', 'pulse']
+/** All styles in canonical order, for random selection. */
+const DEEPSEEK_WAVE_STYLES: readonly DeepseekWaveStyle[] = ['wave', 'aurora', 'pulse']
 
 /** Wave half-width in columns — Codex WAVE_HALF_WIDTH (9). */
 export const WAVE_HALF_WIDTH = 9
 
 /** Pulse ring half-width in columns — Codex PULSE_HALF_WIDTH (4.5). */
-export const PULSE_HALF_WIDTH = 4.5
+const PULSE_HALF_WIDTH = 4.5
 
 /** Sparkle start and frame cadence — Codex SPARK_START / SPARK_FRAME. */
-export const SPARK_START_MS = 900
-export const SPARK_FRAME_MS = 100
+const SPARK_START_MS = 900
+const SPARK_FRAME_MS = 100
 
 /** Sparkle glyphs in frame order — Codex SPARK_GLYPHS (`· ✦ ✧`). */
 export const SPARK_GLYPHS = ['·', '✦', '✧'] as const
@@ -124,7 +116,7 @@ export const DEEPSEEK_WAVE_BANDS: Readonly<Record<DeepseekWaveStyle, Readonly<Re
 }
 
 /** Extra display time applied to every Codex ignition style. */
-export const DEEPSEEK_WAVE_DURATION_EXTENSION_MS = 200
+const DEEPSEEK_WAVE_DURATION_EXTENSION_MS = 200
 
 /** Original Codex duration used as the animation's sampling timeline. */
 function deepseekWaveBaseDuration(tier: DeepseekWaveTier, style: DeepseekWaveStyle): number {
@@ -164,15 +156,6 @@ export function deepseekWaveStyleRandom(previous: DeepseekWaveStyle | undefined)
   const candidates = DEEPSEEK_WAVE_STYLES.filter(style => style !== previous)
   return candidates[Math.floor(Math.random() * candidates.length)] ?? 'wave'
 }
-
-/**
- * Blank-cell background the wave tint blends toward — fixed approximations
- * of the terminal's default background, mirroring Codex's
- * `user_message_bg_rgb` (which derives a near-black / near-white bubble tint
- * from the terminal background). The Ink layer picks the active theme's one.
- */
-export const WAVE_BASE_DARK: RgbTriple = [16, 18, 24]
-export const WAVE_BASE_LIGHT: RgbTriple = [242, 244, 248]
 
 /**
  * Tier for a `provider/model` label: a model id containing `flash` runs the
@@ -284,7 +267,7 @@ function blendRgb(fg: RgbTriple, bg: RgbTriple, alpha: number): RgbTriple {
  * and the bottom row last, sweeping down the band. 0.12 keeps the bottom
  * row's lag inside the 200ms duration extension.
  */
-export const DEEPSEEK_WAVE_ROW_PHASE = 0.12
+const DEEPSEEK_WAVE_ROW_PHASE = 0.12
 
 /**
  * The background color for one composer-band column at a tick — Codex

@@ -4,7 +4,7 @@
  * the sparkle frame window, and the ≤0.55 background tint cap. */
 
 import { describe, expect, it } from 'vitest'
-import { DARK_PALETTE, type RgbTriple } from '../src/theme.ts'
+import { DARK_PALETTE, PALETTES, type RgbTriple } from '../src/theme.ts'
 import {
   BUSY_CHASE_FRAMES,
   busyChaseFrame,
@@ -23,14 +23,15 @@ import {
   effortAboveHigh,
   envelope,
   isOfficialDeepSeekLabel,
-  pulseFrame,
   SPARK_GLYPHS,
-  WAVE_BASE_DARK,
-  WAVE_BASE_LIGHT,
   WAVE_HALF_WIDTH,
   type DeepseekWaveStyle,
   type DeepseekWaveTier,
 } from '../src/render/animations.ts'
+
+/** The wave's tint base in production is the composer band — pin fixtures to it. */
+const WAVE_BASE_DARK = PALETTES.dark.composerBand
+const WAVE_BASE_LIGHT = PALETTES.light.composerBand
 
 /** Dark-theme tier hues the wave interpolates in production by default. The
  * Wave style samples hues[0] only (Codex Wave bands carry no hue index). */
@@ -49,16 +50,6 @@ const deepseekHues: [RgbTriple, RgbTriple, RgbTriple] = [
 function channelDelta(a: RgbTriple, b: RgbTriple): number {
   return Math.max(Math.abs(a[0] - b[0]), Math.abs(a[1] - b[1]), Math.abs(a[2] - b[2]))
 }
-
-describe('pulseFrame', () => {
-  it('steps brightness with flat holds over an 8-frame 1s cycle', () => {
-    expect(pulseFrame(0)).toBe('█')
-    expect(pulseFrame(1)).toBe('█')
-    expect(pulseFrame(2)).toBe('▆')
-    expect(pulseFrame(4)).toBe('▁')
-    expect(pulseFrame(8)).toBe('█')
-  })
-})
 
 describe('busyChaseFrame', () => {
   it('rotates the web StateDot ongoing chase clockwise over 8 distinct frames', () => {

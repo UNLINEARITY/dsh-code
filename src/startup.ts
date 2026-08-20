@@ -33,7 +33,7 @@ export const name = 'tui-startup'
 export const inject = ['cmdlineArgs']
 
 /** Service provided by this plugin and injected by the terminal runner. */
-export const TUI_STARTUP_SERVICE = 'tuiStartup'
+const TUI_STARTUP_SERVICE = 'tuiStartup'
 
 /** How the runner obtains its session identity. */
 export type TuiStartup =

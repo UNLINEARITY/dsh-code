@@ -1,7 +1,7 @@
 /** Agent-preset policy kept independent from the Ink surface. */
 
 import type { Context } from '@deepseek-ai/cordis'
-import type { Agent, AgentHandle } from '@deepseek-ai/dsh-agent'
+import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 
 /** One discoverable agent composition. */
@@ -71,6 +71,3 @@ export async function switchPreset(
   writable.append('agent-preset/selected', { agentPreset: preset.id })
   return preset
 }
-
-/** Minimal handle shape used by lifecycle tests without exposing Agent internals. */
-export type OwnedAgent = Pick<AgentHandle, 'agent' | 'dispose'>

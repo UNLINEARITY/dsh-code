@@ -115,6 +115,9 @@ export const PALETTES = {
  * two-palette switch keep compiling and painting identically (the default
  * theme IS dark). New code should read the active palette through
  * {@link getPalette} so a theme switch reaches it.
+ *
+ * @deprecated Read the active palette through {@link getPalette}; this
+ * compatibility alias is removed in the next minor release.
  */
 export const TUI_RGB = DARK_PALETTE
 
