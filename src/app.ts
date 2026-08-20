@@ -79,6 +79,26 @@ import type { GitDiffView } from './git-workflow.ts'
 const RESIZE_REFLOW_DELAY_MS = 75
 
 /**
+ * Cap on rendered settled history, in physical rows (header and hint
+ * included). 3,000 rows sits inside Codex's 1k–10k reflow budget range:
+ * replays stay under ~200ms while roughly a hundred messages stay visible
+ * before the oldest drop out. `DSH_SETTLED_ROWS` overrides it; 0 disables
+ * the cap entirely (the historical unbounded behavior).
+ */
+const SETTLED_ROW_CAP = readSettledRowCap()
+/** Hysteresis: the cap may overflow by 25% before one trimming replay fires. */
+/** Header rows plus the trim hint, reserved out of the row cap. */
+const SETTLED_ROW_RESERVE = 12
+
+/** Read the configurable settled-history cap once per process. */
+function readSettledRowCap(): number {
+  const raw = process.env.DSH_SETTLED_ROWS
+  if (raw === undefined) return 3_000
+  const parsed = Number.parseInt(raw, 10)
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 3_000
+}
+
+/**
  * Safety net for a bracketed paste whose end marker never arrives (terminal
  * defect or crash mid-paste): past this window the open-paste flag resets so
  * Enter submits again instead of inserting newlines forever.
@@ -3322,11 +3342,15 @@ interface SettledRowRecord {
   before: ReactElement | undefined
   /** The roomy-prompt spacer AFTER the row, or undefined. */
   after: ReactElement | undefined
+  /** Physical rows this record contributes (row body plus spacers) — the
+   * unit of the rendered-history cap. */
+  rows: number
 }
 
 /** The incremental settled-history cache (see `computeSettledRows`). */
 interface SettledRowsCache {
-  /** The exact settled entries the cache covers (`view.entries[0..entries.length)`). */
+  /** The exact settled entries the cache covers (the WINDOW: the newest
+   * `entries.length` settled entries, oldest dropped entries excluded). */
   entries: TranscriptEntry[]
   /** Records keyed by entry identity; mutated in place so the append path
    * never copies the whole map. */
@@ -3337,12 +3361,21 @@ interface SettledRowsCache {
   resumed: boolean
   /** The toggle state the rows were built with. */
   showReasoning: boolean
-  /** The refreshEpoch the rows were built for; a bump forces a full rebuild. */
+  /** The refreshEpoch the rows was built for; a bump forces a full rebuild. */
   epoch: number
   /** The terminal width the rows were wrapped for; a change forces a rebuild. */
   columns: number
-  /** The flat row list (header + per-entry before/box/after). */
+  /** The flat row list (header + optional hint + per-entry before/box/after). */
   flat: ReactElement[]
+  /** Settled entries dropped from the window's head (rendering only — the
+   * event log keeps everything; Ctrl+O and /export read it directly). */
+  droppedEntries: number
+  /** Physical rows the window's entries contribute (excludes header/hint). */
+  totalRows: number
+  /** The window overflowed the trim hysteresis; one source-backed replay
+   * (epoch bump) will re-window the cache. The append path never mutates
+   * flat's head, so <Static> only ever sees tail appends between remounts. */
+  needsTrim: boolean
 }
 
 /** One step of `computeSettledRows`. */
@@ -3352,29 +3385,34 @@ interface SettledRowsResult {
   built: number
 }
 
-/** Wrap the settled row model; the row's own prefix IS the transcript gutter. */
-function settledRowBox(entry: TranscriptEntry, index: number, showReasoning: boolean, columns: number): ReactElement {
+/** Build one settled row (row Box plus its roomy-prompt spacers and row count). */
+function buildSettledRow(entry: TranscriptEntry, index: number, showReasoning: boolean, columns: number): SettledRowRecord {
   // The SAME physical-row pipeline as the live tail (settledEntryLines).
   // Every row carries its own two-column prefix (user ❯, reply body, tool
   // cards), which is the whole gutter: no extra container padding, so reply
   // text starts at the same column as the composer's input text and wrapped
   // continuations keep their hanging indent instead of resetting to column 0.
-  const row = createElement(StyledRows, { lines: settledEntryLines(entry, Math.max(10, columns - 2), showReasoning) })
-  return createElement(Box, { key: index }, row)
-}
-
-/** Build one settled row (row Box plus its roomy-prompt spacers). */
-function buildSettledRow(entry: TranscriptEntry, index: number, showReasoning: boolean, columns: number): SettledRowRecord {
   const roomyPrompt = entry.kind === 'user' && !entry.notice
+  const lines = settledEntryLines(entry, Math.max(10, columns - 2), showReasoning)
   return {
-    box: settledRowBox(entry, index, showReasoning, columns),
+    box: createElement(Box, { key: index }, createElement(StyledRows, { lines })),
     before: roomyPrompt
       ? createElement(Box, { key: `prompt-before-${index}`, paddingX: 1 }, createElement(Text, null, ' '))
       : undefined,
     after: roomyPrompt
       ? createElement(Box, { key: `prompt-after-${index}`, paddingX: 1 }, createElement(Text, null, ' '))
       : undefined,
+    rows: lines.length + (roomyPrompt ? 2 : 0),
   }
+}
+
+/** The dim hint row placed under the header once the window has dropped entries. */
+function settledTrimHint(droppedEntries: number, columns: number): ReactElement {
+  return createElement(
+    Text,
+    { key: 'history-cap-hint', color: inkColor(getPalette().dim), wrap: 'truncate-end' },
+    truncateColumns(`… +${droppedEntries} earlier messages hidden · ctrl+o browse · /export full transcript`, Math.max(10, columns - 2)),
+  )
 }
 
 /**
@@ -3390,12 +3428,27 @@ function buildSettledRow(entry: TranscriptEntry, index: number, showReasoning: b
  * rebuild of rows, Map, or MarkdownBody parses). `records` is mutated in place
  * on the append/toggle paths to stay O(delta).
  *
+ * RENDERED-HISTORY CAP: the window holds at most `rowCap` physical rows of
+ * settled transcript (header and hint reserved on top). The cap exists only
+ * here — the event log, the store projection, /export, Ctrl+O, and /resume
+ * keep the full history. Ink 5's <Static> is a consumption counter
+ * (items.slice(index) keyed on length): deleting head items mid-stream while
+ * appending tail items can permanently swallow new rows, so the append branch
+ * NEVER drops the head — it only accounts rows and flags `needsTrim` once the
+ * window overflows cap + margin. The flag fires one source-backed replay
+ * (epoch bump = the existing clear + <Static> remount), whose rebuild branch
+ * walks the settled entries BACKWARD from the newest, keeps whole entries
+ * until the cap, and counts everything older as `droppedEntries` (those
+ * entries never even reach settledEntryLines). Hysteresis bounds replays to
+ * at most one per 25% growth; resize / Ctrl+L / idle Ctrl+R replays re-window
+ * for free on the same path.
+ *
  * Full rebuilds run only on the rare, deliberate paths: no cache yet, a
  * source-backed replay (`epoch` bump: resize / Ctrl+L / an idle Ctrl+R fold
- * toggle remounts `<Static>` and must re-flush the CURRENT rows at the CURRENT
- * fold state), a `resumed` change, or a shrink (`store.reset`). While a turn is
- * busy or streaming, Ctrl+R only flips the live region; rows already emitted
- * to native scrollback change exclusively through those rebuilds.
+ * toggle / a cap trim remounts `<Static>` and must re-flush the CURRENT rows
+ * at the CURRENT fold state), a `resumed` change, or a shrink (`store.reset`).
+ * While a turn is busy or streaming, Ctrl+R only flips the live region; rows
+ * already emitted to native scrollback change exclusively through rebuilds.
  */
 export function computeSettledRows(
   previous: SettledRowsCache | undefined,
@@ -3405,25 +3458,51 @@ export function computeSettledRows(
   resumed: boolean,
   epoch: number,
   columns = 80,
+  rowCap = SETTLED_ROW_CAP,
 ): SettledRowsResult {
   if (previous === undefined || previous.epoch !== epoch || previous.resumed !== resumed
     || settled < previous.entries.length) {
-    // Full rebuild from the current settled prefix, all rows at the CURRENT
-    // fold state: an epoch bump (resize, Ctrl+L, or an idle Ctrl+R toggle)
-    // repaints a uniform transcript instead of preserving per-entry modes.
+    // Full rebuild at the CURRENT fold state, newest-first so the cap keeps
+    // whole entries and never even parses dropped ones.
     const records = new Map<TranscriptEntry, SettledRowRecord>()
-    const flat: ReactElement[] = [createElement(Header, { key: 'header', resumed })]
-    for (let index = 0; index < settled; index++) {
+    const window: ReactElement[] = []
+    let windowRows = 0
+    let droppedEntries = 0
+    let index = settled - 1
+    for (; index >= 0; index--) {
       const entry = entries[index]
+      if (entry === undefined) break
       const record = buildSettledRow(entry, index, showReasoning, columns)
+      if (rowCap > 0 && windowRows + record.rows > rowCap - SETTLED_ROW_RESERVE) {
+        // This whole entry (and everything older) falls out of the window.
+        droppedEntries = index + 1
+        break
+      }
       records.set(entry, record)
-      if (record.before !== undefined) flat.push(record.before)
-      flat.push(record.box)
-      if (record.after !== undefined) flat.push(record.after)
+      windowRows += record.rows
+      if (record.after !== undefined) window.unshift(record.after)
+      window.unshift(record.box)
+      if (record.before !== undefined) window.unshift(record.before)
     }
+    const header = createElement(Header, { key: 'header', resumed })
+    const flat = droppedEntries > 0
+      ? [header, settledTrimHint(droppedEntries, columns), ...window]
+      : [header, ...window]
     return {
-      cache: { entries: entries.slice(0, settled), records, header: flat[0]!, resumed, showReasoning, epoch, columns, flat },
-      built: settled,
+      cache: {
+        entries: entries.slice(droppedEntries, settled),
+        records,
+        header,
+        resumed,
+        showReasoning,
+        epoch,
+        columns,
+        flat,
+        droppedEntries,
+        totalRows: windowRows,
+        needsTrim: false,
+      },
+      built: records.size,
     }
   }
   if (previous.showReasoning !== showReasoning) {
@@ -3437,19 +3516,25 @@ export function computeSettledRows(
     // memoized <Static> subtree does not re-render at all.
     return { cache: previous, built: 0 }
   }
-  // The boundary grew: build ONLY the newly settled suffix.
+  // The boundary grew: build ONLY the newly settled suffix. The head is never
+  // dropped here (Ink's Static counter would swallow rows on a mixed frame);
+  // overflow only flags the cache for one trimming replay.
   const records = previous.records
   const suffix: TranscriptEntry[] = []
   const added: ReactElement[] = []
-  for (let index = previous.entries.length; index < settled; index++) {
+  let deltaRows = 0
+  for (let index = previous.entries.length + previous.droppedEntries; index < settled; index++) {
     const entry = entries[index]
     const record = buildSettledRow(entry, index, showReasoning, previous.columns)
     records.set(entry, record)
     suffix.push(entry)
+    deltaRows += record.rows
     if (record.before !== undefined) added.push(record.before)
     added.push(record.box)
     if (record.after !== undefined) added.push(record.after)
   }
+  const totalRows = previous.totalRows + deltaRows
+  const needsTrim = rowCap > 0 && totalRows > rowCap + Math.floor(rowCap / 4)
   return {
     cache: {
       entries: previous.entries.concat(suffix),
@@ -3460,8 +3545,11 @@ export function computeSettledRows(
       epoch: previous.epoch,
       columns: previous.columns,
       flat: previous.flat.concat(added),
+      droppedEntries: previous.droppedEntries,
+      totalRows,
+      needsTrim,
     },
-    built: settled - previous.entries.length,
+    built: suffix.length,
   }
 }
 
@@ -3850,6 +3938,17 @@ export function App(props: AppProps): ReactElement {
   }, [appStdout, refreshEpoch])
   // An idle Ctrl+R fold toggle joins resize and explicit Ctrl+L as a deliberate
   // source-backed rebuild of native scrollback; busy turns never do.
+
+  // Rendered-history cap: when the settled window overflows the trim
+  // hysteresis, one source-backed replay re-windows it (the rebuild branch
+  // drops the oldest entries beyond the cap). Deferred while busy or
+  // streaming so the clear never interrupts a visible stream; the flag
+  // survives until the turn calms.
+  const settledNeedsTrim = settledRowsCache.current?.needsTrim === true
+  useEffect(() => {
+    if (!settledNeedsTrim || busy || streamingActive) return
+    refreshScreen()
+  }, [settledNeedsTrim, busy, streamingActive])
 
   /** Apply one /model pick: record the selection, close the panel, report via notice. */
   const applyModel = (row: ModelRow, effortId: string | undefined): void => {

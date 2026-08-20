@@ -2978,3 +2978,68 @@ describe('composer band', () => {
     }
   })
 })
+
+describe('settled row cap window', () => {
+  // One short assistant entry renders as exactly one physical row at 80 cols.
+  const one = (text: string): TranscriptEntry => assistantEntry(text)
+
+  it('rebuild keeps whole newest entries within the cap and reports the dropped count', () => {
+    const entries = Array.from({ length: 20 }, (_, index) => one(`m${index}`))
+    // Budget = cap - reserve(12): cap 20 leaves 8 rows -> newest 8 entries stay.
+    const result = computeSettledRows(undefined, entries, entries.length, false, false, 0, 80, 20)
+    expect(result.built).toBe(8)
+    expect(result.cache.droppedEntries).toBe(12)
+    expect(result.cache.entries).toHaveLength(8)
+    expect(result.cache.totalRows).toBe(8)
+    expect(result.cache.needsTrim).toBe(false)
+    // flat = header + trim hint + the 8 window rows.
+    expect(result.cache.flat).toHaveLength(1 + 1 + 8)
+    expect(result.cache.flat[1]!.key).toBe('history-cap-hint')
+  })
+
+  it('append only accounts rows; the epoch-bump replay performs the actual drop', () => {
+    const tight = Array.from({ length: 30 }, (_, index) => one(`t${index}`))
+    // Capped rebuild (cap 30, budget 18): 18 stay, 2 drop, hint present.
+    let state = computeSettledRows(undefined, tight.slice(0, 20), 20, false, false, 0, 80, 30)
+    expect(state.cache.entries).toHaveLength(18)
+    expect(state.cache.droppedEntries).toBe(2)
+    expect(state.cache.flat).toHaveLength(1 + 1 + 18)
+    // Growing inside cap + 25% hysteresis never trims: rows append, head stays.
+    // (The window holds 28 of 30 — the 2 dropped at rebuild stay dropped.)
+    state = computeSettledRows(state.cache, tight, tight.length, false, false, 0, 80, 30)
+    expect(state.cache.needsTrim).toBe(false)
+    expect(state.cache.entries).toHaveLength(28)
+    expect(state.cache.totalRows).toBe(28)
+    // Crossing cap + 25% (40 > 37) only flags the cache for a trimming replay.
+    const big = [...tight, ...Array.from({ length: 12 }, (_, index) => one(`b${index}`))]
+    state = computeSettledRows(state.cache, big, big.length, false, false, 0, 80, 30)
+    expect(state.cache.needsTrim).toBe(true)
+    expect(state.cache.entries).toHaveLength(40)
+    expect(state.cache.flat).toHaveLength(1 + 1 + 40)
+    // The replay (epoch bump) re-windows: back to the cap, flag cleared.
+    state = computeSettledRows(state.cache, big, big.length, false, false, 1, 80, 30)
+    expect(state.cache.needsTrim).toBe(false)
+    expect(state.cache.entries).toHaveLength(18)
+    expect(state.cache.droppedEntries).toBe(24)
+    expect(state.cache.totalRows).toBe(18)
+    expect(state.cache.flat).toHaveLength(1 + 1 + 18)
+  })
+
+  it('cap 0 disables windowing entirely', () => {
+    const entries = Array.from({ length: 50 }, (_, index) => one(`m${index}`))
+    const result = computeSettledRows(undefined, entries, entries.length, false, false, 0, 80, 0)
+    expect(result.cache.entries).toHaveLength(50)
+    expect(result.cache.droppedEntries).toBe(0)
+    expect(result.cache.flat).toHaveLength(1 + 50)
+    expect(result.cache.needsTrim).toBe(false)
+  })
+
+  it('the fold toggle preserves the window bookkeeping', () => {
+    const entries = Array.from({ length: 20 }, (_, index) => one(`m${index}`))
+    const capped = computeSettledRows(undefined, entries, entries.length, false, false, 0, 80, 20)
+    const toggled = computeSettledRows(capped.cache, entries, entries.length, true, false, 0, 80, 20)
+    expect(toggled.cache.droppedEntries).toBe(capped.cache.droppedEntries)
+    expect(toggled.cache.totalRows).toBe(capped.cache.totalRows)
+    expect(toggled.cache.flat).toBe(capped.cache.flat)
+  })
+})
