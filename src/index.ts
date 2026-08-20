@@ -660,7 +660,10 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     const finish = (): void => {
       pendingControllers.delete(controller)
     }
-    void Promise.resolve().then(() => registry.execute(currentAgent, line, controller.signal)).then((execution) => {
+    // rc.8 registry.execute gained an `images` admission parameter; the TUI
+    // composer never attaches images to a slash line, so every invocation is
+    // the empty batch (commands declaring input.images still run image-free).
+    void Promise.resolve().then(() => registry.execute(currentAgent, line, [], controller.signal)).then((execution) => {
       finish()
       // A switch/quit landed while the command ran: its fall-through must not
       // reach an agent that is no longer on screen.
