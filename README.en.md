@@ -7,6 +7,7 @@ English | [中文](README.md)
 <p align="center"><img alt="Typing SVG" src="https://readme-typing-svg.herokuapp.com?font=JetBrains+Mono&amp;weight=500&amp;size=22&amp;duration=4000&amp;pause=700&amp;color=4176E6&amp;center=true&amp;vCenter=true&amp;width=680&amp;lines=DeepSeek+Harness+Code;DSH+%E5%86%85%E6%A0%B8%E7%9A%84%E7%BB%88%E7%AB%AF%E7%BC%96%E7%A0%81%E7%95%8C%E9%9D%A2"></p>
 <p align="center">
   <a href="https://github.com/deepseek-ai/deepseek-harness"><img alt="DeepSeek Harness" src="https://img.shields.io/badge/DeepSeek-Harness-4176E6?style=for-the-badge&amp;logo=deepseek&amp;logoColor=white&amp;labelColor=1c1917"></a>
+  <a href="https://www.npmjs.com/package/@deepseek-ai/dsh"><img alt="dsh version" src="https://img.shields.io/badge/dsh-0.1.0--rc.8-4176E6?style=for-the-badge&amp;logo=deepseek&amp;logoColor=white&amp;labelColor=1c1917"></a>
   <a href="https://github.com/UNLINEARITY/dsh-code/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/UNLINEARITY/dsh-code?label=Stars&amp;style=for-the-badge&amp;logo=github&amp;logoColor=white&amp;color=4176E6&amp;labelColor=1c1917"></a>
   <a href="https://www.npmjs.com/package/dsh-code"><img alt="npm version" src="https://img.shields.io/npm/v/dsh-code?label=npm&amp;style=for-the-badge&amp;logo=npm&amp;color=cb3837&amp;labelColor=1c1917"></a>
   <a href="https://github.com/UNLINEARITY/dsh-code/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/github/license/UNLINEARITY/dsh-code?label=License&amp;style=for-the-badge&amp;logo=opensourceinitiative&amp;color=4176E6&amp;labelColor=1c1917"></a>
@@ -34,30 +35,27 @@ The interface follows familiar terminal conventions, while runtime behavior cont
 
 ## 2. Quick start
 
-Requires Node `^22.19 || >=24` and the preview `dsh` CLI. `DEEPSEEK_API_KEY` is not a startup prerequisite: the TUI, sessions, and non-model features remain available without it; press `a` in `/model` to add an API key through the Harness credentials service.
+Requires Node `^22.19 || >=24` and the preview `dsh` CLI (current line: `@deepseek-ai/dsh@0.1.0-rc.8`). `DEEPSEEK_API_KEY` is not a startup prerequisite: the TUI, sessions, and non-model features remain available without it; press `a` in `/model` to add an API key through the Harness credentials service.
 
-### 1. First installing
+### 1. Install or update
+
+First install and updates use the same commands:
 
 ```sh
-npm install -g @deepseek-ai/dsh dsh-code
+npm install -g @deepseek-ai/dsh@0.1.0-rc.8 dsh-code@1.0.0
 npm install -g pnpm
-dsh plugin --profile cli add dsh-code@0.9.1
+dsh plugin --profile cli add dsh-code@1.0.0
 ```
 
-> Note: pnpm ignores packages published less than 24 hours ago, so pin `dsh-code@0.9.1` on the release day; the version can be omitted afterwards. npm installs are not affected.
-
-### 2. Updating
-
-```sh
-npm install -g dsh-code@0.9.1
-dsh plugin --profile cli add dsh-code@0.9.1
-```
+> Note: pnpm ignores packages published less than 24 hours ago, so pin `dsh-code@1.0.0` on the release day; the version can be omitted afterwards. npm installs are not affected.
+>
+> Version alignment: dsh-code 1.0.x builds against the dsh `0.1.0-rc.8` plugin line (all peer dependencies are `^0.1.0-rc.8`). Keep the global dsh CLI and dsh-code on the same release line so the host and the plugin stay aligned.
 
 ### DSH-Code wrapper
 
 DSH-Code is a terminal wrapper over DeepSeek Harness. It does not replace Harness services for Agent, sessions, models, tools, approvals, or persistence; the `cli` profile composes those services with the terminal bundle. `deepseek` and `dsh-code` are convenience aliases for `dsh --profile cli`.
 
-### 3. launching
+### 2. launching
 
 Available launch commands:
 

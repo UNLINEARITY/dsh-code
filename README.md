@@ -7,6 +7,7 @@
 <p align="center"><img alt="Typing SVG" src="https://readme-typing-svg.herokuapp.com?font=JetBrains+Mono&amp;weight=500&amp;size=22&amp;duration=4000&amp;pause=700&amp;color=4176E6&amp;center=true&amp;vCenter=true&amp;width=680&amp;lines=DeepSeek+Harness+Code;DSH+%E5%86%85%E6%A0%B8%E7%9A%84%E7%BB%88%E7%AB%AF%E7%BC%96%E7%A0%81%E7%95%8C%E9%9D%A2"></p>
 <p align="center">
   <a href="https://github.com/deepseek-ai/deepseek-harness"><img alt="DeepSeek Harness" src="https://img.shields.io/badge/DeepSeek-Harness-4176E6?style=for-the-badge&amp;logo=deepseek&amp;logoColor=white&amp;labelColor=1c1917"></a>
+  <a href="https://www.npmjs.com/package/@deepseek-ai/dsh"><img alt="dsh version" src="https://img.shields.io/badge/dsh-0.1.0--rc.8-4176E6?style=for-the-badge&amp;logo=deepseek&amp;logoColor=white&amp;labelColor=1c1917"></a>
   <a href="https://github.com/UNLINEARITY/dsh-code/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/UNLINEARITY/dsh-code?label=Stars&amp;style=for-the-badge&amp;logo=github&amp;logoColor=white&amp;color=4176E6&amp;labelColor=1c1917"></a>
   <a href="https://www.npmjs.com/package/dsh-code"><img alt="npm version" src="https://img.shields.io/npm/v/dsh-code?label=npm&amp;style=for-the-badge&amp;logo=npm&amp;color=cb3837&amp;labelColor=1c1917"></a>
   <a href="https://github.com/UNLINEARITY/dsh-code/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/github/license/UNLINEARITY/dsh-code?label=License&amp;style=for-the-badge&amp;logo=opensourceinitiative&amp;color=4176E6&amp;labelColor=1c1917"></a>
@@ -34,30 +35,27 @@ DSH-Code 保留这套结构，并补充适合编码任务的终端工作流。
 
 ## 二、快速开始
 
-需要 Node `^22.19 || >=24` 和预览版 `dsh` CLI。`DEEPSEEK_API_KEY` 不是启动前置条件：未配置时仍可进入 TUI、查看会话和使用非模型功能；在 `/model` 中按 `a` 可通过 Harness credentials 服务添加 API key。
+需要 Node `^22.19 || >=24` 和预览版 `dsh` CLI（当前版本线：`@deepseek-ai/dsh@0.1.0-rc.8`）。`DEEPSEEK_API_KEY` 不是启动前置条件：未配置时仍可进入 TUI、查看会话和使用非模型功能；在 `/model` 中按 `a` 可通过 Harness credentials 服务添加 API key。
 
-### 1. 初次安装
+### 1. 安装与更新
+
+初次安装和更新使用同一组指令：
 
 ```sh
-npm install -g @deepseek-ai/dsh dsh-code
+npm install -g @deepseek-ai/dsh@0.1.0-rc.8 dsh-code@1.0.0
 npm install -g pnpm
-dsh plugin --profile cli add dsh-code@0.9.1
+dsh plugin --profile cli add dsh-code@1.0.0
 ```
 
-> 提示：pnpm 会忽略发布不足 24 小时的包，因此发布首日请使用精确版本 `dsh-code@0.9.1`；24 小时后可省略版本号。npm 安装不受此限制。
-
-### 2. 已有 DSH 或更新版本
-
-```sh
-npm install -g dsh-code@0.9.1
-dsh plugin --profile cli add dsh-code@0.9.1
-```
+> 提示：pnpm 会忽略发布不足 24 小时的包，因此发布首日请使用精确版本 `dsh-code@1.0.0`；24 小时后可省略版本号。npm 安装不受此限制。
+>
+> 版本对齐：dsh-code 1.0.x 基于 dsh `0.1.0-rc.8` 插件线构建（peer 依赖全部为 `^0.1.0-rc.8`），请保持全局 dsh 与 dsh-code 在同一版本线，避免宿主与插件版本不一致。
 
 ### DSH-Code 封装
 
 DSH-Code 是叠加在 DeepSeek Harness 之上的终端封装，不修改 Harness 的 Agent、会话、模型、工具、审批和持久化等核心服务；`cli` profile 负责将它们与终端 bundle 组合起来。`deepseek` 与 `dsh-code` 只是 `dsh --profile cli` 的便利启动别名。
 
-### 3. 启动指令
+### 2. 启动指令
 
 可用的启动指令：
 ```sh
