@@ -32,7 +32,7 @@ import {
 } from './theme.ts'
 import { ThemePanel } from './theme-panel.ts'
 import { WHALE_GLYPH, WHALE_GLYPH_COLUMNS } from './whale-glyph.ts'
-import { DSH_CODE_VERSION } from './version.ts'
+import { DSH_CODE_VERSION, dshKernelVersion } from './version.ts'
 import type { TranscriptStore } from './store.ts'
 import { settledEntryCount, type TranscriptEntry } from './render/projection.ts'
 import { type MdSegment, visibleColumns } from './render/markdown.ts'
@@ -523,19 +523,27 @@ function PanelGap({ visible }: { visible: boolean }): ReactElement | undefined {
 
 
 /**
- * The whale header with a compact three-line copy lockup. The title, bilingual
- * slogan, and key hint stay centered inside the existing eight content rows,
- * preserving the Static header's ten physical rows. Short or narrow terminals
- * keep a one-line form.
+ * The whale header with a compact copy lockup. The dsh kernel version (when
+ * the host manifest resolves), the title, the bilingual slogan, and the key
+ * hint stay centered inside the existing eight content rows, preserving the
+ * Static header's ten physical rows; without a resolvable host the lockup
+ * keeps its historical three lines. Short or narrow terminals keep a one-line
+ * form without the kernel line.
  */
 function Header({ resumed }: { resumed: boolean }): ReactElement {
   const stdout = useStdout().stdout
   const rows = stdout?.rows ?? 40
   const columns = stdout?.columns ?? 80
+  const kernelLine = (() => {
+    const version = dshKernelVersion()
+    return version === undefined ? undefined : `dsh-v${version}`
+  })()
   const title = `DeepSeek Harness · v${DSH_CODE_VERSION}`
   const slogan = 'Into the Unknown  探索未至之境'
   const hint = resumed ? 'resumed · /help · Esc interrupt' : '/help · Esc interrupt · Ctrl+C quit'
-  const copyColumns = Math.max(visibleColumns(title), visibleColumns(slogan), visibleColumns(hint))
+  const copyWidths = [visibleColumns(title), visibleColumns(slogan), visibleColumns(hint)]
+  if (kernelLine !== undefined) copyWidths.push(visibleColumns(kernelLine))
+  const copyColumns = Math.max(...copyWidths)
   const compact = `${title} · ${hint}`
   if (rows < 20 || columns < WHALE_GLYPH_COLUMNS + copyColumns + 10) {
     return createElement(
@@ -560,6 +568,9 @@ function Header({ resumed }: { resumed: boolean }): ReactElement {
     createElement(
       Box,
       { flexDirection: 'column', width: copyColumns, justifyContent: 'center' },
+      ...(kernelLine === undefined
+        ? []
+        : [createElement(Text, { color: inkColor(getPalette().dim), wrap: 'truncate-end' }, kernelLine)]),
       createElement(Text, { color: inkColor(getPalette().brandBright), bold: true, wrap: 'truncate-end' }, title),
       createElement(
         Text,

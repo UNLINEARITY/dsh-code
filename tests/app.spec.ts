@@ -1,5 +1,8 @@
 /** App-level Ctrl+O rendering regression over real Node streams. */
 
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { PassThrough } from 'node:stream'
 import chalk from 'chalk'
 import { createElement } from 'react'
@@ -13,7 +16,7 @@ import { createTranscriptStore } from '../src/store.ts'
 import type { TranscriptEntry } from '../src/render/projection.ts'
 import { DEFAULT_STATUSLINE_ITEMS } from '../src/render/status.ts'
 import { setTheme } from '../src/theme.ts'
-import { DSH_CODE_VERSION } from '../src/version.ts'
+import { DSH_CODE_VERSION, _resetDshKernelVersionForTests } from '../src/version.ts'
 
 const wait = async (): Promise<void> => new Promise(resolve => setTimeout(resolve, 100))
 const resizeClear = '\x1b[r\x1b[0m\x1b[H\x1b[2J\x1b[3J\x1b[H'
@@ -2871,5 +2874,53 @@ describe('editorWindow caret grapheme safety', () => {
     expect(win.caret).toBe(' ')
     expect(win.before).toContain('b')
     expect(win.after).toBe('')
+  })
+})
+
+describe('dsh kernel header line', () => {
+  it('prepends the resolved kernel version above the title without extra chrome', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-kernel-header-'))
+    const hostDir = join(root, '@deepseek-ai', 'dsh')
+    mkdirSync(join(hostDir, 'lib'), { recursive: true })
+    writeFileSync(join(hostDir, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.1.0-rc.8' }))
+    const previousArgv = process.argv[1]
+    process.argv[1] = join(hostDir, 'lib', 'bin.js')
+    _resetDshKernelVersionForTests()
+    const harness = createTty(120, 30)
+    try {
+      const instance = renderApp(harness, appProps())
+      try {
+        await wait()
+        const text = harness.output.text
+        expect(text).toContain('dsh-v0.1.0-rc.8')
+        expect(text.indexOf('dsh-v0.1.0-rc.8')).toBeLessThan(text.indexOf(`DeepSeek Harness · v${DSH_CODE_VERSION}`))
+        expect(text).toContain('Into the Unknown  探索未至之境')
+      } finally {
+        instance.unmount()
+      }
+    } finally {
+      harness.stdin.destroy()
+      harness.stdout.destroy()
+      process.argv[1] = previousArgv
+      _resetDshKernelVersionForTests()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps the historical three-line lockup when no host manifest resolves', async () => {
+    const harness = createTty(120, 30)
+    try {
+      const instance = renderApp(harness, appProps())
+      try {
+        await wait()
+        expect(harness.output.text).not.toContain('dsh-v')
+        expect(harness.output.text).toContain(`DeepSeek Harness · v${DSH_CODE_VERSION}`)
+      } finally {
+        instance.unmount()
+      }
+    } finally {
+      harness.stdin.destroy()
+      harness.stdout.destroy()
+    }
   })
 })
