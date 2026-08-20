@@ -16,7 +16,6 @@
  */
 
 import { visibleColumns } from './markdown.ts'
-import { displayText } from './text.ts'
 
 /** One grapheme cluster with its source span and display width in cells. */
 export interface GraphemeSpan {
@@ -108,11 +107,19 @@ export function moveCursorBy(value: string, offset: number, delta: number): numb
 /**
  * Normalize text entering the draft: CRLF/CR become LF, tabs become two
  * spaces (terminal tab stops are contextual and cannot join a deterministic
- * row budget), and every other control or deceptive character is escaped
- * visibly so nothing in the composer can drive the terminal.
+ * row budget), and every other C0 control byte plus DEL is REMOVED — the
+ * draft is data, so a stray ESC (Windows Terminal file drops) disappears
+ * instead of rendering as literal backslash-x-1-b text. Newlines survive.
  */
 export function sanitizeDraftText(text: string): string {
-  return displayText(text.replaceAll('\r\n', '\n').replaceAll('\r', '\n')).replaceAll('\t', '  ')
+  return text
+    .replaceAll('\r\n', '\n')
+    .replaceAll('\r', '\n')
+    // The draft is DATA, not display: strip C0 control bytes (the stray ESC
+    // that rides Windows Terminal file drops) and DEL instead of escaping
+    // them into visible "\x1b" text. Newlines survive; tabs widen.
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/gu, '')
+    .replaceAll('\t', '  ')
 }
 
 /** One physical editor row: wrapped text plus its boundary map. */

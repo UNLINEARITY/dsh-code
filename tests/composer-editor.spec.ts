@@ -28,8 +28,15 @@ describe('sanitizeDraftText', () => {
   it('normalizes line endings and tabs', () => {
     expect(sanitizeDraftText('a\r\nb\rc\td')).toBe('a\nb\nc  d')
   })
-  it('escapes injectable control characters visibly', () => {
-    expect(sanitizeDraftText('x\x07y\x1b[31m')).toBe('x\\x07y\\x1b[31m')
+  it('strips injectable control characters instead of escaping them', () => {
+    expect(sanitizeDraftText('x\x07y\x1b[31m')).toBe('xy[31m')
+  })
+  it('strips the stray ESC that rides Windows Terminal file drops instead of escaping it', () => {
+    expect(sanitizeDraftText('C:\\pics\\pre2.gif\x1b')).toBe('C:\\pics\\pre2.gif')
+  })
+  it('keeps newlines and widens tabs while removing other control bytes', () => {
+    expect(sanitizeDraftText('a\rb')).toBe('a\nb')
+    expect(sanitizeDraftText('q\u0000w\u007fx')).toBe('qwx')
   })
 })
 
