@@ -40,7 +40,6 @@ import {
   busyChaseFrame,
   caretVisible,
   DEEPSEEK_WAVE_TICK_MS,
-  deepseekWaveBorderColor,
   deepseekWaveColumnBg,
   deepseekWaveDuration,
   deepseekWaveSpark,
@@ -50,8 +49,6 @@ import {
   deepseekWaveWordVisible,
   effortAboveHigh,
   isOfficialDeepSeekLabel,
-  WAVE_BASE_DARK,
-  WAVE_BASE_LIGHT,
   type DeepseekWaveStyle,
   type DeepseekWaveTier,
 } from './render/animations.ts'
@@ -755,7 +752,7 @@ function statusToneProps(tone: StatusTone): {
  * truncation degrades groups, it never wraps a row.
  *
  * The DeepSeek easter egg: when the model label *switches* to an official
- * DeepSeek route, the composer's INPUT ROW (not the frame) plays Codex's
+ * DeepSeek route, the composer's INPUT ROW (the band's middle) plays Codex's
  * effort-ignition "Wave" — a blue crest sweeping the content row column by
  * column, with the `· ✦ ✧` sparkles on the deepseek tier — and the prompt
  * marker keeps the tier accent afterwards. The border stays a constant
@@ -841,8 +838,8 @@ function StatusLine({ facts, stats, busy, columns, items }: {
     // of wrapping.
     return createElement(
       Box,
-      // Match the prompt text inside the bordered composer: one border column
-      // plus one padding column. The secondary row adds the model-name indent
+      // Match the prompt text inside the composer band: two padding columns.
+      // The secondary row adds the model-name indent
       // (its budget already shrinks by the same amount) so its figures align
       // under the model name rather than under the busy dot.
       { paddingLeft: 2 + indent, justifyContent: rightParts.length > 0 ? 'space-between' : undefined },
@@ -2335,7 +2332,7 @@ export function completionCandidates(
 
 /**
  * The completion menu, rendered inside the composer's subtree directly above
- * the framed box — attached the way Claude-Code anchors its dropdown. Opening
+ * the composer band — attached the way Claude-Code anchors its dropdown. Opening
  * it grows the stack downward: the composer stays the last element on screen
  * and everything above (the flushed static transcript, the status line) never
  * moves. Props-only (no lifted state): the menu is a pure view of the input
@@ -3069,7 +3066,7 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   })
 
   // The DeepSeek easter-egg wave owns its 33ms tick HERE instead of in App:
-  // the interval re-renders only the composer row at 30fps, never the whole
+  // the interval re-renders only the composer band at 30fps, never the whole
   // tree. App drives the tier/style pair on a model switch; this local effect
   // starts the sweep whenever that pair changes (App picks a NEW random style
   // for every replay — including effort changes on the same route — so the
@@ -3133,44 +3130,45 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   useEffect(() => {
     onEditorRows(editorRowCount)
   }, [editorRowCount, onEditorRows])
+  // The composer band: the old border's three-row footprint repainted as a
+  // background-color band (the Codex-style shaded composer strip) — one
+  // blank band row above and below the content rows, full width minus the
+  // final column. Row counts are untouched, so every height budget stays
+  // exact.
+  const bandWidth = Math.max(1, columns - 1)
+  const bandBg = inkColor(getPalette().composerBand)
+  const bandFill = (consumed: number): string => ' '.repeat(Math.max(0, bandWidth - consumed))
+  const band = (content: ReactElement): ReactElement => createElement(
+    Box,
+    { flexDirection: 'column', width: bandWidth },
+    createElement(Text, { backgroundColor: bandBg }, ' '.repeat(bandWidth)),
+    content,
+    createElement(Text, { backgroundColor: bandBg }, ' '.repeat(bandWidth)),
+  )
   if (frozen) {
-    // A pending deletion turns the box into the confirm prompt: the y/n is
-    // typed HERE, with a readable warn-styled hint instead of a dim footer.
+    // A pending deletion turns the band into the confirm prompt: the y/n is
+    // typed HERE; without a border the warn color carries the warning.
     if (deleteConfirm !== undefined) {
-      return createElement(
-        Box,
-        { width: Math.max(1, columns - 1), borderStyle: 'round', borderColor: inkColor(getPalette().warn), paddingX: 1 },
-        createElement(
-          Text,
-          { wrap: 'truncate-end' },
-          createElement(Text, { color: inkColor(getPalette().warn), bold: true }, '❯ '),
-          createElement(Text, { color: inkColor(getPalette().warn), bold: true }, 'y delete · any other key cancels'),
-        ),
-      )
+      const warning = 'y delete · any other key cancels'
+      return band(createElement(
+        Text,
+        { backgroundColor: bandBg, wrap: 'truncate-end' },
+        createElement(Text, { color: inkColor(getPalette().warn), bold: true }, '❯ '),
+        createElement(Text, { color: inkColor(getPalette().warn), bold: true }, warning),
+        bandFill(2 + visibleColumns(warning)),
+      ))
     }
-    const frozen = value === ''
+    const frozenLine = value === ''
       ? 'type a message'
       : verboseLine(value, Math.max(1, columns - 6))
-    return createElement(
-      Box,
-      { width: Math.max(1, columns - 1), borderStyle: 'round', borderColor: inkColor(getPalette().dim), paddingX: 1 },
-      createElement(
-        Text,
-        { wrap: 'truncate-end' },
-        createElement(Text, { color: promptColor, bold: tierActive ? true : undefined }, busy ? '… ' : `${promptGlyph} `),
-        frozen,
-      ),
-    )
+    return band(createElement(
+      Text,
+      { backgroundColor: bandBg, wrap: 'truncate-end' },
+      createElement(Text, { color: promptColor, bold: tierActive ? true : undefined }, busy ? '… ' : `${promptGlyph} `),
+      frozenLine,
+      bandFill(2 + visibleColumns(frozenLine)),
+    ))
   }
-
-  // The bordered frame: static dim at rest; while the wave runs the border
-  // breathes with the sweep (dim blends toward the tier accent and back), so
-  // the frame glows up while the crest crosses the row.
-  const frame = (row: ReactElement, borderRgb?: RgbTriple): ReactElement => createElement(
-    Box,
-    { width: Math.max(1, columns - 1), borderStyle: 'round', borderColor: inkColor(borderRgb ?? getPalette().dim), paddingX: 1 },
-    row,
-  )
   const menu = createElement(CompletionMenu, {
     active: menuActive,
     mention: mentionActive,
@@ -3179,7 +3177,7 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   })
 
   // The multiline editor (idle, busy, or after the wave): every visible
-  // physical row renders inside the frame, the prompt marker leading the
+  // physical row renders inside the band, the prompt marker leading the
   // first and a two-space indent aligning continuations under the text
   // column — the same gutter reply rows use. The caret is the inverse block
   // on its exact grapheme, so wide CJK cells and emoji clusters position the
@@ -3197,9 +3195,12 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
       : caretAt < row.cuts.length - 1
         ? row.text.slice(row.cuts[caretAt + 1]!)
         : ''
+    const placeholder = index === 0 && value === '' && !busy
+    const tail = placeholder ? COMPOSER_PLACEHOLDER : after
+    const consumed = 2 + visibleColumns(before) + visibleColumns(caretChar) + visibleColumns(tail)
     editorRows.push(createElement(
       Text,
-      { key: index, wrap: 'truncate-end' },
+      { key: index, backgroundColor: bandBg, wrap: 'truncate-end' },
       index === 0
         ? busy
           ? createElement(BusyChase)
@@ -3207,46 +3208,55 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
         : '  ',
       before,
       createElement(CursorBlock, { key: 'caret', char: caretChar }),
-      index === 0 && value === '' && !busy
+      placeholder
         ? createElement(Text, { dimColor: true }, COMPOSER_PLACEHOLDER)
         : after,
+      bandFill(consumed),
     ))
   }
   const staticEditor = createElement(Box, { flexDirection: 'column' }, ...editorRows)
 
-  // Wave row: the input row assembled column by column, each cell carrying
-  // the sampled wave `backgroundColor` (null outside the crest → transparent),
-  // so the crest sweeps the FULL content row — prompt, draft, cursor,
-  // placeholder, and the trailing blank fill. The deepseek tier drops the
+  // Wave band: all three rows assembled column by column, each cell carrying
+  // the sampled wave `backgroundColor` (null outside the crest → the band
+  // background), so the crest sweeps the FULL band — blank rows, prompt,
+  // draft, cursor, placeholder, and the trailing fill — with a per-row phase
+  // offset that flows the wave down the band. The deepseek tier drops the
   // `· ✦ ✧` sparkles into the rightmost blank cell from 900ms on.
   const waveRow = (): ReactElement => {
-    const contentWidth = Math.max(1, columns - 5)
-    const waveEditor = editorWindow(value, cursor, Math.max(1, contentWidth - 2))
     const hues = deepseekWaveHues(waveTier!)
     const style = waveStyle!
-    const base = getTheme() === 'light' ? WAVE_BASE_LIGHT : WAVE_BASE_DARK
-    const waveBg = (column: number): string | undefined => {
-      const rgb = deepseekWaveColumnBg(waveTick!, column, contentWidth, waveTier!, style, hues, base)
-      return rgb === null ? undefined : inkColor(rgb)
+    const bandRgb = getPalette().composerBand
+    const waveBg = (row: number, column: number): string => {
+      const rgb = deepseekWaveColumnBg(waveTick!, column, bandWidth, waveTier!, style, hues, bandRgb, row, 3)
+      return rgb === null ? bandBg : inkColor(rgb)
     }
-    const cells: ComposerCell[] = []
-    cells.push({ char: promptGlyph, color: promptColor, bold: true, backgroundColor: waveBg(0) })
-    cells.push({ char: ' ', color: promptColor, backgroundColor: waveBg(1) })
+    const blankBandRow = (row: number): ReactElement => {
+      const blanks: ComposerCell[] = []
+      while (blanks.length < bandWidth) blanks.push({ char: ' ', backgroundColor: waveBg(row, blanks.length) })
+      return createElement(Text, { key: row }, ...waveRowSpans(blanks))
+    }
+    const waveEditor = editorWindow(value, cursor, Math.max(1, columns - 7))
+    const cells: ComposerCell[] = [
+      { char: ' ', backgroundColor: waveBg(1, 0) },
+      { char: ' ', backgroundColor: waveBg(1, 1) },
+      { char: promptGlyph, color: promptColor, bold: true, backgroundColor: waveBg(1, 2) },
+      { char: ' ', color: promptColor, backgroundColor: waveBg(1, 3) },
+    ]
     for (const char of waveEditor.before) {
-      cells.push({ char, backgroundColor: waveBg(cells.length) })
+      cells.push({ char, backgroundColor: waveBg(1, cells.length) })
     }
-    cells.push({ char: waveEditor.caret, inverse: true, backgroundColor: waveBg(cells.length) })
+    cells.push({ char: waveEditor.caret, inverse: true, backgroundColor: waveBg(1, cells.length) })
     if (value === '' && !busy) {
       for (let at = 0; at < COMPOSER_PLACEHOLDER.length; at += 1) {
-        cells.push({ char: COMPOSER_PLACEHOLDER[at]!, dim: true, backgroundColor: waveBg(cells.length) })
+        cells.push({ char: COMPOSER_PLACEHOLDER[at]!, dim: true, backgroundColor: waveBg(1, cells.length) })
       }
     } else {
       for (const char of waveEditor.after) {
-        cells.push({ char, backgroundColor: waveBg(cells.length) })
+        cells.push({ char, backgroundColor: waveBg(1, cells.length) })
       }
     }
-    while (cells.length < contentWidth) {
-      cells.push({ char: ' ', backgroundColor: waveBg(cells.length) })
+    while (cells.length < bandWidth) {
+      cells.push({ char: ' ', backgroundColor: waveBg(1, cells.length) })
     }
     // The wordmark rides the wave's middle: `deepseek` on the official
     // tiers, `Into the Unknown` on the non-DeepSeek high-effort variant —
@@ -3254,7 +3264,7 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
     // over blank or placeholder cells — real draft text is never covered.
     if (deepseekWaveWordVisible(waveTick!, waveTier!, style)) {
       const word = waveTier === 'unknown' ? 'Into the Unknown' : 'deepseek'
-      const start = Math.max(2, Math.floor((contentWidth - word.length) / 2))
+      const start = Math.max(2, Math.floor((bandWidth - word.length) / 2))
       let clear = true
       for (let at = 0; at < word.length; at += 1) {
         const cell = cells[start + at]
@@ -3285,15 +3295,20 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
         }
       }
     }
-    const borderRgb = deepseekWaveBorderColor(waveTick!, waveTier!, style, hues, getPalette().dim)
-    return frame(createElement(Text, { wrap: 'truncate-end' }, ...waveRowSpans(cells)), borderRgb)
+    return createElement(
+      Box,
+      { flexDirection: 'column', width: bandWidth },
+      blankBandRow(0),
+      createElement(Text, { wrap: 'truncate-end' }, ...waveRowSpans(cells)),
+      blankBandRow(2),
+    )
   }
 
   return createElement(
     Box,
     { flexDirection: 'column' },
     menu,
-    waveTick !== null && waveTier !== null && !busy ? waveRow() : frame(staticEditor),
+    waveTick !== null && waveTier !== null && !busy ? waveRow() : band(staticEditor),
   )
 }
 
@@ -3485,7 +3500,7 @@ export function App(props: AppProps): ReactElement {
    * follows the applied model label (what the status bar actually shows),
    * never the initial paint, and the tier is derived from the label and
    * cached at the switch. The 33ms tick itself lives inside Input, so the
-   * sweep re-renders only the composer row, not the whole tree, at 30fps;
+   * sweep re-renders only the composer band, not the whole tree, at 30fps;
    * App owns the rarely-changing tier/style and Input starts the sweep
    * whenever that pair changes. */
   const [waveTier, setWaveTier] = useState<DeepseekWaveTier | null>(null)

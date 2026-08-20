@@ -280,14 +280,23 @@ function blendRgb(fg: RgbTriple, bg: RgbTriple, alpha: number): RgbTriple {
 }
 
 /**
- * The background color for one composer-row column at a tick — Codex
+ * Per-row phase share of the duration: the crest reaches the top row first
+ * and the bottom row last, sweeping down the band. 0.12 keeps the bottom
+ * row's lag inside the 200ms duration extension.
+ */
+export const DEEPSEEK_WAVE_ROW_PHASE = 0.12
+
+/**
+ * The background color for one composer-band column at a tick — Codex
  * `paint_bands` + `Canvas::tint` for all three styles. Bands overlap with a
  * max for Wave/Pulse and a SUM for Aurora (Codex differs by style), the
  * weighted hues mix per column (Wave/Pulse always end on hue 0), the tint
  * blends the mixed hue toward the blank-cell base at the style's alpha cap,
  * and Aurora applies its own fade envelope. Returns `null` when the column
  * should stay transparent, so the row returns to no `backgroundColor` on
- * both ends.
+ * both ends. With `rows > 1` each row samples the same timeline shifted by a
+ * per-row phase offset, so the crest cascades down the band instead of
+ * painting every row identically.
  * @param tick - wave frame (0, 1, … at DEEPSEEK_WAVE_TICK_MS).
  * @param column - column index in the content row (0..width-1).
  * @param width - content-row width in columns.
@@ -295,6 +304,8 @@ function blendRgb(fg: RgbTriple, bg: RgbTriple, alpha: number): RgbTriple {
  * @param style - the ignition style.
  * @param hues - the tier's three hues.
  * @param base - the blank-cell base color the tint blends toward.
+ * @param row - row index in the band (0..rows-1; default 0 = old single-row).
+ * @param rows - band height in rows (default 1).
  * @returns the blended RGB background, or null for transparent.
  */
 export function deepseekWaveColumnBg(
@@ -305,9 +316,12 @@ export function deepseekWaveColumnBg(
   style: DeepseekWaveStyle,
   hues: readonly [RgbTriple, RgbTriple, RgbTriple],
   base: RgbTriple,
+  row = 0,
+  rows = 1,
 ): RgbTriple | null {
   const total = deepseekWaveBaseDuration(tier, style) / 1000
   const elapsed = deepseekWaveSampleElapsedMs(tick, tier, style) / 1000
+    - (row - (rows - 1) / 2) * total * DEEPSEEK_WAVE_ROW_PHASE
   const fade = style === 'aurora' ? envelope(elapsed, total, 0.25, 0.40) : 1
   const weights = [0, 0, 0]
   for (const band of DEEPSEEK_WAVE_BANDS[style][tier]) {
@@ -346,33 +360,6 @@ export function deepseekWaveSpark(tick: number): string | null {
   if (elapsed < SPARK_START_MS) return null
   const frame = Math.floor((elapsed - SPARK_START_MS) / SPARK_FRAME_MS)
   return SPARK_GLYPHS[frame] ?? null
-}
-
-/**
- * The composer BORDER color at a tick: the frame breathes with the wave —
- * the palette's static dim blends toward the tier accent as the crest is
- * alive and back, so the frame glows up while the wave sweeps and settles to
- * dim on both ends (first==last frame==dim, no hard jump).
- * @param tick - wave frame at DEEPSEEK_WAVE_TICK_MS.
- * @param tier - the wave tier.
- * @param hues - the tier's three hues; the border blends toward hues[0].
- * @param dim - the palette's static dim RGB (the resting border color).
- * @returns the blended border RGB.
- */
-export function deepseekWaveBorderColor(
-  tick: number,
-  tier: DeepseekWaveTier,
-  style: DeepseekWaveStyle,
-  hues: readonly [RgbTriple, RgbTriple, RgbTriple],
-  dim: RgbTriple,
-): RgbTriple {
-  const total = deepseekWaveBaseDuration(tier, style) / 1000
-  const elapsed = deepseekWaveSampleElapsedMs(tick, tier, style) / 1000
-  // The border stays visibly on the tier accent for the whole sweep (a
-  // floor keeps it glowing, not just cresting mid-wave): it ramps in as the
-  // first band launches and relaxes after the last crest passes.
-  const glow = envelope(elapsed, total, total * 0.25, total * 0.4)
-  return blendRgb(hues[0], dim, 0.25 + glow * 0.6)
 }
 
 /**

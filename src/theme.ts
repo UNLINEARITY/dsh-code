@@ -32,6 +32,7 @@ export type ThemeToken =
   | 'warn'
   | 'text'
   | 'code'
+  | 'composerBand'
 
 /** One full color palette: every token key mapped to an RGB triple. */
 export type ThemePalette = Readonly<Record<ThemeToken, RgbTriple>>
@@ -68,6 +69,8 @@ export const DARK_PALETTE = {
   text: [236, 240, 246],
   /** Inline/fenced code — soft sky blue, distinct from brand accents. */
   code: [125, 211, 252],
+  /** Composer three-row band base — neutral light gray, hue-free so wave tints read on it. */
+  composerBand: [46, 48, 52],
 } as const satisfies ThemePalette
 
 /**
@@ -97,6 +100,8 @@ export const LIGHT_PALETTE = {
   text: [21, 21, 23],
   /** Inline/fenced code — Tailwind cyan-700, distinct from brand accents. */
   code: [14, 116, 144],
+  /** Composer three-row band base — neutral light gray, hue-free so wave tints read on it. */
+  composerBand: [229, 231, 235],
 } as const satisfies ThemePalette
 
 /** Every palette by theme name; auto resolves through {@link resolveTheme}. */

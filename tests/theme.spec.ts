@@ -64,6 +64,16 @@ describe('tui theme', () => {
     expect(LIGHT_PALETTE.warn).toEqual([180, 83, 9])
   })
 
+  it('pins the composer band base in both palettes', () => {
+    expect(DARK_PALETTE.composerBand).toEqual([46, 48, 52])
+    expect(LIGHT_PALETTE.composerBand).toEqual([229, 231, 235])
+    // The band stays hue-free (neutral gray): the wave's blue tints must not
+    // blend into a same-hue background.
+    expect(Math.max(...DARK_PALETTE.composerBand) - Math.min(...DARK_PALETTE.composerBand)).toBeLessThanOrEqual(6)
+    expect(Math.max(...LIGHT_PALETTE.composerBand) - Math.min(...LIGHT_PALETTE.composerBand)).toBeLessThanOrEqual(6)
+    expect(LIGHT_PALETTE.composerBand[0]).toBeGreaterThan(200)
+  })
+
   it('keeps both palettes on the same token keys and the canonical names', () => {
     expect(Object.keys(PALETTES).sort()).toEqual(['dark', 'light'])
     expect(Object.keys(LIGHT_PALETTE).sort()).toEqual(Object.keys(DARK_PALETTE).sort())

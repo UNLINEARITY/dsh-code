@@ -12,7 +12,6 @@ import {
   crest,
   DEEPSEEK_WAVE_BANDS,
   DEEPSEEK_WAVE_TICK_MS,
-  deepseekWaveBorderColor,
   deepseekWaveColumnBg,
   deepseekWaveDuration,
   deepseekWaveSpark,
@@ -331,24 +330,32 @@ describe('deepseekWaveSpark', () => {
   })
 })
 
-describe('deepseekWaveBorderColor', () => {
-  it('glows with the tier accent from the first frame (a 0.25 floor) and peaks mid-wave', () => {
-    const dim = DARK_PALETTE.dim
-    // tick 0: the border is already 25% toward the accent (visible, not dim).
-    const start = deepseekWaveBorderColor(0, 'deepseek', 'wave', flashHues, dim)
-    expect(channelDelta(start, dim)).toBeGreaterThan(8)
-    // Mid-wave the glow is at its brightest (0.25 + 0.6 = 0.85 toward accent).
-    const accent = flashHues[0]
-    const mid = Math.floor(deepseekWaveDuration('deepseek', 'wave') / DEEPSEEK_WAVE_TICK_MS / 2)
-    const color = deepseekWaveBorderColor(mid, 'deepseek', 'wave', flashHues, dim)
-    expect(channelDelta(color, accent)).toBeLessThan(channelDelta(start, accent))
-    // Every channel stays inside the dim→accent span.
-    for (let channel = 0; channel < 3; channel += 1) {
-      const low = Math.min(dim[channel], accent[channel])
-      const high = Math.max(dim[channel], accent[channel])
-      expect(color[channel]).toBeGreaterThanOrEqual(low)
-      expect(color[channel]).toBeLessThanOrEqual(high)
+describe('deepseekWaveColumnBg three-row band phase', () => {
+  const width = 40
+
+  it('keeps the middle row of three identical to the legacy single-row sample', () => {
+    for (const style of ['wave', 'aurora', 'pulse'] as const) {
+      for (const column of [0, 5, 12, 20, 30, 39]) {
+        expect(deepseekWaveColumnBg(20, column, width, 'deepseek', style, deepseekHues, WAVE_BASE_DARK, 1, 3))
+          .toEqual(deepseekWaveColumnBg(20, column, width, 'deepseek', style, deepseekHues, WAVE_BASE_DARK))
+      }
     }
+  })
+
+  it('sweeps the crest down the band: cells light the top row before the bottom, and later the bottom after the top', () => {
+    const frames = Math.ceil(deepseekWaveDuration('flash', 'wave') / DEEPSEEK_WAVE_TICK_MS) + 8
+    let topLeads = 0
+    let bottomLags = 0
+    for (let tick = 0; tick < frames; tick += 1) {
+      for (let column = 0; column < width; column += 1) {
+        const top = deepseekWaveColumnBg(tick, column, width, 'flash', 'wave', flashHues, WAVE_BASE_DARK, 0, 3)
+        const bottom = deepseekWaveColumnBg(tick, column, width, 'flash', 'wave', flashHues, WAVE_BASE_DARK, 2, 3)
+        if (top !== null && bottom === null) topLeads += 1
+        if (top === null && bottom !== null) bottomLags += 1
+      }
+    }
+    expect(topLeads).toBeGreaterThan(0)
+    expect(bottomLags).toBeGreaterThan(0)
   })
 })
 

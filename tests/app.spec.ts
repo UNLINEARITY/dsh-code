@@ -15,11 +15,16 @@ import { App, computeSettledRows, editorWindow, type AppProps } from '../src/app
 import { createTranscriptStore } from '../src/store.ts'
 import type { TranscriptEntry } from '../src/render/projection.ts'
 import { DEFAULT_STATUSLINE_ITEMS } from '../src/render/status.ts'
-import { setTheme } from '../src/theme.ts'
+import { DARK_PALETTE, setTheme } from '../src/theme.ts'
 import { DSH_CODE_VERSION, _resetDshKernelVersionForTests } from '../src/version.ts'
 
 const wait = async (): Promise<void> => new Promise(resolve => setTimeout(resolve, 100))
 const resizeClear = '\x1b[r\x1b[0m\x1b[H\x1b[2J\x1b[3J\x1b[H'
+// The composer band's resting background (dark palette): every frame may
+// carry it. A WAVE background is any OTHER truecolor 48;2 triple.
+const bandBgSeq = `48;2;${DARK_PALETTE.composerBand[0]};${DARK_PALETTE.composerBand[1]};${DARK_PALETTE.composerBand[2]}`
+const waveBgCount = (text: string): number =>
+  (text.match(/48;2;\d{1,3};\d{1,3};\d{1,3}/g) ?? []).filter(seq => seq !== bandBgSeq).length
 // useSyncExternalStore compares getSnapshot results by identity: these
 // doubles must return one frozen object forever, or React spins into an
 // infinite re-render loop (Maximum update depth exceeded).
@@ -859,9 +864,10 @@ describe('DeepSeek model-switch easter egg', () => {
       const label = 'deepseek-official/deepseek-reasoner'
       expect(output).toContain(label)
       // The persistent prompt marker switched to the deepseek tier glyph » in
-      // the tier accent (brandBright in the dark palette) — no border wave.
+      // the tier accent (brandBright in the dark palette). The composer is the
+      // frozen band here, so no wave background yet — only the band base.
       expect(output).toContain('»')
-      expect(output).not.toContain('48;2;')
+      expect(waveBgCount(output)).toBe(0)
 
       // Mid-wave (~0.7s in): the input row paints per-column wave backgrounds
       // (a truecolor `48;2;` run per sampled gradient column) while the draft
@@ -877,12 +883,12 @@ describe('DeepSeek model-switch easter egg', () => {
       expect(output).toContain('✧')
 
       // Past the 1.5s duration: fresh frames carry no wave backgrounds and no
-      // sparkles — the row returns to transparent (no `backgroundColor`).
+      // sparkles — the band settles back to its static background color.
       await sleep(900)
       const settled = output.length
       await sleep(400)
       const settledDelta = output.slice(settled)
-      expect(settledDelta).not.toMatch(/48;2;/)
+      expect(waveBgCount(settledDelta)).toBe(0)
       expect(settledDelta).not.toContain('✦')
 
       // Switch away from DeepSeek: the prompt restores the static brand ❯ and
@@ -1068,12 +1074,12 @@ describe('DeepSeek model-switch easter egg', () => {
       expect(output).toContain('✧')
 
       // Past the 1.5s duration: fresh frames carry no wave backgrounds and no
-      // sparkles — the row returns to transparent.
+      // sparkles — the band settles back to its static background color.
       await sleep(900)
       const settled = output.length
       await sleep(400)
       const settledDelta = output.slice(settled)
-      expect(settledDelta).not.toMatch(/48;2;/)
+      expect(waveBgCount(settledDelta)).toBe(0)
       expect(settledDelta).not.toContain('✦')
 
       // Dropping the effort back to high clears the wave state: no "Into the
@@ -2921,6 +2927,41 @@ describe('dsh kernel header line', () => {
     } finally {
       harness.stdin.destroy()
       harness.stdout.destroy()
+    }
+  })
+})
+
+describe('composer band', () => {
+  it('paints a three-row background band instead of a border with the draft on the middle row', async () => {
+    const originalChalkLevel = chalk.level
+    chalk.level = 3
+    const harness = createTty(100, 24)
+    const band = DARK_PALETTE.composerBand
+    const bandSeq = `\u001b[48;2;${band[0]};${band[1]};${band[2]}m`
+    try {
+      const instance = renderApp(harness, appProps())
+      try {
+        await wait()
+        harness.stdin.write('banded')
+        await wait()
+        const lines = harness.output.text.split('\n')
+        const row = lines.findIndex(line => line.includes('banded'))
+        expect(row).toBeGreaterThanOrEqual(0)
+        // The draft row plus one blank band row above and below: three
+        // consecutive rows carry the band background, no border glyphs.
+        expect(lines[row]).toContain(bandSeq)
+        expect(lines[row - 1]).toContain(bandSeq)
+        expect(lines[row + 1]).toContain(bandSeq)
+        expect(lines[row]).not.toContain('│')
+        expect(lines[row - 1]).not.toContain('╭')
+        expect(lines[row + 1]).not.toContain('╰')
+      } finally {
+        instance.unmount()
+      }
+    } finally {
+      harness.stdin.destroy()
+      harness.stdout.destroy()
+      chalk.level = originalChalkLevel
     }
   })
 })
