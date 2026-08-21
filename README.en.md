@@ -7,7 +7,7 @@ English | [中文](README.md)
 <p align="center"><img alt="Typing SVG" src="https://readme-typing-svg.herokuapp.com?font=JetBrains+Mono&amp;weight=500&amp;size=22&amp;duration=4000&amp;pause=700&amp;color=4176E6&amp;center=true&amp;vCenter=true&amp;width=680&amp;lines=DeepSeek+Harness+Code;Terminal+Coding+Interface+for+the+DSH+Core"></p>
 <p align="center">
   <a href="https://github.com/deepseek-ai/deepseek-harness"><img alt="DeepSeek Harness" src="https://img.shields.io/badge/DeepSeek-Harness-4176E6?style=for-the-badge&amp;logo=deepseek&amp;logoColor=white&amp;labelColor=1c1917"></a>
-  <a href="https://www.npmjs.com/package/@deepseek-ai/dsh"><img alt="dsh version" src="https://img.shields.io/badge/dsh-0.1.0--rc.8-4176E6?style=for-the-badge&amp;logo=deepseek&amp;logoColor=white&amp;labelColor=1c1917"></a>
+  <a href="https://www.npmjs.com/package/@deepseek-ai/dsh"><img alt="dsh version" src="https://img.shields.io/badge/dsh-0.1.1--rc.2-4176E6?style=for-the-badge&amp;logo=deepseek&amp;logoColor=white&amp;labelColor=1c1917"></a>
   <a href="https://github.com/UNLINEARITY/dsh-code/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/UNLINEARITY/dsh-code?label=Stars&amp;style=for-the-badge&amp;logo=github&amp;logoColor=white&amp;color=4176E6&amp;labelColor=1c1917"></a>
   <a href="https://www.npmjs.com/package/dsh-code"><img alt="npm version" src="https://img.shields.io/npm/v/dsh-code?label=npm&amp;style=for-the-badge&amp;logo=npm&amp;color=cb3837&amp;labelColor=1c1917"></a>
   <a href="https://github.com/UNLINEARITY/dsh-code/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/github/license/UNLINEARITY/dsh-code?label=License&amp;style=for-the-badge&amp;logo=opensourceinitiative&amp;color=4176E6&amp;labelColor=1c1917"></a>
@@ -23,21 +23,21 @@ DeepSeek Harness registers models, tools, storage, policies, and interfaces as p
 
 ## 2. Quick start
 
-Requires Node `^22.19 || >=24` and the preview `dsh` CLI (current release line: `@deepseek-ai/dsh@0.1.0-rc.8`). You can still enter the TUI, browse sessions, and use non-model features without configuring a model; press `a` in `/model` to add an API key through the Harness credentials service.
+Requires Node `^22.19 || >=24` and the preview `dsh` CLI (current release line: `@deepseek-ai/dsh@0.1.1-rc.2`). You can still enter the TUI, browse sessions, and use non-model features without configuring a model; press `a` in `/model` to manage API keys, OAuth, and device-code sign-in.
 
 ### 1. Install and update
 
 Use the same commands for the initial installation and subsequent updates:
 
 ```sh
-npm install -g @deepseek-ai/dsh@0.1.0-rc.8 dsh-code@1.0.0
+npm install -g @deepseek-ai/dsh@0.1.1-rc.2 dsh-code@1.0.1
 npm install -g pnpm
-dsh plugin --profile cli add dsh-code@1.0.0
+dsh plugin --profile cli add dsh-code@1.0.1
 ```
 
-> Note: pnpm ignores packages published less than 24 hours ago, so use the exact version `dsh-code@1.0.0` on release day; the version may be omitted after 24 hours. npm installation is not affected.
+> Note: pnpm ignores packages published less than 24 hours ago, so use the exact version `dsh-code@1.0.1` on release day; the version may be omitted after 24 hours. npm installation is not affected.
 >
-> Version alignment: dsh-code 1.0.x is built against the dsh `0.1.0-rc.8` plugin line (all peer dependencies use `^0.1.0-rc.8`). Keep the global dsh CLI and dsh-code on the same release line to avoid host/plugin incompatibilities.
+> Version alignment: dsh-code 1.0.1 targets dsh `0.1.1-rc.2`, with every Harness dependency pinned exactly to `0.1.1-rc.2`. Keep the global dsh CLI and dsh-code aligned instead of mixing release candidates. rc.2 removes the old DeepSeek setting `maxRequestImageBytes`.
 
 ### 2. Launch commands
 
@@ -76,7 +76,8 @@ DSH-Code brings DSH Agents, models, tools, and durable sessions directly into th
 
 - Select an independent Agent Preset for each session to compose tools, prompt sections, skills, context compaction, plan mode, and subagent capabilities
 - Use `/mode` to select `standard`, `code`, `minimal`, `cordis`, or a user-defined Preset
-- Use `/model` to switch models and manage providers, API keys, endpoints, available models, and context windows
+- Use `/model` to switch models and manage providers, API keys, OAuth/device-code sign-in, endpoints, available models, and context windows
+- In the `/model` provider list, Enter manages a manual API key, `l` starts sign-in, and `o` logs out after confirmation
 - Automatically load commands and skills available in DSH; use `/help` to find them and `/plugin` to inspect extension status
 - Use plans, goals, todos, permissions, sandboxes, subagents, and additional instructions while a task is running
 
@@ -101,8 +102,8 @@ Levels above `high` include `xhigh`, `x-high`, `very-high`, `max`, `maximum`, an
 
 ### 4. Coding workflow
 
-- Use `@` to reference workspace files or existing sessions and provide additional context
-- Attach images through the initial prompt and repeated `--image` arguments
+- Use `@` to reference workspace files or existing sessions; selecting PNG, JPEG, WebP, or GIF files attaches the real image automatically
+- Attach images through the initial prompt, repeated `--image` arguments, or by dragging one or more images into the terminal
 - Inspect changes by file with `/diff`, and start a read-only code review with `/review`
 - Copy the latest complete response with `/copy`, and inspect full history and tool details with Ctrl+O
 - Handle tool approvals, structured questions, plan reviews, multiple selections, and custom answers
@@ -141,7 +142,7 @@ The following built-in commands are available inside the TUI. Additional Harness
 | Command | Purpose |
 | --- | --- |
 | `/mode [preset]` | Inspect or select the current session's Agent Preset |
-| `/model` | Switch models and manage providers, API keys, endpoints, and available models |
+| `/model` | Switch models and manage providers, API keys, browser sign-in, endpoints, and available models |
 | `/effort` | Adjust the current model's reasoning effort |
 | `/permission [preset]` | Inspect or switch the permission Preset |
 | `/subagent` | Select the model used when a subagent performs a task |
@@ -174,7 +175,7 @@ The following built-in commands are available inside the TUI. Additional Harness
 | `Enter` | Submit the current input |
 | `Up` / `Down` | Recall the previous or next input-history entry |
 | `Tab` | Complete commands, skills, or `@` references |
-| `@` | Reference workspace files or existing sessions |
+| `@` | Reference workspace files or existing sessions; image files are sent as attachments |
 | `Ctrl+O` | Inspect full history and tool details |
 | `Ctrl+R` | Fold or expand model reasoning |
 | `Shift+Tab` | Cycle through permission Presets |
