@@ -1,7 +1,8 @@
 /** Permission-preset policy for pending and active TUI sessions. */
 
 import type { Context } from '@deepseek-ai/cordis'
-import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
+import type { PermissionPresetService } from '@deepseek-ai/dsh-permission-presets'
+import type { Session } from '@deepseek-ai/dsh-session'
 
 /** One selectable permission preset row for the /permission panel. */
 export interface PermissionRow {
@@ -9,20 +10,12 @@ export interface PermissionRow {
   readonly description?: string
 }
 
-/** Structural boundary over Harness permission presets; values stay service-owned. */
-export interface PermissionPresetsService {
-  readonly names: readonly string[]
-  readonly defaultPreset: string
-  resolve(name: string): unknown
-  current(events: readonly SessionEvent[]): string
-  set(session: Session, preset: string): void
-  /** Client presentation metadata for one preset; may reject unknown names. */
-  optionOf?(name: string): { name: string; description?: string } | undefined
-}
+/** Public compatibility alias for the official upstream permission service. */
+export type PermissionPresetsService = PermissionPresetService
 
 /** Read the optional Harness service without importing its runtime package. */
 export function permissionPresetsFrom(ctx: Context): PermissionPresetsService | undefined {
-  return (ctx as unknown as { get(name: string): unknown }).get('permissionPresets') as PermissionPresetsService | undefined
+  return ctx.get('permissionPresets')
 }
 
 /** Effective label for either an active session or the not-yet-created first one. */
@@ -75,7 +68,6 @@ export function applyPendingPermission(
  */
 export function listPermissionRows(service: PermissionPresetsService): readonly PermissionRow[] {
   return service.names.map((id) => {
-    if (service.optionOf === undefined) return { id }
     try {
       return { id, description: service.optionOf(id)?.description }
     } catch {

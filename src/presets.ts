@@ -2,31 +2,18 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
+import type { AgentPreset, AgentPresets } from '@deepseek-ai/dsh-agent-presets'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 
 /** One discoverable agent composition. */
-export interface PresetRow {
-  readonly id: string
-  readonly trust: 'system' | 'user'
-  readonly name?: string
-  readonly description?: string
-  readonly order?: number
-  readonly broken?: string
-}
+export type PresetRow = AgentPreset
 
-/** Structural boundary for the optional upstream AgentPresets service. */
-export interface AgentPresetsService {
-  readonly defaultId: string
-  list(): Promise<PresetRow[]>
-  resolve(id?: string): Promise<PresetRow>
-  mount(agentCtx: Context, id?: string): Promise<PresetRow>
-  recompose(agentCtx: Context, id: string): Promise<PresetRow>
-  composedPreset(agentCtx: Context): string | undefined
-}
+/** Public compatibility alias for the official upstream service type. */
+export type AgentPresetsService = AgentPresets
 
 /** Read an optional Cordis service without requiring its package at build time. */
 export function agentPresetsFrom(ctx: Context): AgentPresetsService | undefined {
-  return (ctx as unknown as { get(name: string): unknown }).get('agentPresets') as AgentPresetsService | undefined
+  return ctx.get('agentPresets')
 }
 
 /** A preset may change only before the first durable turn begins. */

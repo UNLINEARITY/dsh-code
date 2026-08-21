@@ -162,7 +162,7 @@ export function mergeSessionTitles(
   const titles = new Map<string, string>()
   for (const observation of observations) {
     if (observation.status !== 'fulfilled') continue
-    const title = observation.value?.title?.title ?? observation.value?.title?.text
+    const title = observation.value?.title?.title
     if (title !== undefined && title.trim() !== '') titles.set(observation.sessionId, title)
   }
   return rows.map(row => titles.has(row.id) ? { ...row, title: titles.get(row.id) } : row)
