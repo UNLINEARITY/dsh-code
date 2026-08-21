@@ -26,10 +26,10 @@ describe('resolveDshHostVersion', () => {
   it('resolves the host manifest above a lib entry (npm-global layout)', () => {
     const root = makeFixture(
       join('@deepseek-ai', 'dsh', 'package.json'),
-      { name: '@deepseek-ai/dsh', version: '0.1.0-rc.8' },
+      { name: '@deepseek-ai/dsh', version: '0.1.1-rc.2' },
     )
     mkdirSync(join(root, '@deepseek-ai', 'dsh', 'lib'), { recursive: true })
-    expect(resolveDshHostVersion(join(root, '@deepseek-ai', 'dsh', 'lib', 'bin.js'))).toBe('0.1.0-rc.8')
+    expect(resolveDshHostVersion(join(root, '@deepseek-ai', 'dsh', 'lib', 'bin.js'))).toBe('0.1.1-rc.2')
   })
 
   it('resolves when the entry sits directly beside the manifest', () => {
@@ -69,15 +69,15 @@ describe('dshKernelVersion memo', () => {
   it('memoizes the first probe until the test reset', () => {
     const root = makeFixture(
       join('@deepseek-ai', 'dsh', 'package.json'),
-      { name: '@deepseek-ai/dsh', version: '0.1.0-rc.8' },
+      { name: '@deepseek-ai/dsh', version: '0.1.1-rc.2' },
     )
     const previous = process.argv[1]
     try {
       process.argv[1] = join(root, '@deepseek-ai', 'dsh', 'lib', 'bin.js')
       _resetDshKernelVersionForTests()
-      expect(dshKernelVersion()).toBe('0.1.0-rc.8')
+      expect(dshKernelVersion()).toBe('0.1.1-rc.2')
       process.argv[1] = join(root, 'unrelated.js')
-      expect(dshKernelVersion()).toBe('0.1.0-rc.8')
+      expect(dshKernelVersion()).toBe('0.1.1-rc.2')
     } finally {
       process.argv[1] = previous
       _resetDshKernelVersionForTests()
