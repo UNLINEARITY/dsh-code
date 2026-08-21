@@ -22,6 +22,7 @@ import type { Agent, AgentHandle, ModelSelection, ModelSelectionRef } from '@dee
 import type {} from '@deepseek-ai/dsh-agent-default-model'
 import type {} from '@deepseek-ai/dsh-attachment'
 import { createUserMessage, MessageId, type ContentBlock, type ImageBlock } from '@deepseek-ai/dsh-llm'
+import type { JobSnapshot } from '@deepseek-ai/dsh-jobs'
 import { SessionId, type Session, type SessionEvent, type SessionHeader, type UserMessage } from '@deepseek-ai/dsh-session'
 import type { SessionPersistence } from '@deepseek-ai/dsh-session-persistence'
 // Type-only: carries the ctx.sessionTitle service merge for /title.
@@ -52,8 +53,16 @@ import { HISTORY_MAX_ENTRIES, parseHistoryFile, serializeHistoryList } from './h
 import { watchSkills, type SkillsView } from './skills.ts'
 import { toolArgumentsPreview } from './render/tool-preview.ts'
 import { buildExportMarkdown } from './render/export.ts'
-import { saveImagePaths } from './attachments.ts'
+import { inspectImagePaths, saveImagePaths } from './attachments.ts'
 import { copyText, latestAssistantText } from './editor.ts'
+import {
+  beginProviderAuthorization,
+  cancelProviderAuthorization,
+  loadProviderAuthorizations,
+  logoutProviderAuthorization,
+  openAuthorizationUrl,
+  subscribeProviderAuthorizations,
+} from './authorization.ts'
 import { selectForkSeed } from './fork.ts'
 import { buildReviewPrompt, loadGitDiff } from './git-workflow.ts'
 import type { TuiStartup } from './startup.ts'
@@ -118,19 +127,6 @@ function fail(io: TuiIo, error: unknown): void {
   io.exit(1)
 }
 
-/** The `ctx.jobs` registry face (dsh-jobs-local behind the base patch row). */
-interface JobsServiceLike {
-  list(caller?: Agent): ReadonlyArray<{
-    id: string
-    kind: string
-    label: string
-    status: 'running' | 'stopping' | 'completed' | 'killed' | 'failed'
-    detail?: string
-    startedAt: number
-    finishedAt?: number
-  }>
-}
-
 /**
  * Snapshot caller-visible background jobs for the /jobs panel. Jobs the agent
  * started through run_in_background are fenced by their owner, so the CURRENT
@@ -142,10 +138,10 @@ interface JobsServiceLike {
  * @returns job rows in registration order; never throws.
  */
 function listJobs(ctx: Context, caller: Agent | undefined): readonly import('./kernel-panels.ts').JobRow[] {
-  const jobs = (ctx as unknown as { get(name: string): unknown }).get('jobs') as JobsServiceLike | undefined
+  const jobs = ctx.get('jobs')
   if (jobs === undefined) return []
   try {
-    return jobs.list(caller).map(job => ({
+    return jobs.list(caller).map((job: JobSnapshot) => ({
       id: job.id,
       kind: job.kind,
       label: job.label,
@@ -884,8 +880,8 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   }
 
   /** Dispatch one submitted line: slash commands to the registry, other text to the agent. */
-  const dispatch = (text: string): void => {
-    send(text, 'followup')
+  const dispatch = (text: string, images: readonly ImageBlock[] = []): void => {
+    send(text, 'followup', images)
   }
 
   /**
@@ -893,8 +889,8 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
    * boundary (the inbox delivers between steps); an idle driver just starts
    * a turn, so this doubles as the busy-state submit path.
    */
-  const steer = (text: string): void => {
-    send(text, 'steer')
+  const steer = (text: string, images: readonly ImageBlock[] = []): void => {
+    send(text, 'steer', images)
   }
 
   /** Interrupt the running turn (Esc); true when a turn was actually cancelled. */
@@ -1398,7 +1394,18 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       saveModelProviderConfiguration: (target, configuration) => saveProviderConfiguration(ctx, target, configuration),
       unsetModelProviderCredential: target => unsetProviderCredential(ctx, target),
       removeModelProvider: target => removeProviderSettings(ctx, target),
+      loadProviderAuthorizations: () => loadProviderAuthorizations(ctx),
+      subscribeProviderAuthorizations: listener => subscribeProviderAuthorizations(ctx, listener),
+      beginProviderAuthorization: (row, method, interaction, signal) => (
+        beginProviderAuthorization(ctx, row, method, interaction, signal)
+      ),
+      cancelProviderAuthorization: row => cancelProviderAuthorization(ctx, row.key),
+      logoutProviderAuthorization: row => logoutProviderAuthorization(ctx, row),
+      openAuthorizationUrl,
+      copyTextValue: copyText,
       loadMentions: (query: string, signal?: AbortSignal) => mentions.candidates(query, signal),
+      inspectImages: paths => inspectImagePaths(paths, ctx.get('attachments'), session?.header.cwd ?? cwd),
+      prepareImages: paths => saveImagePaths(paths, ctx.get('attachments')),
       cyclePermission,
       setPermission: setPermissionAction,
       selectModel,
@@ -1449,8 +1456,14 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   // Startup prompt/images use the same durable delivery path as composer
   // submissions. Image bytes are committed before the user/message event.
   if (startup.prompt !== undefined || (startup.images?.length ?? 0) > 0) {
+    if ((startup.images?.length ?? 0) > 0) {
+      bridge.notify(`processing ${startup.images!.length} startup image${startup.images!.length === 1 ? '' : 's'}…`)
+    }
     void saveImagePaths(startup.images ?? [], ctx.get('attachments')).then(
-      images => send(startup.prompt ?? '', 'followup', images),
+      images => {
+        if (images.length > 0) bridge.notify(`${images.length} startup image${images.length === 1 ? '' : 's'} attached`)
+        send(startup.prompt ?? '', 'followup', images)
+      },
       (error: unknown) => bridge.notify(`initial prompt failed: ${error instanceof Error ? error.message : String(error)}`, 'error'),
     )
   }

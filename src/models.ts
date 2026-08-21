@@ -16,6 +16,7 @@ import {
   type LlmModelInfo,
   type LlmModelReasoningInfo,
   type LlmResolvedModelInfo,
+  type ModelModality,
 } from '@deepseek-ai/dsh-llm'
 
 /** Display metadata for one adapter-owned reasoning effort (mirrors `LlmReasoningEffortInfo`). */
@@ -46,6 +47,8 @@ export interface ModelRow {
   model: string
   /** Human-readable model name. */
   modelName: string
+  /** Request modalities advertised for this exact route; absent means unknown. */
+  inputModalities?: readonly ModelModality[]
   /** Adapter-owned selectable reasoning levels when the model exposes any. */
   reasoning?: ModelReasoning
 }
@@ -197,13 +200,16 @@ export async function loadModelDirectory(ctx: Context): Promise<ModelDirectory> 
           providerName: provider.name,
           model: model.id,
           modelName: model.name,
+          ...model.inputModalities === undefined ? {} : { inputModalities: [...model.inputModalities] },
         }
         if (llmResolve.resolveModelInfo === undefined) return row
         try {
           const resolved = await llmResolve.resolveModelInfo(provider.id, model.id)
-          return resolved.reasoning === undefined
-            ? row
-            : { ...row, reasoning: mapReasoning(resolved.reasoning) }
+          return {
+            ...row,
+            ...resolved.inputModalities === undefined ? {} : { inputModalities: [...resolved.inputModalities] },
+            ...resolved.reasoning === undefined ? {} : { reasoning: mapReasoning(resolved.reasoning) },
+          }
         } catch {
           reasoningFailures.push(`${provider.id}/${model.id}`)
           return row

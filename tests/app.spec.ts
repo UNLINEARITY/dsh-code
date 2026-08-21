@@ -17,6 +17,7 @@ import type { TranscriptEntry } from '../src/render/projection.ts'
 import { DEFAULT_STATUSLINE_ITEMS } from '../src/render/status.ts'
 import { DARK_PALETTE, setTheme } from '../src/theme.ts'
 import { DSH_CODE_VERSION, _resetDshKernelVersionForTests } from '../src/version.ts'
+import type { PendingQuestion, QuestionSnapshot } from '../src/questions.ts'
 
 const wait = async (): Promise<void> => new Promise(resolve => setTimeout(resolve, 100))
 const resizeClear = '\x1b[r\x1b[0m\x1b[H\x1b[2J\x1b[3J\x1b[H'
@@ -95,6 +96,8 @@ function appProps(overrides: Partial<AppProps> = {}): AppProps {
     quit: noop,
     loadModels: async () => ({ rows: [], failures: [] }),
     loadMentions: async () => [],
+    inspectImages: async () => [],
+    prepareImages: async () => [],
     selectModel: () => 'test/model',
       subagentModel: '',
       setSubagentModel: () => '',
@@ -199,6 +202,134 @@ describe('pre-session controls', () => {
       harness.stdin.write('\r')
       await wait()
       expect(switchMode).toHaveBeenCalledWith('minimal')
+    } finally {
+      instance.unmount()
+    }
+  })
+})
+
+describe('composer image attachments', () => {
+  it('turns @ images and dragged paths into durable image blocks without a new slash command', async () => {
+    const harness = createTty(120, 24)
+    const dispatch = vi.fn()
+    const inspectImages = vi.fn(async (paths: readonly string[]) => paths.map((path) => ({
+      path,
+      name: path.split(/[\\/]/u).at(-1) ?? 'image.png',
+      mediaType: path.endsWith('.webp') ? 'image/webp' as const : 'image/png' as const,
+      bytes: 8,
+    })))
+    const prepareImages = vi.fn(async (paths: readonly string[]) => paths.map((path, index) => ({
+      type: 'image' as const,
+      attachment: {
+        attachmentId: `sha-${index}`,
+        mediaType: path.endsWith('.webp') ? 'image/webp' as const : 'image/png' as const,
+        bytes: 8,
+        width: 1,
+        height: 1,
+        name: path.split(/[\\/]/u).at(-1),
+      },
+    })))
+    const instance = renderApp(harness, appProps({
+      dispatch,
+      inspectImages,
+      prepareImages,
+      loadMentions: async () => [{ label: 'docs/pic.png', description: 'File', kind: 'file', path: 'C:\\repo\\docs\\pic.png' }],
+    }))
+    try {
+      await wait()
+      harness.stdin.write('@pic')
+      await wait()
+      harness.stdin.write('\t')
+      await wait(180)
+      expect(harness.output.text).toContain('@pic.png')
+      harness.stdin.write('\r')
+      await wait(180)
+      expect(prepareImages).toHaveBeenCalledWith(['C:\\repo\\docs\\pic.png'])
+      expect(dispatch).toHaveBeenCalledWith('@pic.png', [expect.objectContaining({ type: 'image' })])
+
+      harness.stdin.write('"C:\\outside\\a.png" "D:\\b.webp"')
+      await wait(180)
+      expect(harness.output.text).toContain('[image: a.png]')
+      expect(harness.output.text).toContain('[image: b.webp]')
+      harness.stdin.write('\r')
+      await wait(180)
+      expect(prepareImages).toHaveBeenLastCalledWith(['C:\\outside\\a.png', 'D:\\b.webp'])
+      expect(dispatch).toHaveBeenLastCalledWith('[image: a.png] [image: b.webp]', expect.arrayContaining([
+        expect.objectContaining({ type: 'image' }),
+        expect.objectContaining({ type: 'image' }),
+      ]))
+    } finally {
+      instance.unmount()
+    }
+  })
+
+  it('warns but allows a text-only model when the session contains image history', async () => {
+    const harness = createTty(110, 24)
+    const store = createTranscriptStore()
+    store.apply({
+      type: 'user/message',
+      seq: 1,
+      time: 1,
+      data: createUserMessage({
+        content: [{
+          type: 'image',
+          attachment: { attachmentId: 'sha-1', mediaType: 'image/png', bytes: 8, width: 1, height: 1, name: 'pixel.png' },
+        }],
+        source: { kind: 'user' },
+      }),
+    } as unknown as SessionEvent)
+    const selectModel = vi.fn(() => 'acme/text-only')
+    const instance = renderApp(harness, appProps({
+      store,
+      loadModels: async () => ({
+        rows: [{ provider: 'acme', providerName: 'Acme', model: 'text-only', modelName: 'Text only', inputModalities: ['text'] }],
+        failures: [],
+      }),
+      selectModel,
+    }))
+    try {
+      await wait()
+      harness.stdin.write('/model')
+      await wait()
+      harness.stdin.write('\r')
+      await wait()
+      harness.stdin.write('\r')
+      await wait()
+      expect(selectModel).toHaveBeenCalled()
+      expect(harness.output.text).toContain('image history will be sent as text placeholders')
+    } finally {
+      instance.unmount()
+    }
+  })
+})
+
+describe('structured question custom answers', () => {
+  it('accepts pasted multiline text without adding a newline shortcut', async () => {
+    const harness = createTty(100, 24)
+    const submit = vi.fn()
+    const pending = {
+      request: { questions: [{ id: 'details', question: 'Provide details' }] },
+      resolve: noop,
+      reject: noop,
+    } as unknown as PendingQuestion
+    const snapshot: QuestionSnapshot = { pending }
+    const instance = renderApp(harness, appProps({
+      questions: {
+        subscribe: () => unsubscribe,
+        getSnapshot: () => snapshot,
+        submit,
+        cancel: noop,
+      },
+    }))
+    try {
+      await wait()
+      harness.stdin.write('\x1b[200~first line\nsecond line\x1b[201~')
+      await wait(180)
+      harness.stdin.write('\r')
+      await wait()
+      expect(submit).toHaveBeenCalledWith(pending, {
+        answers: [{ id: 'details', selected: [], custom: 'first line\nsecond line' }],
+      })
     } finally {
       instance.unmount()
     }
@@ -867,10 +998,10 @@ describe('DeepSeek model-switch easter egg', () => {
       const label = 'deepseek-official/deepseek-reasoner'
       expect(output).toContain(label)
       // The persistent prompt marker switched to the deepseek tier glyph » in
-      // the tier accent (brandBright in the dark palette). The composer is the
-      // frozen band here, so no wave background yet — only the band base.
+      // the tier accent. The first animation interval may already have landed
+      // by the time the TTY assertion runs, so lifecycle coverage starts from
+      // the stable marker instead of assuming an exact zero-tick frame.
       expect(output).toContain('»')
-      expect(waveBgCount(output)).toBe(0)
 
       // Mid-wave (~0.7s in): the input row paints per-column wave backgrounds
       // (a truecolor `48;2;` run per sampled gradient column) while the draft
@@ -2901,7 +3032,7 @@ describe('dsh kernel header line', () => {
     const root = mkdtempSync(join(tmpdir(), 'dsh-kernel-header-'))
     const hostDir = join(root, '@deepseek-ai', 'dsh')
     mkdirSync(join(hostDir, 'lib'), { recursive: true })
-    writeFileSync(join(hostDir, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.1.0-rc.8' }))
+    writeFileSync(join(hostDir, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.1.1-rc.2' }))
     const previousArgv = process.argv[1]
     process.argv[1] = join(hostDir, 'lib', 'bin.js')
     _resetDshKernelVersionForTests()
@@ -2911,8 +3042,8 @@ describe('dsh kernel header line', () => {
       try {
         await wait()
         const text = harness.output.text
-        expect(text).toContain('dsh-v0.1.0-rc.8')
-        expect(text.indexOf('dsh-v0.1.0-rc.8')).toBeLessThan(text.indexOf(`DeepSeek Harness · v${DSH_CODE_VERSION}`))
+        expect(text).toContain('dsh-v0.1.1-rc.2')
+        expect(text.indexOf('dsh-v0.1.1-rc.2')).toBeLessThan(text.indexOf(`DeepSeek Harness · v${DSH_CODE_VERSION}`))
         expect(text).toContain('Into the Unknown  探索未至之境')
       } finally {
         instance.unmount()

@@ -76,7 +76,7 @@ describe('createMentions.candidates (fileReferences service)', () => {
     ]), agent, nowhere)
     const detached = api.candidates
     await expect(detached('')).resolves.toEqual([
-      { label: 'alpha.ts', description: 'File', kind: 'file' },
+      { label: 'alpha.ts', description: 'File', kind: 'file', path: join(nowhere, 'alpha.ts') },
       { label: 'src', description: 'Folder', kind: 'directory' },
     ])
   })
@@ -88,7 +88,7 @@ describe('createMentions.candidates (fileReferences service)', () => {
     const menu = await api.candidates('  app  ')
     expect(queries).toEqual(['app'])
     expect(menu).toHaveLength(20)
-    expect(menu[0]).toEqual({ label: 'f0.ts', description: 'File', kind: 'file' })
+    expect(menu[0]).toEqual({ label: 'f0.ts', description: 'File', kind: 'file', path: join(nowhere, 'f0.ts') })
   })
 
   it('returns empty file rows without the service (agent present) or on service failure', async () => {

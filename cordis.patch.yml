@@ -117,6 +117,13 @@
     - id: web-fetch-http
       name: '@deepseek-ai/dsh-web-fetch-http'
 
+    # Interactive provider authorization. The base bundle supplies the
+    # credential store; mounting the neutral authorization seam wakes the
+    # login flows already registered by llm-pi-ai without coupling the TUI to
+    # any provider's OAuth or device-code protocol.
+    - id: authorization
+      name: '@deepseek-ai/dsh-authorization'
+
     - id: tui-startup
       name: 'dsh-code/startup'
 

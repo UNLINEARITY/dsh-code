@@ -338,7 +338,11 @@ export function imageLabels(images: readonly ImageBlock['attachment'][] | undefi
   return images.map((image, index) => {
     const rawName = image.name?.trim() || `image ${index + 1}`
     const name = rawName.length <= 80 ? rawName : `${rawName.slice(0, 79)}…`
-    return `[image: ${name} · ${image.width}×${image.height} · ${image.bytes} B]`
+    const original = image.originalDimensions
+    const dimensions = original === undefined
+      ? `${image.width}×${image.height}`
+      : `${image.width}×${image.height} · original ${original.width}×${original.height}`
+    return `[image: ${name} · ${dimensions} · ${image.bytes} B]`
   }).join('\n')
 }
 

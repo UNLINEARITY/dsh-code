@@ -2,7 +2,13 @@ import { describe, expect, it, vi } from 'vitest'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { detectImageMediaType, saveImagePaths } from '../src/attachments.ts'
+import {
+  detectImageMediaType,
+  inspectImagePaths,
+  looksLikeImagePath,
+  parsePastedImagePaths,
+  saveImagePaths,
+} from '../src/attachments.ts'
 
 describe('terminal image attachments', () => {
   it('detects supported formats from encoded bytes', () => {
@@ -15,6 +21,39 @@ describe('terminal image attachments', () => {
 
   it('does not require an attachment service for a text-only prompt', async () => {
     await expect(saveImagePaths([], undefined)).resolves.toEqual([])
+  })
+
+  it('parses quoted multi-image terminal drops without treating prose as paths', () => {
+    expect(looksLikeImagePath('diagram.PNG')).toBe(true)
+    expect(parsePastedImagePaths('"C:\\work files\\a.png" "D:\\b.webp"'))
+      .toEqual(['C:\\work files\\a.png', 'D:\\b.webp'])
+    expect(parsePastedImagePaths('please inspect C:\\a.png')).toEqual([])
+  })
+
+  it('validates signature and limits before submission without persisting', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'dsh-image-inspect-'))
+    const path = join(directory, 'pixel.png')
+    const attachments = {
+      imageLimits: {
+        maxImageBytes: 1024,
+        maxImagesPerMessage: 4,
+        maxMessageImageBytes: 2048,
+        maxImagePixels: 1_000_000,
+        maxImageDimension: 4096,
+        mediaTypes: ['image/png'],
+      },
+    }
+    try {
+      await writeFile(path, Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+      await expect(inspectImagePaths([path], attachments as never)).resolves.toEqual([{
+        path,
+        name: 'pixel.png',
+        mediaType: 'image/png',
+        bytes: 8,
+      }])
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
   })
 
   it('reads image bytes and returns only durable references', async () => {

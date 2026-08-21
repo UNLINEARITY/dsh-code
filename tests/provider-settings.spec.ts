@@ -89,7 +89,7 @@ describe('subscribeProviderSettings', () => {
     } as unknown as Context
     let updates = 0
     const dispose = subscribeProviderSettings(ctx, () => { updates += 1 })
-    for (const event of ['credentials/updated', 'settings/document-updated', 'llm/adapters-updated']) {
+    for (const event of ['credentials/reference-updated', 'settings/document-updated', 'llm/adapters-updated']) {
       expect(listeners.get(event)?.size).toBe(1)
       for (const listener of listeners.get(event) ?? []) listener()
     }

@@ -249,7 +249,7 @@ export interface ProviderSettingsDirectory {
 
 /** Events that invalidate the official Models provider/settings/credential join. */
 const PROVIDER_SETTINGS_EVENTS = [
-  'credentials/updated',
+  'credentials/reference-updated',
   'settings/document-updated',
   'llm/adapters-updated',
 ] as const

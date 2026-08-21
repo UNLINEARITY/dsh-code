@@ -108,11 +108,12 @@ describe('loadModelDirectory reasoning', () => {
   it('attaches advertised reasoning levels to each row', async () => {
     const llm = {
       listProviders: () => [{ id: 'deepseek-official', name: 'DeepSeek' }],
-      listModels: async () => [{ id: 'deepseek-v4-flash', name: 'V4 Flash' }],
+      listModels: async () => [{ id: 'deepseek-v4-flash', name: 'V4 Flash', inputModalities: ['text', 'image'] as const }],
       resolveModelInfo: async (provider: string, model: string) => ({
         provider,
         id: model,
         name: model,
+        inputModalities: ['text', 'image'] as const,
         reasoning: {
           efforts: [
             { id: ReasoningEffortId('off'), name: 'Off' },
@@ -130,6 +131,7 @@ describe('loadModelDirectory reasoning', () => {
         providerName: 'DeepSeek',
         model: 'deepseek-v4-flash',
         modelName: 'V4 Flash',
+        inputModalities: ['text', 'image'],
         reasoning: {
           efforts: [
             { id: 'off', name: 'Off' },

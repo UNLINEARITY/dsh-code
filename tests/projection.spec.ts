@@ -99,7 +99,7 @@ describe('transcript projection', () => {
   it('projects durable image metadata without paths or encoded bytes', () => {
     const attachment = {
       attachmentId: 'sha-1', mediaType: 'image/png', bytes: 128,
-      width: 20, height: 10, name: 'diagram.png',
+      width: 20, height: 10, name: 'diagram.png', originalDimensions: { width: 80, height: 40 },
     }
     const event = {
       type: 'user/message', seq: 1, time: 0,
@@ -112,7 +112,7 @@ describe('transcript projection', () => {
     const replay = projectEvents([event])
     expect(sequential).toEqual(replay)
     expect(sequential.entries[0]).toMatchObject({
-      kind: 'user', text: 'inspect', images: [{ name: 'diagram.png', width: 20, height: 10, bytes: 128 }],
+      kind: 'user', text: 'inspect', images: [{ name: 'diagram.png', width: 20, height: 10, bytes: 128, originalDimensions: { width: 80, height: 40 } }],
     })
     expect(JSON.stringify(sequential)).not.toContain('base64')
   })

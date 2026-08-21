@@ -22,6 +22,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
+import { isAbsolute, resolve } from 'node:path'
 import {
   DEFAULT_FILE_SEARCH_EXCLUDED_DIRECTORIES,
   DEFAULT_FILE_SEARCH_MAX_ENTRIES,
@@ -46,6 +47,8 @@ export interface MentionCandidate {
   description: string
   /** Origin kind for icon/coloring decisions. */
   kind: 'file' | 'directory' | 'session'
+  /** Absolute path for file candidates; never rendered or persisted directly. */
+  path?: string
 }
 
 /** Prepared submission: readable content plus optional injected context. */
@@ -144,6 +147,9 @@ export function createMentions(ctx: Context, agent: Agent | undefined, cwd: stri
         label: candidate.path,
         description: candidate.kind === 'directory' ? 'Folder' : 'File',
         kind: candidate.kind,
+        ...candidate.kind === 'file'
+          ? { path: isAbsolute(candidate.path) ? candidate.path : resolve(cwd, candidate.path) }
+          : {},
       }))
       const sessionRows: MentionCandidate[] = sessions.map(candidate => ({
         label: formatSessionReferenceMention(candidate),

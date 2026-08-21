@@ -62,7 +62,7 @@ describe('completionCandidates', () => {
     const registry = completionCandidates('/', [{ name: 'permission', description: 'registry child' }], [])
     const permission = registry.filter(row => row.label === '/permission')
     expect(permission).toEqual([
-      { label: '/permission', description: 'inspect or select the permission preset', origin: 'command' },
+      { label: '/permission', description: 'inspect or select the permission preset (/permission [preset])', origin: 'command' },
     ])
   })
 
@@ -77,7 +77,7 @@ describe('completionCandidates', () => {
     ]
     const rows = completionCandidates('/', descriptors, skills)
     const help = rows.find(row => row.label === '/help')
-    expect(help?.description).toBe('show commands')
+    expect(help?.description).toBe('show this overlay')
     // `/compact` stays a registry command; the skill never renders.
     const compact = rows.find(row => row.label === '/compact')
     expect(compact?.description).toBe('shrink history')

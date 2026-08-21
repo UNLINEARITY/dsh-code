@@ -81,6 +81,7 @@ describe('normalizeKeyboardChunk', () => {
 describe('stripPasteMarkers', () => {
   it('removes start and end markers from pasted chunks', () => {
     expect(stripPasteMarkers('[200~hello[201~')).toBe('hello')
+    expect(stripPasteMarkers('[200~hello\x1b[201~')).toBe('hello')
     expect(stripPasteMarkers('[200~')).toBe('')
     expect(stripPasteMarkers('[201~')).toBe('')
   })

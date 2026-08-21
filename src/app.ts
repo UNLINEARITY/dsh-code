@@ -14,13 +14,16 @@
  * @module @deepseek-ai/dsh-code/app
  */
 
+import { basename } from 'node:path'
 import {
   createElement, memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactElement,
 } from 'react'
 import { Box, Static, Text, useInput, useStdin, useStdout, type Key } from 'ink'
 import type { CommandDescriptor } from '@deepseek-ai/dsh-commands'
+import type { ImageBlock } from '@deepseek-ai/dsh-llm'
 import type { TodoItem } from '@deepseek-ai/dsh-session'
 import type { AskUserQuestionAnswerItem } from '@deepseek-ai/dsh-user-questions'
+import type { AuthorizationInteraction, AuthorizationStatus } from '@deepseek-ai/dsh-authorization'
 import {
   dim,
   getPalette,
@@ -74,6 +77,18 @@ import {
 } from './history.ts'
 import type { SessionDirectoryOptions, SessionRow } from './session-directory.ts'
 import type { GitDiffView } from './git-workflow.ts'
+import {
+  authorizationForProvider,
+  providerAuthorizationStatus,
+  type ProviderAuthorizationDirectory,
+  type ProviderAuthorizationRow,
+} from './authorization.ts'
+import { ProviderAuthorizationLogoutPanel, ProviderAuthorizationPanel } from './authorization-panel.ts'
+import {
+  looksLikeImagePath,
+  parsePastedImagePaths,
+  type ImagePathInspection,
+} from './attachments.ts'
 
 /** Match Codex's settled-resize window before rebuilding terminal scrollback. */
 const RESIZE_REFLOW_DELAY_MS = 75
@@ -173,6 +188,36 @@ import {
 /** Visual priority for one bounded local notice. */
 export type NoticeTone = 'info' | 'warning' | 'error'
 
+/** One source of truth for TUI-owned slash commands in completion and `/help`. */
+const LOCAL_COMMANDS = [
+  { label: '/help', description: 'show this overlay' },
+  { label: '/model', description: 'switch the model and manage providers' },
+  { label: '/effort', description: 'adjust reasoning effort for the current model' },
+  { label: '/mode', description: 'inspect or select the agent preset (/mode [preset])' },
+  { label: '/permission', description: 'inspect or select the permission preset (/permission [preset])' },
+  { label: '/new', description: 'create and switch to a fresh session (/new [preset])' },
+  { label: '/fork', description: 'fork at the latest completed turn (/fork [event-seq])' },
+  { label: '/resume', description: 'browse or switch root sessions (/resume [id|prefix])' },
+  { label: '/plugin', description: 'inspect the live plugin composition' },
+  { label: '/jobs', description: 'inspect background jobs' },
+  { label: '/statusline', description: 'customize the status line items' },
+  { label: '/theme', description: 'switch the color theme' },
+  { label: '/history', description: 'search and recall past prompts' },
+  { label: '/agents', description: 'inspect subagent sessions of this conversation' },
+  { label: '/todos', description: 'inspect the full todo list' },
+  { label: '/subagent', description: 'choose the model delegated subagents run on' },
+  { label: '/delete', description: 'delete a session and its subagent threads' },
+  { label: '/clear', description: 'clear the screen' },
+  { label: '/export', description: 'export the transcript to markdown (/export [path])' },
+  { label: '/title', description: 'rename this session (/title <text>)' },
+  { label: '/copy', description: 'copy the latest assistant response' },
+  { label: '/diff', description: 'inspect Git changes (/diff [--staged|ref])' },
+  { label: '/review', description: 'review Git changes under read-only permissions' },
+  { label: '/quit', description: 'exit' },
+] as const
+
+const LOCAL_COMMAND_NAMES = new Set(LOCAL_COMMANDS.map(command => command.label.slice(1)))
+
 /** Props the runner hands the app; callbacks stay owned by the runner. */
 export interface AppProps {
   /** Event-fed transcript store for the live session. */
@@ -206,9 +251,9 @@ export interface AppProps {
   /** Permission preset selected for the current or pending first session. */
   permission: string
   /** Submit one line: slash commands to the registry, other text to the agent. */
-  dispatch(text: string): void
+  dispatch(text: string, images?: readonly ImageBlock[]): void
   /** Submit steering: consumed at the running turn's next step boundary. */
-  steer(text: string): void
+  steer(text: string, images?: readonly ImageBlock[]): void
   /** Interrupt the running turn (Esc); true when a turn was cancelled. */
   interrupt(): boolean
   /** Quit: unmount, flush, and request process exit. */
@@ -217,6 +262,10 @@ export interface AppProps {
   loadModels(): Promise<ModelDirectory>
   /** Load @mention candidates for the typed query (files + sessions). */
   loadMentions(query: string, signal?: AbortSignal): Promise<readonly MentionCandidate[]>
+  /** Validate draft image paths without committing attachment objects. */
+  inspectImages(paths: readonly string[]): Promise<readonly ImagePathInspection[]>
+  /** Validate, normalize and persist images immediately before submission. */
+  prepareImages(paths: readonly string[]): Promise<readonly ImageBlock[]>
   /** Apply one /model selection (with an advertised reasoning effort, when picked); returns the display label. */
   selectModel(row: ModelRow, effortId?: string): string
   /** The /subagent override label, '' when delegated agents follow the current model. */
@@ -239,6 +288,19 @@ export interface AppProps {
   removeModelProvider?(target: ProviderTargetView): Promise<void>
   /** Save endpoint and explicit model capacities through the provider profile. */
   saveModelProviderConfiguration?(target: ProviderTargetView, configuration: ProviderConfiguration): Promise<void>
+  /** Provider authorization flows and value-free stored-record facts. */
+  loadProviderAuthorizations?(): Promise<ProviderAuthorizationDirectory>
+  subscribeProviderAuthorizations?(listener: () => void): () => void
+  beginProviderAuthorization?(
+    row: ProviderAuthorizationRow,
+    method: string,
+    interaction: AuthorizationInteraction,
+    signal: AbortSignal,
+  ): Promise<AuthorizationStatus>
+  cancelProviderAuthorization?(row: ProviderAuthorizationRow): void
+  logoutProviderAuthorization?(row: ProviderAuthorizationRow): Promise<void>
+  openAuthorizationUrl?(url: string): boolean
+  copyTextValue?(text: string): Promise<void>
   /** Cycle to the next permission preset (Shift+Tab); returns the new label. */
   cyclePermission(): string
   /** Select or inspect a permission preset without requiring a pre-existing session. */
@@ -1428,7 +1490,8 @@ function ModelPanel({ directory, error, current, onSelect, onProviders, onRetry,
     ...visibleStateRows,
     ...visible.map((row) => {
       const index = rows.indexOf(row)
-      const label = displayText(`${row.providerName} · ${row.modelName}`)
+      const capability = row.inputModalities?.includes('image') === true ? ' · image' : ''
+      const label = displayText(`${row.providerName} · ${row.modelName}${capability}`)
       return createElement(
         Text,
         {
@@ -1458,13 +1521,17 @@ function providerStateLabel(row: ProviderTargetView): string {
 }
 
 /** The provider-management stage reached from /model with `a`. */
-function ProviderPanel({ directory, error, onCredential, onConfigure, onUnset, onRemove, onRetry, onBack }: {
+function ProviderPanel({ directory, error, authorizations, authorizationError, onCredential, onConfigure, onUnset, onRemove, onLogin, onLogout, onRetry, onBack }: {
   directory: ProviderSettingsDirectory | undefined
   error: string | undefined
+  authorizations: ProviderAuthorizationDirectory | undefined
+  authorizationError: string | undefined
   onCredential(target: ProviderTargetView): void
   onConfigure(target: ProviderTargetView): void
   onUnset(target: ProviderTargetView): void
   onRemove(target: ProviderTargetView): void
+  onLogin(target: ProviderTargetView, authorization: ProviderAuthorizationRow): void
+  onLogout(target: ProviderTargetView, authorization: ProviderAuthorizationRow): void
   onRetry(): void
   onBack(): void
 }): ReactElement {
@@ -1539,6 +1606,19 @@ function ProviderPanel({ directory, error, onCredential, onConfigure, onUnset, o
       }
       return
     }
+    const authorization = authorizationForProvider(authorizations, target.provider)
+    if (input === 'l' || input === 'L') {
+      if (authorization === undefined) setActionError('this provider offers no interactive login flow')
+      else if (authorization.inFlight) setActionError('a login attempt is already running for this provider')
+      else onLogin(target, authorization)
+      return
+    }
+    if (input === 'o' || input === 'O') {
+      if (authorization === undefined || !authorization.record.configured) setActionError('this provider has no login record to remove')
+      else if (!authorization.record.writable) setActionError('this login record is read-only')
+      else onLogout(target, authorization)
+      return
+    }
     if (key.return) {
       if (target.settingsNs.length === 0) {
         setActionError('this provider is not managed by Harness settings')
@@ -1571,6 +1651,14 @@ function ProviderPanel({ directory, error, onCredential, onConfigure, onUnset, o
           { key: `failure-${index}`, color: inkColor(getPalette().warn), wrap: 'truncate-end' },
           truncateColumns(`  ${singleLineText(failure)}`, viewport.contentColumns),
         )),
+        ...(authorizationError === undefined
+          ? []
+          : [createElement(Text, { key: 'authorization-error', color: inkColor(getPalette().warn), wrap: 'truncate-end' }, truncateColumns(`  login status unavailable: ${singleLineText(authorizationError)}`, viewport.contentColumns))]),
+        ...(authorizations?.failures ?? []).map((failure, index) => createElement(
+          Text,
+          { key: `authorization-failure-${index}`, color: inkColor(getPalette().warn), wrap: 'truncate-end' },
+          truncateColumns(`  ${singleLineText(failure)}`, viewport.contentColumns),
+        )),
         ...(rows.length === 0
           ? [createElement(Text, { key: 'empty', color: inkColor(getPalette().dim), wrap: 'truncate-end' }, '  no configurable providers')]
           : []),
@@ -1588,7 +1676,11 @@ function ProviderPanel({ directory, error, onCredential, onConfigure, onUnset, o
     ...visible.map((row) => {
       const index = rows.indexOf(row)
       const identity = row.displayName === row.provider ? row.provider : `${row.displayName} (${row.provider})`
-      const label = `${identity} · ${providerStateLabel(row)}${row.removable ? ' · custom' : ''}`
+      const authorization = authorizationForProvider(authorizations, row.provider)
+      const manualKeyConfigured = row.credential?.kind === 'facts' && row.credential.configured
+      const showAuthorization = !manualKeyConfigured || authorization?.record.configured === true || authorization?.inFlight === true
+      const authLabel = showAuthorization ? ` · ${providerAuthorizationStatus(authorization)}` : ''
+      const label = `${identity} · ${providerStateLabel(row)}${authLabel}${row.removable ? ' · custom' : ''}`
       return createElement(
         Text,
         { key: row.provider, color: index === cursor ? inkColor(getPalette().brandBright) : inkColor(getPalette().dim), wrap: 'truncate-end' },
@@ -1596,7 +1688,7 @@ function ProviderPanel({ directory, error, onCredential, onConfigure, onUnset, o
       )
     }),
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
-    createElement(Text, { color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns('↑↓ move · tab configure · enter add/update key · d remove key · x remove custom provider · r retry · esc back', viewport.contentColumns)),
+    createElement(Text, { color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns('↑↓ move · enter key · l login · o logout · tab configure · d remove key · x remove provider · r retry · esc back', viewport.contentColumns)),
   )
 }
 
@@ -1890,31 +1982,12 @@ function HelpPanel({ descriptors, skills, commandError, skillError, onClose }: {
         { key: 'commands-error', color: inkColor(getPalette().error), wrap: 'truncate-end' },
         truncateColumns(`  command catalog unavailable: ${singleLineText(commandError)}`, viewport.contentColumns),
       )]),
-    createElement(Box, { key: 'local-help' }, row('/help', 'show this overlay')),
-    createElement(Box, { key: 'local-model' }, row('/model', 'switch the model')),
-    createElement(Box, { key: 'local-effort' }, row('/effort', 'adjust reasoning effort for the current model')),
-    createElement(Box, { key: 'local-mode' }, row('/mode', 'inspect or select the agent preset (/mode [preset])')),
-    createElement(Box, { key: 'local-permission' }, row('/permission', 'inspect or select the permission preset (/permission [preset])')),
-    createElement(Box, { key: 'local-new' }, row('/new', 'create and switch to a fresh session (/new [preset])')),
-    createElement(Box, { key: 'local-fork' }, row('/fork', 'fork at the latest completed turn (/fork [event-seq])')),
-    createElement(Box, { key: 'local-resume' }, row('/resume', 'browse or switch root sessions (/resume [id|prefix])')),
-    createElement(Box, { key: 'local-plugin' }, row('/plugin', 'inspect the live plugin composition')),
-    createElement(Box, { key: 'local-jobs' }, row('/jobs', 'inspect background jobs')),
-    createElement(Box, { key: 'local-statusline' }, row('/statusline', 'customize the status line items')),
-    createElement(Box, { key: 'local-theme' }, row('/theme', 'switch the color theme')),
-    createElement(Box, { key: 'local-history' }, row('/history', 'search and recall past prompts')),
-    createElement(Box, { key: 'local-agents' }, row('/agents', 'inspect subagent sessions of this conversation')),
-    createElement(Box, { key: 'local-todos' }, row('/todos', 'inspect the full todo list')),
-    createElement(Box, { key: 'local-subagent' }, row('/subagent', 'choose the model delegated subagents run on')),
-    createElement(Box, { key: 'local-delete' }, row('/delete', 'delete a session and its subagent threads')),
-    createElement(Box, { key: 'local-clear' }, row('/clear', 'clear the screen')),
-    createElement(Box, { key: 'local-export' }, row('/export', 'export the transcript to markdown (/export [path])')),
-    createElement(Box, { key: 'local-title' }, row('/title', 'rename this session (/title <text>)')),
-    createElement(Box, { key: 'local-copy' }, row('/copy', 'copy the latest assistant response')),
-    createElement(Box, { key: 'local-diff' }, row('/diff', 'inspect Git changes (/diff [--staged|ref])')),
-    createElement(Box, { key: 'local-review' }, row('/review', 'review Git changes under read-only permissions')),
-    createElement(Box, { key: 'local-quit' }, row('/quit', 'exit')),
-    ...descriptors.map(descriptor => createElement(
+    ...LOCAL_COMMANDS.map(command => createElement(
+      Box,
+      { key: `local-${command.label.slice(1)}` },
+      row(command.label, command.description),
+    )),
+    ...descriptors.filter(descriptor => !LOCAL_COMMAND_NAMES.has(descriptor.name)).map(descriptor => createElement(
       Text,
       { key: `command-${descriptor.name}`, dimColor: true, wrap: 'truncate-end' },
       `  ${padColumns(`/${descriptor.name}`, nameWidth)}${dim(truncateColumns(displayText(descriptor.description), descBudget))}`,
@@ -2287,38 +2360,12 @@ export function completionCandidates(
 ): readonly CompletionCandidate[] {
   if (!value.startsWith('/')) return []
   const prefix = value.slice(1).split(' ')[0] ?? ''
-  const local: CompletionCandidate[] = [
-    { label: '/help', description: 'show commands', origin: 'command' },
-    { label: '/model', description: 'switch the model', origin: 'command' },
-    { label: '/effort', description: 'adjust reasoning effort for the current model', origin: 'command' },
-    { label: '/mode', description: 'select the agent preset', origin: 'command' },
-    { label: '/permission', description: 'inspect or select the permission preset', origin: 'command' },
-    { label: '/new', description: 'start a fresh session', origin: 'command' },
-    { label: '/fork', description: 'fork at a completed turn', origin: 'command' },
-    { label: '/resume', description: 'browse or switch sessions', origin: 'command' },
-    { label: '/plugin', description: 'inspect the plugin composition', origin: 'command' },
-    { label: '/jobs', description: 'inspect background jobs', origin: 'command' },
-    { label: '/statusline', description: 'customize the status line', origin: 'command' },
-    { label: '/theme', description: 'switch the color theme', origin: 'command' },
-    { label: '/history', description: 'search and recall past prompts', origin: 'command' },
-    { label: '/agents', description: 'inspect subagent sessions of this conversation', origin: 'command' },
-    { label: '/todos', description: 'inspect the full todo list', origin: 'command' },
-    { label: '/subagent', description: 'choose the model delegated subagents run on', origin: 'command' },
-    { label: '/delete', description: 'delete a session and its subagent threads', origin: 'command' },
-    { label: '/clear', description: 'clear the screen', origin: 'command' },
-    { label: '/export', description: 'export the transcript to markdown', origin: 'command' },
-    { label: '/title', description: 'rename this session', origin: 'command' },
-    { label: '/copy', description: 'copy the latest assistant response', origin: 'command' },
-    { label: '/diff', description: 'inspect Git changes', origin: 'command' },
-    { label: '/review', description: 'review changes read-only', origin: 'command' },
-    { label: '/quit', description: 'exit', origin: 'command' },
-  ]
+  const local: CompletionCandidate[] = LOCAL_COMMANDS.map(command => ({ ...command, origin: 'command' }))
   // Local commands shadow registry names (e.g. the TUI-local /permission works
   // before any session exists, while the registry child needs one), so
   // collisions cannot render two rows with the same key.
-  const localNames = new Set(local.map(candidate => candidate.label.slice(1)))
   const registry = descriptors
-    .filter(descriptor => !localNames.has(descriptor.name))
+    .filter(descriptor => !LOCAL_COMMAND_NAMES.has(descriptor.name))
     .map((descriptor): CompletionCandidate => ({
       label: `/${descriptor.name}`,
       description: descriptor.description,
@@ -2408,20 +2455,25 @@ function CompletionMenu({ active, mention, index, rows }: {
   )
 }
 
+interface DraftImage extends ImagePathInspection {
+  /** Visible draft token; deleting it also detaches the hidden path. */
+  readonly marker: string
+}
+
 /**
  * The prompt box: TUI-local slash commands handled locally, other lines
  * dispatched; input editing keeps a cursor with history and completion.
  * While a modal (approval / question / model panel) owns the keys, the
  * box passes every key through untouched.
  */
-function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openEffort, openHelp, openMode, openPermission, openResume, openPlugin, openJobs, openStatusline, openTheme, openHistory, openAgents, openSubagent, openTodos, openDelete, openDiff, reviewChanges, deleteConfirm, confirmDelete, cancelDelete, createSession, forkSession, cancelSessionSwitch, notify, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, cyclePermission, exportTranscript, renameTitle, copyLastResponse, recallSpace, recordLocal, recordHistory, queued, cancelQueued, historyFill, historyConsumed, waveTier, waveStyle, maxRows, onEditorRows }: {
+function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openEffort, openHelp, openMode, openPermission, openResume, openPlugin, openJobs, openStatusline, openTheme, openHistory, openAgents, openSubagent, openTodos, openDelete, openDiff, reviewChanges, deleteConfirm, confirmDelete, cancelDelete, createSession, forkSession, cancelSessionSwitch, notify, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, inspectImages, prepareImages, cyclePermission, exportTranscript, renameTitle, copyLastResponse, recallSpace, recordLocal, recordHistory, queued, cancelQueued, historyFill, historyConsumed, waveTier, waveStyle, maxRows, onEditorRows }: {
   active: boolean
   frozen: boolean
   busy: boolean
   descriptors: readonly CommandDescriptor[]
   skills: readonly SkillRow[]
-  dispatch(text: string): void
-  steer(text: string): void
+  dispatch(text: string, images?: readonly ImageBlock[]): void
+  steer(text: string, images?: readonly ImageBlock[]): void
   interrupt(): boolean
   quit(): void
   openModel(): void
@@ -2462,6 +2514,8 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   clearView(): void
   refresh(): void
   loadMentions(query: string, signal?: AbortSignal): Promise<readonly MentionCandidate[]>
+  inspectImages(paths: readonly string[]): Promise<readonly ImagePathInspection[]>
+  prepareImages(paths: readonly string[]): Promise<readonly ImageBlock[]>
   cyclePermission(): string
   exportTranscript(argument: string): Promise<void>
   renameTitle(argument: string): string
@@ -2497,6 +2551,14 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   const stdin = useStdin().stdin
   const [value, setValue] = useState('')
   const [cursor, setCursor] = useState(0)
+  const valueRef = useRef(value)
+  const cursorRef = useRef(cursor)
+  valueRef.current = value
+  cursorRef.current = cursor
+  const [draftImages, setDraftImages] = useState<readonly DraftImage[]>([])
+  const draftImagesRef = useRef(draftImages)
+  draftImagesRef.current = draftImages
+  const [preparingImages, setPreparingImages] = useState(false)
   // Codex textarea editing state: a single-entry kill buffer, the vertical
   // move's preferred display column, the editor's scroll window, and the
   // bracketed-paste marker state. All of it is editor-local; nothing here
@@ -2518,6 +2580,8 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   useEffect(() => {
     if (historyFill === undefined) return
     const safe = sanitizeDraftText(historyFill.text)
+    draftImagesRef.current = []
+    setDraftImages([])
     setValue(safe)
     setCursor(safe.length)
     preferredColumnRef.current = null
@@ -2530,6 +2594,14 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
     }
     historyConsumed()
   }, [historyFill, recallSpace, historyConsumed])
+
+  useEffect(() => {
+    setDraftImages((current) => {
+      const next = current.filter(image => value.includes(image.marker))
+      draftImagesRef.current = next
+      return next.length === current.length ? current : next
+    })
+  }, [value])
 
   // Home/End and the Backspace-vs-Delete family never survive Ink's parser
   // as distinct keys, and kitty CSI-u forms parse as unnamed junk Ink would
@@ -2580,6 +2652,65 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   const mentionActive = mentionToken !== undefined
   const [mentionRows, setMentionRows] = useState<readonly MentionCandidate[]>([])
 
+  const sameImagePath = (left: string, right: string): boolean => (
+    process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right
+  )
+
+  const uniqueImageMarker = (name: string, source: 'mention' | 'drop', reserved: readonly string[] = []): string => {
+    const safeName = singleLineText(sanitizeDraftText(name))
+    const base = source === 'mention' ? `@${safeName}` : `[image: ${safeName}]`
+    let marker = base
+    let suffix = 2
+    while (valueRef.current.includes(marker) || draftImagesRef.current.some(image => image.marker === marker) || reserved.includes(marker)) {
+      marker = source === 'mention' ? `@${safeName} (${suffix})` : `[image: ${safeName} ${suffix}]`
+      suffix += 1
+    }
+    return marker
+  }
+
+  const registerDraftImage = (inspection: ImagePathInspection, marker: string): boolean => {
+    if (draftImagesRef.current.some(image => sameImagePath(image.path, inspection.path))) {
+      notify(`${inspection.name} is already attached`, 'warning')
+      return false
+    }
+    const next = [...draftImagesRef.current, { ...inspection, marker }]
+    draftImagesRef.current = next
+    setDraftImages(next)
+    return true
+  }
+
+  const insertDroppedImages = (paths: readonly string[]): void => {
+    notify(`checking ${paths.length} image${paths.length === 1 ? '' : 's'}…`)
+    void inspectImages(paths).then((inspected) => {
+      const additions: DraftImage[] = []
+      const markers: string[] = []
+      for (const inspection of inspected) {
+        if ([...draftImagesRef.current, ...additions].some(image => sameImagePath(image.path, inspection.path))) continue
+        const marker = uniqueImageMarker(inspection.name, 'drop', markers)
+        additions.push({ ...inspection, marker })
+        markers.push(marker)
+      }
+      if (additions.length === 0) {
+        notify('those images are already attached', 'warning')
+        return
+      }
+      const at = cursorRef.current
+      const current = valueRef.current
+      const insertion = `${at > 0 && !/\s$/u.test(current.slice(0, at)) ? ' ' : ''}${markers.join(' ')}${current.slice(at) === '' ? '' : ' '}`
+      const next = current.slice(0, at) + insertion + current.slice(at)
+      valueRef.current = next
+      cursorRef.current = at + insertion.length
+      setValue(next)
+      setCursor(cursorRef.current)
+      const nextImages = [...draftImagesRef.current, ...additions]
+      draftImagesRef.current = nextImages
+      setDraftImages(nextImages)
+      notify(`${additions.length} image${additions.length === 1 ? '' : 's'} ready for the next message`)
+    }, (reason: unknown) => {
+      notify(`image attachment failed: ${reason instanceof Error ? reason.message : String(reason)}`, 'error')
+    })
+  }
+
   useEffect(() => {
     if (!active || !mentionActive) {
       setMentionRows([])
@@ -2615,6 +2746,41 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
     if (mentionActive && mentionToken !== undefined) {
       const row = mentionRows[completionIndex % mentionRows.length]
       if (row !== undefined) {
+        if (row.kind === 'file' && row.path !== undefined && looksLikeImagePath(row.path)) {
+          const tokenText = value.slice(mentionToken.start, cursor)
+          const start = mentionToken.start
+          notify(`checking image ${basename(row.path)}…`)
+          void inspectImages([row.path]).then((inspected) => {
+            const inspection = inspected[0]
+            if (inspection === undefined) return
+            const current = valueRef.current
+            if (current.slice(start, start + tokenText.length) !== tokenText) return
+            if (draftImagesRef.current.some(image => sameImagePath(image.path, inspection.path))) {
+              const next = current.slice(0, start) + current.slice(start + tokenText.length)
+              valueRef.current = next
+              cursorRef.current = start
+              setValue(next)
+              setCursor(start)
+              setDismissedMenuValue(next)
+              notify(`${inspection.name} is already attached`, 'warning')
+              return
+            }
+            const marker = uniqueImageMarker(inspection.name, 'mention')
+            const next = current.slice(0, start) + marker + current.slice(start + tokenText.length)
+            valueRef.current = next
+            cursorRef.current = start + marker.length
+            setValue(next)
+            setCursor(cursorRef.current)
+            setDismissedMenuValue(next)
+            registerDraftImage(inspection, marker)
+            notify(`${inspection.name} ready for the next message`)
+          }, (reason: unknown) => {
+            notify(`image attachment failed: ${reason instanceof Error ? reason.message : String(reason)}`, 'error')
+          })
+          setCompletionIndex(0)
+          setDismissedMenuValue(undefined)
+          return
+        }
         // Session rows carry the canonical @[label](dsh-session:…) token;
         // file rows insert `@path` (directories keep their trailing slash).
         const insertion = row.label.startsWith('@')
@@ -2654,6 +2820,7 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   useInput((input, key) => {
     // Modal ownership: approval/question/model dialogs consume all keys.
     if (!active) return
+    if (preparingImages) return
     // Deletion confirm owns the box: y proceeds, anything else cancels.
     // Typed in the INPUT BOX (codex delete-confirm): the keystroke is echoed
     // as the box's own prompt, not an invisible panel keypress.
@@ -2696,6 +2863,8 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
       } else if (value !== '') {
         setValue('')
         setCursor(0)
+        draftImagesRef.current = []
+        setDraftImages([])
         setCompletionIndex(0)
         setDismissedMenuValue(undefined)
       } else {
@@ -2751,6 +2920,34 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
         }
       }
       const text = value.trim()
+      if (draftImagesRef.current.length > 0) {
+        setPreparingImages(true)
+        notify(`processing ${draftImagesRef.current.length} image${draftImagesRef.current.length === 1 ? '' : 's'}…`)
+        const snapshot = draftImagesRef.current
+        void prepareImages(snapshot.map(image => image.path)).then((images) => {
+          setPreparingImages(false)
+          valueRef.current = ''
+          cursorRef.current = 0
+          setValue('')
+          setCursor(0)
+          draftImagesRef.current = []
+          setDraftImages([])
+          setCompletionIndex(0)
+          setDismissedMenuValue(undefined)
+          dismissNotice()
+          if (text !== '') {
+            recordLocal(text)
+            recordHistory(text)
+          }
+          recall.current = beginRecall(recallSpace, '')
+          if (busy) steer(text, images)
+          else dispatch(text, images)
+        }, (reason: unknown) => {
+          setPreparingImages(false)
+          notify(`image submission failed: ${reason instanceof Error ? reason.message : String(reason)}`, 'error')
+        })
+        return
+      }
       setValue('')
       setCursor(0)
       setCompletionIndex(0)
@@ -3073,6 +3270,11 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
         text = text.replaceAll(PASTE_END_MARKER, '')
       }
       if (text === '') return
+      const droppedPaths = text.length > 1 ? parsePastedImagePaths(text) : []
+      if (droppedPaths.length > 0) {
+        insertDroppedImages(droppedPaths)
+        return
+      }
       applyEdit(insertText(value, cursor, text))
     }
   })
@@ -3564,10 +3766,11 @@ export function App(props: AppProps): ReactElement {
   const [modelOpen, setModelOpen] = useState(false)
   /** Nested /model stages; only one owns terminal input at a time. */
   const [providerOpen, setProviderOpen] = useState(false)
-  const [providerAction, setProviderAction] = useState<{
-    kind: 'credential' | 'configure' | 'unset' | 'remove'
-    target: ProviderTargetView
-  } | undefined>(undefined)
+  const [providerAction, setProviderAction] = useState<
+    | { kind: 'credential' | 'configure' | 'unset' | 'remove'; target: ProviderTargetView }
+    | { kind: 'login' | 'logout'; target: ProviderTargetView; authorization: ProviderAuthorizationRow }
+    | undefined
+  >(undefined)
   /** The model row whose effort levels the /model stage lists; undefined shows the model list. */
   const [effortFor, setEffortFor] = useState<ModelRow | undefined>(undefined)
   /** Effective reasoning effort, shown in the /model picker and switch notice. */
@@ -3619,6 +3822,8 @@ export function App(props: AppProps): ReactElement {
   const [modelError, setModelError] = useState<string | undefined>(undefined)
   const [providerDirectory, setProviderDirectory] = useState<ProviderSettingsDirectory | undefined>(undefined)
   const [providerError, setProviderError] = useState<string | undefined>(undefined)
+  const [authorizationDirectory, setAuthorizationDirectory] = useState<ProviderAuthorizationDirectory | undefined>(undefined)
+  const [authorizationError, setAuthorizationError] = useState<string | undefined>(undefined)
   const [modelLoadEpoch, setModelLoadEpoch] = useState(0)
   const [notice, setNotice] = useState<{ text: string; tone: NoticeTone } | undefined>(undefined)
   const notify = useCallback((text: string, tone: NoticeTone = 'info'): void => {
@@ -3660,6 +3865,20 @@ export function App(props: AppProps): ReactElement {
     }
   }, [modelOpen, modelLoadEpoch, props.loadModelProviders])
   useEffect(() => {
+    if (!modelOpen || props.loadProviderAuthorizations === undefined) return
+    let cancelled = false
+    setAuthorizationDirectory(undefined)
+    setAuthorizationError(undefined)
+    Promise.resolve().then(() => props.loadProviderAuthorizations!()).then((loaded) => {
+      if (!cancelled) setAuthorizationDirectory(loaded)
+    }, (error: unknown) => {
+      if (!cancelled) setAuthorizationError(error instanceof Error ? error.message : String(error))
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [modelOpen, modelLoadEpoch, props.loadProviderAuthorizations])
+  useEffect(() => {
     const subscribe = props.subscribeModelProviders
     if (!modelOpen || subscribe === undefined) return
     try {
@@ -3668,6 +3887,15 @@ export function App(props: AppProps): ReactElement {
       setProviderError(error instanceof Error ? error.message : String(error))
     }
   }, [modelOpen, props.subscribeModelProviders])
+  useEffect(() => {
+    const subscribe = props.subscribeProviderAuthorizations
+    if (!modelOpen || subscribe === undefined) return
+    try {
+      return subscribe(() => setModelLoadEpoch(epoch => epoch + 1))
+    } catch (error: unknown) {
+      setAuthorizationError(error instanceof Error ? error.message : String(error))
+    }
+  }, [modelOpen, props.subscribeProviderAuthorizations])
 
   const busy = view.busy
   const [showReasoning, setShowReasoning] = useState(false)
@@ -3940,13 +4168,21 @@ export function App(props: AppProps): ReactElement {
     refreshScreen()
   }, [settledNeedsTrim, busy, streamingActive])
 
+  const sessionHasImages = useMemo(() => view.entries.some(entry =>
+    (entry.kind === 'user' || entry.kind === 'pending') && (entry.images?.length ?? 0) > 0), [view.entries])
+
   /** Apply one /model pick: record the selection, close the panel, report via notice. */
   const applyModel = (row: ModelRow, effortId: string | undefined): void => {
     try {
       const label = props.selectModel(row, effortId)
       setModelLabel(label)
       setEffortLabel(effortId)
-      notify(`model → next step uses ${label}${effortId === undefined || effortId === '' ? '' : `@${effortId}`}`)
+      const selected = `${label}${effortId === undefined || effortId === '' ? '' : `@${effortId}`}`
+      if (sessionHasImages && row.inputModalities !== undefined && !row.inputModalities.includes('image')) {
+        notify(`model → ${selected} · image history will be sent as text placeholders`, 'warning')
+      } else {
+        notify(`model → next step uses ${selected}`)
+      }
       setModelOpen(false)
       setProviderOpen(false)
       setProviderAction(undefined)
@@ -3967,7 +4203,43 @@ export function App(props: AppProps): ReactElement {
   }
   let modelSurface: ReactElement | undefined
   if (modelOpen && !approvalPending && !questionPending) {
-    if (providerAction?.kind === 'configure' && props.saveModelProviderConfiguration !== undefined) {
+    if (providerAction?.kind === 'login'
+      && props.beginProviderAuthorization !== undefined
+      && props.cancelProviderAuthorization !== undefined
+      && props.openAuthorizationUrl !== undefined
+      && props.copyTextValue !== undefined) {
+      modelSurface = createElement(ProviderAuthorizationPanel, {
+        row: providerAction.authorization,
+        begin: props.beginProviderAuthorization,
+        cancel: () => props.cancelProviderAuthorization!(providerAction.authorization),
+        openUrl: props.openAuthorizationUrl,
+        copy: props.copyTextValue,
+        done: () => {
+          const authorization = providerAction.authorization
+          setProviderAction(undefined)
+          setProviderOpen(false)
+          reloadModelSurfaces()
+          notify(`logged in to ${authorization.label}; select a model`)
+        },
+        back: () => {
+          setProviderAction(undefined)
+          setProviderOpen(true)
+        },
+      })
+    } else if (providerAction?.kind === 'logout' && props.logoutProviderAuthorization !== undefined) {
+      modelSurface = createElement(ProviderAuthorizationLogoutPanel, {
+        row: providerAction.authorization,
+        confirm: props.logoutProviderAuthorization,
+        done: () => {
+          const authorization = providerAction.authorization
+          setProviderAction(undefined)
+          setProviderOpen(true)
+          reloadModelSurfaces()
+          notify(`logged out from ${authorization.label}`)
+        },
+        back: () => setProviderAction(undefined),
+      })
+    } else if (providerAction?.kind === 'configure' && props.saveModelProviderConfiguration !== undefined) {
       modelSurface = createElement(ProviderConfigurationPanel, {
         target: providerAction.target,
         catalog: directory?.rows ?? [],
@@ -4026,6 +4298,8 @@ export function App(props: AppProps): ReactElement {
       modelSurface = createElement(ProviderPanel, {
         directory: providerDirectory,
         error: providerError,
+        authorizations: authorizationDirectory,
+        authorizationError,
         onCredential: (target: ProviderTargetView) => {
           if (props.saveModelProviderCredential === undefined) {
             notify('API key storage is unavailable in this profile', 'warning')
@@ -4053,6 +4327,27 @@ export function App(props: AppProps): ReactElement {
             return
           }
           setProviderAction({ kind: 'remove', target })
+        },
+        onLogin: (target: ProviderTargetView, authorization: ProviderAuthorizationRow) => {
+          if (busy) {
+            notify('provider login is available only while the agent is idle', 'warning')
+            return
+          }
+          if (props.beginProviderAuthorization === undefined
+            || props.cancelProviderAuthorization === undefined
+            || props.openAuthorizationUrl === undefined
+            || props.copyTextValue === undefined) {
+            notify('provider login is unavailable in this profile', 'warning')
+            return
+          }
+          setProviderAction({ kind: 'login', target, authorization })
+        },
+        onLogout: (target: ProviderTargetView, authorization: ProviderAuthorizationRow) => {
+          if (props.logoutProviderAuthorization === undefined) {
+            notify('provider logout is unavailable in this profile', 'warning')
+            return
+          }
+          setProviderAction({ kind: 'logout', target, authorization })
         },
         onRetry: reloadModelSurfaces,
         onBack: () => setProviderOpen(false),
@@ -4306,6 +4601,8 @@ export function App(props: AppProps): ReactElement {
           setModelError(undefined)
           setProviderDirectory(undefined)
           setProviderError(undefined)
+          setAuthorizationDirectory(undefined)
+          setAuthorizationError(undefined)
           setProviderOpen(false)
           setProviderAction(undefined)
           setEffortFor(undefined)
@@ -4406,6 +4703,8 @@ export function App(props: AppProps): ReactElement {
           if (!busy && !streamingActive) refreshScreen()
         },
         loadMentions: props.loadMentions,
+        inspectImages: props.inspectImages,
+        prepareImages: props.prepareImages,
         cyclePermission: props.cyclePermission,
         exportTranscript: props.exportTranscript,
         renameTitle: props.renameTitle,

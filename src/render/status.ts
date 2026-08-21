@@ -55,12 +55,12 @@ function formatRate(n: number): string {
 /**
  * Cache-hit share of billed prompt-side input.
  * @param usage - cumulative token totals.
- * @returns rounded integer percent, or null when no input was billed.
+ * @returns percent rounded to one decimal place, or null when no input was billed.
  */
 export function cacheHitPercent(usage: TranscriptStats['usage']): number | null {
   return usage.inputTokens === 0
     ? null
-    : Math.round(usage.cacheReadTokens / usage.inputTokens * 100)
+    : Math.round(usage.cacheReadTokens / usage.inputTokens * 1_000) / 10
 }
 
 /**

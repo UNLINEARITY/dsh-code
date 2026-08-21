@@ -38,7 +38,11 @@ export const PASTE_END_MARKER = '[201~'
  * "[200~"/"[201~" markers Ink leaves after stripping the ESC byte.
  */
 export function stripPasteMarkers(text: string): string {
-  return text.replaceAll(PASTE_START_MARKER, '').replaceAll(PASTE_END_MARKER, '')
+  return text
+    .replaceAll(`\x1b${PASTE_START_MARKER}`, '')
+    .replaceAll(`\x1b${PASTE_END_MARKER}`, '')
+    .replaceAll(PASTE_START_MARKER, '')
+    .replaceAll(PASTE_END_MARKER, '')
 }
 
 /** One decoded CSI-u keypress: key code, 1-based modifier param, alternate code. */

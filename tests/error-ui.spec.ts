@@ -5,6 +5,7 @@ import { createElement } from 'react'
 import { render } from 'ink'
 import { describe, expect, it } from 'vitest'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import { credentialKey } from '@deepseek-ai/dsh-credentials'
 import { App, type AppProps } from '../src/app.ts'
 import { createTranscriptStore } from '../src/store.ts'
 import { DEFAULT_STATUSLINE_ITEMS } from '../src/render/status.ts'
@@ -73,6 +74,8 @@ function renderApp(
     quit: noop,
     loadModels: async () => ({ rows: [], failures: [] }),
     loadMentions: async () => [],
+    inspectImages: async () => [],
+    prepareImages: async () => [],
     selectModel: () => 'test/model',
       subagentModel: '',
       setSubagentModel: () => '',
@@ -239,6 +242,57 @@ describe('/model provider credentials', () => {
     ...overrides,
   })
 
+  it('starts an upstream provider login from /model and returns to the model list', async () => {
+    let begins = 0
+    const authorization = {
+      key: credentialKey('llm-pi-ai', 'deepseek-official'),
+      provider: 'deepseek-official',
+      label: 'DeepSeek',
+      methods: [{ id: 'oauth', label: 'OAuth' }],
+      inFlight: false,
+      record: { configured: false, writable: true },
+    } as const
+    const app = renderApp({
+      loadModels: async () => ({
+        rows: [{ provider: 'deepseek-official', providerName: 'DeepSeek', model: 'flash', modelName: 'Flash' }],
+        failures: [],
+      }),
+      loadModelProviders: async () => ({ rows: [provider()], writable: true, failures: [] }),
+      saveModelProviderCredential: async () => {},
+      loadProviderAuthorizations: async () => ({ rows: [authorization], failures: [] }),
+      subscribeProviderAuthorizations: () => () => {},
+      beginProviderAuthorization: async (_row, method) => {
+        begins += 1
+        expect(method).toBe('oauth')
+        return 'authorized'
+      },
+      cancelProviderAuthorization: () => {},
+      logoutProviderAuthorization: async () => {},
+      openAuthorizationUrl: () => true,
+      copyTextValue: async () => {},
+    }, { columns: 100, rows: 24 })
+    try {
+      await wait()
+      app.stdin.push('/model')
+      await wait()
+      app.stdin.push('\r')
+      await wait()
+      app.stdin.push('a')
+      await wait()
+      expect(app.output()).toContain('not logged in')
+      app.stdin.push('l')
+      await wait()
+      expect(app.output()).toContain('login DeepSeek')
+      app.stdin.push('\r')
+      await wait()
+      expect(begins).toBe(1)
+      expect(app.output()).toContain('logged in to DeepSeek; select a model')
+      expect(app.output()).toContain('DeepSeek')
+    } finally {
+      app.unmount()
+    }
+  })
+
   it('opens from the model list, masks the key, saves it, and returns to model selection', async () => {
     let saved = ''
     let current = provider()
@@ -276,6 +330,7 @@ describe('/model provider credentials', () => {
       invalidate?.()
       await wait()
       expect(app.output()).toContain('key file')
+      expect(app.output()).not.toContain('key file · not logged in')
 
       app.clearOutput()
       app.stdin.push('\r')

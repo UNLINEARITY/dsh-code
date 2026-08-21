@@ -46,11 +46,11 @@ describe('buildExportMarkdown', () => {
       ...createTranscriptView(),
       entries: [{
         kind: 'user', text: 'inspect', notice: false,
-        images: [{ attachmentId: 'secret-ref', mediaType: 'image/png', bytes: 42, width: 2, height: 3, name: 'plot.png' }],
+        images: [{ attachmentId: 'secret-ref', mediaType: 'image/png', bytes: 42, width: 2, height: 3, name: 'plot.png', originalDimensions: { width: 8, height: 12 } }],
       }],
     } as unknown as ReturnType<typeof createTranscriptView>
     const markdown = buildExportMarkdown(view, 's')
-    expect(markdown).toContain('[image: plot.png · 2×3 · 42 B]')
+    expect(markdown).toContain('[image: plot.png · 2×3 · original 8×12 · 42 B]')
     expect(markdown).not.toContain('secret-ref')
   })
 })

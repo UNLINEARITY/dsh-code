@@ -100,6 +100,7 @@ describe('status formatting', () => {
   it('computes cache hit only over billed input', () => {
     expect(cacheHitPercent(emptyStats.usage)).toBeNull()
     expect(cacheHitPercent({ inputTokens: 200, outputTokens: 0, cacheReadTokens: 150 })).toBe(75)
+    expect(cacheHitPercent({ inputTokens: 201, outputTokens: 0, cacheReadTokens: 150 })).toBe(74.6)
   })
 })
 
