@@ -8,9 +8,8 @@
  * grapheme boundaries) so the React state stays two primitives
  * (value, cursor) and every operation here stays pure and testable.
  *
- * Word motion deviates from Codex's UAX#29 segmentation in one deliberate
- * way: a run of same-class characters is ONE piece, so a CJK run moves as a
- * single word (two hanzi are one Alt+B step, not two).
+ * Word motion follows Codex's piece semantics: whitespace separates runs,
+ * punctuation runs stay atomic, and each Han grapheme is its own boundary.
  *
  * @module @deepseek-ai/dsh-code/render/editor
  */
@@ -203,6 +202,31 @@ export interface CaretSite {
   column: number
 }
 
+/** Text slices for rendering one physical row with at most one caret. */
+export interface EditorRowParts {
+  readonly before: string
+  readonly caret: string
+  readonly after: string
+  readonly hasCaret: boolean
+}
+
+/** Split one row around the authoritative caret; every other row stays whole. */
+export function editorRowParts(
+  row: EditorRowModel,
+  rowIndex: number,
+  caretRow: number,
+  cursor: number,
+  caretEnabled = true,
+): EditorRowParts {
+  if (!caretEnabled || rowIndex !== caretRow) return { before: '', caret: '', after: row.text, hasCaret: false }
+  const at = row.offsets.indexOf(cursor)
+  if (at < 0) return { before: '', caret: '', after: row.text, hasCaret: false }
+  const before = at > 0 ? row.text.slice(0, row.cuts[at]!) : ''
+  const caret = at < row.cuts.length - 1 ? row.text.slice(row.cuts[at]!, row.cuts[at + 1]!) : ' '
+  const after = at < row.cuts.length - 1 ? row.text.slice(row.cuts[at + 1]!) : ''
+  return { before, caret, after, hasCaret: true }
+}
+
 /** Map a cursor offset to its caret site on the wrapped rows. */
 export function caretSite(model: EditorModel, offset: number): CaretSite {
   const target = Math.max(0, Math.min(model.length, offset))
@@ -223,7 +247,9 @@ export function caretSite(model: EditorModel, offset: number): CaretSite {
 export function moveCursorVertically(model: EditorModel, offset: number, preferredColumn: number, delta: number): number {
   const site = caretSite(model, offset)
   const target = site.row + delta
-  if (target < 0 || target >= model.rows.length || delta === 0) return offset
+  if (delta === 0) return offset
+  if (target < 0) return 0
+  if (target >= model.rows.length) return model.length
   const row = model.rows[target]!
   const wanted = Math.max(0, Math.min(preferredColumn, row.columns[row.columns.length - 1]!))
   let best = 0
@@ -247,22 +273,26 @@ const WORD_SEPARATORS = new Set('`~!@#$%^&*()-=+[{]}\\|;:\'",.<>/?')
 
 type PieceClass = 'space' | 'punct' | 'word'
 
+const HAN_GRAPHEME = /^\p{Script=Han}(?:\p{Mark}|\uFE0F)*$/u
+const UNICODE_PUNCTUATION = /^\p{P}+$/u
+
 function classifyGrapheme(text: string): PieceClass {
   if (/^\s$/u.test(text)) return 'space'
-  return WORD_SEPARATORS.has(text) ? 'punct' : 'word'
+  return WORD_SEPARATORS.has(text) || UNICODE_PUNCTUATION.test(text) ? 'punct' : 'word'
 }
 
-/** Maximal same-class runs of graphemes as [start, end) spans. */
-function pieceRuns(value: string): readonly { start: number; end: number; class: PieceClass }[] {
-  const runs: { start: number; end: number; class: PieceClass }[] = []
-  let current: { start: number; end: number; class: PieceClass } | undefined
+/** Maximal same-class runs; Han graphemes deliberately stay one run each. */
+function pieceRuns(value: string): readonly { start: number; end: number; class: PieceClass; atomic: boolean }[] {
+  const runs: { start: number; end: number; class: PieceClass; atomic: boolean }[] = []
+  let current: { start: number; end: number; class: PieceClass; atomic: boolean } | undefined
   for (const span of splitGraphemes(value)) {
     const klass = span.text === '\n' ? 'space' : classifyGrapheme(span.text)
-    if (current !== undefined && current.class === klass) {
+    const atomic = klass === 'word' && HAN_GRAPHEME.test(span.text)
+    if (current !== undefined && current.class === klass && !current.atomic && !atomic) {
       current.end = span.end
       continue
     }
-    current = { start: span.start, end: span.end, class: klass }
+    current = { start: span.start, end: span.end, class: klass, atomic }
     runs.push(current)
   }
   return runs
@@ -273,11 +303,11 @@ function pieceRuns(value: string): readonly { start: number; end: number; class:
  * START of the trailing non-space piece (extending over separator pieces).
  */
 export function moveWordLeft(value: string, offset: number): number {
-  const cursor = Math.max(0, Math.min(value.length, offset))
+  const cursor = clampCursor(value, offset)
   const runs = pieceRuns(value)
-  // Index of the last run that ends at or before the cursor.
-  let index = runs.length - 1
-  while (index >= 0 && runs[index]!.end > cursor) index -= 1
+  // The last run with content before the cursor includes the current word's
+  // left-hand fragment, instead of skipping the whole containing run.
+  let index = runs.findLastIndex(run => run.start < cursor)
   if (index < 0) return 0
   if (runs[index]!.class === 'space') {
     index -= 1
@@ -293,10 +323,11 @@ export function moveWordLeft(value: string, offset: number): number {
  * the leading non-space piece (extending over separator pieces).
  */
 export function moveWordRight(value: string, offset: number): number {
-  const cursor = Math.max(0, Math.min(value.length, offset))
+  const cursor = clampCursor(value, offset)
   const runs = pieceRuns(value)
-  let index = 0
-  while (index < runs.length && runs[index]!.start < cursor) index += 1
+  // The first run with content after the cursor includes the current word's
+  // right-hand fragment, instead of jumping straight to the following word.
+  let index = runs.findIndex(run => run.end > cursor)
   if (index >= runs.length) return value.length
   if (runs[index]!.class === 'space') {
     index += 1
@@ -377,6 +408,75 @@ export function insertText(value: string, cursor: number, text: string): EditRes
   return { value: value.slice(0, cursor) + safe + value.slice(cursor), cursor: cursor + safe.length, killed: undefined }
 }
 
+/** Ctrl+A: current logical line start, then the previous line start on repeat. */
+export function moveToLineStart(value: string, cursor: number, crossOnRepeat: boolean): number {
+  const site = clampCursor(value, cursor)
+  const bounds = lineBounds(value, site)
+  if (!crossOnRepeat || site !== bounds.start || bounds.start === 0) return bounds.start
+  return lineBounds(value, bounds.start - 1).start
+}
+
+/** Ctrl+E: current logical line end, then the next line end on repeat. */
+export function moveToLineEnd(value: string, cursor: number, crossOnRepeat: boolean): number {
+  const site = clampCursor(value, cursor)
+  const bounds = lineBounds(value, site)
+  if (!crossOnRepeat || site !== bounds.end || bounds.end >= value.length) return bounds.end
+  return lineBounds(value, bounds.end + 1).end
+}
+
+/** One stable text range captured before an asynchronous draft operation. */
+export interface DraftRange {
+  readonly start: number
+  readonly end: number
+}
+
+/**
+ * Remap a captured range when all intervening edits are wholly before or
+ * wholly after it. An edit overlapping either boundary invalidates the
+ * anchor instead of guessing and inserting content at a surprising place.
+ */
+export function remapStableRange(original: string, current: string, range: DraftRange): DraftRange | undefined {
+  const start = Math.max(0, Math.min(original.length, range.start))
+  const end = Math.max(start, Math.min(original.length, range.end))
+  if (original === current) return { start, end }
+  let prefix = 0
+  const shared = Math.min(original.length, current.length)
+  while (prefix < shared && original[prefix] === current[prefix]) prefix += 1
+  let suffix = 0
+  while (suffix < original.length - prefix
+    && suffix < current.length - prefix
+    && original[original.length - 1 - suffix] === current[current.length - 1 - suffix]) suffix += 1
+  const oldChangedEnd = original.length - suffix
+  if (prefix >= end) return { start, end }
+  if (oldChangedEnd <= start) {
+    const delta = current.length - original.length
+    return { start: start + delta, end: end + delta }
+  }
+  return undefined
+}
+
+/** Replace a current range while preserving a cursor moved after capture. */
+export function replaceRangePreservingCursor(
+  value: string,
+  cursor: number,
+  range: DraftRange,
+  replacement: string,
+): EditResult {
+  const start = Math.max(0, Math.min(value.length, range.start))
+  const end = Math.max(start, Math.min(value.length, range.end))
+  const site = clampCursor(value, cursor)
+  const nextCursor = site <= start
+    ? site
+    : site >= end
+      ? site + replacement.length - (end - start)
+      : start + replacement.length
+  return {
+    value: value.slice(0, start) + replacement + value.slice(end),
+    cursor: nextCursor,
+    killed: undefined,
+  }
+}
+
 /**
  * Composer editor row budget: the editor itself never grows past this many
  * physical rows; deeper drafts scroll internally to keep the caret visible.
@@ -387,12 +487,12 @@ export function composerMaxRows(terminalRows: number): number {
 }
 
 /**
- * Codex `should_handle_navigation`: Up/Down walk history only from an empty
- * draft, or from a boundary of a draft that still exactly matches the last
- * recalled entry. Any interior cursor position keeps vertical caret movement.
+ * History navigation starts with Up on an empty draft, or after visual
+ * movement has reached the directional text edge of an unchanged recalled
+ * entry. Every other position remains under textarea movement.
  */
-export function shouldRecallNavigate(value: string, cursor: number, lastRecalled: string | null): boolean {
-  if (value === '') return true
-  if (cursor !== 0 && cursor !== value.length) return false
-  return lastRecalled === value
+export function shouldRecallNavigate(value: string, cursor: number, lastRecalled: string | null, direction: -1 | 1): boolean {
+  if (value === '') return direction < 0
+  if (lastRecalled !== value) return false
+  return direction < 0 ? cursor === 0 : cursor === value.length
 }

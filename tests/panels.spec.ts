@@ -699,8 +699,12 @@ describe('queued messages and global recall', () => {
       expect(output).toContain('bump the package version')
       expect(output).not.toContain('1 of 3 match')
 
-      // Up from the filled match recalls the older entry (boundary gate).
+      // The first Up stays inside the filled prompt and moves to its visual
+      // start; only a second Up at the true edge recalls the older entry.
       output = ''
+      stdin.write('\x1b[A')
+      await wait()
+      expect(output).not.toContain('fix the login bug')
       stdin.write('\x1b[A')
       await wait()
       expect(output).toContain('fix the login bug')

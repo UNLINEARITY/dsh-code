@@ -140,7 +140,14 @@ import {
   type StatusTone,
 } from './render/status.ts'
 import { displayTail, displayText, singleLineText, truncateColumns } from './render/text.ts'
-import { normalizeKeyboardChunk, PASTE_END_MARKER, PASTE_START_MARKER, stripPasteMarkers } from './keyboard.ts'
+import {
+  normalizeKeyboardChunk,
+  PASTE_END_MARKER,
+  PASTE_START_MARKER,
+  stripPasteMarkers,
+  tokenizeRawEditorChunk,
+  type RawEditorToken,
+} from './keyboard.ts'
 import {
   clampScroll,
   followInspectorCursor,
@@ -171,15 +178,19 @@ import {
   deleteWordBackward,
   deleteWordForward,
   editorModel,
+  editorRowParts,
   insertText,
   type EditResult,
   killToLineEnd,
   killToLineStart,
-  lineBounds,
   moveCursorBy,
   moveCursorVertically,
+  moveToLineEnd,
+  moveToLineStart,
   moveWordLeft,
   moveWordRight,
+  remapStableRange,
+  replaceRangePreservingCursor,
   sanitizeDraftText,
   shouldRecallNavigate,
   splitGraphemes,
@@ -265,7 +276,7 @@ export interface AppProps {
   /** Validate draft image paths without committing attachment objects. */
   inspectImages(paths: readonly string[]): Promise<readonly ImagePathInspection[]>
   /** Validate, normalize and persist images immediately before submission. */
-  prepareImages(paths: readonly string[]): Promise<readonly ImageBlock[]>
+  prepareImages(paths: readonly string[], signal?: AbortSignal): Promise<readonly ImageBlock[]>
   /** Apply one /model selection (with an advertised reasoning effort, when picked); returns the display label. */
   selectModel(row: ModelRow, effortId?: string): string
   /** The /subagent override label, '' when delegated agents follow the current model. */
@@ -398,10 +409,23 @@ function Caret(): ReactElement {
   return createElement(Text, null, caretVisible(tick) ? '▍' : ' ')
 }
 
-/** Blinking input cursor: inverse block while the caret phase is on. */
-function CursorBlock({ char }: { char: string }): ReactElement {
-  const tick = useFrames(530)
-  return createElement(Text, { inverse: caretVisible(tick) || undefined }, char)
+/** One resettable input-caret phase shared by the entire composer. */
+function useCursorBlink(active: boolean): { visible: boolean; reset(): void } {
+  const [epoch, setEpoch] = useState(0)
+  const [visible, setVisible] = useState(true)
+  useEffect(() => {
+    setVisible(true)
+    if (!active) return
+    const id = setInterval(() => setVisible(current => !current), 530)
+    return () => {
+      clearInterval(id)
+    }
+  }, [active, epoch])
+  const reset = useCallback((): void => {
+    setVisible(true)
+    setEpoch(current => current + 1)
+  }, [])
+  return { visible, reset }
 }
 
 /**
@@ -2054,83 +2078,13 @@ function verboseLine(text: string, columns: number): string {
   return truncateColumns(displayText(text).replace(/\n/gu, ' ↵ ').replace(/\t/gu, '  '), Math.max(1, columns))
 }
 
-/**
- * Keys Ink 5's parser cannot express at the useInput boundary: Home/End
- * arrive with `input === ''` and no flag, and Backspace vs Delete both
- * collapse onto `key.delete`. The composer patches `stdin.read` — the one
- * choke point every Ink input chunk already passes through — and annotates
- * the exact sequences the editor must own; Ink's own view of the same chunk
- * is a no-op for every one of them.
- */
-type RawKeyAnnotation =
-  | 'home'
-  | 'end'
-  | 'delete-backward'
-  | 'delete-word-backward'
-  | 'delete-forward'
-  | 'delete-word-forward'
-  | undefined
-
-/** Identify one whole-chunk key sequence Ink drops or blurs. */
-function annotateRawKey(chunk: string): RawKeyAnnotation {
-  switch (chunk) {
-    case '':
-      return 'delete-backward'
-    case '':
-    case '':
-      return 'delete-word-backward'
-    case '[3~':
-    case '[3;2~':
-      return 'delete-forward'
-    case '[3;3~':
-    case '[3;5~':
-      return 'delete-word-forward'
-    case '[H':
-    case '[1~':
-    case '[7~':
-    case 'OH':
-      return 'home'
-    case '[F':
-    case '[4~':
-    case '[8~':
-    case 'OF':
-      return 'end'
-    default:
-      return undefined
-  }
-}
-
-/**
- * One-row editor window keeping the logical cursor visible in long drafts.
- * The caret and its surroundings slice at grapheme boundaries: splitting a
- * star-plane surrogate pair would render an isolated half under the block
- * caret with a width the terminal never draws.
- */
-export function editorWindow(value: string, cursor: number, columns: number): { before: string; caret: string; after: string } {
-  const width = Math.max(1, columns)
-  const normalize = (text: string): string => displayText(text).replace(/\n/gu, '↵').replace(/\t/gu, '  ')
-  const site = clampCursor(value, cursor)
-  const caretSpan = splitGraphemes(value).find(span => span.start === site)
-  const caret = caretSpan === undefined ? ' ' : normalize(caretSpan.text)
-  const rest = value.slice(caretSpan === undefined ? site : caretSpan.end)
-  const remaining = Math.max(0, width - visibleColumns(caret))
-  const afterBudget = Math.min(Math.floor(remaining / 3), visibleColumns(normalize(rest)))
-  const beforeBudget = Math.max(0, remaining - afterBudget)
-  const before = beforeBudget === 0
-    ? ''
-    : displayTail(normalize(value.slice(0, site)), beforeBudget, 1).text
-  const after = afterBudget === 0
-    ? ''
-    : truncateColumns(normalize(rest), afterBudget)
-  return { before, caret, after }
-}
-
 /** The empty-composer placeholder text (shared by the static and wave paths). */
 const COMPOSER_PLACEHOLDER = 'type a message · / commands · @ mentions'
 
 /** One physical cell of the wave-painted composer row: a char plus styles. */
 interface ComposerCell {
   char: string
+  width?: number
   color?: string
   backgroundColor?: string
   bold?: boolean
@@ -2515,7 +2469,7 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   refresh(): void
   loadMentions(query: string, signal?: AbortSignal): Promise<readonly MentionCandidate[]>
   inspectImages(paths: readonly string[]): Promise<readonly ImagePathInspection[]>
-  prepareImages(paths: readonly string[]): Promise<readonly ImageBlock[]>
+  prepareImages(paths: readonly string[], signal?: AbortSignal): Promise<readonly ImageBlock[]>
   cyclePermission(): string
   exportTranscript(argument: string): Promise<void>
   renameTitle(argument: string): string
@@ -2548,6 +2502,7 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   onEditorRows(rows: number): void
 }): ReactElement {
   const columns = useStdout().stdout?.columns ?? 80
+  const editorColumns = Math.max(1, columns - 6)
   const stdin = useStdin().stdin
   const [value, setValue] = useState('')
   const [cursor, setCursor] = useState(0)
@@ -2559,6 +2514,13 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   const draftImagesRef = useRef(draftImages)
   draftImagesRef.current = draftImages
   const [preparingImages, setPreparingImages] = useState(false)
+  const prepareAbortRef = useRef<AbortController | undefined>(undefined)
+  const prepareEpochRef = useRef(0)
+  const { visible: cursorVisible, reset: resetCursorBlink } = useCursorBlink(active && !frozen && !preparingImages)
+  useEffect(() => () => {
+    prepareEpochRef.current += 1
+    prepareAbortRef.current?.abort()
+  }, [])
   // Codex textarea editing state: a single-entry kill buffer, the vertical
   // move's preferred display column, the editor's scroll window, and the
   // bracketed-paste marker state. All of it is editor-local; nothing here
@@ -2569,11 +2531,15 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   const pasteBracketRef = useRef(false)
   /** Cancels the pending lost-paste safety timer (undefined when disarmed). */
   const pasteBracketCancelRef = useRef<(() => void) | undefined>(undefined)
-  /** Annotation of the stdin chunk Ink is about to deliver to useInput. */
-  const rawAnnotation = useRef<RawKeyAnnotation>(undefined)
+  /** Ordered editor tokens from the stdin chunk Ink is about to deliver. */
+  const rawEditorTokens = useRef<readonly RawEditorToken[] | undefined>(undefined)
   // Codex shell-style recall: the navigation cursor, the saved draft restored
   // on Down past the newest entry, and the boundary-gate anchor.
   const recall = useRef<RecallState>(beginRecall([], ''))
+
+  useEffect(() => {
+    preferredColumnRef.current = null
+  }, [editorColumns])
 
   // A /history panel acceptance lands as a fill: place the sanitized text at
   // the end of the composer and resume recall from that entry.
@@ -2582,8 +2548,11 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
     const safe = sanitizeDraftText(historyFill.text)
     draftImagesRef.current = []
     setDraftImages([])
+    valueRef.current = safe
+    cursorRef.current = safe.length
     setValue(safe)
     setCursor(safe.length)
+    resetCursorBlink()
     preferredColumnRef.current = null
     setDismissedMenuValue(undefined)
     recall.current = {
@@ -2593,7 +2562,7 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
       lastRecalled: safe,
     }
     historyConsumed()
-  }, [historyFill, recallSpace, historyConsumed])
+  }, [historyFill, recallSpace, historyConsumed, resetCursorBlink])
 
   useEffect(() => {
     setDraftImages((current) => {
@@ -2608,10 +2577,9 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   // insert as draft text.
   // Patch stdin.read — the single choke point Ink's input loop pulls every
   // chunk through — to first rewrite decodable CSI-u sequences to their
-  // legacy bytes, then annotate the resulting chunk before Ink emits the
-  // matching 'input' event, so the useInput handler below reads the
-  // annotation for exactly the chunk it is processing. Ink receives and
-  // parses the normalized string; every other byte passes through untouched.
+  // legacy bytes, then tokenize editor-only sequences before Ink emits the
+  // matching input event. Batched Home/End/Delete/Backspace actions remain
+  // ordered even though Ink invokes useInput only once for the whole chunk.
   useEffect(() => {
     if (stdin === undefined) return
     const originalRead = stdin.read.bind(stdin)
@@ -2619,7 +2587,7 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
       const chunk = originalRead(...args)
       if (chunk === null) return chunk
       const normalized = normalizeKeyboardChunk(typeof chunk === 'string' ? chunk : String(chunk))
-      rawAnnotation.current = annotateRawKey(normalized)
+      rawEditorTokens.current = tokenizeRawEditorChunk(normalized)
       return normalized
     } as typeof stdin.read
     stdin.read = patchedRead
@@ -2680,6 +2648,8 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   }
 
   const insertDroppedImages = (paths: readonly string[]): void => {
+    const originalValue = valueRef.current
+    const originalCursor = cursorRef.current
     notify(`checking ${paths.length} image${paths.length === 1 ? '' : 's'}…`)
     void inspectImages(paths).then((inspected) => {
       const additions: DraftImage[] = []
@@ -2694,14 +2664,23 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
         notify('those images are already attached', 'warning')
         return
       }
-      const at = cursorRef.current
       const current = valueRef.current
+      const anchor = remapStableRange(originalValue, current, { start: originalCursor, end: originalCursor })
+      if (anchor === undefined) {
+        notify('draft changed at the image drop point; drop the images again', 'warning')
+        return
+      }
+      const at = anchor.start
       const insertion = `${at > 0 && !/\s$/u.test(current.slice(0, at)) ? ' ' : ''}${markers.join(' ')}${current.slice(at) === '' ? '' : ' '}`
-      const next = current.slice(0, at) + insertion + current.slice(at)
-      valueRef.current = next
-      cursorRef.current = at + insertion.length
-      setValue(next)
-      setCursor(cursorRef.current)
+      const edit = replaceRangePreservingCursor(current, cursorRef.current, anchor, insertion)
+      const nextCursor = current === originalValue && cursorRef.current === originalCursor
+        ? at + insertion.length
+        : edit.cursor
+      valueRef.current = edit.value
+      cursorRef.current = nextCursor
+      setValue(edit.value)
+      setCursor(nextCursor)
+      resetCursorBlink()
       const nextImages = [...draftImagesRef.current, ...additions]
       draftImagesRef.current = nextImages
       setDraftImages(nextImages)
@@ -2730,7 +2709,7 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   // Codex routes keys to the topmost surface first. Completion therefore
   // remains available while a turn runs, and Esc dismisses it before the
   // same key is allowed to interrupt the turn.
-  const menuActive = (slashActive || mentionActive) && dismissedMenuValue !== value
+  const menuActive = !preparingImages && (slashActive || mentionActive) && dismissedMenuValue !== value
   const menuRows: readonly CompletionCandidate[] = mentionActive
     ? mentionRows.map(row => ({
       label: row.label.startsWith('@')
@@ -2749,29 +2728,36 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
         if (row.kind === 'file' && row.path !== undefined && looksLikeImagePath(row.path)) {
           const tokenText = value.slice(mentionToken.start, cursor)
           const start = mentionToken.start
+          const originalValue = value
           notify(`checking image ${basename(row.path)}…`)
           void inspectImages([row.path]).then((inspected) => {
             const inspection = inspected[0]
             if (inspection === undefined) return
             const current = valueRef.current
-            if (current.slice(start, start + tokenText.length) !== tokenText) return
+            const anchor = remapStableRange(originalValue, current, { start, end: start + tokenText.length })
+            if (anchor === undefined || current.slice(anchor.start, anchor.end) !== tokenText) {
+              notify('draft changed around the image mention; select it again', 'warning')
+              return
+            }
             if (draftImagesRef.current.some(image => sameImagePath(image.path, inspection.path))) {
-              const next = current.slice(0, start) + current.slice(start + tokenText.length)
-              valueRef.current = next
-              cursorRef.current = start
-              setValue(next)
-              setCursor(start)
-              setDismissedMenuValue(next)
+              const edit = replaceRangePreservingCursor(current, cursorRef.current, anchor, '')
+              valueRef.current = edit.value
+              cursorRef.current = edit.cursor
+              setValue(edit.value)
+              setCursor(edit.cursor)
+              resetCursorBlink()
+              setDismissedMenuValue(edit.value)
               notify(`${inspection.name} is already attached`, 'warning')
               return
             }
             const marker = uniqueImageMarker(inspection.name, 'mention')
-            const next = current.slice(0, start) + marker + current.slice(start + tokenText.length)
-            valueRef.current = next
-            cursorRef.current = start + marker.length
-            setValue(next)
-            setCursor(cursorRef.current)
-            setDismissedMenuValue(next)
+            const edit = replaceRangePreservingCursor(current, cursorRef.current, anchor, marker)
+            valueRef.current = edit.value
+            cursorRef.current = edit.cursor
+            setValue(edit.value)
+            setCursor(edit.cursor)
+            resetCursorBlink()
+            setDismissedMenuValue(edit.value)
             registerDraftImage(inspection, marker)
             notify(`${inspection.name} ready for the next message`)
           }, (reason: unknown) => {
@@ -2786,14 +2772,24 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
         const insertion = row.label.startsWith('@')
           ? row.label
           : `@${row.label}${row.kind === 'directory' ? '/' : ''}`
-        setValue(value.slice(0, mentionToken.start) + insertion + value.slice(cursor))
-        setCursor(mentionToken.start + insertion.length)
+        const nextValue = value.slice(0, mentionToken.start) + insertion + value.slice(cursor)
+        const nextCursor = mentionToken.start + insertion.length
+        valueRef.current = nextValue
+        cursorRef.current = nextCursor
+        setValue(nextValue)
+        setCursor(nextCursor)
+        resetCursorBlink()
       }
     } else {
       const candidate = candidates[completionIndex % candidates.length]
       if (candidate !== undefined) {
-        setValue(`${candidate.label} `)
-        setCursor(candidate.label.length + 1)
+        const nextValue = `${candidate.label} `
+        const nextCursor = candidate.label.length + 1
+        valueRef.current = nextValue
+        cursorRef.current = nextCursor
+        setValue(nextValue)
+        setCursor(nextCursor)
+        resetCursorBlink()
       }
     }
     setCompletionIndex(0)
@@ -2803,8 +2799,11 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   /** Apply one editor edit: draft, cursor, kill buffer, menu reset. */
   const applyEdit = (edit: EditResult): void => {
     if (edit.killed !== undefined && edit.killed !== '') killRef.current = edit.killed
+    valueRef.current = edit.value
+    cursorRef.current = edit.cursor
     setValue(edit.value)
     setCursor(edit.cursor)
+    resetCursorBlink()
     preferredColumnRef.current = null
     setCompletionIndex(0)
     setDismissedMenuValue(undefined)
@@ -2812,15 +2811,100 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
 
   /** Move the cursor without editing; horizontal moves clear the column preference. */
   const moveCursorTo = (next: number): void => {
-    if (next === cursor) return
+    resetCursorBlink()
+    if (next === cursorRef.current) return
+    cursorRef.current = next
     setCursor(next)
     preferredColumnRef.current = null
   }
 
-  useInput((input, key) => {
+  /** Apply an ordered raw-key batch against one current draft snapshot. */
+  const applyRawEditorTokens = (tokens: readonly RawEditorToken[]): void => {
+    let nextValue = valueRef.current
+    let nextCursor = cursorRef.current
+    for (const token of tokens) {
+      if (token.kind === 'text') {
+        const edit = insertText(nextValue, nextCursor, token.text)
+        nextValue = edit.value
+        nextCursor = edit.cursor
+        continue
+      }
+      if (token.kind === 'home') {
+        nextCursor = moveToLineStart(nextValue, nextCursor, false)
+        continue
+      }
+      if (token.kind === 'end') {
+        nextCursor = moveToLineEnd(nextValue, nextCursor, false)
+        continue
+      }
+      const edit = token.kind === 'delete-backward'
+        ? deleteBackward(nextValue, nextCursor)
+        : token.kind === 'delete-word-backward'
+          ? deleteWordBackward(nextValue, nextCursor)
+          : token.kind === 'delete-forward'
+            ? deleteForward(nextValue, nextCursor)
+            : deleteWordForward(nextValue, nextCursor)
+      if (edit.killed !== undefined && edit.killed !== '') killRef.current = edit.killed
+      nextValue = edit.value
+      nextCursor = edit.cursor
+    }
+    valueRef.current = nextValue
+    cursorRef.current = nextCursor
+    setValue(nextValue)
+    setCursor(nextCursor)
+    resetCursorBlink()
+    preferredColumnRef.current = null
+    setCompletionIndex(0)
+    setDismissedMenuValue(undefined)
+  }
+
+  const cancelImageSubmission = (): void => {
+    prepareEpochRef.current += 1
+    prepareAbortRef.current?.abort()
+    prepareAbortRef.current = undefined
+    setPreparingImages(false)
+    dismissNotice()
+    notify('image submission cancelled', 'warning')
+  }
+
+  /** Move through visual rows first, then cross history at the true edge. */
+  const navigateVertical = (direction: -1 | 1): void => {
+    const currentValue = valueRef.current
+    const currentCursor = cursorRef.current
+    const model = editorModel(currentValue, editorColumns)
+    const preferred = preferredColumnRef.current ?? caretSite(model, currentCursor).column
+    const next = moveCursorVertically(model, currentCursor, preferred, direction)
+    if (next !== currentCursor) {
+      cursorRef.current = next
+      setCursor(next)
+      resetCursorBlink()
+      preferredColumnRef.current = preferred
+      return
+    }
+    if (recall.current.entries.length > 0
+      && shouldRecallNavigate(currentValue, currentCursor, recall.current.lastRecalled, direction)) {
+      const step = direction < 0 ? recallOlder(recall.current, currentValue) : recallNewer(recall.current)
+      recall.current = step.state
+      if (step.entry !== undefined) {
+        const safe = sanitizeDraftText(step.entry)
+        valueRef.current = safe
+        cursorRef.current = safe.length
+        setValue(safe)
+        setCursor(safe.length)
+        preferredColumnRef.current = null
+        setDismissedMenuValue(undefined)
+      }
+    }
+    resetCursorBlink()
+  }
+
+  useStableInput((input, key) => {
     // Modal ownership: approval/question/model dialogs consume all keys.
     if (!active) return
-    if (preparingImages) return
+    if (preparingImages) {
+      if (key.escape || (key.ctrl && input === 'c')) cancelImageSubmission()
+      return
+    }
     // Deletion confirm owns the box: y proceeds, anything else cancels.
     // Typed in the INPUT BOX (codex delete-confirm): the keystroke is echoed
     // as the box's own prompt, not an invisible panel keypress.
@@ -2861,8 +2945,11 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
       if (busy) {
         interrupt()
       } else if (value !== '') {
+        valueRef.current = ''
+        cursorRef.current = 0
         setValue('')
         setCursor(0)
+        resetCursorBlink()
         draftImagesRef.current = []
         setDraftImages([])
         setCompletionIndex(0)
@@ -2921,10 +3008,16 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
       }
       const text = value.trim()
       if (draftImagesRef.current.length > 0) {
+        const controller = new AbortController()
+        const epoch = prepareEpochRef.current + 1
+        prepareEpochRef.current = epoch
+        prepareAbortRef.current = controller
         setPreparingImages(true)
         notify(`processing ${draftImagesRef.current.length} image${draftImagesRef.current.length === 1 ? '' : 's'}…`)
         const snapshot = draftImagesRef.current
-        void prepareImages(snapshot.map(image => image.path)).then((images) => {
+        void prepareImages(snapshot.map(image => image.path), controller.signal).then((images) => {
+          if (controller.signal.aborted || prepareEpochRef.current !== epoch) return
+          prepareAbortRef.current = undefined
           setPreparingImages(false)
           valueRef.current = ''
           cursorRef.current = 0
@@ -2943,13 +3036,18 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
           if (busy) steer(text, images)
           else dispatch(text, images)
         }, (reason: unknown) => {
+          if (controller.signal.aborted || prepareEpochRef.current !== epoch) return
+          prepareAbortRef.current = undefined
           setPreparingImages(false)
           notify(`image submission failed: ${reason instanceof Error ? reason.message : String(reason)}`, 'error')
         })
         return
       }
+      valueRef.current = ''
+      cursorRef.current = 0
       setValue('')
       setCursor(0)
+      resetCursorBlink()
       setCompletionIndex(0)
       setDismissedMenuValue(undefined)
       if (text === '') return
@@ -3105,67 +3203,22 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
       setCompletionIndex(index => (index + 1) % menuRows.length)
       return
     }
-    // Raw-annotated keys (Home/End, the delete family): Ink's own flags for
-    // the same chunk are blank or blurred, so the read-patch annotation is
-    // authoritative whenever it is set.
-    const rawKey = rawAnnotation.current
-    if (rawKey !== undefined) {
-      if (rawKey === 'home') moveCursorTo(lineBounds(value, cursor).start)
-      else if (rawKey === 'end') moveCursorTo(lineBounds(value, cursor).end)
-      else if (rawKey === 'delete-backward') applyEdit(deleteBackward(value, cursor))
-      else if (rawKey === 'delete-word-backward') applyEdit(deleteWordBackward(value, cursor))
-      else if (rawKey === 'delete-forward') applyEdit(deleteForward(value, cursor))
-      else applyEdit(deleteWordForward(value, cursor))
+    // Batched Home/End/Delete/Backspace sequences bypass Ink's one-key parser
+    // and reduce against one current editor snapshot in their original order.
+    const rawTokens = rawEditorTokens.current
+    rawEditorTokens.current = undefined
+    if (rawTokens !== undefined) {
+      applyRawEditorTokens(rawTokens)
       return
     }
     if (key.upArrow || key.downArrow) {
-      // Codex boundary gate: shell recall runs from an empty draft, or from
-      // a boundary of a draft that still matches the last recalled entry;
-      // every interior Up/Down moves the caret across the multiline draft.
-      if (recall.current.entries.length > 0 && shouldRecallNavigate(value, cursor, recall.current.lastRecalled)) {
-        const step = key.upArrow ? recallOlder(recall.current, value) : recallNewer(recall.current)
-        recall.current = step.state
-        if (step.entry !== undefined) {
-          const safe = sanitizeDraftText(step.entry)
-          setValue(safe)
-          setCursor(safe.length)
-          preferredColumnRef.current = null
-          setDismissedMenuValue(undefined)
-        }
-        return
-      }
-      const model = editorModel(value, Math.max(1, columns - 6))
-      const preferred = preferredColumnRef.current ?? caretSite(model, cursor).column
-      const next = moveCursorVertically(model, cursor, preferred, key.upArrow ? -1 : 1)
-      if (next !== cursor) {
-        setCursor(next)
-        preferredColumnRef.current = preferred
-      }
+      navigateVertical(key.upArrow ? -1 : 1)
       return
     }
     // Ctrl+P / Ctrl+N share the Up/Down contract (Codex binds them to
     // move_up/move_down, so the history gate applies first).
     if (key.ctrl && (input === 'p' || input === 'n')) {
-      const up = input === 'p'
-      if (recall.current.entries.length > 0 && shouldRecallNavigate(value, cursor, recall.current.lastRecalled)) {
-        const step = up ? recallOlder(recall.current, value) : recallNewer(recall.current)
-        recall.current = step.state
-        if (step.entry !== undefined) {
-          const safe = sanitizeDraftText(step.entry)
-          setValue(safe)
-          setCursor(safe.length)
-          preferredColumnRef.current = null
-          setDismissedMenuValue(undefined)
-        }
-        return
-      }
-      const model = editorModel(value, Math.max(1, columns - 6))
-      const preferred = preferredColumnRef.current ?? caretSite(model, cursor).column
-      const next = moveCursorVertically(model, cursor, preferred, up ? -1 : 1)
-      if (next !== cursor) {
-        setCursor(next)
-        preferredColumnRef.current = preferred
-      }
+      navigateVertical(input === 'p' ? -1 : 1)
       return
     }
     if (key.tab && menuActive) {
@@ -3217,11 +3270,11 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
     // Readline parity over the LOGICAL line: A/E to its ends, U/K kill to
     // them (filling the single kill buffer), Y yanks it back.
     if (key.ctrl && input === 'a') {
-      moveCursorTo(lineBounds(value, cursor).start)
+      moveCursorTo(moveToLineStart(value, cursor, true))
       return
     }
     if (key.ctrl && input === 'e') {
-      moveCursorTo(lineBounds(value, cursor).end)
+      moveCursorTo(moveToLineEnd(value, cursor, true))
       return
     }
     if (key.ctrl && input === 'u') {
@@ -3277,7 +3330,7 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
       }
       applyEdit(insertText(value, cursor, text))
     }
-  })
+  }, active)
 
   // The DeepSeek easter-egg wave owns its 33ms tick HERE instead of in App:
   // the interval re-renders only the composer band at 30fps, never the whole
@@ -3299,7 +3352,7 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
       setWaveTick(0)
     }
   }, [waveTier, waveStyle])
-  const waveActive = waveTick !== null && waveTier !== null && waveStyle !== null
+  const waveActive = !preparingImages && waveTick !== null && waveTier !== null && waveStyle !== null
     && waveTick * DEEPSEEK_WAVE_TICK_MS < deepseekWaveDuration(waveTier, waveStyle)
   useEffect(() => {
     if (!waveActive) return
@@ -3325,7 +3378,6 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   // column-safe physical rows, with the caret mapped to its exact row and
   // column. Computed before the frozen path so the row report below runs
   // unconditionally.
-  const editorColumns = Math.max(1, columns - 6)
   const editorViewModel = editorModel(value, editorColumns)
   const clampedCursor = clampCursor(value, cursor)
   const caret = caretSite(editorViewModel, clampedCursor)
@@ -3390,131 +3442,126 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
     rows: menuRows,
   })
 
-  // The multiline editor (idle, busy, or after the wave): every visible
-  // physical row renders inside the band, the prompt marker leading the
-  // first and a two-space indent aligning continuations under the text
-  // column — the same gutter reply rows use. The caret is the inverse block
-  // on its exact grapheme, so wide CJK cells and emoji clusters position the
-  // block precisely. The prompt marker keeps the tier accent while an
-  // official DeepSeek model is applied, restoring the static brand ❯ on any
-  // other route.
+  // Every state reuses this exact multiline editor window. Only the caret row
+  // owns an inverse block; non-caret rows render their text without a hidden
+  // spacer or a second blink timer.
   const editorRows: ReactElement[] = []
   for (let index = editorWindowStart; index < Math.min(editorViewModel.rows.length, editorWindowStart + editorWindowRows); index += 1) {
     const row = editorViewModel.rows[index]!
-    const caretAt = index === caret.row ? row.offsets.indexOf(clampedCursor) : -1
-    const before = caretAt > 0 ? row.text.slice(0, row.cuts[caretAt]!) : ''
-    const caretChar = caretAt >= 0 && caretAt < row.cuts.length - 1 ? row.text.slice(row.cuts[caretAt]!, row.cuts[caretAt + 1]!) : ' '
-    const after = caretAt < 0
-      ? row.text
-      : caretAt < row.cuts.length - 1
-        ? row.text.slice(row.cuts[caretAt + 1]!)
-        : ''
-    const placeholder = index === 0 && value === '' && !busy
-    const tail = placeholder ? COMPOSER_PLACEHOLDER : after
-    const consumed = 2 + visibleColumns(before) + visibleColumns(caretChar) + visibleColumns(tail)
+    const parts = editorRowParts(row, index, caret.row, clampedCursor, !preparingImages)
+    const placeholder = index === 0 && value === '' && !busy && !preparingImages
+    const tail = placeholder ? COMPOSER_PLACEHOLDER : parts.after
+    const consumed = 2 + visibleColumns(parts.before) + visibleColumns(parts.caret) + visibleColumns(tail)
     editorRows.push(createElement(
       Text,
       { key: index, backgroundColor: bandBg, wrap: 'truncate-end' },
       index === 0
-        ? busy
+        ? preparingImages
+          ? createElement(Text, { color: inkColor(getPalette().warn), bold: true }, '… ')
+          : busy
           ? createElement(BusyChase)
           : createElement(Text, { color: promptColor, bold: tierActive ? true : undefined }, `${promptGlyph} `)
         : '  ',
-      before,
-      createElement(CursorBlock, { key: 'caret', char: caretChar }),
+      parts.before,
+      parts.hasCaret
+        ? createElement(Text, { key: 'caret', inverse: cursorVisible || undefined }, parts.caret)
+        : null,
       placeholder
         ? createElement(Text, { dimColor: true }, COMPOSER_PLACEHOLDER)
-        : after,
+        : parts.after,
       bandFill(consumed),
     ))
   }
   const staticEditor = createElement(Box, { flexDirection: 'column' }, ...editorRows)
 
-  // Wave band: all three rows assembled column by column, each cell carrying
-  // the sampled wave `backgroundColor` (null outside the crest → the band
-  // background), so the crest sweeps the FULL band — blank rows, prompt,
-  // draft, cursor, placeholder, and the trailing fill — with a per-row phase
-  // offset that flows the wave down the band. The deepseek tier drops the
-  // `· ✦ ✧` sparkles into the rightmost blank cell from 900ms on.
+  // The wave paints the SAME visible rows and caret site as the static path.
+  // Graphemes remain atomic and every background sample advances by terminal
+  // display columns, so CJK and emoji cannot move the caret or wrap the band.
   const waveRow = (): ReactElement => {
     const hues = deepseekWaveHues(waveTier!)
     const style = waveStyle!
     const bandRgb = getPalette().composerBand
+    const visibleRows = editorViewModel.rows.slice(editorWindowStart, editorWindowStart + editorWindowRows)
+    const totalBandRows = visibleRows.length + 2
     const waveBg = (row: number, column: number): string => {
-      const rgb = deepseekWaveColumnBg(waveTick!, column, bandWidth, waveTier!, style, hues, bandRgb, row, 3)
+      const rgb = deepseekWaveColumnBg(waveTick!, column, bandWidth, waveTier!, style, hues, bandRgb, row, totalBandRows)
       return rgb === null ? bandBg : inkColor(rgb)
     }
     const blankBandRow = (row: number): ReactElement => {
       const blanks: ComposerCell[] = []
-      while (blanks.length < bandWidth) blanks.push({ char: ' ', backgroundColor: waveBg(row, blanks.length) })
-      return createElement(Text, { key: row }, ...waveRowSpans(blanks))
-    }
-    const waveEditor = editorWindow(value, cursor, Math.max(1, columns - 7))
-    const cells: ComposerCell[] = [
-      { char: ' ', backgroundColor: waveBg(1, 0) },
-      { char: ' ', backgroundColor: waveBg(1, 1) },
-      { char: promptGlyph, color: promptColor, bold: true, backgroundColor: waveBg(1, 2) },
-      { char: ' ', color: promptColor, backgroundColor: waveBg(1, 3) },
-    ]
-    for (const char of waveEditor.before) {
-      cells.push({ char, backgroundColor: waveBg(1, cells.length) })
-    }
-    cells.push({ char: waveEditor.caret, inverse: true, backgroundColor: waveBg(1, cells.length) })
-    if (value === '' && !busy) {
-      for (let at = 0; at < COMPOSER_PLACEHOLDER.length; at += 1) {
-        cells.push({ char: COMPOSER_PLACEHOLDER[at]!, dim: true, backgroundColor: waveBg(1, cells.length) })
+      for (let column = 0; column < bandWidth; column += 1) {
+        blanks.push({ char: ' ', width: 1, backgroundColor: waveBg(row, column) })
       }
-    } else {
-      for (const char of waveEditor.after) {
-        cells.push({ char, backgroundColor: waveBg(1, cells.length) })
-      }
+      return createElement(Text, { key: `blank-${row}` }, ...waveRowSpans(blanks))
     }
-    while (cells.length < bandWidth) {
-      cells.push({ char: ' ', backgroundColor: waveBg(1, cells.length) })
-    }
-    // The wordmark rides the wave's middle: `deepseek` on the official
-    // tiers, `Into the Unknown` on the non-DeepSeek high-effort variant —
-    // in the tier's cycled hues, placed in the row's mid-section and only
-    // over blank or placeholder cells — real draft text is never covered.
-    if (deepseekWaveWordVisible(waveTick!, waveTier!, style)) {
-      const word = waveTier === 'unknown' ? 'Into the Unknown' : 'deepseek'
-      const start = Math.max(2, Math.floor((bandWidth - word.length) / 2))
-      let clear = true
-      for (let at = 0; at < word.length; at += 1) {
-        const cell = cells[start + at]
-        if (cell === undefined || (cell.char !== ' ' && cell.dim !== true)) { clear = false; break }
+    const cellIndexAtColumn = (cells: readonly ComposerCell[], target: number): number | undefined => {
+      let column = 0
+      for (let index = 0; index < cells.length; index += 1) {
+        if (column === target) return index
+        column += cells[index]!.width ?? visibleColumns(cells[index]!.char)
+        if (column > target) return undefined
       }
-      if (clear) {
-        for (let at = 0; at < word.length; at += 1) {
-          const cell = cells[start + at]!
-          cell.char = word[at]!
-          cell.color = inkColor(deepseekWaveWordHue(at, hues))
-          cell.bold = true
-          cell.dim = false
+      return undefined
+    }
+    const editorWaveRows = visibleRows.map((row, visibleIndex) => {
+      const sourceIndex = editorWindowStart + visibleIndex
+      const bandRow = visibleIndex + 1
+      const parts = editorRowParts(row, sourceIndex, caret.row, clampedCursor)
+      const placeholder = sourceIndex === 0 && value === '' && !busy
+      const cells: ComposerCell[] = []
+      let usedColumns = 0
+      const push = (char: string, extra: Omit<ComposerCell, 'char' | 'width' | 'backgroundColor'> = {}): void => {
+        const width = visibleColumns(char)
+        cells.push({ char, width, backgroundColor: waveBg(bandRow, usedColumns), ...extra })
+        usedColumns += width
+      }
+      if (sourceIndex === 0) {
+        push(promptGlyph, { color: promptColor, bold: true })
+        push(' ', { color: promptColor })
+      } else {
+        push(' ')
+        push(' ')
+      }
+      for (const span of splitGraphemes(parts.before)) push(span.text)
+      if (parts.hasCaret) push(parts.caret, { inverse: cursorVisible })
+      const tail = placeholder ? COMPOSER_PLACEHOLDER : parts.after
+      for (const span of splitGraphemes(tail)) push(span.text, placeholder ? { dim: true } : {})
+      while (usedColumns < bandWidth) push(' ')
+
+      const middleBandRow = Math.floor(totalBandRows / 2)
+      if (bandRow === middleBandRow && deepseekWaveWordVisible(waveTick!, waveTier!, style)) {
+        const word = waveTier === 'unknown' ? 'Into the Unknown' : 'deepseek'
+        const start = Math.max(2, Math.floor((bandWidth - word.length) / 2))
+        const indices = Array.from({ length: word.length }, (_, at) => cellIndexAtColumn(cells, start + at))
+        if (indices.every(index => index !== undefined && (cells[index]!.char === ' ' || cells[index]!.dim === true))) {
+          for (let at = 0; at < word.length; at += 1) {
+            const cell = cells[indices[at]!]!
+            cell.char = word[at]!
+            cell.width = 1
+            cell.color = inkColor(deepseekWaveWordHue(at, hues))
+            cell.bold = true
+            cell.dim = false
+          }
         }
       }
-    }
-    // The tail sparkles belong to the Wave style's pro tiers only (the
-    // deepseek and unknown tiers share the Ultra parameters — Codex paints
-    // spark_frame on Wave+Ultra).
-    if ((waveTier === 'deepseek' || waveTier === 'unknown') && style === 'wave') {
-      const spark = deepseekWaveSpark(waveTick!)
-      if (spark !== null) {
-        const last = cells[cells.length - 1]
-        if (last !== undefined && last.char === ' ') {
-          last.char = spark
-          last.color = promptColor
-          last.bold = true
-          last.dim = false
+      if (bandRow === middleBandRow && (waveTier === 'deepseek' || waveTier === 'unknown') && style === 'wave') {
+        const spark = deepseekWaveSpark(waveTick!)
+        const lastIndex = cellIndexAtColumn(cells, bandWidth - 1)
+        if (spark !== null && lastIndex !== undefined && cells[lastIndex]!.char === ' ') {
+          cells[lastIndex]!.char = spark
+          cells[lastIndex]!.color = promptColor
+          cells[lastIndex]!.bold = true
+          cells[lastIndex]!.dim = false
         }
       }
-    }
+      return createElement(Text, { key: `editor-${sourceIndex}`, wrap: 'truncate-end' }, ...waveRowSpans(cells))
+    })
     return createElement(
       Box,
       { flexDirection: 'column', width: bandWidth },
       blankBandRow(0),
-      createElement(Text, { wrap: 'truncate-end' }, ...waveRowSpans(cells)),
-      blankBandRow(2),
+      ...editorWaveRows,
+      blankBandRow(totalBandRows - 1),
     )
   }
 
@@ -3522,7 +3569,9 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
     Box,
     { flexDirection: 'column' },
     menu,
-    waveTick !== null && waveTier !== null && !busy ? waveRow() : band(staticEditor),
+    waveTick !== null && waveTier !== null && waveStyle !== null && !busy && !preparingImages
+      ? waveRow()
+      : band(staticEditor),
   )
 }
 

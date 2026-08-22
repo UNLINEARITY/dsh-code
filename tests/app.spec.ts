@@ -8,10 +8,10 @@ import chalk from 'chalk'
 import { createElement } from 'react'
 import { render } from 'ink'
 import { describe, expect, it, vi } from 'vitest'
-import { createAssistantMessage, createToolResultMessage, createUserMessage, type CallId } from '@deepseek-ai/dsh-llm'
+import { createAssistantMessage, createToolResultMessage, createUserMessage, type CallId, type ImageBlock } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type { TodoItem } from '@deepseek-ai/dsh-session'
-import { App, computeSettledRows, editorWindow, type AppProps } from '../src/app.ts'
+import { App, computeSettledRows, type AppProps } from '../src/app.ts'
 import { createTranscriptStore } from '../src/store.ts'
 import type { TranscriptEntry } from '../src/render/projection.ts'
 import { DEFAULT_STATUSLINE_ITEMS } from '../src/render/status.ts'
@@ -244,7 +244,7 @@ describe('composer image attachments', () => {
       expect(harness.output.text).toContain('@pic.png')
       harness.stdin.write('\r')
       await wait(180)
-      expect(prepareImages).toHaveBeenCalledWith(['C:\\repo\\docs\\pic.png'])
+      expect(prepareImages).toHaveBeenCalledWith(['C:\\repo\\docs\\pic.png'], expect.anything())
       expect(dispatch).toHaveBeenCalledWith('@pic.png', [expect.objectContaining({ type: 'image' })])
 
       harness.stdin.write('"C:\\outside\\a.png" "D:\\b.webp"')
@@ -253,7 +253,7 @@ describe('composer image attachments', () => {
       expect(harness.output.text).toContain('[image: b.webp]')
       harness.stdin.write('\r')
       await wait(180)
-      expect(prepareImages).toHaveBeenLastCalledWith(['C:\\outside\\a.png', 'D:\\b.webp'])
+      expect(prepareImages).toHaveBeenLastCalledWith(['C:\\outside\\a.png', 'D:\\b.webp'], expect.anything())
       expect(dispatch).toHaveBeenLastCalledWith('[image: a.png] [image: b.webp]', expect.arrayContaining([
         expect.objectContaining({ type: 'image' }),
         expect.objectContaining({ type: 'image' }),
@@ -299,6 +299,111 @@ describe('composer image attachments', () => {
       expect(harness.output.text).toContain('image history will be sent as text placeholders')
     } finally {
       instance.unmount()
+    }
+  })
+
+  it('preserves a moved cursor when an async image mention resolves', async () => {
+    const harness = createTty(120, 24)
+    const dispatch = vi.fn()
+    let resolveInspection!: (value: readonly { path: string; name: string; mediaType: 'image/png'; bytes: number }[]) => void
+    const inspectImages = vi.fn(() => new Promise<readonly { path: string; name: string; mediaType: 'image/png'; bytes: number }[]>(resolve => {
+      resolveInspection = resolve
+    }))
+    const instance = renderApp(harness, appProps({
+      dispatch,
+      inspectImages,
+      prepareImages: async () => [],
+      loadMentions: async () => [{ label: 'docs/pic.png', description: 'File', kind: 'file', path: 'C:\\repo\\docs\\pic.png' }],
+    }))
+    try {
+      await wait()
+      harness.stdin.write('@pic')
+      await wait()
+      harness.stdin.write('\t')
+      await wait()
+      harness.stdin.write(' later')
+      await wait()
+      resolveInspection([{ path: 'C:\\repo\\docs\\pic.png', name: 'pic.png', mediaType: 'image/png', bytes: 8 }])
+      await wait()
+      harness.stdin.write('X')
+      await wait()
+      harness.stdin.write('\r')
+      await wait()
+      expect(dispatch).toHaveBeenCalledWith('@pic.png laterX', [])
+    } finally {
+      instance.unmount()
+      harness.stdin.destroy()
+      harness.stdout.destroy()
+    }
+  })
+
+  it('anchors a dropped image at the drop-time cursor instead of the resolution-time cursor', async () => {
+    const harness = createTty(120, 24)
+    const dispatch = vi.fn()
+    let resolveInspection!: (value: readonly { path: string; name: string; mediaType: 'image/png'; bytes: number }[]) => void
+    const inspectImages = vi.fn(() => new Promise<readonly { path: string; name: string; mediaType: 'image/png'; bytes: number }[]>(resolve => {
+      resolveInspection = resolve
+    }))
+    const instance = renderApp(harness, appProps({ dispatch, inspectImages, prepareImages: async () => [] }))
+    try {
+      await wait()
+      harness.stdin.write('AB')
+      await wait()
+      harness.stdin.write('\x1b[D')
+      await wait()
+      harness.stdin.write('"C:\\outside\\a.png"')
+      await wait()
+      harness.stdin.write('\x1b[C')
+      await wait()
+      resolveInspection([{ path: 'C:\\outside\\a.png', name: 'a.png', mediaType: 'image/png', bytes: 8 }])
+      await wait()
+      harness.stdin.write('X')
+      await wait()
+      harness.stdin.write('\r')
+      await wait()
+      expect(dispatch).toHaveBeenCalledWith('A [image: a.png] BX', [])
+    } finally {
+      instance.unmount()
+      harness.stdin.destroy()
+      harness.stdout.destroy()
+    }
+  })
+
+  it('freezes without a caret while preparing images and restores the draft on cancellation', async () => {
+    const harness = createTty(120, 24)
+    const dispatch = vi.fn()
+    let resolvePreparation!: (value: readonly ImageBlock[]) => void
+    const prepareImages = vi.fn((_paths: readonly string[], _signal?: AbortSignal) => new Promise<readonly ImageBlock[]>(resolve => {
+      resolvePreparation = resolve
+    }))
+    const instance = renderApp(harness, appProps({
+      dispatch,
+      inspectImages: async paths => paths.map(path => ({ path, name: 'a.png', mediaType: 'image/png', bytes: 8 })),
+      prepareImages,
+    }))
+    try {
+      await wait()
+      harness.stdin.write('"C:\\outside\\a.png"')
+      await wait()
+      harness.output.text = ''
+      harness.stdin.write('\r')
+      await wait()
+      expect(harness.output.text).toContain('processing 1 image')
+      expect(harness.output.text).not.toContain('\x1b[7m')
+      const signal = prepareImages.mock.calls[0]?.[1]
+      expect(signal?.aborted).toBe(false)
+
+      harness.stdin.write('\x1b')
+      await wait()
+      expect(signal?.aborted).toBe(true)
+      expect(harness.output.text).toContain('[image: a.png]')
+      resolvePreparation([])
+      await wait()
+      expect(dispatch).not.toHaveBeenCalled()
+    } finally {
+      instance.unmount()
+      harness.stdin.destroy()
+      harness.stdout.destroy()
     }
   })
 })
@@ -438,6 +543,106 @@ describe('multiline composer', () => {
       await wait()
       expect(dispatched).toBe('firstX\nsecond')
       expect(dispatched).not.toContain('older entry')
+    } finally {
+      instance.unmount()
+      harness.stdin.destroy()
+      harness.stdout.destroy()
+    }
+  })
+
+  it('renders exactly one caret and keeps movement responsive through blink frames', async () => {
+    const harness = createTty(80, 24)
+    let dispatched = ''
+    const instance = renderApp(harness, appProps({ dispatch: text => { dispatched = text } }))
+    try {
+      await wait()
+      harness.output.text = ''
+      harness.stdin.write('[200~first\rsecond[201~')
+      await wait()
+      const plain = harness.output.text.replace(/\x1b\[[0-9;?]*[A-Za-z]/gu, '')
+      expect(plain).toContain('❯ first')
+      expect(plain).not.toContain('❯  first')
+
+      await new Promise(resolve => setTimeout(resolve, 560))
+      harness.stdin.write('\x1b[D')
+      await wait()
+      harness.stdin.write('X')
+      await wait()
+      harness.stdin.write('\r')
+      await wait()
+      expect(dispatched).toBe('first\nseconXd')
+    } finally {
+      instance.unmount()
+      harness.stdin.destroy()
+      harness.stdout.destroy()
+    }
+  })
+
+  it('moves inside a recalled multiline entry before crossing history', async () => {
+    const harness = createTty(80, 24)
+    let dispatched = ''
+    const instance = renderApp(harness, appProps({
+      history: ['older entry', 'first\nsecond'],
+      dispatch: text => { dispatched = text },
+    }))
+    try {
+      await wait()
+      harness.stdin.write('\x1b[A') // recall the newest multiline entry
+      await wait()
+      harness.stdin.write('\x1b[A') // move inside it, not to the older entry
+      await wait()
+      harness.stdin.write('X')
+      await wait()
+      harness.stdin.write('\r')
+      await wait()
+      expect(dispatched).toBe('firstX\nsecond')
+    } finally {
+      instance.unmount()
+      harness.stdin.destroy()
+      harness.stdout.destroy()
+    }
+  })
+
+  it('applies repeated Backspace actions from one stdin chunk in order', async () => {
+    const harness = createTty(80, 24)
+    let dispatched = ''
+    const instance = renderApp(harness, appProps({ dispatch: text => { dispatched = text } }))
+    try {
+      await wait()
+      harness.stdin.write('abcd')
+      await wait()
+      harness.stdin.write('\x7f\x7f')
+      await wait()
+      harness.stdin.write('\r')
+      await wait()
+      expect(dispatched).toBe('ab')
+    } finally {
+      instance.unmount()
+      harness.stdin.destroy()
+      harness.stdout.destroy()
+    }
+  })
+
+  it('resets the preferred vertical column after terminal width changes', async () => {
+    const harness = createTty(40, 30)
+    let dispatched = ''
+    const instance = renderApp(harness, appProps({ dispatch: text => { dispatched = text } }))
+    try {
+      await wait()
+      harness.stdin.write('[200~abcdefghij\rxy\rabcdefghij[201~')
+      await wait()
+      harness.stdin.write('\x1b[A') // short middle line; remembers column 10
+      await wait()
+      Object.assign(harness.stdout, { columns: 20 })
+      harness.stdout.emit('resize')
+      await new Promise(resolve => setTimeout(resolve, 220))
+      harness.stdin.write('\x1b[B') // must use the current column 2 after resize
+      await wait()
+      harness.stdin.write('X')
+      await wait()
+      harness.stdin.write('\r')
+      await wait()
+      expect(dispatched).toBe('abcdefghij\nxy\nabXcdefghij')
     } finally {
       instance.unmount()
       harness.stdin.destroy()
@@ -1003,6 +1208,17 @@ describe('DeepSeek model-switch easter egg', () => {
       // the stable marker instead of assuming an exact zero-tick frame.
       expect(output).toContain('»')
 
+      // A multiline CJK draft keeps the same physical editor rows throughout
+      // the animation; the wave only changes backgrounds and never flattens
+      // explicit newlines into a one-row ↵ preview.
+      output = ''
+      stdin.write('[200~动画第一行\r动画第二行[201~')
+      await wait()
+      const multilineWave = output.replace(/\x1b\[[0-9;?]*[A-Za-z]/gu, '')
+      expect(multilineWave).toContain('动画第一行')
+      expect(multilineWave).toContain('动画第二行')
+      expect(multilineWave).not.toContain('动画第一行↵动画第二行')
+
       // Mid-wave (~0.7s in): the input row paints per-column wave backgrounds
       // (a truecolor `48;2;` run per sampled gradient column) while the draft
       // area stays readable — the tint blends at ≤ 0.55 toward the base.
@@ -1031,6 +1247,8 @@ describe('DeepSeek model-switch easter egg', () => {
       // so the brand ❯ must be the LAST prompt painted after the selection.
       // The reopened list rests on the APPLIED deepseek row: one up reaches
       // the previous acme row.
+      stdin.write('\x03') // clear the multiline draft before typing /model
+      await wait()
       output = ''
       stdin.write('/model')
       await wait()
@@ -3005,25 +3223,6 @@ describe('/delete and /subagent', () => {
       harness.stdin.destroy()
       harness.stdout.destroy()
     }
-  })
-})
-
-describe('editorWindow caret grapheme safety', () => {
-  it('keeps a star-plane emoji family whole under the caret', () => {
-    const win = editorWindow('👨‍👩‍👦x', 0, 20)
-    expect(win.caret).toBe('👨‍👩‍👦')
-    expect(win.after).toContain('x')
-  })
-  it('clamps a mid-cluster cursor onto the grapheme boundary', () => {
-    const win = editorWindow('a👨‍👩‍👦', 2, 20)
-    expect(win.before).toContain('a')
-    expect(win.caret).toBe('👨‍👩‍👦')
-  })
-  it('renders a blank caret past the end and clamps huge offsets', () => {
-    const win = editorWindow('ab', 99, 20)
-    expect(win.caret).toBe(' ')
-    expect(win.before).toContain('b')
-    expect(win.after).toBe('')
   })
 })
 

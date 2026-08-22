@@ -1405,7 +1405,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       copyTextValue: copyText,
       loadMentions: (query: string, signal?: AbortSignal) => mentions.candidates(query, signal),
       inspectImages: paths => inspectImagePaths(paths, ctx.get('attachments'), session?.header.cwd ?? cwd),
-      prepareImages: paths => saveImagePaths(paths, ctx.get('attachments')),
+      prepareImages: (paths, signal) => saveImagePaths(paths, ctx.get('attachments'), signal),
       cyclePermission,
       setPermission: setPermissionAction,
       selectModel,

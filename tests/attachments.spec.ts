@@ -77,4 +77,20 @@ describe('terminal image attachments', () => {
       await rm(directory, { recursive: true, force: true })
     }
   })
+
+  it('stops before persistence when image submission is cancelled', async () => {
+    const saveImages = vi.fn(async () => [])
+    const directory = await mkdtemp(join(tmpdir(), 'dsh-image-cancel-'))
+    const path = join(directory, 'pixel.png')
+    const controller = new AbortController()
+    try {
+      await writeFile(path, Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+      controller.abort()
+      await expect(saveImagePaths([path], { saveImages } as never, controller.signal))
+        .rejects.toThrow('image submission cancelled')
+      expect(saveImages).not.toHaveBeenCalled()
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
 })

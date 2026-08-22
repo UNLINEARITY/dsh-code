@@ -108,11 +108,16 @@ export async function inspectImagePaths(
 export async function saveImagePaths(
   paths: readonly string[],
   attachments: AttachmentStore | undefined,
+  signal?: AbortSignal,
 ): Promise<readonly ImageBlock[]> {
   if (paths.length === 0) return []
   if (attachments === undefined) throw new Error('image attachments are unavailable in this profile')
+  const checkCancelled = (): void => {
+    if (signal?.aborted === true) throw new Error('image submission cancelled')
+  }
   const inputs: SaveImageAttachment[] = []
   for (const path of paths) {
+    checkCancelled()
     let data: Uint8Array
     try {
       data = await readFile(path)
@@ -123,6 +128,8 @@ export async function saveImagePaths(
     if (mediaType === undefined) throw new Error(`unsupported image file "${path}" (expected PNG, JPEG, WebP, or GIF)`)
     inputs.push({ data, mediaType, name: basename(path) })
   }
+  checkCancelled()
   const refs = await attachments.saveImages(inputs)
+  checkCancelled()
   return refs.map(attachment => ({ type: 'image', attachment }))
 }

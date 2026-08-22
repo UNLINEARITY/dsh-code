@@ -12,14 +12,19 @@ import {
   deleteWordBackward,
   deleteWordForward,
   editorModel,
+  editorRowParts,
   insertText,
   killToLineEnd,
   killToLineStart,
   lineBounds,
   moveCursorBy,
   moveCursorVertically,
+  moveToLineEnd,
+  moveToLineStart,
   moveWordLeft,
   moveWordRight,
+  remapStableRange,
+  replaceRangePreservingCursor,
   sanitizeDraftText,
   shouldRecallNavigate,
 } from '../src/render/editor.ts'
@@ -92,6 +97,24 @@ describe('caretSite', () => {
   })
 })
 
+describe('editorRowParts', () => {
+  it('assigns the caret to exactly one visible row without shifting the others', () => {
+    const model = editorModel('first line\nsecond line', 6)
+    const site = caretSite(model, model.length)
+    const rows = model.rows.map((row, index) => editorRowParts(row, index, site.row, model.length))
+    expect(rows.filter(row => row.hasCaret)).toHaveLength(1)
+    expect(rows.filter(row => !row.hasCaret).map(row => row.after)).toEqual(
+      model.rows.filter((_, index) => index !== site.row).map(row => row.text),
+    )
+  })
+  it('hides the caret without changing row text while input is locked', () => {
+    const model = editorModel('hello', 20)
+    expect(editorRowParts(model.rows[0]!, 0, 0, 2, false)).toEqual({
+      before: '', caret: '', after: 'hello', hasCaret: false,
+    })
+  })
+})
+
 describe('vertical movement', () => {
   it('moves across logical lines clamping to each line end', () => {
     const model = editorModel('short\na longer line\nend', 40)
@@ -103,6 +126,11 @@ describe('vertical movement', () => {
     const mid = moveCursorVertically(model, 3, 3, 1)
     expect(mid).toBe(9)
     expect(moveCursorVertically(model, mid, 3, 1)).toBe(13)
+  })
+  it('lands on the text boundary when moving beyond the first or last visual row', () => {
+    const model = editorModel('abcdef\nxy', 4)
+    expect(moveCursorVertically(model, 2, 2, -1)).toBe(0)
+    expect(moveCursorVertically(model, model.length - 1, 1, 1)).toBe(model.length)
   })
 })
 
@@ -124,9 +152,15 @@ describe('word motion (Codex pieces)', () => {
     expect(moveWordRight('foo  -  bar', 3)).toBe(6)
     expect(moveWordRight('hello, world', 5)).toBe(6)
   })
-  it('treats a CJK run as one piece', () => {
-    expect(moveWordLeft('中文测试', 4)).toBe(0)
-    expect(moveWordRight('中文测试', 0)).toBe(4)
+  it('keeps the current word when moving from its interior', () => {
+    expect(moveWordLeft('foo bar baz', 6)).toBe(4)
+    expect(moveWordRight('foo bar baz', 5)).toBe(7)
+  })
+  it('treats each Han grapheme as one word boundary', () => {
+    expect(moveWordLeft('中文测试', 4)).toBe(3)
+    expect(moveWordRight('中文测试', 0)).toBe(1)
+    expect(moveWordRight('hello中文', 5)).toBe(6)
+    expect(moveWordRight('中文，测试', 2)).toBe(3)
   })
   it('crosses newlines as whitespace', () => {
     expect(moveWordLeft('one\ntwo', 7)).toBe(4)
@@ -146,6 +180,38 @@ describe('delete helpers', () => {
   })
   it('deleteWordForward kills through following whitespace', () => {
     expect(deleteWordForward('foo bar baz', 3)).toEqual({ value: 'foo baz', cursor: 3, killed: ' bar' })
+  })
+  it('word deletion from inside a word never consumes its neighbours', () => {
+    expect(deleteWordBackward('foo bar baz', 6)).toEqual({ value: 'foo r baz', cursor: 4, killed: 'ba' })
+    expect(deleteWordForward('foo bar baz', 5)).toEqual({ value: 'foo b baz', cursor: 5, killed: 'ar' })
+  })
+})
+
+describe('line boundary movement', () => {
+  it('keeps Home/End on one logical line and lets repeated Ctrl+A/E cross lines', () => {
+    const value = 'one\ntwo\nthree'
+    expect(moveToLineStart(value, 6, false)).toBe(4)
+    expect(moveToLineStart(value, 4, true)).toBe(0)
+    expect(moveToLineEnd(value, 5, false)).toBe(7)
+    expect(moveToLineEnd(value, 7, true)).toBe(value.length)
+  })
+})
+
+describe('asynchronous draft anchors', () => {
+  it('remaps ranges across edits wholly before or after the anchor', () => {
+    expect(remapStableRange('say @pic now', 'please say @pic now', { start: 4, end: 8 })).toEqual({ start: 11, end: 15 })
+    expect(remapStableRange('say @pic now', 'say @pic now please', { start: 4, end: 8 })).toEqual({ start: 4, end: 8 })
+  })
+  it('rejects an edit overlapping the captured range', () => {
+    expect(remapStableRange('say @pic now', 'say @photo now', { start: 4, end: 8 })).toBeUndefined()
+  })
+  it('replaces an anchor without stealing a cursor moved elsewhere', () => {
+    expect(replaceRangePreservingCursor('say @pic now', 12, { start: 4, end: 8 }, '@pic.png')).toEqual({
+      value: 'say @pic.png now',
+      cursor: 16,
+      killed: undefined,
+    })
+    expect(replaceRangePreservingCursor('say @pic now', 0, { start: 4, end: 8 }, '@pic.png').cursor).toBe(0)
   })
 })
 
@@ -184,14 +250,16 @@ describe('composerMaxRows', () => {
 })
 
 describe('shouldRecallNavigate (boundary gate)', () => {
-  it('recalls from an empty draft', () => {
-    expect(shouldRecallNavigate('', 0, null)).toBe(true)
+  it('recalls older from an empty draft but never newer', () => {
+    expect(shouldRecallNavigate('', 0, null, -1)).toBe(true)
+    expect(shouldRecallNavigate('', 0, null, 1)).toBe(false)
   })
-  it('recalls only at a boundary of the unchanged last recalled entry', () => {
-    expect(shouldRecallNavigate('old', 3, 'old')).toBe(true)
-    expect(shouldRecallNavigate('old', 0, 'old')).toBe(true)
-    expect(shouldRecallNavigate('old', 1, 'old')).toBe(false)
-    expect(shouldRecallNavigate('new', 3, 'old')).toBe(false)
+  it('recalls only past the directional boundary of the unchanged recalled entry', () => {
+    expect(shouldRecallNavigate('old', 0, 'old', -1)).toBe(true)
+    expect(shouldRecallNavigate('old', 3, 'old', -1)).toBe(false)
+    expect(shouldRecallNavigate('old', 3, 'old', 1)).toBe(true)
+    expect(shouldRecallNavigate('old', 0, 'old', 1)).toBe(false)
+    expect(shouldRecallNavigate('new', 3, 'old', 1)).toBe(false)
   })
 })
 

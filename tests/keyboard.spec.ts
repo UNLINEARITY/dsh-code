@@ -8,6 +8,7 @@ import {
   KEYBOARD_ENHANCE_ENABLE,
   normalizeKeyboardChunk,
   stripPasteMarkers,
+  tokenizeRawEditorChunk,
 } from '../src/keyboard.ts'
 
 describe('protocol constants', () => {
@@ -75,6 +76,32 @@ describe('normalizeKeyboardChunk', () => {
   })
   it('passes undecodable CSI-u codes through unchanged', () => {
     expect(normalizeKeyboardChunk('\x1b[57441u')).toBe('\x1b[57441u')
+  })
+})
+
+describe('tokenizeRawEditorChunk', () => {
+  it('preserves repeated editor keys inside one stdin chunk', () => {
+    expect(tokenizeRawEditorChunk('\x7f\x7f')).toEqual([
+      { kind: 'delete-backward' },
+      { kind: 'delete-backward' },
+    ])
+    expect(tokenizeRawEditorChunk('\x1b[H\x1b[F')).toEqual([{ kind: 'home' }, { kind: 'end' }])
+  })
+  it('keeps printable text around raw editor actions in order', () => {
+    expect(tokenizeRawEditorChunk('ab\x7fc')).toEqual([
+      { kind: 'text', text: 'ab' },
+      { kind: 'delete-backward' },
+      { kind: 'text', text: 'c' },
+    ])
+  })
+  it('classifies modified Delete and Backspace by word semantics', () => {
+    expect(tokenizeRawEditorChunk('\x1b\x7f')).toEqual([{ kind: 'delete-word-backward' }])
+    expect(tokenizeRawEditorChunk('\x1b[3~')).toEqual([{ kind: 'delete-forward' }])
+    expect(tokenizeRawEditorChunk('\x1b[3;5~')).toEqual([{ kind: 'delete-word-forward' }])
+  })
+  it('leaves plain text and unknown escape sequences under Ink ownership', () => {
+    expect(tokenizeRawEditorChunk('plain')).toBeUndefined()
+    expect(tokenizeRawEditorChunk('\x1b[A')).toBeUndefined()
   })
 })
 

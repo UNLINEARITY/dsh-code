@@ -124,3 +124,84 @@ export function normalizeKeyboardChunk(chunk: string): string {
     return legacy ?? whole
   })
 }
+
+/** Editor actions Ink cannot distinguish reliably when terminal bytes batch. */
+export type RawEditorToken =
+  | { readonly kind: 'text'; readonly text: string }
+  | { readonly kind: 'home' | 'end' | 'delete-backward' | 'delete-word-backward' | 'delete-forward' | 'delete-word-forward' }
+
+const HOME_SEQUENCES = ['\x1b[H', '\x1b[1~', '\x1b[7~', '\x1bOH'] as const
+const END_SEQUENCES = ['\x1b[F', '\x1b[4~', '\x1b[8~', '\x1bOF'] as const
+
+/** Parse one CSI functional-key sequence at `offset`. */
+function functionalToken(chunk: string, offset: number): { token: RawEditorToken; length: number } | undefined {
+  const tail = chunk.slice(offset)
+  for (const sequence of HOME_SEQUENCES) {
+    if (tail.startsWith(sequence)) return { token: { kind: 'home' }, length: sequence.length }
+  }
+  for (const sequence of END_SEQUENCES) {
+    if (tail.startsWith(sequence)) return { token: { kind: 'end' }, length: sequence.length }
+  }
+  const modifiedHome = /^\x1b\[1;(\d+)H/u.exec(tail)
+  if (modifiedHome !== null) return { token: { kind: 'home' }, length: modifiedHome[0].length }
+  const modifiedEnd = /^\x1b\[1;(\d+)F/u.exec(tail)
+  if (modifiedEnd !== null) return { token: { kind: 'end' }, length: modifiedEnd[0].length }
+  const modifiedDelete = /^\x1b\[3(?:;(\d+))?~/u.exec(tail)
+  if (modifiedDelete !== null) {
+    const modifiers = Number.parseInt(modifiedDelete[1] ?? '1', 10) - 1
+    const byWord = (modifiers & 2) !== 0 || (modifiers & 4) !== 0
+    return {
+      token: { kind: byWord ? 'delete-word-forward' : 'delete-forward' },
+      length: modifiedDelete[0].length,
+    }
+  }
+  return undefined
+}
+
+/**
+ * Tokenize a stdin chunk containing at least one editor-only key. Ink calls
+ * `useInput` once for a pasted/batched chunk, so preserving each action here
+ * prevents repeated Backspace/Home/End/Delete presses from collapsing into
+ * one blurred key event. Unknown escape sequences return undefined and stay
+ * under Ink's ownership.
+ */
+export function tokenizeRawEditorChunk(chunk: string): readonly RawEditorToken[] | undefined {
+  const tokens: RawEditorToken[] = []
+  let text = ''
+  let special = false
+  const flushText = (): void => {
+    if (text === '') return
+    tokens.push({ kind: 'text', text })
+    text = ''
+  }
+  for (let offset = 0; offset < chunk.length;) {
+    if (chunk.startsWith('\x1b\x7f', offset) || chunk.startsWith('\x1b\b', offset)) {
+      flushText()
+      tokens.push({ kind: 'delete-word-backward' })
+      special = true
+      offset += 2
+      continue
+    }
+    const functional = functionalToken(chunk, offset)
+    if (functional !== undefined) {
+      flushText()
+      tokens.push(functional.token)
+      special = true
+      offset += functional.length
+      continue
+    }
+    const char = chunk[offset]!
+    if (char === '\x7f' || char === '\b') {
+      flushText()
+      tokens.push({ kind: 'delete-backward' })
+      special = true
+      offset += 1
+      continue
+    }
+    if (char === '\x1b') return undefined
+    text += char
+    offset += 1
+  }
+  flushText()
+  return special ? tokens : undefined
+}
