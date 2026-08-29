@@ -54,6 +54,23 @@ export const BRACKETED_PASTE_ENABLE = '\x1b[?2004h'
 /** Disable bracketed paste reporting. */
 export const BRACKETED_PASTE_DISABLE = '\x1b[?2004l'
 
+/** Enable terminal focus-in/focus-out reporting (xterm focus protocol). */
+export const TERMINAL_FOCUS_REPORT_ENABLE = '\x1b[?1004h'
+
+/** Disable terminal focus-in/focus-out reporting. */
+export const TERMINAL_FOCUS_REPORT_DISABLE = '\x1b[?1004l'
+
+/**
+ * Remove xterm focus reports from one input chunk and update the caller's
+ * focus state. Focus reports are terminal protocol, not composer text.
+ */
+export function stripTerminalFocusEvents(chunk: string, onFocus: (focused: boolean) => void): string {
+  return chunk.replace(/\x1b\[(I|O)/gu, (_whole, event: string) => {
+    onFocus(event === 'I')
+    return ''
+  })
+}
+
 /** Bracketed paste markers as Ink delivers them (it strips the leading ESC). */
 export const PASTE_START_MARKER = '[200~'
 export const PASTE_END_MARKER = '[201~'

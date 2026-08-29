@@ -145,10 +145,12 @@ import {
 } from './render/status.ts'
 import { displayTail, displayText, singleLineText, truncateColumns } from './render/text.ts'
 import {
+  isVsCodeTerminalEnv,
   normalizeKeyboardChunk,
   PASTE_END_MARKER,
   PASTE_START_MARKER,
   stripPasteMarkers,
+  stripTerminalFocusEvents,
   tokenizeRawEditorChunk,
   type RawEditorToken,
 } from './keyboard.ts'
@@ -2513,6 +2515,7 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   const columns = useStdout().stdout?.columns ?? 80
   const editorColumns = Math.max(1, columns - 6)
   const stdin = useStdin().stdin
+  const focusReporting = isVsCodeTerminalEnv()
   const [value, setValue] = useState('')
   const [cursor, setCursor] = useState(0)
   const valueRef = useRef(value)
@@ -2542,6 +2545,8 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   const pasteBracketCancelRef = useRef<(() => void) | undefined>(undefined)
   /** Ordered editor tokens from the stdin chunk Ink is about to deliver. */
   const rawEditorTokens = useRef<readonly RawEditorToken[] | undefined>(undefined)
+  /** VS Code focus state from xterm focus-report events; starts focused. */
+  const terminalFocusedRef = useRef(true)
   // Codex shell-style recall: the navigation cursor, the saved draft restored
   // on Down past the newest entry, and the boundary-gate anchor.
   const recall = useRef<RecallState>(beginRecall([], ''))
@@ -2596,14 +2601,19 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
       const chunk = originalRead(...args)
       if (chunk === null) return chunk
       const normalized = normalizeKeyboardChunk(typeof chunk === 'string' ? chunk : String(chunk))
-      rawEditorTokens.current = tokenizeRawEditorChunk(normalized)
-      return normalized
+      const input = focusReporting
+        ? stripTerminalFocusEvents(normalized, focused => {
+          terminalFocusedRef.current = focused
+        })
+        : normalized
+      rawEditorTokens.current = tokenizeRawEditorChunk(input)
+      return input
     } as typeof stdin.read
     stdin.read = patchedRead
     return () => {
       stdin.read = originalRead as typeof stdin.read
     }
-  }, [stdin])
+  }, [focusReporting, stdin])
 
   // Keep the navigation's recall space fresh while browsing state survives
   // (new local submissions extend the space; the index stays valid unless
@@ -2956,6 +2966,7 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
     }
     // Ctrl+R toggles the thinking display (Claude-Code reasoning fold).
     if (key.ctrl && input === 'r') {
+      if (focusReporting && !terminalFocusedRef.current) return
       toggleReasoning()
       return
     }

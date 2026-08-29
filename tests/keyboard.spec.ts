@@ -8,10 +8,13 @@ import {
   DSH_ENABLE_KEYBOARD_ENHANCEMENT,
   KEYBOARD_ENHANCE_DISABLE,
   KEYBOARD_ENHANCE_ENABLE,
+  TERMINAL_FOCUS_REPORT_DISABLE,
+  TERMINAL_FOCUS_REPORT_ENABLE,
   isVsCodeTerminalEnv,
   normalizeKeyboardChunk,
   shouldEnableKeyboardEnhancement,
   stripPasteMarkers,
+  stripTerminalFocusEvents,
   tokenizeRawEditorChunk,
 } from '../src/keyboard.ts'
 
@@ -25,6 +28,10 @@ describe('protocol constants', () => {
   it('enables and disables bracketed paste', () => {
     expect(BRACKETED_PASTE_ENABLE).toBe('\x1b[?2004h')
     expect(BRACKETED_PASTE_DISABLE).toBe('\x1b[?2004l')
+  })
+  it('enables and disables terminal focus reporting', () => {
+    expect(TERMINAL_FOCUS_REPORT_ENABLE).toBe('\x1b[?1004h')
+    expect(TERMINAL_FOCUS_REPORT_DISABLE).toBe('\x1b[?1004l')
   })
 })
 
@@ -95,6 +102,14 @@ describe('normalizeKeyboardChunk', () => {
   })
   it('passes undecodable CSI-u codes through unchanged', () => {
     expect(normalizeKeyboardChunk('\x1b[57441u')).toBe('\x1b[57441u')
+  })
+})
+
+describe('terminal focus reporting', () => {
+  it('removes focus protocol events and reports the current focus state', () => {
+    const states: boolean[] = []
+    expect(stripTerminalFocusEvents('a\x1b[Ob\x1b[Ic', focused => states.push(focused))).toBe('abc')
+    expect(states).toEqual([false, true])
   })
 })
 

@@ -800,7 +800,7 @@ describe('keyboard protocol and transcript alignment', () => {
     }
   })
 
-  it('hangs wrapped tool summaries under the card instead of column zero', async () => {
+  it('folds tool output by default and expands wrapped summaries with Ctrl+R', async () => {
     const harness = createTty(40, 30)
     const { stdin, output } = harness
     const callId = 'wide-tool' as CallId
@@ -826,8 +826,12 @@ describe('keyboard protocol and transcript alignment', () => {
     const instance = renderApp(harness, appProps({ store }))
     try {
       await wait()
-      // The settled card's ⎿ row wraps; every continuation line starts with
-      // the four-space hanging indent, never at column zero.
+      expect(output.text).toContain('Ctrl+R')
+      output.text = ''
+      stdin.write('\x12')
+      await wait()
+      // The expanded settled card's ⎿ row wraps; every continuation line
+      // starts with the four-space hanging indent, never at column zero.
       const lines = output.text.split('\n')
       const arrow = lines.findIndex(line => line.includes('\u23bf'))
       expect(arrow).toBeGreaterThanOrEqual(0)
@@ -1594,6 +1598,56 @@ describe('bracketed paste safety', () => {
 })
 
 describe('Ctrl+R reasoning fold', () => {
+  it('handles Ctrl+R only while the VS Code terminal reports focus', async () => {
+    vi.stubEnv('TERM_PROGRAM', 'vscode')
+    vi.stubEnv('VSCODE_INJECTION', '1')
+    const harness = createTty(100, 24)
+    const store = createTranscriptStore([
+      {
+        type: 'user/message',
+        seq: 1,
+        time: 1,
+        data: createUserMessage({ content: [{ type: 'text', text: 'go' }], source: { kind: 'user' } }),
+      } as SessionEvent,
+      {
+        type: 'assistant/message',
+        seq: 2,
+        time: 2,
+        data: {
+          turn: 1,
+          step: 1,
+          message: createAssistantMessage({
+            content: [
+              { type: 'reasoning', text: 'focus-gated reasoning' },
+              { type: 'text', text: 'answer' },
+            ],
+            source: { provider: 'p', model: 'm' },
+          }),
+        },
+      } as SessionEvent,
+    ])
+    const instance = renderApp(harness, appProps({ store }))
+    try {
+      await wait()
+      expect(harness.output.text).toContain('Thinking (')
+
+      harness.output.text = ''
+      harness.stdin.write('\x1b[O\x12')
+      await wait()
+      expect(harness.output.text).not.toContain('focus-gated reasoning')
+
+      harness.output.text = ''
+      harness.stdin.write('\x1b[I\x12')
+      await wait()
+      expect(harness.output.text).toContain('focus-gated reasoning')
+    } finally {
+      instance.unmount()
+      harness.stdin.destroy()
+      harness.stdout.destroy()
+      vi.unstubAllEnvs()
+    }
+  })
+
   it('repaints the settled fold through one source-backed replay on an idle toggle', async () => {
     const stdin = Object.assign(new PassThrough(), {
       isTTY: true,

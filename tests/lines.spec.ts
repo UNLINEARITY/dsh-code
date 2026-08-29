@@ -102,7 +102,7 @@ describe('styled terminal lines', () => {
     }
   })
 
-  it('does not impose the old forty-row display cap on retained raw tool output', () => {
+  it('folds raw tool output to three rows by default and expands with Ctrl+R state', () => {
     const raw = Array.from({ length: 60 }, (_, index) => `tool-${index}`).join('\n')
     const entry: TranscriptEntry = {
       kind: 'tool',
@@ -116,9 +116,13 @@ describe('styled terminal lines', () => {
       summary: 'done',
       detail: { kind: 'raw', text: raw, truncated: false },
     }
-    const text = textOf(transcriptEntryLines(entry, 40))
-    expect(text).toContain('tool-0')
-    expect(text).toContain('tool-59')
+    const collapsed = transcriptEntryLines(entry, 40, false)
+    expect(collapsed).toHaveLength(3)
+    expect(textOf(collapsed)).toContain('Ctrl+R')
+
+    const expanded = transcriptEntryLines(entry, 40, true)
+    expect(expanded.length).toBeGreaterThan(60)
+    expect(textOf(expanded)).toContain('tool-59')
   })
 
   it('renders the global call ordinal in the badge and the error line alike', () => {

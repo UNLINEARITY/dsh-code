@@ -236,6 +236,18 @@ function toolDetailLines(detail: ToolDetail, columns: number): readonly StyledLi
   }
 }
 
+/** Default compact tool-card window used while the Ctrl+R fold is closed. */
+const DEFAULT_TOOL_ROWS = 3
+
+/** Keep the invocation visible while making hidden tool output discoverable. */
+function compactToolLines(lines: readonly StyledLine[], columns: number): readonly StyledLine[] {
+  if (lines.length <= DEFAULT_TOOL_ROWS) return lines
+  return [
+    ...lines.slice(0, DEFAULT_TOOL_ROWS - 1),
+    ...textLines('    … output hidden · Ctrl+R', columns, 'dim').slice(0, 1),
+  ]
+}
+
 /**
  * Convert one durable transcript entry to its complete scrollable row model.
  * The source entry stays intact; only the caller's visible slice is rendered.
@@ -247,6 +259,7 @@ export function transcriptEntryLines(
   columns: number,
   showReasoning = true,
   reasoningToggleHint = true,
+  showToolDetails = showReasoning,
 ): readonly StyledLine[] {
   const width = Math.max(1, Math.floor(columns))
   switch (entry.kind) {
@@ -278,7 +291,7 @@ export function transcriptEntryLines(
       const mark = entry.state === 'running' ? '●' : entry.state === 'error' ? '⨯' : '⏺'
       const markStyle: LineStyle = entry.state === 'running' ? 'brand' : entry.state === 'error' ? 'error' : 'success'
       const summaryStyle: LineStyle = entry.state === 'error' ? 'error' : 'dim'
-      return [
+      const lines = [
         // The invocation row hangs wrapped previews under the call badge.
         ...hangingStyledLines([
           // Global call ordinal — the same number an error line references.
@@ -295,6 +308,7 @@ export function transcriptEntryLines(
         )),
         ...(entry.detail === undefined ? [] : toolDetailLines(entry.detail, width)),
       ]
+      return showToolDetails ? lines : compactToolLines(lines, width)
     }
     case 'command': {
       const mark = entry.state === 'running' ? '●' : entry.state === 'error' ? '⨯' : '⏺'
@@ -338,5 +352,5 @@ export function transcriptEntryLines(
 
 /** Settled-history variant carrying the Ctrl+R reasoning fold. */
 export function settledEntryLines(entry: TranscriptEntry, columns: number, showReasoning: boolean): readonly StyledLine[] {
-  return transcriptEntryLines(entry, columns, showReasoning, false)
+  return transcriptEntryLines(entry, columns, showReasoning, false, showReasoning)
 }

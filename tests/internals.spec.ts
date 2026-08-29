@@ -7,6 +7,8 @@ import {
   BRACKETED_PASTE_ENABLE,
   KEYBOARD_ENHANCE_DISABLE,
   KEYBOARD_ENHANCE_ENABLE,
+  TERMINAL_FOCUS_REPORT_DISABLE,
+  TERMINAL_FOCUS_REPORT_ENABLE,
 } from '../src/keyboard.ts'
 
 const ink = vi.hoisted(() => ({ render: vi.fn() }))
@@ -54,9 +56,9 @@ describe('production TUI mount', () => {
     ink.render.mockReturnValue({ rerender: vi.fn(), unmount: vi.fn() })
     try {
       const mounted = internals.mount({} as ReactElement)
-      expect(stdoutWrite).toHaveBeenNthCalledWith(1, BRACKETED_PASTE_ENABLE)
+      expect(stdoutWrite).toHaveBeenNthCalledWith(1, BRACKETED_PASTE_ENABLE + TERMINAL_FOCUS_REPORT_ENABLE)
       mounted.unmount()
-      expect(stdoutWrite).toHaveBeenNthCalledWith(2, BRACKETED_PASTE_DISABLE)
+      expect(stdoutWrite).toHaveBeenNthCalledWith(2, BRACKETED_PASTE_DISABLE + TERMINAL_FOCUS_REPORT_DISABLE)
     } finally {
       stdoutWrite.mockRestore()
       vi.unstubAllEnvs()

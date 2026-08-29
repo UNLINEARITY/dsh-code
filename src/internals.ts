@@ -13,6 +13,9 @@ import {
   BRACKETED_PASTE_ENABLE,
   KEYBOARD_ENHANCE_DISABLE,
   KEYBOARD_ENHANCE_ENABLE,
+  TERMINAL_FOCUS_REPORT_DISABLE,
+  TERMINAL_FOCUS_REPORT_ENABLE,
+  isVsCodeTerminalEnv,
   shouldEnableKeyboardEnhancement,
 } from './keyboard.ts'
 
@@ -39,7 +42,12 @@ export const internals: {
     // enhancement is enabled. Keep bracketed paste everywhere, but only push
     // the keyboard protocol on terminals that can safely own those key events.
     const keyboardEnhanced = shouldEnableKeyboardEnhancement()
-    process.stdout.write((keyboardEnhanced ? KEYBOARD_ENHANCE_ENABLE : '') + BRACKETED_PASTE_ENABLE)
+    const focusReporting = isVsCodeTerminalEnv()
+    process.stdout.write(
+      (keyboardEnhanced ? KEYBOARD_ENHANCE_ENABLE : '')
+      + BRACKETED_PASTE_ENABLE
+      + (focusReporting ? TERMINAL_FOCUS_REPORT_ENABLE : ''),
+    )
     // App owns Ctrl+C's deliberate three-state contract (interrupt, clear
     // draft, quit). Ink's default `exitOnCtrlC: true` would intercept the
     // normalized control byte first, unmount only its renderer, and leave the
@@ -52,7 +60,11 @@ export const internals: {
       unmount(): void {
         instance.unmount()
         // Pop only a stack this mount pushed, then disable bracketed paste.
-        process.stdout.write((keyboardEnhanced ? KEYBOARD_ENHANCE_DISABLE : '') + BRACKETED_PASTE_DISABLE)
+        process.stdout.write(
+          (keyboardEnhanced ? KEYBOARD_ENHANCE_DISABLE : '')
+          + BRACKETED_PASTE_DISABLE
+          + (focusReporting ? TERMINAL_FOCUS_REPORT_DISABLE : ''),
+        )
       },
     }
   },
