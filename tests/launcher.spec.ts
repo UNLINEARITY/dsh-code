@@ -22,7 +22,7 @@ describe('global launcher aliases', () => {
   })
 
   it('pins setup to this release so pnpm can install it on publication day', () => {
-    expect(setupBundle([])).toBe('dsh-code@1.0.1')
+    expect(setupBundle([])).toBe('dsh-code@1.0.2')
   })
 
   it('starts dsh with inherited stdio and preserves its exit code', () => {

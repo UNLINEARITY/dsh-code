@@ -30,14 +30,14 @@ Requires Node `^22.19 || >=24` and the preview `dsh` CLI (current release line: 
 Use the same commands for the initial installation and subsequent updates:
 
 ```sh
-npm install -g @deepseek-ai/dsh@0.1.1-rc.2 dsh-code@1.0.1
+npm install -g @deepseek-ai/dsh@0.1.1-rc.2 dsh-code@1.0.2
 npm install -g pnpm
-dsh plugin --profile cli add dsh-code@1.0.1
+dsh plugin --profile cli add dsh-code@1.0.2
 ```
 
-> Note: pnpm ignores packages published less than 24 hours ago, so use the exact version `dsh-code@1.0.1` on release day; the version may be omitted after 24 hours. npm installation is not affected.
+> Note: pnpm ignores packages published less than 24 hours ago, so use the exact version `dsh-code@1.0.2` on release day; the version may be omitted after 24 hours. npm installation is not affected.
 >
-> Version alignment: dsh-code 1.0.1 targets dsh `0.1.1-rc.2`, with every Harness dependency pinned exactly to `0.1.1-rc.2`. Keep the global dsh CLI and dsh-code aligned instead of mixing release candidates. rc.2 removes the old DeepSeek setting `maxRequestImageBytes`.
+> Version alignment: dsh-code 1.0.2 targets dsh `0.1.1-rc.2`, with every Harness dependency pinned exactly to `0.1.1-rc.2`. Keep the global dsh CLI and dsh-code aligned instead of mixing release candidates. rc.2 removes the old DeepSeek setting `maxRequestImageBytes`.
 
 ### 2. Launch commands
 

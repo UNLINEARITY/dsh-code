@@ -30,14 +30,14 @@ DeepSeek Harness 将模型、工具、存储、策略和界面作为插件，通
 初次安装和更新使用同一组指令：
 
 ```sh
-npm install -g @deepseek-ai/dsh@0.1.1-rc.2 dsh-code@1.0.1
+npm install -g @deepseek-ai/dsh@0.1.1-rc.2 dsh-code@1.0.2
 npm install -g pnpm
-dsh plugin --profile cli add dsh-code@1.0.1
+dsh plugin --profile cli add dsh-code@1.0.2
 ```
 
-> 提示：pnpm 会忽略发布不足 24 小时的包，因此发布首日请使用精确版本 `dsh-code@1.0.1`；24 小时后可省略版本号。npm 安装不受此限制。
+> 提示：pnpm 会忽略发布不足 24 小时的包，因此发布首日请使用精确版本 `dsh-code@1.0.2`；24 小时后可省略版本号。npm 安装不受此限制。
 >
-> 版本对齐：dsh-code 1.0.1 面向 dsh `0.1.1-rc.2` 构建，全部 Harness 依赖均精确锁定为 `0.1.1-rc.2`。请保持全局 dsh 与 dsh-code 同步，避免宿主与插件混用候选版本。rc.2 已删除旧的 DeepSeek 配置项 `maxRequestImageBytes`。
+> 版本对齐：dsh-code 1.0.2 面向 dsh `0.1.1-rc.2` 构建，全部 Harness 依赖均精确锁定为 `0.1.1-rc.2`。请保持全局 dsh 与 dsh-code 同步，避免宿主与插件混用候选版本。rc.2 已删除旧的 DeepSeek 配置项 `maxRequestImageBytes`。
 
 ### 2. 启动指令
 
