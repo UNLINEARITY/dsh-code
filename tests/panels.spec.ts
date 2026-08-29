@@ -1,6 +1,7 @@
 /** Long exclusive-panel regression over real Ink TTY streams. */
 
 import { PassThrough } from 'node:stream'
+import chalk from 'chalk'
 import { createElement } from 'react'
 import { render } from 'ink'
 import { describe, expect, it, vi } from 'vitest'
@@ -715,7 +716,9 @@ describe('queued messages and global recall', () => {
     }
   })
 
-  it('shows the web StateDot chase in the composer and the Deep-diving line while busy', async () => {
+  it('shows the Codex shimmer Deep-diving line and original braille busy marker', async () => {
+    const originalChalkLevel = chalk.level
+    chalk.level = 3
     const stdin = Object.assign(new PassThrough(), {
       isTTY: true,
       isRaw: false,
@@ -803,15 +806,21 @@ describe('queued messages and global recall', () => {
 
     try {
       await wait()
-      expect(output).toContain('Deep diving')
-      // The busy composer replaces '❯ ' with the rotating chase.
+      const plainOutput = output.replace(/\x1b\[[0-9;?]*[A-Za-z]/gu, '')
+      expect(plainOutput).toContain('Deep diving')
+      // The busy composer keeps the original rotating braille chase.
       const frames = ['⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷']
-      expect(frames.some(frame => output.includes(frame))).toBe(true)
+      expect(frames.some(frame => plainOutput.includes(frame))).toBe(true)
+      // The status text is painted by the active-palette blue shimmer,
+      // rather than one dim gray span.
+      expect(output).toContain('38;2;72;104;178m')
+      expect(output).toContain('38;2;103;158;254m')
       expect(output).not.toContain('❯ type a message')
     } finally {
       instance.unmount()
       stdin.destroy()
       stdout.destroy()
+      chalk.level = originalChalkLevel
     }
   })
 })

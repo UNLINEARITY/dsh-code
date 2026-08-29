@@ -1,9 +1,8 @@
 /**
- * Terminal animation frame tables derived from the web design language:
- * the StateDot "ongoing" pixel chase (3×3 ring, 125ms flat-hold brightness
- * steps, 1s cycle) becomes the full-ring clockwise braille chase in
- * {@link BUSY_CHASE_FRAMES}, and the streaming caret blink is the
- * Claude-Code convention.
+ * Terminal animation helpers derived from the web design language:
+ * thinking uses Codex's slow shimmer sweep, the busy composer marker uses the
+ * original braille chase, and the streaming caret blink is the Claude-Code
+ * convention.
  *
  * The DeepSeek model-switch easter egg ports Codex's effort-ignition "Wave"
  * style (`codex-rs/tui/src/bottom_pane/effort_ignition_styles.rs`): switching
@@ -19,16 +18,50 @@
 
 import type { RgbTriple } from '../theme.ts'
 
-/**
- * The web StateDot "ongoing" chase in terminal form: three cells of the 3×3
- * ring trail clockwise around the eight outer positions, one braille glyph
- * per step — 8 frames × 125ms = the web's 1s cycle.
- */
+/** Cadence for the original busy braille chase (8 frames × 125ms = 1s). */
+export const BUSY_CHASE_TICK_MS = 125
+
+/** Original terminal StateDot chase frames. */
 export const BUSY_CHASE_FRAMES = ['⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷'] as const
 
-/** Chase frame for a monotonic tick (the busy composer/Deep-diving marker). */
+/** Chase frame for a monotonic tick. */
 export function busyChaseFrame(tick: number): string {
   return BUSY_CHASE_FRAMES[tick % BUSY_CHASE_FRAMES.length] ?? BUSY_CHASE_FRAMES[0]
+}
+
+/** Clock cadence for the Codex-style Deep diving shimmer. */
+export const DEEP_DIVING_SHIMMER_TICK_MS = 33
+
+/** Codex shimmer timing and geometry. */
+export const DEEP_DIVING_SHIMMER_DURATION_MS = 2_000
+export const DEEP_DIVING_SHIMMER_PADDING = 10
+export const DEEP_DIVING_SHIMMER_HALF_WIDTH = 5
+
+/**
+ * Codex's 2-second shimmer sweep, expressed in terminal ticks. The sweep has
+ * ten virtual columns of padding on either side and a five-column cosine
+ * highlight band, so the text changes gently rather than cycling rapidly.
+ */
+export function deepDivingShimmerIntensity(index: number, tick: number, graphemeCount: number): number {
+  if (graphemeCount <= 0) return 0
+  const period = graphemeCount + DEEP_DIVING_SHIMMER_PADDING * 2
+  const elapsed = ((tick * DEEP_DIVING_SHIMMER_TICK_MS) % DEEP_DIVING_SHIMMER_DURATION_MS + DEEP_DIVING_SHIMMER_DURATION_MS) % DEEP_DIVING_SHIMMER_DURATION_MS
+  const position = elapsed / DEEP_DIVING_SHIMMER_DURATION_MS * period
+  const distance = Math.abs(index + DEEP_DIVING_SHIMMER_PADDING - position)
+  if (distance > DEEP_DIVING_SHIMMER_HALF_WIDTH) return 0
+  const angle = Math.PI * distance / DEEP_DIVING_SHIMMER_HALF_WIDTH
+  return 0.5 * (1 + Math.cos(angle))
+}
+
+/** Blue RGB color for one grapheme in the Codex-style shimmer. */
+export function deepDivingGradientColor(
+  index: number,
+  tick: number,
+  graphemeCount: number,
+  base: RgbTriple,
+  highlight: RgbTriple,
+): RgbTriple {
+  return blendRgb(highlight, base, deepDivingShimmerIntensity(index, tick, graphemeCount) * 0.9)
 }
 
 /** Caret visibility: half the ticks on, half off (530ms blink). */

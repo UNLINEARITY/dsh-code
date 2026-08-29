@@ -41,7 +41,9 @@ import { settledEntryCount, type TranscriptEntry } from './render/projection.ts'
 import { type MdSegment, visibleColumns } from './render/markdown.ts'
 import {
   busyChaseFrame,
+  BUSY_CHASE_TICK_MS,
   caretVisible,
+  DEEP_DIVING_SHIMMER_TICK_MS,
   DEEPSEEK_WAVE_TICK_MS,
   deepseekWaveColumnBg,
   deepseekWaveDuration,
@@ -50,6 +52,7 @@ import {
   deepseekWaveTier,
   deepseekWaveWordHue,
   deepseekWaveWordVisible,
+  deepDivingGradientColor,
   effortAboveHigh,
   isOfficialDeepSeekLabel,
   type DeepseekWaveStyle,
@@ -366,14 +369,15 @@ function padColumns(text: string, width: number): string {
 }
 
 /** Interval-driven frame counter for one self-contained animated leaf. */
-function useFrames(intervalMs: number): number {
+function useFrames(intervalMs: number, active = true): number {
   const [tick, setTick] = useState(0)
   useEffect(() => {
+    if (!active) return
     const id = setInterval(() => setTick(current => current + 1), intervalMs)
     return () => {
       clearInterval(id)
     }
-  }, [intervalMs])
+  }, [active, intervalMs])
   return tick
 }
 
@@ -392,14 +396,9 @@ function useStableInput(handler: (input: string, key: Key) => void, active: bool
   useInput(stableHandler, { isActive: active })
 }
 
-/**
- * The web StateDot "ongoing" chase in terminal form: three cells of the 3×3
- * ring trail clockwise around the eight outer positions (8 frames × 125ms =
- * the web's 1s cycle). Replaces the plain busy ellipsis as the composer's
- * prompt marker and leads the Deep-diving line.
- */
+/** The original web StateDot chase used by the busy composer marker. */
 function BusyChase(): ReactElement {
-  const tick = useFrames(125)
+  const tick = useFrames(BUSY_CHASE_TICK_MS)
   return createElement(Text, { color: inkColor(getPalette().brandBright) }, busyChaseFrame(tick) + ' ')
 }
 
@@ -429,23 +428,25 @@ function useCursorBlink(active: boolean): { visible: boolean; reset(): void } {
 }
 
 /**
- * The busy line, web TurnStatus contract: the StateDot chase leads the plain
- * `Deep diving...` label, with the elapsed clock appended only once the turn
- * has clearly been running (15s) — anchored to `turn/start` so a resumed
- * mid-turn keeps the real time.
+ * The busy line, web TurnStatus contract: a continuously moving blue gradient
+ * paints the complete `Deep diving...` label, with the elapsed clock appended
+ * only once the turn has clearly been running (15s) — anchored to `turn/start`
+ * so a resumed mid-turn keeps the real time.
  */
 function DeepDivingLine({ since }: { since: number }): ReactElement {
-  useFrames(1000)
+  const tick = useFrames(DEEP_DIVING_SHIMMER_TICK_MS)
   const elapsed = since === 0 ? 0 : Date.now() - since
+  const text = elapsed >= 15_000 ? `Deep diving... ${runClock(elapsed)}` : 'Deep diving...'
+  const palette = getPalette()
+  const graphemes = splitGraphemes(text)
   return createElement(
-    Box,
-    { flexDirection: 'row' },
-    createElement(BusyChase),
-    createElement(
+    Text,
+    { wrap: 'truncate-end' },
+    ...graphemes.map((grapheme, index) => createElement(
       Text,
-      { dimColor: true },
-      elapsed >= 15_000 ? `Deep diving... ${runClock(elapsed)}` : 'Deep diving...',
-    ),
+      { key: `${grapheme.start}-${grapheme.end}`, color: inkColor(deepDivingGradientColor(index, tick, graphemes.length, palette.brandDeep, palette.brandBright)) },
+      grapheme.text,
+    )),
   )
 }
 
@@ -3459,8 +3460,8 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
         ? preparingImages
           ? createElement(Text, { color: inkColor(getPalette().warn), bold: true }, '… ')
           : busy
-          ? createElement(BusyChase)
-          : createElement(Text, { color: promptColor, bold: tierActive ? true : undefined }, `${promptGlyph} `)
+            ? createElement(BusyChase)
+            : createElement(Text, { color: promptColor, bold: tierActive ? true : undefined }, `${promptGlyph} `)
         : '  ',
       parts.before,
       parts.hasCaret

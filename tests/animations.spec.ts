@@ -1,4 +1,4 @@
-/** Terminal animation frames (web StateDot pulse + chase), caret blink, and
+/** Terminal animation helpers (Codex shimmer + braille StateDot chase), caret blink, and
  * the Codex effort-ignition "Wave" port for the DeepSeek model-switch easter
  * egg: tier mapping, crest/ease/envelope shapes, per-column band sampling,
  * the sparkle frame window, and the ≤0.55 background tint cap. */
@@ -19,6 +19,11 @@ import {
   deepseekWaveTier,
   deepseekWaveWordHue,
   deepseekWaveWordVisible,
+  DEEP_DIVING_SHIMMER_DURATION_MS,
+  DEEP_DIVING_SHIMMER_HALF_WIDTH,
+  DEEP_DIVING_SHIMMER_PADDING,
+  deepDivingGradientColor,
+  deepDivingShimmerIntensity,
   easeInOut,
   effortAboveHigh,
   envelope,
@@ -52,7 +57,7 @@ function channelDelta(a: RgbTriple, b: RgbTriple): number {
 }
 
 describe('busyChaseFrame', () => {
-  it('rotates the web StateDot ongoing chase clockwise over 8 distinct frames', () => {
+  it('rotates the original braille chase clockwise over 8 distinct frames', () => {
     expect(BUSY_CHASE_FRAMES).toHaveLength(8)
     expect(new Set(BUSY_CHASE_FRAMES).size).toBe(8)
     expect(busyChaseFrame(0)).toBe(BUSY_CHASE_FRAMES[0])
@@ -60,6 +65,33 @@ describe('busyChaseFrame', () => {
     expect(busyChaseFrame(8)).toBe(BUSY_CHASE_FRAMES[0])
     for (let tick = 0; tick < 16; tick += 1) {
       expect(BUSY_CHASE_FRAMES).toContain(busyChaseFrame(tick))
+    }
+  })
+})
+
+describe('deepDivingGradientColor', () => {
+  const base: RgbTriple = [20, 40, 80]
+  const highlight: RgbTriple = [100, 180, 255]
+
+  it('matches Codex timing: two-second sweep, padded edges, and cosine highlight', () => {
+    expect(DEEP_DIVING_SHIMMER_DURATION_MS).toBe(2_000)
+    expect(DEEP_DIVING_SHIMMER_PADDING).toBe(10)
+    expect(DEEP_DIVING_SHIMMER_HALF_WIDTH).toBe(5)
+    expect(deepDivingShimmerIntensity(0, 0, 12)).toBe(0)
+    expect(deepDivingShimmerIntensity(0, 19, 12)).toBeGreaterThan(0.99)
+    expect(deepDivingShimmerIntensity(0, 120, 12)).toBe(0)
+    expect(deepDivingShimmerIntensity(0, 0, 12)).toBe(deepDivingShimmerIntensity(0, 120, 12))
+    expect(deepDivingShimmerIntensity(0, 19, 12)).toBeGreaterThan(deepDivingShimmerIntensity(0, 10, 12))
+    expect(deepDivingShimmerIntensity(0, 19, 12)).toBeGreaterThan(deepDivingShimmerIntensity(0, 30, 12))
+  })
+
+  it('blends only between the supplied blue base and highlight', () => {
+    for (let tick = 0; tick < 120; tick += 1) {
+      const color = deepDivingGradientColor(0, tick, 12, base, highlight)
+      for (let channel = 0; channel < 3; channel += 1) {
+        expect(color[channel]!).toBeGreaterThanOrEqual(base[channel]!)
+        expect(color[channel]!).toBeLessThanOrEqual(highlight[channel]!)
+      }
     }
   })
 })
