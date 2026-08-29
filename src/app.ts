@@ -65,7 +65,7 @@ import type { ModelDirectory, ModelRow } from './models.ts'
 import type { ProviderConfiguration, ProviderSettingsDirectory, ProviderTargetView } from './provider-settings.ts'
 import type { QuestionSnapshot, QuestionStore } from './questions.ts'
 import type { SkillsView, SkillRow } from './skills.ts'
-import type { MentionCandidate } from './mentions.ts'
+import { isPathLikeMentionQuery, type MentionCandidate } from './mentions.ts'
 import type { SubagentFeedView, SubagentRow } from './subagents.ts'
 import { AgentsPanel, EffortPanel, HistoryPanel, JobsPanel, ModePanel, PermissionPanel, PluginPanel, ResumePanel, StatuslinePanel, runClock, SubagentPanel, type JobRow } from './kernel-panels.ts'
 import type { PresetRow } from './presets.ts'
@@ -2628,6 +2628,7 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
     : { start: beforeCursor.length - lastLine.length + (tokenMatch.index ?? 0) + (tokenMatch[1]?.length ?? 0), query: tokenMatch[2] ?? '' }
   const mentionActive = mentionToken !== undefined
   const [mentionRows, setMentionRows] = useState<readonly MentionCandidate[]>([])
+  const mentionRequestRef = useRef(0)
 
   const sameImagePath = (left: string, right: string): boolean => (
     process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right
@@ -2700,17 +2701,24 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   }
 
   useEffect(() => {
+    const requestId = mentionRequestRef.current + 1
+    mentionRequestRef.current = requestId
     if (!active || !mentionActive) {
       setMentionRows([])
       return
     }
     const controller = new AbortController()
-    setMentionRows([])
-    loadMentions(mentionToken.query, controller.signal).then(
-      rows => setMentionRows(rows),
-      () => {},
-    )
+    const query = mentionToken.query
+    const timer = setTimeout(() => {
+      void loadMentions(query, controller.signal).then(
+        rows => {
+          if (!controller.signal.aborted && mentionRequestRef.current === requestId) setMentionRows(rows)
+        },
+        () => {},
+      )
+    }, 50)
     return () => {
+      clearTimeout(timer)
       controller.abort()
     }
   }, [active, mentionActive, mentionToken?.query])
@@ -2719,8 +2727,11 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   // remains available while a turn runs, and Esc dismisses it before the
   // same key is allowed to interrupt the turn.
   const menuActive = !preparingImages && (slashActive || mentionActive) && dismissedMenuValue !== value
+  const visibleMentionRows = mentionToken !== undefined && isPathLikeMentionQuery(mentionToken.query)
+    ? mentionRows.filter(row => row.kind !== 'session')
+    : mentionRows
   const menuRows: readonly CompletionCandidate[] = mentionActive
-    ? mentionRows.map(row => ({
+    ? visibleMentionRows.map(row => ({
       label: row.label.startsWith('@')
         ? row.label
         : `@${row.label}${row.kind === 'directory' ? '/' : ''}`,
@@ -2732,8 +2743,8 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   /** Accept the highlighted completion-menu candidate into the draft. */
   const acceptMenuCandidate = (): void => {
     if (mentionActive && mentionToken !== undefined) {
-      if (mentionRows.length === 0) return
-      const row = mentionRows[completionIndex % mentionRows.length]
+      if (visibleMentionRows.length === 0) return
+      const row = visibleMentionRows[completionIndex % visibleMentionRows.length]
       if (row !== undefined) {
         if (row.kind === 'file' && row.path !== undefined && looksLikeImagePath(row.path)) {
           const tokenText = value.slice(mentionToken.start, cursor)

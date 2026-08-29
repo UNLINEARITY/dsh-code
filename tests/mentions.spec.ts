@@ -33,7 +33,7 @@ interface ServiceRow {
 /** Context double exposing a canned `fileReferences.list` (and optionally sessions). */
 function serviceContext(
   rows: readonly ServiceRow[] | Error,
-  options: { queries?: string[]; sessions?: readonly SessionReferenceCandidate[] } = {},
+  options: { queries?: string[]; sessionQueries?: string[]; sessions?: readonly SessionReferenceCandidate[] } = {},
 ): Context {
   return {
     get: (name: string): unknown => {
@@ -48,7 +48,10 @@ function serviceContext(
       }
       if (name === 'sessionReferenceResolver') {
         return {
-          listCandidates: async (): Promise<readonly SessionReferenceCandidate[]> => options.sessions ?? [],
+          listCandidates: async (_agent: Agent, query: string): Promise<readonly SessionReferenceCandidate[]> => {
+            options.sessionQueries?.push(query)
+            return options.sessions ?? []
+          },
           prepare: async (_agent: unknown, content: unknown) => ({ content, additionalContext: undefined }),
         }
       }
@@ -134,5 +137,26 @@ describe('createMentions.candidates (fileReferences service)', () => {
     expect(rows[1]!.description).toBe('Session · /repo')
     // A bare `@` never queries sessions.
     await expect(createMentions(serviceContext([], { sessions }), agent, nowhere).candidates('')).resolves.toEqual([])
+  })
+
+  it('skips session discovery while navigating a file path', async () => {
+    const sessionQueries: string[] = []
+    const api = createMentions(serviceContext([
+      { path: 'src', kind: 'directory' },
+    ], { sessionQueries, sessions: [{
+      sessionId: 'session-1234' as never,
+      label: 'prior work',
+      cwd: '/repo',
+    } as unknown as SessionReferenceCandidate] }), agent, nowhere)
+
+    await expect(api.candidates('src/')).resolves.toEqual([{
+      label: 'src',
+      description: 'Folder',
+      kind: 'directory',
+    }])
+    expect(sessionQueries).toEqual([])
+
+    await api.candidates('prior')
+    expect(sessionQueries).toEqual(['prior'])
   })
 })

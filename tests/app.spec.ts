@@ -208,6 +208,40 @@ describe('pre-session controls', () => {
   })
 })
 
+describe('mention completion scheduling', () => {
+  it('debounces path lookups, keeps the previous rows, and ignores stale results', async () => {
+    const harness = createTty(120, 24)
+    const calls: { query: string; resolve: (rows: readonly { label: string; description: string; kind: 'file' | 'directory' }[]) => void }[] = []
+    const loadMentions = vi.fn((query: string) => new Promise<readonly { label: string; description: string; kind: 'file' | 'directory' }[]>(resolve => {
+      calls.push({ query, resolve })
+    }))
+    const instance = renderApp(harness, appProps({ loadMentions }))
+
+    try {
+      await wait()
+      harness.stdin.write('@a')
+      await wait(80)
+      expect(calls.map(call => call.query)).toEqual(['a'])
+
+      harness.stdin.write('b')
+      await wait(80)
+      expect(calls.map(call => call.query)).toEqual(['a', 'ab'])
+
+      calls[0]!.resolve([{ label: 'old.ts', description: 'File', kind: 'file' }])
+      await wait()
+      expect(harness.output.text).not.toContain('@old.ts')
+
+      calls[1]!.resolve([{ label: 'new.ts', description: 'File', kind: 'file' }])
+      await wait()
+      expect(harness.output.text).toContain('@new.ts')
+    } finally {
+      instance.unmount()
+      harness.stdin.destroy()
+      harness.stdout.destroy()
+    }
+  })
+})
+
 describe('composer image attachments', () => {
   it('turns @ images and dragged paths into durable image blocks without a new slash command', async () => {
     const harness = createTty(120, 24)

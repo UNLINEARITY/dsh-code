@@ -75,6 +75,11 @@ interface FileReferenceServiceLike {
 /** Menu cap on file rows; the service owns ranking and default rows. */
 const MAX_FILE_ROWS = 20
 
+/** Whether a mention token is already navigating a filesystem path. */
+export function isPathLikeMentionQuery(query: string): boolean {
+  return /[\\/]/u.test(query)
+}
+
 /** The mention API the input editor and the runner share. */
 export interface MentionsApi {
   /** Ranked menu candidates for the typed `@` query. */
@@ -136,7 +141,7 @@ export function createMentions(ctx: Context, agent: Agent | undefined, cwd: stri
           : agent === undefined
             ? preSessionFiles(needle, signal).catch(() => [] as readonly ServiceFileCandidate[])
             : Promise.resolve([] as readonly ServiceFileCandidate[]),
-        sessionCapable && needle !== '' && agent !== undefined
+        sessionCapable && needle !== '' && !isPathLikeMentionQuery(needle) && agent !== undefined
           ? resolver!.listCandidates(agent, needle, 10, signal).catch(() => [] as readonly SessionReferenceCandidate[])
           : Promise.resolve([] as readonly SessionReferenceCandidate[]),
       ])
