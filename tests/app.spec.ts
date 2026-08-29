@@ -2931,6 +2931,61 @@ describe('queued inbox rows in a mixed mutable tail', () => {
 })
 
 describe('completion menu', () => {
+  it('accepts a slash command on Tab and keeps the draft editable immediately afterward', async () => {
+    const harness = createTty(100, 24)
+    const dispatch = vi.fn()
+    const instance = renderApp(harness, appProps({
+      dispatch,
+      commands: {
+        descriptors: [{ name: 'command-00', description: 'registry command' }],
+        subscribe: () => unsubscribe,
+      },
+    }))
+    try {
+      await wait()
+      harness.stdin.write('/command-0')
+      await wait()
+      // A terminal may coalesce Tab and the first argument into one read.
+      harness.stdin.write('\targ')
+      await wait()
+      harness.stdin.write('\r')
+      await wait()
+      expect(dispatch).toHaveBeenCalledWith('/command-00 arg')
+    } finally {
+      instance.unmount()
+      harness.stdin.destroy()
+      harness.stdout.destroy()
+    }
+  })
+
+  it('accepts Kitty CSI-u Tab without leaking the sequence or locking the editor', async () => {
+    const harness = createTty(100, 24)
+    const dispatch = vi.fn()
+    const instance = renderApp(harness, appProps({
+      dispatch,
+      commands: {
+        descriptors: [{ name: 'command-00', description: 'registry command' }],
+        subscribe: () => unsubscribe,
+      },
+    }))
+    try {
+      await wait()
+      harness.stdin.write('/command-0')
+      await wait()
+      // The same coalescing can happen after Kitty CSI-u normalization.
+      harness.stdin.write('\x1b[9uarg')
+      await wait()
+      harness.stdin.write('\r')
+      await wait()
+      expect(dispatch).toHaveBeenCalledWith('/command-00 arg')
+      expect(harness.output.text).not.toContain('[9u')
+    } finally {
+      instance.unmount()
+      harness.stdin.destroy()
+      harness.stdout.destroy()
+    }
+  })
+
   it('accepts the highlighted candidate on Enter (Codex list parity with Tab)', async () => {
     const harness = createTty(100, 24)
     const dispatch = vi.fn()

@@ -8,7 +8,13 @@
 
 import { render } from 'ink'
 import type { ReactElement } from 'react'
-import { BRACKETED_PASTE_DISABLE, BRACKETED_PASTE_ENABLE, KEYBOARD_ENHANCE_DISABLE, KEYBOARD_ENHANCE_ENABLE } from './keyboard.ts'
+import {
+  BRACKETED_PASTE_DISABLE,
+  BRACKETED_PASTE_ENABLE,
+  KEYBOARD_ENHANCE_DISABLE,
+  KEYBOARD_ENHANCE_ENABLE,
+  shouldEnableKeyboardEnhancement,
+} from './keyboard.ts'
 
 /** A mounted terminal app instance; the runner owns unmount ordering. */
 export interface TuiMount {
@@ -29,11 +35,11 @@ export const internals: {
   stderr: { write(chunk: string): unknown }
 } = {
   mount: (element: ReactElement): TuiMount => {
-    // Codex keyboard_modes parity: push the kitty keyboard protocol so
-    // modified controls remain distinguishable, and enable bracketed paste so
-    // pasted newlines insert instead of submitting. Both are inert in
-    // terminals without support.
-    process.stdout.write(KEYBOARD_ENHANCE_ENABLE + BRACKETED_PASTE_ENABLE)
+    // VS Code's integrated terminal can route Tab to the workbench when Kitty
+    // enhancement is enabled. Keep bracketed paste everywhere, but only push
+    // the keyboard protocol on terminals that can safely own those key events.
+    const keyboardEnhanced = shouldEnableKeyboardEnhancement()
+    process.stdout.write((keyboardEnhanced ? KEYBOARD_ENHANCE_ENABLE : '') + BRACKETED_PASTE_ENABLE)
     // App owns Ctrl+C's deliberate three-state contract (interrupt, clear
     // draft, quit). Ink's default `exitOnCtrlC: true` would intercept the
     // normalized control byte first, unmount only its renderer, and leave the
@@ -45,9 +51,8 @@ export const internals: {
       },
       unmount(): void {
         instance.unmount()
-        // Pop the stack so the parent shell does not inherit enhanced key
-        // reporting (Codex resets even harder on forced exit).
-        process.stdout.write(KEYBOARD_ENHANCE_DISABLE + BRACKETED_PASTE_DISABLE)
+        // Pop only a stack this mount pushed, then disable bracketed paste.
+        process.stdout.write((keyboardEnhanced ? KEYBOARD_ENHANCE_DISABLE : '') + BRACKETED_PASTE_DISABLE)
       },
     }
   },

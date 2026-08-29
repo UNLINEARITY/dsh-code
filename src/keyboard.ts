@@ -22,6 +22,32 @@ export const KEYBOARD_ENHANCE_ENABLE = '\x1b[>4;0m\x1b[>5u'
 /** Pop the enhancement stack and reset modifyOtherKeys (exit path). */
 export const KEYBOARD_ENHANCE_DISABLE = '\x1b[<u\x1b[>4;0m'
 
+/** Explicit environment overrides for terminal keyboard enhancement. */
+export const DSH_DISABLE_KEYBOARD_ENHANCEMENT = 'DSH_DISABLE_KEYBOARD_ENHANCEMENT'
+export const DSH_ENABLE_KEYBOARD_ENHANCEMENT = 'DSH_ENABLE_KEYBOARD_ENHANCEMENT'
+
+function parseBooleanEnv(value: string | undefined): boolean | undefined {
+  if (value === undefined) return undefined
+  const normalized = value.trim().toLowerCase()
+  if (normalized === '1' || normalized === 'true' || normalized === 'yes') return true
+  if (normalized === '0' || normalized === 'false' || normalized === 'no') return false
+  return undefined
+}
+
+/** True when the process is running inside the VS Code integrated terminal. */
+export function isVsCodeTerminalEnv(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.TERM_PROGRAM?.trim().toLowerCase() === 'vscode' || env.VSCODE_INJECTION === '1'
+}
+
+/** Whether to push Kitty keyboard enhancement for the current terminal. */
+export function shouldEnableKeyboardEnhancement(env: NodeJS.ProcessEnv = process.env): boolean {
+  const explicitDisable = parseBooleanEnv(env[DSH_DISABLE_KEYBOARD_ENHANCEMENT])
+  if (explicitDisable === true) return false
+  const explicitEnable = parseBooleanEnv(env[DSH_ENABLE_KEYBOARD_ENHANCEMENT])
+  if (explicitEnable !== undefined) return explicitEnable
+  return !isVsCodeTerminalEnv(env)
+}
+
 /** Enable bracketed paste reporting. */
 export const BRACKETED_PASTE_ENABLE = '\x1b[?2004h'
 

@@ -2732,6 +2732,7 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   /** Accept the highlighted completion-menu candidate into the draft. */
   const acceptMenuCandidate = (): void => {
     if (mentionActive && mentionToken !== undefined) {
+      if (mentionRows.length === 0) return
       const row = mentionRows[completionIndex % mentionRows.length]
       if (row !== undefined) {
         if (row.kind === 'file' && row.path !== undefined && looksLikeImagePath(row.path)) {
@@ -2790,6 +2791,7 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
         resetCursorBlink()
       }
     } else {
+      if (candidates.length === 0) return
       const candidate = candidates[completionIndex % candidates.length]
       if (candidate !== undefined) {
         const nextValue = `${candidate.label} `
@@ -2910,6 +2912,12 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   useStableInput((input, key) => {
     // Modal ownership: approval/question/model dialogs consume all keys.
     if (!active) return
+    // React may not have committed the previous Tab completion render before
+    // the next terminal byte arrives. Read the synchronous editor refs so a
+    // completion followed immediately by text edits never uses stale closure
+    // state.
+    const liveValue = valueRef.current
+    const liveCursor = cursorRef.current
     if (preparingImages) {
       if (key.escape || (key.ctrl && input === 'c')) cancelImageSubmission()
       return
@@ -2953,7 +2961,7 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
     if (key.ctrl && input === 'c') {
       if (busy) {
         interrupt()
-      } else if (value !== '') {
+      } else if (liveValue !== '') {
         valueRef.current = ''
         cursorRef.current = 0
         setValue('')
@@ -2971,8 +2979,8 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
     if (key.ctrl && input === 'd') {
       // Codex: Ctrl+D deletes forward while a draft exists; the app-level
       // exit only fires from an empty composer.
-      if (value !== '') {
-        applyEdit(deleteForward(value, cursor))
+      if (liveValue !== '') {
+        applyEdit(deleteForward(liveValue, liveCursor))
         return
       }
       if (busy) notify('cancel the running turn before exiting (Esc or Ctrl+C)', 'warning')
@@ -2981,7 +2989,7 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
     }
     if (key.escape) {
       if (menuActive) {
-        setDismissedMenuValue(value)
+        setDismissedMenuValue(liveValue)
         return
       }
       if (hasNotice) {
@@ -2993,14 +3001,14 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
     }
     // Delete on the empty composer cancels the newest queued message (the
     // web queue-mirror contract: the durable splice drops the pending row).
-    if (key.delete && value === '' && queued.length > 0) {
+    if (key.delete && liveValue === '' && queued.length > 0) {
       cancelQueued(queued[queued.length - 1]!.messageId)
       return
     }
     if (key.return) {
       // A newline inside an open bracketed paste inserts; it never submits.
       if (pasteBracketRef.current) {
-        applyEdit(insertText(value, cursor, '\n'))
+        applyEdit(insertText(liveValue, liveCursor, '\n'))
         return
       }
       // Enter on an open completion menu accepts the highlighted candidate
@@ -3009,13 +3017,13 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
       // exactly, in which case Enter submits it (typing a full "/effort" and
       // pressing return must run the command, not re-accept its own text).
       if (menuActive) {
-        const exactSlash = !mentionActive && candidates.some(candidate => candidate.label === value)
+        const exactSlash = !mentionActive && candidates.some(candidate => candidate.label === liveValue)
         if (!exactSlash) {
           acceptMenuCandidate()
           return
         }
       }
-      const text = value.trim()
+      const text = liveValue.trim()
       if (draftImagesRef.current.length > 0) {
         const controller = new AbortController()
         const epoch = prepareEpochRef.current + 1
@@ -3204,6 +3212,15 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
     // Ink exposes Ctrl+J as a bare LF and Alt+Enter as a bare CR after
     // stripping the leading escape. Neither is a multiline shortcut.
     if (input === '\n' || input === '\r') return
+    // A fast Tab followed by text can arrive as one readable chunk in an
+    // integrated terminal. Accept the candidate first, then apply the
+    // remaining characters against the synchronously updated editor refs.
+    if (menuActive && (key.tab || input.startsWith('\t'))) {
+      const remainder = key.tab ? '' : input.slice(1)
+      acceptMenuCandidate()
+      if (remainder !== '') applyEdit(insertText(valueRef.current, cursorRef.current, remainder))
+      return
+    }
     if (menuActive && key.upArrow) {
       setCompletionIndex(index => (index + menuRows.length - 1) % menuRows.length)
       return
@@ -3230,72 +3247,68 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
       navigateVertical(input === 'p' ? -1 : 1)
       return
     }
-    if (key.tab && menuActive) {
-      acceptMenuCandidate()
-      return
-    }
     // Codex editor keymap: Alt/Ctrl+arrows and Alt+B/F move by word pieces;
     // plain arrows and Ctrl+B/F move by grapheme.
     if (key.leftArrow) {
-      moveCursorTo(key.meta || key.ctrl ? moveWordLeft(value, cursor) : moveCursorBy(value, cursor, -1))
+      moveCursorTo(key.meta || key.ctrl ? moveWordLeft(liveValue, liveCursor) : moveCursorBy(liveValue, liveCursor, -1))
       return
     }
     if (key.rightArrow) {
-      moveCursorTo(key.meta || key.ctrl ? moveWordRight(value, cursor) : moveCursorBy(value, cursor, 1))
+      moveCursorTo(key.meta || key.ctrl ? moveWordRight(liveValue, liveCursor) : moveCursorBy(liveValue, liveCursor, 1))
       return
     }
     if (key.meta && input === 'b') {
-      moveCursorTo(moveWordLeft(value, cursor))
+      moveCursorTo(moveWordLeft(liveValue, liveCursor))
       return
     }
     if (key.meta && input === 'f') {
-      moveCursorTo(moveWordRight(value, cursor))
+      moveCursorTo(moveWordRight(liveValue, liveCursor))
       return
     }
     if (key.ctrl && input === 'b') {
-      moveCursorTo(moveCursorBy(value, cursor, -1))
+      moveCursorTo(moveCursorBy(liveValue, liveCursor, -1))
       return
     }
     if (key.ctrl && input === 'f') {
-      moveCursorTo(moveCursorBy(value, cursor, 1))
+      moveCursorTo(moveCursorBy(liveValue, liveCursor, 1))
       return
     }
     // Ctrl+W and Alt+Backspace delete the previous word piece into the kill
     // buffer; Alt+D and the raw Ctrl/Alt+Delete variants kill forward.
     if (key.ctrl && input === 'w') {
-      applyEdit(deleteWordBackward(value, cursor))
+      applyEdit(deleteWordBackward(liveValue, liveCursor))
       return
     }
     if (key.meta && input === 'd') {
-      applyEdit(deleteWordForward(value, cursor))
+      applyEdit(deleteWordForward(liveValue, liveCursor))
       return
     }
     // Un-annotated backspace/delete (Ink maps both  and  here):
     // delete the grapheme before the cursor.
     if (key.backspace || key.delete) {
-      applyEdit(deleteBackward(value, cursor))
+      applyEdit(deleteBackward(liveValue, liveCursor))
       return
     }
     // Readline parity over the LOGICAL line: A/E to its ends, U/K kill to
     // them (filling the single kill buffer), Y yanks it back.
     if (key.ctrl && input === 'a') {
-      moveCursorTo(moveToLineStart(value, cursor, true))
+      moveCursorTo(moveToLineStart(liveValue, liveCursor, true))
       return
     }
     if (key.ctrl && input === 'e') {
-      moveCursorTo(moveToLineEnd(value, cursor, true))
+      moveCursorTo(moveToLineEnd(liveValue, liveCursor, true))
       return
     }
     if (key.ctrl && input === 'u') {
-      applyEdit(killToLineStart(value, cursor))
+      applyEdit(killToLineStart(liveValue, liveCursor))
       return
     }
     if (key.ctrl && input === 'k') {
-      applyEdit(killToLineEnd(value, cursor))
+      applyEdit(killToLineEnd(liveValue, liveCursor))
       return
     }
     if (key.ctrl && input === 'y') {
-      if (killRef.current !== '') applyEdit(insertText(value, cursor, killRef.current))
+      if (killRef.current !== '') applyEdit(insertText(liveValue, liveCursor, killRef.current))
       return
     }
     // Ctrl+L refreshes the screen (readline convention): raw ANSI clear
@@ -3337,7 +3350,7 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
         insertDroppedImages(droppedPaths)
         return
       }
-      applyEdit(insertText(value, cursor, text))
+      applyEdit(insertText(valueRef.current, cursorRef.current, text))
     }
   }, active)
 

@@ -4,9 +4,13 @@ import { describe, expect, it } from 'vitest'
 import {
   BRACKETED_PASTE_DISABLE,
   BRACKETED_PASTE_ENABLE,
+  DSH_DISABLE_KEYBOARD_ENHANCEMENT,
+  DSH_ENABLE_KEYBOARD_ENHANCEMENT,
   KEYBOARD_ENHANCE_DISABLE,
   KEYBOARD_ENHANCE_ENABLE,
+  isVsCodeTerminalEnv,
   normalizeKeyboardChunk,
+  shouldEnableKeyboardEnhancement,
   stripPasteMarkers,
   tokenizeRawEditorChunk,
 } from '../src/keyboard.ts'
@@ -21,6 +25,21 @@ describe('protocol constants', () => {
   it('enables and disables bracketed paste', () => {
     expect(BRACKETED_PASTE_ENABLE).toBe('\x1b[?2004h')
     expect(BRACKETED_PASTE_DISABLE).toBe('\x1b[?2004l')
+  })
+})
+
+describe('terminal keyboard enhancement policy', () => {
+  it('disables Kitty enhancement for VS Code by default but keeps other terminals enabled', () => {
+    expect(isVsCodeTerminalEnv({ TERM_PROGRAM: 'vscode' })).toBe(true)
+    expect(isVsCodeTerminalEnv({ VSCODE_INJECTION: '1' })).toBe(true)
+    expect(shouldEnableKeyboardEnhancement({ TERM_PROGRAM: 'vscode', VSCODE_INJECTION: '1' })).toBe(false)
+    expect(shouldEnableKeyboardEnhancement({ TERM_PROGRAM: 'WindowsTerminal' })).toBe(true)
+  })
+
+  it('honors explicit enable/disable overrides', () => {
+    expect(shouldEnableKeyboardEnhancement({ TERM_PROGRAM: 'vscode', [DSH_ENABLE_KEYBOARD_ENHANCEMENT]: '1' })).toBe(true)
+    expect(shouldEnableKeyboardEnhancement({ TERM_PROGRAM: 'WindowsTerminal', [DSH_DISABLE_KEYBOARD_ENHANCEMENT]: 'yes' })).toBe(false)
+    expect(shouldEnableKeyboardEnhancement({ TERM_PROGRAM: 'vscode', [DSH_ENABLE_KEYBOARD_ENHANCEMENT]: '1', [DSH_DISABLE_KEYBOARD_ENHANCEMENT]: '1' })).toBe(false)
   })
 })
 

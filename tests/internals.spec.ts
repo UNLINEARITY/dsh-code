@@ -21,6 +21,8 @@ describe('production TUI mount', () => {
   })
 
   it('leaves Ctrl+C with App and restores terminal protocols through its wrapper', () => {
+    vi.stubEnv('TERM_PROGRAM', 'WindowsTerminal')
+    vi.stubEnv('VSCODE_INJECTION', '')
     const rerender = vi.fn()
     const unmount = vi.fn()
     ink.render.mockReturnValue({ rerender, unmount })
@@ -41,6 +43,24 @@ describe('production TUI mount', () => {
       expect(stdoutWrite).toHaveBeenNthCalledWith(2, KEYBOARD_ENHANCE_DISABLE + BRACKETED_PASTE_DISABLE)
     } finally {
       stdoutWrite.mockRestore()
+      vi.unstubAllEnvs()
     }
   })
+
+  it('keeps bracketed paste but leaves Kitty enhancement disabled in VS Code', () => {
+    vi.stubEnv('TERM_PROGRAM', 'vscode')
+    vi.stubEnv('VSCODE_INJECTION', '1')
+    const stdoutWrite = vi.spyOn(process.stdout, 'write').mockImplementation(() => true)
+    ink.render.mockReturnValue({ rerender: vi.fn(), unmount: vi.fn() })
+    try {
+      const mounted = internals.mount({} as ReactElement)
+      expect(stdoutWrite).toHaveBeenNthCalledWith(1, BRACKETED_PASTE_ENABLE)
+      mounted.unmount()
+      expect(stdoutWrite).toHaveBeenNthCalledWith(2, BRACKETED_PASTE_DISABLE)
+    } finally {
+      stdoutWrite.mockRestore()
+      vi.unstubAllEnvs()
+    }
+  })
+
 })
