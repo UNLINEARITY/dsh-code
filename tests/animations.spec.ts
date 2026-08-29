@@ -22,8 +22,10 @@ import {
   DEEP_DIVING_SHIMMER_DURATION_MS,
   DEEP_DIVING_SHIMMER_HALF_WIDTH,
   DEEP_DIVING_SHIMMER_PADDING,
+  DEEP_DIVING_SPARK_BREATH_DURATION_MS,
   deepDivingGradientColor,
   deepDivingShimmerIntensity,
+  deepDivingSparkIntensity,
   easeInOut,
   effortAboveHigh,
   envelope,
@@ -92,6 +94,20 @@ describe('deepDivingGradientColor', () => {
         expect(color[channel]!).toBeGreaterThanOrEqual(base[channel]!)
         expect(color[channel]!).toBeLessThanOrEqual(highlight[channel]!)
       }
+    }
+  })
+
+  it('breathes the leading sparkle continuously without turning it off', () => {
+    expect(DEEP_DIVING_SPARK_BREATH_DURATION_MS).toBe(2_000)
+    expect(deepDivingSparkIntensity(0)).toBeCloseTo(1)
+    expect(deepDivingSparkIntensity(10)).toBeLessThan(deepDivingSparkIntensity(0))
+    expect(deepDivingSparkIntensity(20)).toBeLessThan(deepDivingSparkIntensity(10))
+    expect(deepDivingSparkIntensity(30)).toBeGreaterThanOrEqual(0.2)
+    expect(deepDivingSparkIntensity(60)).toBeGreaterThan(0.2)
+    expect(deepDivingSparkIntensity(0)).toBeGreaterThanOrEqual(0.2)
+    for (let tick = 0; tick < 120; tick += 1) {
+      expect(deepDivingSparkIntensity(tick)).toBeGreaterThanOrEqual(0.2)
+      expect(deepDivingSparkIntensity(tick)).toBeLessThanOrEqual(1)
     }
   })
 })

@@ -36,6 +36,7 @@ export const DEEP_DIVING_SHIMMER_TICK_MS = 33
 export const DEEP_DIVING_SHIMMER_DURATION_MS = 2_000
 export const DEEP_DIVING_SHIMMER_PADDING = 10
 export const DEEP_DIVING_SHIMMER_HALF_WIDTH = 5
+export const DEEP_DIVING_SPARK_BREATH_DURATION_MS = 2_000
 
 /**
  * Codex's 2-second shimmer sweep, expressed in terminal ticks. The sweep has
@@ -61,7 +62,20 @@ export function deepDivingGradientColor(
   base: RgbTriple,
   highlight: RgbTriple,
 ): RgbTriple {
-  return blendRgb(highlight, base, deepDivingShimmerIntensity(index, tick, graphemeCount) * 0.9)
+  return blendRgb(highlight, base, deepDivingShimmerIntensity(index, tick, graphemeCount))
+}
+
+/** Smooth breathing intensity for the always-visible Deep diving sparkle. */
+export function deepDivingSparkIntensity(tick: number): number {
+  const elapsed = ((tick * DEEP_DIVING_SHIMMER_TICK_MS) % DEEP_DIVING_SPARK_BREATH_DURATION_MS
+    + DEEP_DIVING_SPARK_BREATH_DURATION_MS) % DEEP_DIVING_SPARK_BREATH_DURATION_MS
+  const phase = elapsed / DEEP_DIVING_SPARK_BREATH_DURATION_MS
+  return 0.2 + 0.8 * (0.5 + 0.5 * Math.cos(Math.PI * 2 * phase))
+}
+
+/** Blue RGB color for the breathing Deep diving sparkle. */
+export function deepDivingSparkColor(tick: number, base: RgbTriple, highlight: RgbTriple): RgbTriple {
+  return blendRgb(highlight, base, deepDivingSparkIntensity(tick))
 }
 
 /** Caret visibility: half the ticks on, half off (530ms blink). */

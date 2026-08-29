@@ -53,6 +53,7 @@ import {
   deepseekWaveWordHue,
   deepseekWaveWordVisible,
   deepDivingGradientColor,
+  deepDivingSparkColor,
   effortAboveHigh,
   isOfficialDeepSeekLabel,
   type DeepseekWaveStyle,
@@ -436,17 +437,24 @@ function useCursorBlink(active: boolean): { visible: boolean; reset(): void } {
 function DeepDivingLine({ since }: { since: number }): ReactElement {
   const tick = useFrames(DEEP_DIVING_SHIMMER_TICK_MS)
   const elapsed = since === 0 ? 0 : Date.now() - since
-  const text = elapsed >= 15_000 ? `Deep diving... ${runClock(elapsed)}` : 'Deep diving...'
+  const text = elapsed >= 15_000 ? `✻ Deep diving... ${runClock(elapsed)}` : '✻ Deep diving...'
   const palette = getPalette()
   const graphemes = splitGraphemes(text)
   return createElement(
     Text,
     { wrap: 'truncate-end' },
-    ...graphemes.map((grapheme, index) => createElement(
-      Text,
-      { key: `${grapheme.start}-${grapheme.end}`, color: inkColor(deepDivingGradientColor(index, tick, graphemes.length, palette.brandDeep, palette.brandBright)) },
-      grapheme.text,
-    )),
+    ...graphemes.map((grapheme, index) => {
+      const sparkle = grapheme.text === '✻'
+      return createElement(
+        Text,
+        {
+          key: `${grapheme.start}-${grapheme.end}`,
+          color: inkColor(sparkle ? deepDivingSparkColor(tick, palette.brandDeep, palette.brandBright) : deepDivingGradientColor(index, tick, graphemes.length, palette.brandDeep, palette.brandBright)),
+          bold: sparkle || undefined,
+        },
+        grapheme.text,
+      )
+    }),
   )
 }
 

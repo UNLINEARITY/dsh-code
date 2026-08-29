@@ -807,7 +807,8 @@ describe('queued messages and global recall', () => {
     try {
       await wait()
       const plainOutput = output.replace(/\x1b\[[0-9;?]*[A-Za-z]/gu, '')
-      expect(plainOutput).toContain('Deep diving')
+      expect(plainOutput).toContain('✻ Deep diving')
+      expect(plainOutput).not.toContain('Deep diving... ✻')
       // The busy composer keeps the original rotating braille chase.
       const frames = ['⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷']
       expect(frames.some(frame => plainOutput.includes(frame))).toBe(true)
