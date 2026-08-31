@@ -3,6 +3,16 @@
  * and notifies subscribers. The renderer subscribes through
  * `useSyncExternalStore`; the runner owns event feeding.
  *
+ * Folding runs on the same mutable replay accumulator the persisted-log
+ * path uses (`replayProjectEvent`: id-indexed row updates, in-place
+ * appends), so a live structural event costs O(1) entry work regardless of
+ * transcript length — the copy-on-write fold rebuilt the whole entries
+ * array per event, making a growing session quadratic. An immutable
+ * `TranscriptView` snapshot is materialized only when a changed view is
+ * READ (once per rendered frame under the notification throttle, never per
+ * event), and every snapshot copies its arrays, so a view already handed
+ * out never observes later folds.
+ *
  * Notification coalescing: the fold stays synchronous — `getView()` always
  * returns the latest state the moment `apply` returns — but listener
  * notification is frame-throttled (~16ms) and deduplicated. The zai/GLM
@@ -21,7 +31,7 @@
  */
 
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
-import { createTranscriptView, projectEvent, projectEvents, type TranscriptView } from './render/projection.ts'
+import { createReplayAccumulator, replayProjectEvent, snapshotReplayView, type TranscriptView } from './render/projection.ts'
 
 /** Render frame budget: the notification cadence's upper bound. */
 const NOTIFY_FRAME_MS = 16
@@ -49,7 +59,10 @@ export interface TranscriptStore {
  * @returns the store the runner feeds and the renderer subscribes to.
  */
 export function createTranscriptStore(replay?: readonly SessionEvent[]): TranscriptStore {
-  let view = replay === undefined ? createTranscriptView() : projectEvents(replay)
+  let acc = createReplayAccumulator()
+  for (const event of replay ?? []) replayProjectEvent(acc, event)
+  let view = snapshotReplayView(acc)
+  let dirty = false
   const listeners = new Set<() => void>()
   let scheduled = false
   let lastNotifyAt = 0
@@ -70,7 +83,13 @@ export function createTranscriptStore(replay?: readonly SessionEvent[]): Transcr
     else setTimeout(dispatch, wait)
   }
   return {
-    getView: () => view,
+    getView: (): TranscriptView => {
+      if (dirty) {
+        view = snapshotReplayView(acc)
+        dirty = false
+      }
+      return view
+    },
     subscribe(listener: () => void): () => void {
       listeners.add(listener)
       return () => {
@@ -78,13 +97,13 @@ export function createTranscriptStore(replay?: readonly SessionEvent[]): Transcr
       }
     },
     apply(event: SessionEvent): void {
-      const next = projectEvent(view, event)
-      if (next === view) return
-      view = next
+      if (!replayProjectEvent(acc, event)) return
+      dirty = true
       notify()
     },
     reset(): void {
-      view = createTranscriptView()
+      acc = createReplayAccumulator()
+      dirty = true
       notify()
     },
   }

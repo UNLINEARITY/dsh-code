@@ -38,6 +38,32 @@ describe('transcript store', () => {
     expect(listener).toHaveBeenCalledTimes(1)
   })
 
+  it('hands out immutable snapshots: later folds never mutate a read view', () => {
+    const store = createTranscriptStore()
+    store.apply(userEvent('a', 1))
+    const first = store.getView()
+    store.apply(userEvent('b', 2))
+    store.apply(userEvent('c', 3))
+    const second = store.getView()
+    expect(first.entries).toHaveLength(1)
+    expect(second.entries).toHaveLength(3)
+    expect(first.entries).not.toBe(second.entries)
+  })
+
+  it('keeps view identity and stays silent for ignored events', async () => {
+    const store = createTranscriptStore()
+    store.apply(userEvent('a', 1))
+    const before = store.getView()
+    const listener = vi.fn()
+    store.subscribe(listener)
+    await settle()
+    listener.mockClear()
+    store.apply({ type: 'unknown/kind', seq: 9, time: 0, data: {} } as unknown as SessionEvent)
+    expect(store.getView()).toBe(before)
+    await settle()
+    expect(listener).not.toHaveBeenCalled()
+  })
+
   it('frame-throttles dense bursts and repaints the whole frame at once', async () => {
     const store = createTranscriptStore()
     const listener = vi.fn()

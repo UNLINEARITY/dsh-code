@@ -1036,8 +1036,11 @@ function retireReplayEntry(acc: ReplayAccumulator, index: number): void {
  * to a sequential fold; only the `entries` container operations are mutable.
  *
  * @internal Test-instrumentation path; `projectEvents` is the public entry.
+ * @returns whether the event changed the accumulated state — the live store
+ * stays silent and keeps its snapshot identity for ignored events, exactly
+ * like the copy-on-write reducer returning its input view unchanged.
  */
-export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent): void {
+export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent): boolean {
   switch (event.type) {
     case 'user/message': {
       const message = event.data
@@ -1067,7 +1070,7 @@ export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent):
             prompt: acc.stats.contextSegments.prompt + estimateTokens(text),
           },
         }
-        return
+        return true
       }
       const notice = message.source.kind === 'plugin' && message.source.form === 'notice'
         ? message.source.summary
@@ -1081,7 +1084,7 @@ export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent):
           system: acc.stats.contextSegments.system + estimateTokens(summary),
         },
       }
-      return
+      return true
     }
     case 'agent/inbox/spliced': {
       const { target, start, removedCount = 0, inserted } = event.data
@@ -1107,7 +1110,7 @@ export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent):
         ids.push(message.id)
         acc.ops += 1
       }
-      return
+      return true
     }
     case 'assistant/chunk': {
       const chunk = event.data.chunk
@@ -1126,13 +1129,13 @@ export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent):
       }
       if (chunk.type === 'text-delta') {
         acc.streaming = appendStreamingTail(acc.streaming, chunk.text)
-        return
+        return true
       }
       if (chunk.type === 'reasoning-delta') {
         acc.streamingReasoning = appendStreamingTail(acc.streamingReasoning, chunk.text)
-        return
+        return true
       }
-      return
+      return false
     }
     case 'assistant/message': {
       const key = `${event.data.turn}:${event.data.step}`
@@ -1166,7 +1169,7 @@ export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent):
           assistant: acc.stats.contextSegments.assistant + estimateTokens(text),
         },
       }
-      return
+      return true
     }
     case 'tool/call': {
       const data = event.data
@@ -1196,7 +1199,7 @@ export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent):
             + (typeof data.arguments === 'string' ? estimateTokens(data.arguments) : 0),
         },
       }
-      return
+      return true
     }
     case 'tool/result': {
       const block = event.data.message.content[0]
@@ -1232,18 +1235,18 @@ export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent):
           tools: acc.stats.contextSegments.tools + estimateTokens(rawText),
         },
       }
-      return
+      return true
     }
     case 'todo/write':
       acc.todos = event.data.todos
-      return
+      return true
     case 'turn/start': {
       const wasBusy = acc.busy
       acc.busy = true
       acc.busySince = wasBusy ? acc.busySince : event.time
       acc.todos = []
       acc.stats = { ...acc.stats, turns: acc.stats.turns + 1 }
-      return
+      return true
     }
     case 'step/start': {
       const key = `${event.data.turn}:${event.data.step}`
@@ -1257,7 +1260,7 @@ export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent):
       acc.streaming = ''
       acc.streamingReasoning = ''
       acc.stats = { ...acc.stats, steps: acc.stats.steps + 1 }
-      return
+      return true
     }
     case 'turn/end': {
       const reason = event.data.reason
@@ -1298,7 +1301,7 @@ export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent):
       acc.busy = false
       acc.busySince = 0
       for (const entry of appended) appendReplayEntry(acc, entry)
-      return
+      return true
     }
     case 'llm/retry': {
       const data = event.data
@@ -1314,23 +1317,23 @@ export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent):
         state: 'running',
       })
       indexList(acc.retryIndex, data.retryId).push(acc.entries.length - 1)
-      return
+      return true
     }
     case 'llm/retry-started': {
       const data = event.data
       updateReplayById<RetryEntry>(acc, acc.retryIndex, data.retryId, entry => entry.retryId === data.retryId, entry => ({ ...entry, state: 'done' as const }))
-      return
+      return true
     }
     case 'sandbox/mode':
       acc.sandbox = event.data.mode
-      return
+      return true
     case 'goal/change': {
       const data = event.data
       const clip = (text: string): string => (text.length > 60 ? `${text.slice(0, 59)}…` : text)
       if (data.operation === 'clear') {
         acc.goal = undefined
         appendReplayEntry(acc, { kind: 'turn-marker', text: '◎ goal cleared' })
-        return
+        return true
       }
       const goal: GoalFold = {
         objective: data.goal.objective,
@@ -1352,31 +1355,31 @@ export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent):
                 : undefined
       acc.goal = goal
       if (line !== undefined) appendReplayEntry(acc, { kind: 'turn-marker', text: line })
-      return
+      return true
     }
     case 'session/title':
       acc.title = event.data.title
-      return
+      return true
     case 'compaction/summary':
       if (acc.compactionTokens.size >= MAX_COMPACTION_SUMMARY_RESIDUE) {
         const oldest = acc.compactionTokens.keys().next().value
         if (oldest !== undefined) acc.compactionTokens.delete(oldest)
       }
       acc.compactionTokens.set(event.data.compactionId, event.data.shadowedTokenCount)
-      return
+      return true
     case 'compaction/prune':
       acc.lastPruneTokens = event.data.shadowedTokenCount
-      return
+      return true
     case 'compaction/end': {
       const ok = event.data.error === undefined
       const tokens = acc.compactionTokens.get(event.data.compactionId) ?? acc.lastPruneTokens
       acc.compactionTokens.delete(event.data.compactionId)
       appendReplayEntry(acc, { kind: 'compaction', ok, tokens, error: event.data.error ?? '' })
-      return
+      return true
     }
     case 'request/context':
       acc.stats = { ...acc.stats, contextWindow: event.data.contextWindow ?? acc.stats.contextWindow }
-      return
+      return true
     case 'request/header': {
       const config = event.data.header.config
       acc.model = `${config.provider}/${config.model}`
@@ -1388,14 +1391,14 @@ export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent):
           system: estimateTokens(event.data.header.system ?? ''),
         },
       }
-      return
+      return true
     }
     case 'plan/mode':
       acc.plan = event.data.active
-      return
+      return true
     case 'permission/preset':
       acc.permission = event.data.preset
-      return
+      return true
     case 'command/run': {
       const data = event.data
       appendReplayEntry(acc, {
@@ -1407,7 +1410,7 @@ export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent):
         summary: '',
       })
       indexList(acc.commandIndex, data.commandId).push(acc.entries.length - 1)
-      return
+      return true
     }
     case 'command/done': {
       const data = event.data
@@ -1417,10 +1420,10 @@ export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent):
         summary: boundContextSummary(data.text ?? ''),
       })
       updateReplayById<CommandEntry>(acc, acc.commandIndex, data.commandId, entry => entry.commandId === data.commandId, update)
-      return
+      return true
     }
     default:
-      return
+      return false
   }
 }
 
@@ -1432,8 +1435,27 @@ export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent):
  * @internal Test-instrumentation path; `projectEvents` is the public entry.
  */
 export function finishReplay(acc: ReplayAccumulator): TranscriptView {
+  return materializeReplayView(acc, false)
+}
+
+/**
+ * Materialize the accumulated fold as a fresh immutable snapshot for the
+ * live store. Unlike {@link finishReplay} — the one-shot replay entry, which
+ * hands the accumulator's own arrays through because the accumulator is
+ * discarded — every array a renderer can hold is copied here, so later
+ * folds never mutate a snapshot already handed out. Same fields, same
+ * tombstone compaction.
+ *
+ * @internal Live-store path; `projectEvents` is the public entry.
+ */
+export function snapshotReplayView(acc: ReplayAccumulator): TranscriptView {
+  return materializeReplayView(acc, true)
+}
+
+/** Field-for-field materialization; `copy` selects snapshot array isolation. */
+function materializeReplayView(acc: ReplayAccumulator, copy: boolean): TranscriptView {
   const entries: readonly TranscriptEntry[] = acc.removedCount === 0
-    ? acc.entries as TranscriptEntry[]
+    ? (copy ? [...acc.entries] : acc.entries) as TranscriptEntry[]
     : acc.entries.filter((entry): entry is TranscriptEntry => entry !== undefined)
   if (acc.removedCount > 0) acc.ops += acc.entries.length
   return {
