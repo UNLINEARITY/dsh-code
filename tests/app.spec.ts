@@ -2603,7 +2603,7 @@ describe('deferred session remount', () => {
 })
 
 describe('context stepless bar', () => {
-  it('paints one DeepSeek-blue run per content type with the usage readout', async () => {
+  it('paints one proportional DeepSeek-blue run with the usage readout outside it', async () => {
     // The color assertions need truecolor ANSI output; force level 3 and
     // restore the baseline in the finally block.
     const originalChalkLevel = chalk.level
@@ -2727,14 +2727,20 @@ describe('context stepless bar', () => {
 
     try {
       await wait()
-      // The stepless bar: one solid fill run, dim dotted track, and the
-      // right-aligned readout, all on one primary-row budget.
+      // The stepless bar is purely proportional: the fill run tracks the
+      // true occupancy and the dotted track shows the remainder. The usage
+      // readout rides outside the bar; on this tight row the ladder has
+      // already traded the absolute pair for meter resolution.
       const stripAnsi = (text: string): string => text.replace(/\x1b\[[0-9;]*m/g, '')
-      expect(stripAnsi(output)).toMatch(/context [█░]+100K\/128K 78%/u)
+      expect(stripAnsi(output)).toMatch(/context [█░]+ 100K\/128K 78%/u)
       // The fill paints one brand-blue run; the dotted track reads dim.
       expect(output).toMatch(/38;2;65;118;230m[^\x1b]*█/) // ctxFill → brand
-      // At this width the adaptive meter may consume its full available run;
-      // the pure contextBar tests cover the dotted-track state separately.
+      // The drawn fill share tracks the reported percent within one column
+      // of rounding at this meter width.
+      const run = stripAnsi(output).match(/context ([█░]+)/u)
+      const blocks = (run![1].match(/█/gu) || []).length
+      const expectedFill = Math.round(100_000 / 128_000 * run![1].length)
+      expect(Math.abs(blocks - expectedFill)).toBeLessThanOrEqual(1)
     } finally {
       instance.unmount()
       stdin.destroy()

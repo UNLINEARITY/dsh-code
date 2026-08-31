@@ -6,6 +6,7 @@ import { visibleColumns } from '../src/render/markdown.ts'
 import {
   cacheHitPercent,
   contextBar,
+  contextGroupSpans,
   CONTEXT_BAR_WIDTH,
   DEFAULT_STATUSLINE_ITEMS,
   formatDuration,
@@ -108,11 +109,10 @@ describe('context progress bar', () => {
   /** Joined text of the tone-split bar spans. */
   const barText = (spans: readonly { text: string }[]): string => spans.map(span => span.text).join('')
 
-  it('renders one stepless fill run with a dim dotted track and right-aligned readout', () => {
+  it('renders one stepless proportional fill with a dim dotted free track', () => {
     expect(contextBar(32_000, 128_000, CONTEXT_BAR_WIDTH)).toEqual([
       { text: '██████', tone: 'ctxFill' },
-      { text: '░░░░░░', tone: 'label' },
-      { text: '32K/128K 25%', tone: 'value' },
+      { text: '░░░░░░░░░░░░░░░░░░', tone: 'label' },
     ])
   })
 
@@ -123,33 +123,48 @@ describe('context progress bar', () => {
     }
   })
 
-  it('keeps the deterministic rounding pinned: half-up free share, fill takes the rest', () => {
-    // 0.6875 of 24 free columns = 16.5 → rounds half-up to 17 free, so the
-    // fill takes 7; the same occupancy always renders the identical bar.
-    expect(contextBar(40_000, 128_000, 24).map(span => span.text)).toEqual(['█'.repeat(7), '░'.repeat(5), '40K/128K 31%'])
-    expect(contextBar(32_000, 128_000, 40).map(span => span.text)).toEqual(['█'.repeat(10), '░'.repeat(18), '32K/128K 25%'])
+  it('keeps the deterministic rounding pinned: fill tracks occupancy, track takes the rest', () => {
+    // 0.3125 of 24 = 7.5 → rounds to 8 filled columns; the same occupancy
+    // always renders the identical bar, and the drawn share tracks truth.
+    expect(contextBar(40_000, 128_000, 24).map(span => span.text)).toEqual(['█'.repeat(8), '░'.repeat(16)])
+    expect(contextBar(32_000, 128_000, 40).map(span => span.text)).toEqual(['█'.repeat(10), '░'.repeat(30)])
   })
 
-  it('shrinks the readout to the bare percent as the free track narrows', () => {
-    const tight = contextBar(96_000, 128_000, CONTEXT_BAR_WIDTH)
-    expect(tight.map(span => span.text)).toEqual(['█'.repeat(18), '░'.repeat(3), '75%'])
-    expect(tight.map(span => span.tone)).toEqual(['ctxFill', 'label', 'value'])
-  })
-
-  it('flips the readout to amber at the warning threshold while the fill stays blue', () => {
-    const at = contextBar(121_600, 128_000, CONTEXT_BAR_WIDTH)
-    expect(at.map(span => span.text)).toEqual(['█'.repeat(19), '░░', '95%'])
-    expect(at.at(-1)).toEqual({ text: '95%', tone: 'warn' })
-    expect(at[0]).toEqual({ text: '█'.repeat(19), tone: 'ctxFill' })
-    const over = contextBar(200_000, 128_000, CONTEXT_BAR_WIDTH)
-    // Over budget: the percent keeps the raw value while the fill saturates.
-    expect(over.map(span => span.text)).toEqual(['█'.repeat(19), '░', '156%'])
-    expect(over.at(-1)).toEqual({ text: '156%', tone: 'warn' })
+  it('saturates the fill past the window instead of overdrawing the track', () => {
+    expect(contextBar(96_000, 128_000, CONTEXT_BAR_WIDTH).map(span => span.text)).toEqual(['█'.repeat(18), '░'.repeat(6)])
+    expect(contextBar(200_000, 128_000, CONTEXT_BAR_WIDTH).map(span => span.text)).toEqual(['█'.repeat(24)])
   })
 
   it('returns no spans for a non-positive width or window', () => {
     expect(contextBar(32_000, 128_000, 0)).toEqual([])
     expect(contextBar(32_000, 0, CONTEXT_BAR_WIDTH)).toEqual([])
+  })
+})
+
+describe('context group composition', () => {
+  it('rides the readout outside the bar with a separating space', () => {
+    expect(contextGroupSpans(32_000, 128_000, CONTEXT_BAR_WIDTH, 'full')).toEqual([
+      { text: 'context ', tone: 'label' },
+      { text: '██████', tone: 'ctxFill' },
+      { text: '░░░░░░░░░░░░░░░░░░', tone: 'label' },
+      { text: ' ', tone: 'label' },
+      { text: '32K/128K 25%', tone: 'value' },
+    ])
+  })
+
+  it('degrades the readout to the bare percent and to the bare bar', () => {
+    expect(contextGroupSpans(96_000, 128_000, CONTEXT_BAR_WIDTH, 'percent').at(-1)).toEqual({ text: '75%', tone: 'value' })
+    expect(contextGroupSpans(96_000, 128_000, CONTEXT_BAR_WIDTH, 'none').at(-1)).toEqual({ text: '░'.repeat(6), tone: 'label' })
+  })
+
+  it('flips the readout to amber at the warning threshold while the fill stays blue', () => {
+    const at = contextGroupSpans(121_600, 128_000, CONTEXT_BAR_WIDTH, 'percent')
+    expect(at[1]).toEqual({ text: '█'.repeat(23), tone: 'ctxFill' })
+    expect(at.at(-1)).toEqual({ text: '95%', tone: 'warn' })
+    const over = contextGroupSpans(200_000, 128_000, CONTEXT_BAR_WIDTH, 'full')
+    // Over budget: the fill saturates and the readout keeps the raw percent.
+    expect(over[1]).toEqual({ text: '█'.repeat(24), tone: 'ctxFill' })
+    expect(over.at(-1)).toEqual({ text: '200K/128K 156%', tone: 'warn' })
   })
 })
 
@@ -171,16 +186,32 @@ describe('adaptive context layout', () => {
     expect(visibleColumns(rowText(layout.row1))).toBeLessThanOrEqual(119)
   })
 
-  it('drops the context meter before the permission badge and Shift+Tab hint', () => {
+  it('shrinks the meter first, then degrades the readout, before dropping either', () => {
+    const stats = { ...emptyStats, lastPromptTokens: 96_000, contextWindow: 128_000 }
     const layout = layoutStatusBar(
       { ...baseFacts, model: 'm', cwd: 'r', permission: 'workspace-write' },
-      { ...emptyStats, lastPromptTokens: 96_000, contextWindow: 128_000 },
-      50,
+      stats,
+      66,
       { items: ['model', 'cwd', 'context', 'permission'], contextWidth: 44 },
     )
+    // The meter survives the tight budget: the readout degrades to the bare
+    // percent first and the bar shrinks, while the badge and hint stay.
+    const context = groupText(layout.row1).find(group => group.startsWith('context '))
+    expect(context).toBeDefined()
+    expect(context).toContain('75%')
+    expect(context).not.toContain('75K/128K')
     expect(layout.row1.right).toEqual([{ text: 'workspace-write', tone: 'warn' }])
     expect(layout.row1.hint).toBe(true)
-    expect(groupText(layout.row1).some(group => group.startsWith('context '))).toBe(false)
+    // Past the meter minimum the whole group goes before badge or hint.
+    const dropped = layoutStatusBar(
+      { ...baseFacts, model: 'm', cwd: 'r', permission: 'workspace-write' },
+      stats,
+      40,
+      { items: ['model', 'cwd', 'context', 'permission'], contextWidth: 44 },
+    )
+    expect(groupText(dropped.row1).some(group => group.startsWith('context '))).toBe(false)
+    expect(dropped.row1.right).toEqual([{ text: 'workspace-write', tone: 'warn' }])
+    expect(dropped.row1.hint).toBe(true)
   })
 })
 
@@ -237,7 +268,7 @@ describe('status layout', () => {
     )
     expect(groupText(layout.row1)).toEqual([
       '○ m · r · /mode standard · ⑂ main',
-      'context ██████░░░░░░32K/128K 25%',
+      'context ' + '█'.repeat(6) + '░'.repeat(18) + ' 32K/128K 25%',
     ])
     expect(layout.row1.right).toEqual([{ text: 'workspace-write', tone: 'warn' }])
     expect(layout.row1.hint).toBe(true)
@@ -310,7 +341,7 @@ describe('status layout', () => {
     )
     expect(groupText(layout.row1)).toEqual([
       '○ m · r',
-      'context ██████░░░░░░32K/128K 25%',
+      'context ' + '█'.repeat(6) + '░'.repeat(18) + ' 32K/128K 25%',
     ])
     expect(groupText(layout.row2)).toEqual(['cache 0%', 'in 32K · out 800'])
   })
@@ -452,7 +483,7 @@ describe('status width degradation', () => {
     expect(layout.row1.hint).toBe(true)
     expect(groupText(layout.row1)).toEqual([
       '○ provider/model-name · repository · /mode code · ⑂ feature-branch',
-      'context ██████░░░░░░32K/128K 25%',
+      'context ' + '█'.repeat(6) + '░'.repeat(18) + ' 32K/128K 25%',
     ])
     expect(layout.row1.right.map(span => span.text)).toEqual(['workspace-write'])
     expect(groupText(layout.row2)).toEqual([
@@ -473,7 +504,7 @@ describe('status width degradation', () => {
     const texts = keptTexts(layout)
     const groups = keptGroups(layout)
     expect(texts).not.toContain('a'.repeat(40))
-    expect(groups).toContain('context ██████░░░░░░32K/128K 25%')
+    expect(groups).toContain('context ' + '█'.repeat(6) + '░'.repeat(18) + ' 32K/128K 25%')
     expect(groups).toContain('workspace-write')
     expect(groups).toContain('turns 3 · steps 9')
     expect(groups).toContain('◎ round 2/8')
@@ -483,7 +514,7 @@ describe('status width degradation', () => {
   it('degrades row 2 without moving secondary figures onto row 1', () => {
     const layout = layoutStatusBar(richFacts, richStats, 150)
     const groups = keptGroups(layout)
-    expect(groupText(layout.row1)).toContain('context ██████░░░░░░32K/128K 25%')
+    expect(groupText(layout.row1)).toContain('context ' + '█'.repeat(5) + '░'.repeat(16) + ' 32K/128K 25%')
     expect(groups).toContain('workspace-write')
     expect(groups).toContain('turns 3 · steps 9')
     expect(groups).toContain('in 12.2K · out 2.4K')

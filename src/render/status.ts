@@ -126,37 +126,31 @@ export const STATUS_ITEM_SEPARATOR = ' · '
 export const STATUS_CYCLE_HINT = ' (shift+tab to cycle)'
 
 /**
- * Interior columns of the segmented context bar (content-type segments plus
- * the free tail whose right edge carries the usage readout). The layout
- * starts every bar at this width so the drop ladder can pre-measure the
- * group, then shrinks the bar inside a tighter budget before dropping it
- * (see CONTEXT_MIN_WIDTH) rather than asking the layout for more room.
+ * Interior columns of the context bar. The layout starts every bar at this
+ * width so the drop ladder can pre-measure the group, then degrades the
+ * readout and shrinks the bar inside a tighter budget before dropping the
+ * group (see CONTEXT_MIN_WIDTH) rather than asking the layout for more room.
  */
 export const CONTEXT_BAR_WIDTH = 24
 /** Occupancy at which the usage readout flips from brand blue to amber. */
 const CONTEXT_WARN_PERCENT = 90
-/** Free-tail floor in columns: wide enough for the bare percent readout, so
- * the warning stays visible even at 100%+ occupancy. */
-const CONTEXT_MIN_FREE = 5
 /**
- * Narrowest bar width the drop ladder tries before giving up on the context
- * group: the bar shrinks inside its own budget first (a few columns still
- * show the bare percent readout) and only then drops as a whole.
+ * Narrowest bar width the drop ladder keeps before dropping the whole
+ * context group: the bar shrinks to this floor first (the absolute readout
+ * survives), and only past it does the readout degrade and the group go.
  */
 const CONTEXT_MIN_WIDTH = 5
 
 /**
- * Render context occupancy as ONE stepless bar: a solid DeepSeek-blue fill
- * run, a dim dotted free track, and the usage readout riding the track's
- * right edge (`12.3K/1.0M 25%`, shrinking to the bare percent as the track
- * narrows). No per-content-type segmentation. Column split is deterministic:
- * the free share is `Math.round(free/window*width)` clamped to at least
- * CONTEXT_MIN_FREE columns and at most the full width; the fill takes every
- * remaining column, so a given occupancy always renders the identical bar.
- * The readout flips to amber once occupancy reaches the warning threshold.
- * @param usedTokens - reported used tokens (drives the readout and percent).
+ * Render context occupancy as ONE stepless proportional bar: a solid
+ * DeepSeek-blue fill run tracking the occupancy and a dim dotted free
+ * track for the rest. Nothing else lives inside the bar — the usage
+ * readout rides outside it (see contextGroupSpans) — so the geometry
+ * always reads as the true remaining share. A given occupancy always
+ * renders the identical bar.
+ * @param usedTokens - reported used tokens.
  * @param contextWindow - route capacity.
- * @param width - total bar interior columns.
+ * @param width - total bar columns.
  * @returns tone-split spans for the footer to paint.
  */
 export function contextBar(
@@ -166,27 +160,42 @@ export function contextBar(
 ): readonly StatusSpan[] {
   if (width <= 0 || contextWindow <= 0) return []
   const used = Math.max(0, usedTokens)
-  const percent = Math.round(used / contextWindow * 100)
-  const warning = percent >= CONTEXT_WARN_PERCENT
-  const readoutTone: StatusTone = warning ? 'warn' : 'value'
-
-  const freeShare = Math.round(Math.max(0, contextWindow - used) / contextWindow * width)
-  const freeColumns = Math.min(width, Math.max(freeShare, CONTEXT_MIN_FREE))
-  const usedColumns = Math.max(0, width - freeColumns)
-
-  const total = `${formatTokens(used)}/${formatTokens(contextWindow)}`
-  const percentText = `${percent}%`
-  const readout = freeColumns >= visibleColumns(`${total} ${percentText}`)
-    ? `${total} ${percentText}`
-    : freeColumns >= visibleColumns(percentText)
-      ? percentText
-      : ''
-
+  const fill = Math.min(width, Math.max(0, Math.round(used / contextWindow * width)))
   const spans: StatusSpan[] = []
-  if (usedColumns > 0) spans.push({ text: '█'.repeat(usedColumns), tone: 'ctxFill' })
-  const pad = freeColumns - visibleColumns(readout)
-  if (pad > 0) spans.push({ text: '░'.repeat(pad), tone: 'label' })
-  if (readout !== '') spans.push({ text: readout, tone: readoutTone })
+  if (fill > 0) spans.push({ text: '█'.repeat(fill), tone: 'ctxFill' })
+  const free = width - fill
+  if (free > 0) spans.push({ text: '░'.repeat(free), tone: 'label' })
+  return spans
+}
+
+/** How much usage detail the context group's readout carries. */
+export type ContextReadoutMode = 'full' | 'percent' | 'none'
+
+/**
+ * Compose the context group: the proportional bar plus the usage readout
+ * OUTSIDE the bar, so the dotted track keeps its proportional meaning no
+ * matter how wide the readout is. `full` reads `12.3K/1.0M 25%`; `percent`
+ * drops the absolute pair; `none` is the bare bar. The readout turns amber
+ * once occupancy reaches the warning threshold.
+ */
+export function contextGroupSpans(
+  usedTokens: number,
+  contextWindow: number,
+  barWidth: number,
+  readout: ContextReadoutMode,
+): readonly StatusSpan[] {
+  const spans: StatusSpan[] = [{ text: 'context ', tone: 'label' }]
+  spans.push(...contextBar(usedTokens, contextWindow, barWidth))
+  if (readout === 'none' || barWidth <= 0 || contextWindow <= 0) return spans
+  const used = Math.max(0, usedTokens)
+  const percent = Math.round(used / contextWindow * 100)
+  const text = readout === 'full'
+    ? `${formatTokens(used)}/${formatTokens(contextWindow)} ${percent}%`
+    : `${percent}%`
+  spans.push(
+    { text: ' ', tone: 'label' },
+    { text, tone: percent >= CONTEXT_WARN_PERCENT ? 'warn' : 'value' },
+  )
   return spans
 }
 
@@ -459,17 +468,13 @@ function buildCandidates(
       id: 'cache',
     })
   }
-  // Context occupancy as a segmented bar: per-content-type runs colored by
-  // their own blue shade with a right-aligned usage readout. The used total
-  // is the most recent reported prompt size against the advertised route
-  // capacity (the same figures the old bracket bar showed).
+  // Context occupancy as a purely proportional bar with the usage readout
+  // riding outside it: the used total is the most recent reported prompt
+  // size against the advertised route capacity.
   if (stats.contextWindow > 0 && stats.lastPromptTokens > 0 && enabled.has('context')) {
     left.push({
       group: {
-        spans: [
-          { text: 'context ', tone: 'label' },
-          ...contextBar(stats.lastPromptTokens, stats.contextWindow, contextWidth),
-        ],
+        spans: contextGroupSpans(stats.lastPromptTokens, stats.contextWindow, contextWidth, 'full'),
       },
       rank: RANK_CONTEXT,
       id: 'context',
@@ -569,19 +574,18 @@ export function layoutStatusBar(
   const leftKept = [...orderedLeft]
   const rightKept = [...orderedRight]
 
-  // Context shrink state: the bar starts at its full budget and is rebuilt at
-  // ever narrower widths before the drop ladder is allowed to discard it.
+  // Context degradation state: the readout drops its absolute pair first,
+  // then the bar shrinks inside its own budget, and only then is the whole
+  // group removed — the proportional meter outlives the auxiliary numbers.
   // Rebuilding replaces the group's spans in place so width() re-measures it.
+  let contextReadout: ContextReadoutMode = 'full'
   let contextWidth = maxContextWidth
   const rebuildContext = (): void => {
     const index = leftKept.findIndex(entry => entry.id === 'context')
     if (index < 0) return
     leftKept[index] = {
       group: {
-        spans: [
-          { text: 'context ', tone: 'label' },
-          ...contextBar(stats.lastPromptTokens, stats.contextWindow, contextWidth),
-        ],
+        spans: contextGroupSpans(stats.lastPromptTokens, stats.contextWindow, contextWidth, contextReadout),
       },
       rank: RANK_CONTEXT,
       id: 'context',
@@ -599,23 +603,24 @@ export function layoutStatusBar(
   }
 
   while (width() > budget) {
-    // Context is the lowest-priority visual group. Shrink or remove it before
-    // sacrificing the permission badge or its Shift+Tab affordance.
-    // Shrink the context bar instead of dropping it: reserve everything else
-    // and hand the deficit to the bar, clamped to CONTEXT_MIN_WIDTH. The
-    // fixed label ('context ') and the bar's own readout keep shrinking to
-    // the bare percent, so a tight terminal keeps context visible longer.
-    if (leftKept.some(entry => entry.id === 'context') && contextWidth > CONTEXT_MIN_WIDTH) {
-      const overflow = width() - budget
-      contextWidth = Math.max(CONTEXT_MIN_WIDTH, contextWidth - overflow)
-      rebuildContext()
-      continue
-    }
-    const contextIndex = leftKept.findIndex(entry => entry.id === 'context')
-    if (contextIndex >= 0) {
-      // Once the meter reaches its minimum useful width, remove the whole
-      // group before touching the permission badge or its keyboard hint.
-      leftKept.splice(contextIndex, 1)
+    // Context is the lowest-priority visual group: the bar shrinks inside
+    // its own budget first (the absolute readout survives), then the
+    // readout degrades to the bare percent, and only then does the whole
+    // group go — before the permission badge or its Shift+Tab affordance
+    // is touched.
+    if (leftKept.some(entry => entry.id === 'context')) {
+      if (contextWidth > CONTEXT_MIN_WIDTH) {
+        const overflow = width() - budget
+        contextWidth = Math.max(CONTEXT_MIN_WIDTH, contextWidth - overflow)
+        rebuildContext()
+        continue
+      }
+      if (contextReadout === 'full') {
+        contextReadout = 'percent'
+        rebuildContext()
+        continue
+      }
+      leftKept.splice(leftKept.findIndex(entry => entry.id === 'context'), 1)
       continue
     }
     if (hint && rightKept.length > 0 && leftKept.length > 0) {
