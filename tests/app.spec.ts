@@ -780,16 +780,16 @@ describe('keyboard protocol and transcript alignment', () => {
       stdin.write('[114;5u')
       await wait()
       expect(output.text).not.toContain('[114;5u')
-      // The fold opened in the live region without a source-backed replay.
+      // The fold opens through one global source-backed replay.
       expect(output.text).toContain('the hidden reasoning trace')
-      expect(output.text).not.toContain('\x1b[2J')
+      expect((output.text.match(/\x1b\[2J/gu) ?? []).length).toBe(1)
 
       output.text = ''
       stdin.write('[114;5u')
       await wait()
       expect(output.text).toContain('Thinking')
       expect(output.text).not.toContain('the hidden reasoning trace')
-      expect(output.text).not.toContain('\x1b[2J')
+      expect((output.text.match(/\x1b\[2J/gu) ?? []).length).toBe(1)
 
       stdin.write('\x1b')
       await wait()
@@ -1749,7 +1749,7 @@ describe('Ctrl+R reasoning fold', () => {
     }
   })
 
-  it('defers the fold replay of a busy-turn toggle until the turn settles', async () => {
+  it('replays the fold globally and immediately on a busy-turn toggle', async () => {
     const harness = createTty(100, 30)
     const store = createTranscriptStore([
       {
@@ -1793,15 +1793,16 @@ describe('Ctrl+R reasoning fold', () => {
       await wait()
       harness.stdin.write('\x12')
       await wait()
-      expect(harness.output.text).not.toContain('\x1b[2J')
+      // The toggle replays IMMEDIATELY even mid-turn: exactly one clear, and
+      // the OLD settled entry (already in native scrollback) unifies to the
+      // expanded fold right away.
+      expect((harness.output.text.match(/\x1b\[2J/gu) ?? []).length).toBe(1)
+      expect(harness.output.text.replace(/\x1b\[[0-9;?]*[A-Za-z]/gu, '')).toContain('old settled reasoning')
 
-      // …and once the turn settles, exactly ONE deferred replay unifies the
-      // whole scrollback to the expanded fold — the OLD settled entry
-      // included, never left behind at the collapsed state.
+      // Turn settlement adds no extra replay; the unified state persists.
       store.apply({ type: 'turn/end', seq: 7, time: 7, data: { turn: 2, reason: { kind: 'completed' } } } as SessionEvent)
       await wait()
       expect((harness.output.text.match(/\x1b\[2J/gu) ?? []).length).toBe(1)
-      expect(harness.output.text.replace(/\x1b\[[0-9;?]*[A-Za-z]/gu, '')).toContain('old settled reasoning')
     } finally {
       instance.unmount()
       harness.stdin.destroy()
@@ -2057,10 +2058,11 @@ describe('Ctrl+R reasoning fold', () => {
       output.text = ''
       stdin.write('\x12')
       await wait()
-      // Ctrl+R flips the live entry too, without a source-backed clear.
+      // Ctrl+R replays globally and immediately: the trapped live entry AND
+      // the settled scrollback unify with one clear.
       plain = output.text.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '')
       expect(plain).toContain('the trapped reasoning trace')
-      expect(output.text).not.toContain('\x1b[2J')
+      expect((output.text.match(/\x1b\[2J/gu) ?? []).length).toBe(1)
 
       output.text = ''
       stdin.write('\x12')
@@ -2075,7 +2077,7 @@ describe('Ctrl+R reasoning fold', () => {
     }
   }, 20_000)
 
-  it('keeps the live reasoning toggle clear-free through stream completion', async () => {
+  it('replays the mid-stream fold toggle globally and settles without extra clears', async () => {
     const { stdin, stdout, output } = createTty(100, 24)
     const store = createTranscriptStore([
       {
@@ -2178,18 +2180,18 @@ describe('Ctrl+R reasoning fold', () => {
       let plain = output.text.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '')
       expect(plain).toContain('Thinking')
 
-      // Ctrl+R mid-stream flips ONLY the live region: expanded reasoning
-      // appears and NO clear-and-replay touches the screen yet.
+      // Ctrl+R mid-stream replays globally: expanded reasoning appears with
+      // exactly one clear.
       output.text = ''
       stdin.write('\x12')
       await wait()
       plain = output.text.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '')
       expect(plain).not.toContain('Thinking')
       expect(plain).toContain('stream-9')
-      expect(output.text).not.toContain('\x1b[2J')
+      expect((output.text.match(/\x1b\[2J/gu) ?? []).length).toBe(1)
 
-      // The assembled message ends the stream without a source-backed clear;
-      // the new settled entry still paints the assembled trace and answer.
+      // The assembled message ends the stream WITHOUT a second clear; the
+      // new settled entry still paints the assembled trace and answer.
       store.apply({
         type: 'assistant/message',
         seq: 200,
@@ -2207,7 +2209,7 @@ describe('Ctrl+R reasoning fold', () => {
         },
       } as SessionEvent)
       await wait()
-      expect(output.text).not.toContain('\x1b[2J')
+      expect((output.text.match(/\x1b\[2J/gu) ?? []).length).toBe(1)
       expect(output.text).toContain('the assembled trace')
       expect(output.text).toContain('the assembled answer')
     } finally {
