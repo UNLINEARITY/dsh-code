@@ -48,11 +48,11 @@ describe('styled terminal lines', () => {
     }
   })
 
-  it('does not advertise a live Ctrl+R action on immutable settled scrollback', () => {
+  it('does not advertise a live Ctrl/Alt+R action on immutable settled scrollback', () => {
     const lines = settledEntryLines({ kind: 'assistant', reasoning: 'trace', text: 'answer' }, 40, false)
     const text = textOf(lines)
     expect(text).toContain('Thinking (5 chars)')
-    expect(text).not.toContain('Ctrl+R to expand')
+    expect(text).not.toContain('Ctrl/Alt+R to expand')
   })
 
   it('gives reasoning a Codex-style hanging indent aligned with reply text', () => {
@@ -102,7 +102,7 @@ describe('styled terminal lines', () => {
     }
   })
 
-  it('folds raw tool output to three rows by default and expands with Ctrl+R state', () => {
+  it('folds raw tool output to three rows by default and expands with Ctrl/Alt+R state', () => {
     const raw = Array.from({ length: 60 }, (_, index) => `tool-${index}`).join('\n')
     const entry: TranscriptEntry = {
       kind: 'tool',
@@ -118,7 +118,7 @@ describe('styled terminal lines', () => {
     }
     const collapsed = transcriptEntryLines(entry, 40, false)
     expect(collapsed).toHaveLength(3)
-    expect(textOf(collapsed)).toContain('Ctrl+R')
+    expect(textOf(collapsed)).toContain('Ctrl/Alt+R')
 
     const expanded = transcriptEntryLines(entry, 40, true)
     expect(expanded.length).toBeGreaterThan(60)

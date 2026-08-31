@@ -223,6 +223,7 @@ const LOCAL_COMMANDS = [
   { label: '/agents', description: 'inspect subagent sessions of this conversation' },
   { label: '/todos', description: 'inspect the full todo list' },
   { label: '/subagent', description: 'choose the model delegated subagents run on' },
+  { label: '/vscode-keys', description: 'pass ctrl+r through the vs code terminal' },
   { label: '/delete', description: 'delete a session and its subagent threads' },
   { label: '/clear', description: 'clear the screen' },
   { label: '/export', description: 'export the transcript to markdown (/export [path])' },
@@ -363,6 +364,8 @@ export interface AppProps {
   recordHistory(text: string): void
   /** Cancel one queued inbox message by identity (Delete on the empty composer). */
   cancelQueued(messageId: string): void
+  /** Apply the Ctrl+R terminal passthrough to the detected editor (/vscode-keys); resolves to a one-line summary. */
+  applyEditorKeys(): Promise<string>
 }
 
 /** Pad text with spaces to a visible-column target (menu name column). */
@@ -2004,7 +2007,7 @@ function HelpPanel({ descriptors, skills, commandError, skillError, onClose }: {
     createElement(Text, { key: 'keys-title', bold: true, wrap: 'truncate-end' }, ' keys'),
     createElement(Text, { key: 'key-submit', dimColor: true, wrap: 'truncate-end' }, '  enter submit · up/down history · tab complete'),
     createElement(Text, { key: 'key-mentions', dimColor: true, wrap: 'truncate-end' }, '  @ mentions workspace files and sessions'),
-    createElement(Text, { key: 'key-inspector', dimColor: true, wrap: 'truncate-end' }, '  ctrl+o history details · ctrl+r thinking · shift+tab permission preset'),
+    createElement(Text, { key: 'key-inspector', dimColor: true, wrap: 'truncate-end' }, '  ctrl+o history details · ctrl/alt+r thinking · shift+tab permission preset'),
     createElement(Text, { key: 'key-cancel', dimColor: true, wrap: 'truncate-end' }, '  esc interrupt the running turn · ctrl+c cancel / clear / quit · ctrl+d exit'),
     createElement(Text, { key: 'key-queue', dimColor: true, wrap: 'truncate-end' }, '  delete on the empty composer cancels the newest queued message'),
     createElement(Text, { key: 'key-edit', dimColor: true, wrap: 'truncate-end' }, '  ctrl+k cut to end of line · ctrl+u clear line · ctrl+a / ctrl+e line ends'),
@@ -2431,7 +2434,7 @@ interface DraftImage extends ImagePathInspection {
  * While a modal (approval / question / model panel) owns the keys, the
  * box passes every key through untouched.
  */
-function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openEffort, openHelp, openMode, openPermission, openResume, openPlugin, openJobs, openStatusline, openTheme, openHistory, openAgents, openSubagent, openTodos, openDelete, openDiff, reviewChanges, deleteConfirm, confirmDelete, cancelDelete, createSession, forkSession, cancelSessionSwitch, notify, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, inspectImages, prepareImages, cyclePermission, exportTranscript, renameTitle, copyLastResponse, recallSpace, recordLocal, recordHistory, queued, cancelQueued, historyFill, historyConsumed, waveTier, waveStyle, maxRows, onEditorRows }: {
+function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openEffort, openHelp, openMode, openPermission, openResume, openPlugin, openJobs, openStatusline, openTheme, openHistory, openAgents, openSubagent, openTodos, openDelete, openDiff, reviewChanges, deleteConfirm, confirmDelete, cancelDelete, createSession, forkSession, cancelSessionSwitch, notify, applyEditorKeys, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, inspectImages, prepareImages, cyclePermission, exportTranscript, renameTitle, copyLastResponse, recallSpace, recordLocal, recordHistory, queued, cancelQueued, historyFill, historyConsumed, waveTier, waveStyle, maxRows, onEditorRows }: {
   active: boolean
   frozen: boolean
   busy: boolean
@@ -2472,6 +2475,8 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   forkSession(argument: string): void
   cancelSessionSwitch(): boolean
   notify(text: string, tone?: NoticeTone): void
+  /** Apply the Ctrl+R passthrough to the detected editor (/vscode-keys); resolves to a one-line summary. */
+  applyEditorKeys(): Promise<string>
   hasNotice: boolean
   dismissNotice(): void
   toggleReasoning(): void
@@ -2965,7 +2970,9 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
       return
     }
     // Ctrl+R toggles the thinking display (Claude-Code reasoning fold).
-    if (key.ctrl && input === 'r') {
+    // Alt+R is the zero-config alias: VS Code never intercepts Alt chords,
+    // so the toggle stays reachable before /vscode-keys has been applied.
+    if ((key.ctrl || key.meta) && input === 'r') {
       if (focusReporting && !terminalFocusedRef.current) return
       toggleReasoning()
       return
@@ -3211,6 +3218,13 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
       }
       if (text === '/todos') {
         openTodos()
+        return
+      }
+      if (text === '/vscode-keys' || text.startsWith('/vscode-keys ')) {
+        void applyEditorKeys().then(
+          summary => notify(summary),
+          error => notify(`vscode-keys failed: ${error instanceof Error ? error.message : String(error)}`, 'error'),
+        )
         return
       }
       if (text === '/subagent') {
@@ -4497,7 +4511,7 @@ export function App(props: AppProps): ReactElement {
         visibleLiveLines.length === 0 ? undefined : createElement(StyledRows, { lines: visibleLiveLines }),
         view.streamingReasoning !== '' && reasoningRows > 0
           ? createElement(StreamTail, {
-            text: showReasoning ? view.streamingReasoning : 'Thinking… (Ctrl+R to expand)',
+            text: showReasoning ? view.streamingReasoning : 'Thinking… (Ctrl/Alt+R to expand)',
             prefix: '✻ ',
             continuationPrefix: '  ',
             dim: true,
@@ -4686,6 +4700,7 @@ export function App(props: AppProps): ReactElement {
         descriptors,
         skills,
         dispatch: props.dispatch,
+        applyEditorKeys: props.applyEditorKeys,
         steer: props.steer,
         interrupt: props.interrupt,
         quit: props.quit,

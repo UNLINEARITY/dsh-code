@@ -164,6 +164,7 @@ The following built-in commands are available inside the TUI. Additional Harness
 | --- | --- |
 | `/plugin [query]` | Inspect loaded extensions and their status |
 | `/statusline` | Select the items displayed in the status bar |
+| `/vscode-keys` | Pass Ctrl+R through VS Code-family terminals (idempotent user-level keybindings.json write) |
 | `/theme` | Switch the terminal color theme |
 | `/help` | View key bindings, built-in commands, Harness commands, and user skills |
 | `/quit` | Exit DSH-Code |
@@ -177,7 +178,7 @@ The following built-in commands are available inside the TUI. Additional Harness
 | `Tab` | Complete commands, skills, or `@` references |
 | `@` | Reference workspace files or existing sessions; image files are sent as attachments |
 | `Ctrl+O` | Inspect full history and tool details |
-| `Ctrl+R` | Fold or expand model reasoning |
+| `Ctrl/Alt+R` | Fold or expand model reasoning; run /vscode-keys first in VS Code-family terminals to pass Ctrl+R through |
 | `Shift+Tab` | Cycle through permission Presets |
 | `Delete` | Cancel the newest queued message when the composer is empty |
 | `Ctrl+K` | Delete from the cursor to the end of the line |

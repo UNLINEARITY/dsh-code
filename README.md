@@ -164,6 +164,7 @@ dsh --profile cli --session my-id    # 使用指定 id 新建会话
 | --- | --- |
 | `/plugin [query]` | 查看已加载扩展及其状态 |
 | `/statusline` | 选择状态栏显示的项目 |
+| `/vscode-keys` | 将 Ctrl+R 放行进 VS Code 系终端（幂等写入用户级 keybindings.json） |
 | `/theme` | 切换终端配色主题 |
 | `/help` | 查看快捷键、内置命令、Harness 命令和用户技能 |
 | `/quit` | 退出 DSH-Code |
@@ -177,7 +178,7 @@ dsh --profile cli --session my-id    # 使用指定 id 新建会话
 | `Tab` | 补全命令、技能或 `@` 引用 |
 | `@` | 引用工作区文件或已有会话；图片文件自动作为附件发送 |
 | `Ctrl+O` | 查看完整历史与工具详情 |
-| `Ctrl+R` | 折叠或展开思考过程 |
+| `Ctrl/Alt+R` | 折叠或展开思考过程；VS Code 系终端先运行 /vscode-keys 放行 Ctrl+R |
 | `Shift+Tab` | 循环切换权限 Preset |
 | `Delete` | 输入框为空时，取消最新一条排队消息 |
 | `Ctrl+K` | 删除光标到行尾的内容 |

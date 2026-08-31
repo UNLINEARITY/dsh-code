@@ -244,7 +244,7 @@ function compactToolLines(lines: readonly StyledLine[], columns: number): readon
   if (lines.length <= DEFAULT_TOOL_ROWS) return lines
   return [
     ...lines.slice(0, DEFAULT_TOOL_ROWS - 1),
-    ...textLines('    … output hidden · Ctrl+R', columns, 'dim').slice(0, 1),
+    ...textLines('    … output hidden · Ctrl/Alt+R', columns, 'dim').slice(0, 1),
   ]
 }
 
@@ -276,7 +276,7 @@ export function transcriptEntryLines(
         ? []
         : showReasoning
           ? reasoningLines(entry.reasoning, width)
-          : textLines(`✻ Thinking (${entry.reasoning.length} chars${reasoningToggleHint ? ', Ctrl+R to expand' : ''})`, width, 'dim')
+          : textLines(`✻ Thinking (${entry.reasoning.length} chars${reasoningToggleHint ? ', Ctrl/Alt+R to expand' : ''})`, width, 'dim')
       // Every reply row carries the composer's two-column gutter, so reply
       // text aligns with the input cursor (Codex LIVE_PREFIX alignment); the
       // wrap budget shrinks by the same amount so no line double-wraps.

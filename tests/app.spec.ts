@@ -124,6 +124,7 @@ function appProps(overrides: Partial<AppProps> = {}): AppProps {
     loadJobs: () => [],
     statusline: DEFAULT_STATUSLINE_ITEMS,
     saveStatusline: noop,
+    applyEditorKeys: async () => 'ctrl+r passthrough written to test',
     history: [],
     recordHistory: noop,
     cancelQueued: noop,
@@ -826,7 +827,7 @@ describe('keyboard protocol and transcript alignment', () => {
     const instance = renderApp(harness, appProps({ store }))
     try {
       await wait()
-      expect(output.text).toContain('Ctrl+R')
+      expect(output.text).toContain('Ctrl/Alt+R')
       output.text = ''
       stdin.write('\x12')
       await wait()
@@ -1648,6 +1649,58 @@ describe('Ctrl+R reasoning fold', () => {
     }
   })
 
+  it('accepts alt+r as a fold alias under the same VS Code focus gate', async () => {
+    vi.stubEnv('TERM_PROGRAM', 'vscode')
+    vi.stubEnv('VSCODE_INJECTION', '1')
+    const harness = createTty(100, 24)
+    const store = createTranscriptStore([
+      {
+        type: 'user/message',
+        seq: 1,
+        time: 1,
+        data: createUserMessage({ content: [{ type: 'text', text: 'go' }], source: { kind: 'user' } }),
+      } as SessionEvent,
+      {
+        type: 'assistant/message',
+        seq: 2,
+        time: 2,
+        data: {
+          turn: 1,
+          step: 1,
+          message: createAssistantMessage({
+            content: [
+              { type: 'reasoning', text: 'alias-gated reasoning' },
+              { type: 'text', text: 'answer' },
+            ],
+            source: { provider: 'p', model: 'm' },
+          }),
+        },
+      } as SessionEvent,
+    ])
+    const instance = renderApp(harness, appProps({ store }))
+    try {
+      await wait()
+      expect(harness.output.text).toContain('Thinking (')
+
+      // Focus-out + alt+r stays gated exactly like ctrl+r.
+      harness.output.text = ''
+      harness.stdin.write('\x1b[O\x1br')
+      await wait()
+      expect(harness.output.text).not.toContain('alias-gated reasoning')
+
+      // Focus-in + alt+r toggles the fold.
+      harness.output.text = ''
+      harness.stdin.write('\x1b[I\x1br')
+      await wait()
+      expect(harness.output.text).toContain('alias-gated reasoning')
+    } finally {
+      instance.unmount()
+      harness.stdin.destroy()
+      harness.stdout.destroy()
+      vi.unstubAllEnvs()
+    }
+  })
+
   it('repaints the settled fold through one source-backed replay on an idle toggle', async () => {
     const stdin = Object.assign(new PassThrough(), {
       isTTY: true,
@@ -1758,7 +1811,7 @@ describe('Ctrl+R reasoning fold', () => {
       await wait()
       // Settled reasoning collapses behind the fold marker.
       expect(output).toContain('Thinking (')
-      expect(output).not.toContain('Ctrl+R to expand')
+      expect(output).not.toContain('Ctrl/Alt+R to expand')
       expect(output).not.toContain('the hidden reasoning trace')
 
       output = ''

@@ -56,6 +56,7 @@ import { toolArgumentsPreview } from './render/tool-preview.ts'
 import { buildExportMarkdown } from './render/export.ts'
 import { inspectImagePaths, saveImagePaths } from './attachments.ts'
 import { copyText, latestAssistantText } from './editor.ts'
+import { applyCtrlRPassthrough, resolveEditorKeysStartupHint, type EditorKeysEnv } from './editor-keys.ts'
 import {
   beginProviderAuthorization,
   cancelProviderAuthorization,
@@ -598,6 +599,16 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
         bridge.notify('statusline save failed: ' + (writeError instanceof Error ? writeError.message : String(writeError)), 'error')
       })
   }
+
+  // /vscode-keys: detect the hosting editor's user keybindings.json and pass
+  // Ctrl+R through the workbench. One marker file under the DSH home keeps
+  // the startup hint a once-per-install event.
+  const editorKeysEnv: EditorKeysEnv = {
+    env: process.env,
+    paths: { homedir: homedir(), appdata: process.env.APPDATA, platform: process.platform },
+    flagPath: join(homedir(), '.dsh', 'dsh-code', 'editor-keys.json'),
+  }
+  const applyEditorKeys = (): Promise<string> => applyCtrlRPassthrough(editorKeysEnv)
 
   // /theme persistence: one user-level JSON file under the DSH home, mirroring
   // the statusline file. A missing file means the dark default; a corrupt file
@@ -1470,6 +1481,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       loadJobs: () => listJobs(ctx, active?.agent),
       statusline: statuslineItems,
       saveStatusline,
+      applyEditorKeys,
       saveTheme,
       history: inputHistory,
       recordHistory,
@@ -1519,6 +1531,17 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       bridge.notify('theme config unreadable, using dark: ' + themeWarning, 'warning')
     }, 50)
   }
+
+  // One-shot VS Code Ctrl+R hint: resolveEditorKeysStartupHint checks the
+  // marker file and the live keybindings config; surfacing waits for the
+  // notice channel like the other startup warnings. A failed probe stays
+  // silent — the hint is cosmetic and /vscode-keys remains discoverable.
+  void resolveEditorKeysStartupHint(editorKeysEnv).then(hint => {
+    if (hint === undefined) return
+    setTimeout(() => {
+      bridge.notify(hint)
+    }, 50)
+  }, () => {})
 }
 
 /**
