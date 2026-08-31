@@ -44,9 +44,9 @@ export function parseGitDiffSpec(argument: string): GitDiffSpec {
   return { label: `changes since ${value}`, args: ['diff', '--no-ext-diff', '--unified=3', value, '--'] }
 }
 
-function executeGit(cwd: string, args: readonly string[]): Promise<string> {
+function executeGit(cwd: string, args: readonly string[], signal?: AbortSignal): Promise<string> {
   return new Promise((resolve, reject) => {
-    execFile('git', [...args], { cwd, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, windowsHide: true }, (error, stdout, stderr) => {
+    execFile('git', [...args], { cwd, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, windowsHide: true, signal }, (error, stdout, stderr) => {
       if (error !== null) {
         reject(new Error(stderr.trim() || error.message))
         return
@@ -56,17 +56,21 @@ function executeGit(cwd: string, args: readonly string[]): Promise<string> {
   })
 }
 
-/** Load one complete textual diff without invoking external diff drivers. */
-export async function loadGitDiff(cwd: string, argument: string): Promise<GitDiffView> {
+/**
+ * Load one complete textual diff without invoking external diff drivers.
+ * @param signal - aborted by the caller on session switches/quit, killing the
+ * git subprocess instead of letting a stale repository's diff land later.
+ */
+export async function loadGitDiff(cwd: string, argument: string, signal?: AbortSignal): Promise<GitDiffView> {
   const spec = parseGitDiffSpec(argument)
   try {
-    const text = await executeGit(cwd, spec.args)
+    const text = await executeGit(cwd, spec.args, signal)
     return { title: `git diff - ${spec.label}`, files: parseGitDiffFiles(text) }
   } catch (error: unknown) {
     // An unborn repository has no HEAD. Preserve useful unstaged output for
     // the default form while still surfacing all other Git failures.
     if (argument.trim() !== '') throw error
-    const text = await executeGit(cwd, ['diff', '--no-ext-diff', '--unified=3', '--'])
+    const text = await executeGit(cwd, ['diff', '--no-ext-diff', '--unified=3', '--'], signal)
     return { title: 'git diff - working tree', files: parseGitDiffFiles(text) }
   }
 }

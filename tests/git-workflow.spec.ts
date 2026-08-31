@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildReviewPrompt, parseGitDiffFiles, parseGitDiffSpec } from '../src/git-workflow.ts'
+import { buildReviewPrompt, loadGitDiff, parseGitDiffFiles, parseGitDiffSpec } from '../src/git-workflow.ts'
 
 describe('Git workflow', () => {
   it('parses default, staged, and ref diffs without option injection', () => {
@@ -34,5 +34,11 @@ describe('Git workflow', () => {
     expect(files.map(file => file.path)).toEqual(['src/a.ts', 'src/b.ts'])
     expect(files[0]?.lines).toContain('-old')
     expect(files[1]?.lines).toContain('+added')
+  })
+
+  it('rejects an aborted diff load instead of letting a stale repository review land', async () => {
+    const controller = new AbortController()
+    controller.abort()
+    await expect(loadGitDiff(process.cwd(), '', controller.signal)).rejects.toThrow()
   })
 })
