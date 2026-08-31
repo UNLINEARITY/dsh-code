@@ -434,15 +434,13 @@ function useCursorBlink(active: boolean): { visible: boolean; reset(): void } {
 }
 
 /**
- * The busy line, web TurnStatus contract: a continuously moving blue gradient
- * paints the complete `Deep diving...` label, with the elapsed clock appended
- * only once the turn has clearly been running (15s) — anchored to `turn/start`
- * so a resumed mid-turn keeps the real time.
+ * One bounded line painted with the deep-diving shimmer: a continuously
+ * moving blue gradient across graphemes, the `✻` glyph in the breathing
+ * spark color. Shared by the busy line and the collapsed thinking marker;
+ * always exactly one row (truncate-end) so the live budget stays exact.
  */
-function DeepDivingLine({ since }: { since: number }): ReactElement {
+function ShimmerLine({ text }: { text: string }): ReactElement {
   const tick = useFrames(DEEP_DIVING_SHIMMER_TICK_MS)
-  const elapsed = since === 0 ? 0 : Date.now() - since
-  const text = elapsed >= 15_000 ? `✻ Deep diving... ${runClock(elapsed)}` : '✻ Deep diving...'
   const palette = getPalette()
   const graphemes = splitGraphemes(text)
   return createElement(
@@ -461,6 +459,18 @@ function DeepDivingLine({ since }: { since: number }): ReactElement {
       )
     }),
   )
+}
+
+/**
+ * The busy line, web TurnStatus contract: a continuously moving blue gradient
+ * paints the complete `Deep diving...` label, with the elapsed clock appended
+ * only once the turn has clearly been running (15s) — anchored to `turn/start`
+ * so a resumed mid-turn keeps the real time.
+ */
+function DeepDivingLine({ since }: { since: number }): ReactElement {
+  const elapsed = since === 0 ? 0 : Date.now() - since
+  const text = elapsed >= 15_000 ? `✻ Deep diving... ${runClock(elapsed)}` : '✻ Deep diving...'
+  return createElement(ShimmerLine, { text })
 }
 
 /**
@@ -4510,13 +4520,30 @@ export function App(props: AppProps): ReactElement {
         { flexDirection: 'column' },
         visibleLiveLines.length === 0 ? undefined : createElement(StyledRows, { lines: visibleLiveLines }),
         view.streamingReasoning !== '' && reasoningRows > 0
-          ? createElement(StreamTail, {
-            text: showReasoning ? view.streamingReasoning : 'Thinking… (Ctrl/Alt+R to expand)',
-            prefix: '✻ ',
-            continuationPrefix: '  ',
-            dim: true,
-            maxRows: reasoningRows,
-          })
+          ? showReasoning
+            ? createElement(StreamTail, {
+              text: view.streamingReasoning,
+              prefix: '✻ ',
+              continuationPrefix: '  ',
+              dim: true,
+              maxRows: reasoningRows,
+            })
+            // The collapsed marker shimmers only while reasoning streams
+            // alone: once answer text flows, a periodically re-rendered
+            // animation component would race the store's frame-throttled
+            // notifications and could defer the answer paint by tens to
+            // hundreds of milliseconds (stream-burst contract), so the
+            // marker falls back to the static dim row — same as Deep diving
+            // always yields the live region to streaming content.
+            : view.streaming === ''
+              ? createElement(ShimmerLine, { text: '✻ Thinking… (Ctrl/Alt+R to expand)' })
+              : createElement(StreamTail, {
+                text: 'Thinking… (Ctrl/Alt+R to expand)',
+                prefix: '✻ ',
+                continuationPrefix: '  ',
+                dim: true,
+                maxRows: reasoningRows,
+              })
           : undefined,
         view.streaming !== '' && answerRows > 0
           ? createElement(

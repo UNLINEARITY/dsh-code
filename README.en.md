@@ -188,6 +188,13 @@ The following built-in commands are available inside the TUI. Additional Harness
 | `Ctrl+C` | Cancel a task, clear the input, or exit, depending on the current state |
 | `Ctrl+D` | Exit DSH-Code |
 
+#### Status indicators
+
+| Indicator | Trigger |
+| --- | --- |
+| `✻ Deep diving...` | The turn is running while nothing is streaming (waiting for the first token, gaps during tool runs); an elapsed clock appears after 15 seconds |
+| `✻ Thinking…` | Model reasoning is streaming; collapsed into the shimmer marker by default, expand with `Ctrl/Alt+R` |
+
 ## 4. How DSH-Code integrates with DSH
 
 ### 1. Runtime composition

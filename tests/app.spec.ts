@@ -1701,6 +1701,54 @@ describe('Ctrl+R reasoning fold', () => {
     }
   })
 
+  it('paints the collapsed streaming-thinking marker with the deep-diving shimmer', async () => {
+    const harness = createTty(100, 24)
+    const store = createTranscriptStore()
+    const instance = renderApp(harness, appProps({ store }))
+    try {
+      store.apply({ type: 'request/context', seq: 1, time: 1, data: { provider: 'zai', model: 'glm-5.2', contextWindow: 128_000 } } as SessionEvent)
+      store.apply({ type: 'turn/start', seq: 2, time: 2, data: { turn: 1 } } as SessionEvent)
+      store.apply({ type: 'step/start', seq: 3, time: 3, data: { turn: 1, step: 1 } } as SessionEvent)
+      store.apply({
+        type: 'user/message', seq: 4, time: 4,
+        data: createUserMessage({ content: [{ type: 'text', text: 'go' }], source: { kind: 'user' } }),
+      } as SessionEvent)
+      store.apply({
+        type: 'assistant/chunk', seq: 5, time: 5,
+        data: { turn: 1, step: 1, chunk: { type: 'reasoning-delta', text: 'the streaming thought' } },
+      } as unknown as SessionEvent)
+      await wait()
+      const plain = harness.output.text.replace(/\x1b\[[0-9;?]*[A-Za-z]/gu, '')
+      expect(plain).toContain('✻ Thinking… (Ctrl/Alt+R to expand)')
+      expect(plain).not.toContain('the streaming thought')
+
+      // Once answer text streams, the marker yields the animation (the
+      // tick cadence must not race the answer paint) while staying visible;
+      // the streaming text itself keeps painting.
+      harness.output.text = ''
+      store.apply({
+        type: 'assistant/chunk', seq: 6, time: 6,
+        data: { turn: 1, step: 1, chunk: { type: 'text-delta', text: 'the answer token' } },
+      } as unknown as SessionEvent)
+      await wait()
+      const answering = harness.output.text.replace(/\x1b\[[0-9;?]*[A-Za-z]/gu, '')
+      expect(answering).toContain('the answer token')
+      expect(answering).toContain('Thinking… (Ctrl/Alt+R to expand)')
+
+      // Ctrl+R swaps the marker for the live reasoning stream.
+      harness.output.text = ''
+      harness.stdin.write('\x12')
+      await wait()
+      const expanded = harness.output.text.replace(/\x1b\[[0-9;?]*[A-Za-z]/gu, '')
+      expect(expanded).toContain('the streaming thought')
+      expect(expanded).not.toContain('Thinking… (Ctrl/Alt+R to expand)')
+    } finally {
+      instance.unmount()
+      harness.stdin.destroy()
+      harness.stdout.destroy()
+    }
+  })
+
   it('repaints the settled fold through one source-backed replay on an idle toggle', async () => {
     const stdin = Object.assign(new PassThrough(), {
       isTTY: true,
