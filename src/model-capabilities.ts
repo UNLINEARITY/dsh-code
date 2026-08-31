@@ -124,6 +124,10 @@ export interface CapabilitySyncPlan {
   readonly settingsPath: readonly string[]
   /** Raw model entries, exactly as stored (declaration fields included). */
   readonly models: readonly Record<string, unknown>[]
+  /** Fingerprint of the source models array this plan was derived from. */
+  readonly sourceFingerprint: string
+  /** Document revision of the owning section when the plan was derived. */
+  readonly sourceRevision: number
   /** Model ids that gained a declaration, notice-facing. */
   readonly inherited: readonly string[]
   /** `provider/model` labels the declarations came from, notice-facing. */
@@ -190,6 +194,8 @@ export function planCapabilitySync(input: {
         settingsNs: profile.settingsNs,
         settingsPath: profile.settingsPath,
         models,
+        sourceFingerprint: JSON.stringify(profile.models),
+        sourceRevision: profile.revision,
         inherited,
         sources,
       })
@@ -202,8 +208,8 @@ export function planCapabilitySync(input: {
  * Application.
  * ------------------------------------------------------------------ */
 
-/** Provider -> last successfully applied models value, suppressing repeat writes. */
-const lastApplied = new Map<string, string>()
+/** Provider -> the source snapshot and document revision its last write landed against. */
+const lastApplied = new Map<string, { fingerprint: string; revision: number }>()
 
 /** Fresh revision of one namespace, or undefined when it does not resolve. */
 function revisionOf(settings: SettingsFace, ns: string): number | undefined {
@@ -272,8 +278,14 @@ export async function syncModelCapabilities(ctx: Context, notify?: CapabilityNot
     if (profiles.size === 0) return
     const directory = await loadModelDirectory(ctx)
     for (const plan of planCapabilitySync({ rows: directory.rows, profiles })) {
-      const fingerprint = JSON.stringify(plan.models)
-      if (lastApplied.get(plan.provider) === fingerprint) continue
+      // Skip only a provable echo of our own write: the same source
+      // snapshot at the same document revision we already wrote against
+      // (our write re-triggers the document event before the re-read
+      // catches up). An external edit that removes a materialized
+      // declaration bumps the revision, so identical source content
+      // re-plans and re-writes instead of being skipped forever.
+      const applied = lastApplied.get(plan.provider)
+      if (applied !== undefined && applied.fingerprint === plan.sourceFingerprint && applied.revision === plan.sourceRevision) continue
       // Writes bump the section revision; re-read per plan so the second
       // provider's optimistic revision is not already stale.
       const revision = revisionOf(settings, plan.settingsNs)
@@ -284,7 +296,7 @@ export async function syncModelCapabilities(ctx: Context, notify?: CapabilityNot
           [{ op: 'set', path: [...plan.settingsPath, 'models'], value: plan.models }],
           revision,
         )
-        lastApplied.set(plan.provider, fingerprint)
+        lastApplied.set(plan.provider, { fingerprint: plan.sourceFingerprint, revision: plan.sourceRevision })
         const shown = plan.sources.slice(0, 3).join(', ')
         const more = plan.sources.length > 3 ? `, +${plan.sources.length - 3}` : ''
         notify?.(

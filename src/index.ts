@@ -81,11 +81,11 @@ import {
 import { listPluginRows } from './plugin-inventory.ts'
 import { parseThemeName, setTheme, type ThemeName } from './theme.ts'
 import {
-  collectDeletionSubtree,
   isSubagentSession,
   matchSessionId,
   mergeSessionTitles,
   newestRootForCwd,
+  planSessionDeletion,
   projectSessionRows,
   SESSION_ARTIFACT_NAMES,
   sessionArtifactDirectory,
@@ -93,6 +93,7 @@ import {
   type SessionQueryService,
   type SessionRow,
 } from './session-directory.ts'
+import { createUserSettingsPersistence } from './settings-file.ts'
 
 /** Stable Cordis plugin name. */
 export const name = 'tui-runner'
@@ -554,9 +555,9 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   // same-id donors (sibling settings entries first, then other routes'
   // advertised levels) over the panel's settings.mutate path, where the
   // upstream serviceability gate still rejects invalid writes atomically.
-  // The debounce coalesces the settings/adapters event pair; the applier's
-  // applied-write fingerprints keep the loop convergent after its own write
-  // re-triggers the document event.
+  // The debounce coalesces the settings/adapters event pair; the applier
+  // skips only a same-source same-revision echo of its own write, so the
+  // loop converges without ever ignoring a real external edit.
   const capabilitySyncDebounceMs = 400
   const runCapabilitySync = (): void => {
     void syncModelCapabilities(ctx, bridge.notify)
@@ -589,12 +590,14 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       statuslineWarning = error instanceof Error ? error.message : String(error)
     }
   }
+  // Serialized, crash-atomic writes for the user-level JSON files: the chain
+  // orders rapid consecutive saves (the LAST snapshot wins on disk), each
+  // write goes through a sibling temp file + rename, and quit waits for the
+  // flush exactly like it waits for the recall history.
+  const settingsPersistence = createUserSettingsPersistence()
   const saveStatusline = (items: readonly string[]): void => {
     statuslineItems = [...items]
-    // The config directory may not exist on a first save; create it before
-    // the write so a fresh install persists customizations.
-    void mkdir(dirname(statuslinePath), { recursive: true })
-      .then(() => writeFileAsync(statuslinePath, JSON.stringify({ items }, null, 2) + '\n', 'utf8'))
+    void settingsPersistence.save(statuslinePath, JSON.stringify({ items }, null, 2) + '\n')
       .catch((writeError: unknown) => {
         bridge.notify('statusline save failed: ' + (writeError instanceof Error ? writeError.message : String(writeError)), 'error')
       })
@@ -630,8 +633,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   }
   const saveTheme = (name: ThemeName): void => {
     setTheme(name)
-    void mkdir(dirname(themePath), { recursive: true })
-      .then(() => writeFileAsync(themePath, JSON.stringify({ theme: name }, null, 2) + '\n', 'utf8'))
+    void settingsPersistence.save(themePath, JSON.stringify({ theme: name }, null, 2) + '\n')
       .catch((writeError: unknown) => {
         bridge.notify('theme save failed: ' + (writeError instanceof Error ? writeError.message : String(writeError)), 'error')
       })
@@ -702,8 +704,9 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     // One ordered cleanup: settle the visible session (if any — a bare launch
     // that never composed one resolves immediately), then wait for the final
     // in-flight composition (its work swallows errors and the quitting guard
-    // disposes any half-prepared agent), then flush the durable recall, then
-    // request exit. `composing` and `historyWriteChain` are read at step run
+    // disposes any half-prepared agent), then flush the durable recall and
+    // the queued user-level settings writes, then request exit. `composing`
+    // and `historyWriteChain` are read at step run
     // time, so a turn that was still being queued when quit ran is included.
     // A failing step must never skip the remaining cleanup.
     const steps: QuitCleanupStep[] = [
@@ -715,6 +718,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
         ]),
       { name: 'composing', run: () => composing ?? Promise.resolve() },
       { name: 'history', run: () => historyWriteChain },
+      { name: 'settings', run: () => settingsPersistence.flush() },
     ]
     void runQuitSequence(steps, io.exit, report)
   }
@@ -1126,10 +1130,21 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
    * Delete one session subtree (/delete, codex semantics: subagent threads go
    * with their root). The kernel persistence seam has NO deletion API by
    * design — logs accumulate "until removed externally" — so this is the
-   * controlled external removal: guards (live/current refusal, subtree
-   * collection, and the JSONL layout check `encodeSegment(id)/session.jsonl`)
-   * run before any filesystem touch, and only the backend-located artifacts
-   * are removed. Backends without a locatable artifact (SQLite) are refused.
+   * controlled external removal, in three phases with a hard boundary
+   * between planning and touching the filesystem:
+   *
+   * 1. `planSessionDeletion` collects the subtree and refuses when the root
+   *    or ANY member is live (a live child would outlive its deleted
+   *    parent), ordering the plan children-first.
+   * 2. Every plan node must locate to a guarded artifact directory
+   *    (`encodeSegment(id)`/`session.jsonl` layout). Backends without a
+   *    locatable artifact (SQLite) refuse the WHOLE deletion here — no
+   *    file has been touched yet, so a backend or layout surprise can
+   *    never strand a half-deleted subtree.
+   * 3. Artifacts are removed children-first: only an I/O error mid-delete
+   *    can stop it short (reported with removed/total counts), leaving the
+   *    shallowest lineage intact.
+   *
    * @param id - the root session id to delete.
    * @returns the outcome line for the panel/notice.
    */
@@ -1137,23 +1152,29 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     if (sessionQuery === undefined) return 'session query is unavailable in this profile'
     if (session !== undefined && session.id === id) return 'cannot delete the session you are using — switch or /new first'
     const records = await sessionQuery.listSessions()
-    const target = records.find(record => record.header.id === id)
-    if (target === undefined) return `no persisted session matches "${id}"`
-    if (target.live) return 'cannot delete a live session — it is open in this or another process'
-    const doomed = collectDeletionSubtree(records, id)
+    const plan = planSessionDeletion(records, id)
+    if (!plan.ok) return plan.reason
+    // Phase 2 completes the plan before the first rm: locate and
+    // layout-check every node up front, so a refusal never leaves a
+    // partially removed subtree behind.
     const byId = new Map<string, (typeof records)[number]>(records.map(record => [record.header.id, record]))
-    let removed = 0
-    for (const candidate of doomed) {
-      const record = byId.get(candidate)
-      if (record === undefined || record.live) continue
+    const dirs = new Map<string, string>()
+    for (const node of plan.nodes) {
+      const record = byId.get(node.id)
+      if (record === undefined) return `no persisted session matches "${node.id}"`
       const location = persistence?.locate(record.header)
       if (location === undefined) {
-        return `session backend exposes no deletable artifact for ${candidate.slice(-12)} (deletion is unsupported on this backend)`
+        return `session backend exposes no deletable artifact for ${node.id.slice(-12)} (deletion is unsupported on this backend)`
       }
-      const dir = sessionArtifactDirectory(location.path, candidate)
+      const dir = sessionArtifactDirectory(location.path, node.id)
       if (dir === undefined) {
         return `refusing to delete: unexpected artifact layout at ${location.path}`
       }
+      dirs.set(node.id, dir)
+    }
+    let removed = 0
+    for (const node of plan.nodes) {
+      const dir = dirs.get(node.id)!
       try {
         for (const name of SESSION_ARTIFACT_NAMES) {
           await rm(join(dir, name), { force: true })
@@ -1163,7 +1184,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
         await rm(dir, { force: true, recursive: false }).catch(() => {})
         removed += 1
       } catch (error: unknown) {
-        return `delete failed for ${candidate.slice(-12)}: ${error instanceof Error ? error.message : String(error)}`
+        return `delete failed for ${node.id.slice(-12)} after ${removed} of ${plan.nodes.length}: ${error instanceof Error ? error.message : String(error)}`
       }
     }
     return `deleted ${removed} session${removed === 1 ? '' : 's'}`
@@ -1193,13 +1214,31 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       return choice
     }
 
-    const preset = await selectPreset(presets, currentAgent, id)
-    if (active === undefined) throw new Error('active Agent has no session state')
-    active.mode = preset.id
-    commands.setAgent(currentAgent)
-    skills.setAgent(currentAgent)
-    renderCurrent()
-    return preset.id
+
+    // Serialize the recomposition with session activations: a /mode that
+    // interleaves a switch must not rebind the shared command/skill
+    // registries while the switch is composing the next agent.
+    const currentActive = active
+    const atEpoch = epoch
+    let selected: string | undefined
+    await compose(async () => {
+      const preset = await selectPreset(presets, currentAgent, id)
+      // A switch/quit landed while the recomposition ran: applying here
+      // would write the old choice into the new session's state and rebind
+      // the registries back to a disposed agent. The preset-selection log
+      // entry rode the old agent's session; only the local application is
+      // dropped.
+      if (epoch !== atEpoch || agent !== currentAgent || active !== currentActive) {
+        throw new Error('session changed while switching mode — nothing applied; retry in the active session')
+      }
+      if (active === undefined) throw new Error('active Agent has no session state')
+      active.mode = preset.id
+      commands.setAgent(currentAgent)
+      skills.setAgent(currentAgent)
+      selected = preset.id
+      renderCurrent()
+    })
+    return selected!
   }
 
   interface PendingSwitch { readonly target: Target; readonly label: string }
@@ -1332,7 +1371,26 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   }
 
   const reviewChanges = (argument: string): void => {
-    void loadGitDiff(session?.header.cwd ?? cwd, argument).then(({ title, files }) => {
+    const currentAgent = agent
+    if (currentAgent === undefined) {
+      bridge.notify('no session yet - submit a message to start', 'warning')
+      return
+    }
+    // The diff loads from the CALLING session's cwd; capture that
+    // workspace and this turn's identity so a switch mid-load can neither
+    // flip the new session read-only nor send the old workspace's review
+    // into it. The controller rides pendingControllers, so a switch/quit
+    // kills the git subprocess itself instead of only ignoring its result.
+    const atEpoch = epoch
+    const reviewCwd = session?.header.cwd ?? cwd
+    const controller = new AbortController()
+    pendingControllers.add(controller)
+    const finish = (): void => {
+      pendingControllers.delete(controller)
+    }
+    void loadGitDiff(reviewCwd, argument, controller.signal).then(({ title, files }) => {
+      finish()
+      if (controller.signal.aborted || epoch !== atEpoch || agent !== currentAgent) return
       try {
         setPermissionAction('read-only')
       } catch (error: unknown) {
@@ -1342,6 +1400,8 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       send(buildReviewPrompt(files.flatMap(file => file.lines).join('\n'), title), 'followup')
       bridge.notify('review started under read-only permissions')
     }, (error: unknown) => {
+      finish()
+      if (controller.signal.aborted || epoch !== atEpoch) return
       bridge.notify(`review failed: ${error instanceof Error ? error.message : String(error)}`, 'error')
     })
   }

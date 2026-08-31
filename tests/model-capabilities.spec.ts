@@ -170,6 +170,31 @@ describe('syncModelCapabilities', () => {
     expect(settings.mutate).toHaveBeenCalledTimes(1)
   })
 
+  it('re-writes after an external edit removes a materialized declaration', async () => {
+    const base = {
+      ns: 'llm-pi-ai',
+      revision: 9,
+      value: {
+        providers: {
+          zai: { models: [{ id: 'glm-5.2', name: 'GLM-5.2' }] },
+          bqy: { models: [{ id: 'glm-5.2' }] },
+        },
+      },
+    }
+    const settings = {
+      describe: vi.fn(() => [{ ...base }]),
+      mutate: vi.fn(async () => undefined),
+    }
+    await syncModelCapabilities(fakeCtx({ llm: llmAdvertised, settings }))
+    expect(settings.mutate).toHaveBeenCalledTimes(1)
+    // The user (or another tool) removes the field and the document
+    // revision bumps: the same source content must re-plan and re-write
+    // instead of being skipped as an echo of the earlier write.
+    settings.describe = vi.fn(() => [{ ...base, revision: base.revision + 1 }])
+    await syncModelCapabilities(fakeCtx({ llm: llmAdvertised, settings }))
+    expect(settings.mutate).toHaveBeenCalledTimes(2)
+  })
+
   it('copies a sibling declaration verbatim through the applier', async () => {
     const settings = {
       describe: vi.fn(() => [{
