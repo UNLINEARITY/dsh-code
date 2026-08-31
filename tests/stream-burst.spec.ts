@@ -48,7 +48,7 @@ describe('streaming token bursts', () => {
 
     const props: AppProps = {
       store,
-      subagents: { subscribe: () => unsubscribe, getSnapshot: () => EMPTY_AGENTS },
+      subagents: { subscribe: () => unsubscribe, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
       approval: { subscribe: () => unsubscribe, getSnapshot: () => approvalSnapshot },
       questions: { subscribe: () => unsubscribe, getSnapshot: () => questionSnapshot, submit: noop, cancel: noop },
       commands: { descriptors: [], subscribe: () => unsubscribe },
@@ -159,7 +159,7 @@ describe('streaming token bursts', () => {
 
     const props: AppProps = {
       store,
-      subagents: { subscribe: () => unsubscribe, getSnapshot: () => EMPTY_AGENTS },
+      subagents: { subscribe: () => unsubscribe, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
       approval: { subscribe: () => unsubscribe, getSnapshot: () => approvalSnapshot },
       questions: { subscribe: () => unsubscribe, getSnapshot: () => questionSnapshot, submit: noop, cancel: noop },
       commands: { descriptors: [], subscribe: () => unsubscribe },

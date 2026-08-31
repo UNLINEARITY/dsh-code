@@ -713,11 +713,12 @@ function todoMark(status: TodoItem['status']): string {
 
 /**
  * One-row live subagent summary (the Codex agent status feed, compressed to
- * the transcript's budget): running count, total, and the most recently
- * active child's current activity. One line, never more — the full view is
- * the /agents panel.
+ * the transcript's budget): running count, the observed total (the row cap
+ * is a display budget, not the fan-out size), and the most recently active
+ * child's current activity. One line, never more — the full view is the
+ * /agents panel.
  */
-function AgentsLine({ rows }: { rows: readonly SubagentRow[] }): ReactElement | undefined {
+function AgentsLine({ rows, total }: { rows: readonly SubagentRow[]; total: number }): ReactElement | undefined {
   if (rows.length === 0) return undefined
   const running = rows.filter(row => row.state !== 'done').length
   const newest = [...rows].sort((left, right) => right.updatedAt - left.updatedAt)[0]!
@@ -729,7 +730,7 @@ function AgentsLine({ rows }: { rows: readonly SubagentRow[] }): ReactElement | 
       Text,
       { color: inkColor(getPalette().brand), bold: true, wrap: 'truncate-end' },
       `agents ${running} live`,
-      createElement(Text, { color: inkColor(getPalette().dim) }, ` · ${rows.length} total · /agents`),
+      createElement(Text, { color: inkColor(getPalette().dim) }, ` · ${total} total · /agents`),
       createElement(Text, { color: inkColor(getPalette().text) }, ` · ${mark} ${newest.label} ${newest.activity}`),
     ),
   )
@@ -4577,7 +4578,7 @@ export function App(props: AppProps): ReactElement {
       )
       : undefined,
     transcriptVisible ? createElement(TodoPanel, { todos: view.todos }) : undefined,
-    transcriptVisible ? createElement(AgentsLine, { rows: agentRows }) : undefined,
+    transcriptVisible ? createElement(AgentsLine, { rows: agentRows, total: props.subagents.getTotalSeen() }) : undefined,
     todosOpen && !approvalPending && !questionPending
       ? createElement(MemoTodoListPanel, {
         todos: view.todos,

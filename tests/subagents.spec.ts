@@ -85,6 +85,47 @@ describe('createSubagentFeed', () => {
     expect(feed.getSnapshot()[0]!.activity).toBe('thinking…')
   })
 
+  it('evicts the oldest done row for a new running child and keeps the honest total', async () => {
+    const feed = createSubagentFeed()
+    for (let index = 0; index < MAX_SUBAGENT_ROWS; index += 1) {
+      feed.apply(`child-${index}`, event('request/header', {}, index + 1))
+    }
+    feed.apply('child-0', event('turn/end', {}, 50))
+    feed.apply('child-new', event('request/header', {}, 51))
+    await new Promise<void>(resolve => setTimeout(resolve, 25))
+    const rows = feed.getSnapshot()
+    expect(rows.length).toBe(MAX_SUBAGENT_ROWS)
+    expect(rows.map(row => row.id)).not.toContain('child-0')
+    expect(rows.map(row => row.id)).toContain('child-new')
+    expect(feed.getTotalSeen()).toBe(MAX_SUBAGENT_ROWS + 1)
+  })
+
+  it('drops a new row while every row is busy but still counts and notifies the total', async () => {
+    const feed = createSubagentFeed()
+    let notified = 0
+    feed.subscribe(() => {
+      notified += 1
+    })
+    for (let index = 0; index < MAX_SUBAGENT_ROWS; index += 1) {
+      feed.apply(`busy-${index}`, event('request/header', {}, index + 1))
+    }
+    await new Promise<void>(resolve => setTimeout(resolve, 25))
+    const notifiedBefore = notified
+    feed.apply('overflow', event('request/header', {}, 99))
+    await new Promise<void>(resolve => setTimeout(resolve, 25))
+    expect(feed.getSnapshot().map(row => row.id)).not.toContain('overflow')
+    expect(feed.getTotalSeen()).toBe(MAX_SUBAGENT_ROWS + 1)
+    expect(notified).toBe(notifiedBefore + 1)
+  })
+
+  it('resets the observed total with the rows', async () => {
+    const feed = createSubagentFeed()
+    feed.apply('a', event('request/header', {}, 1))
+    feed.reset()
+    await new Promise<void>(resolve => setTimeout(resolve, 25))
+    expect(feed.getTotalSeen()).toBe(0)
+  })
+
   it('caps the row count and keeps the identity-stable snapshot contract', () => {
     const feed = createSubagentFeed()
     for (let index = 0; index < MAX_SUBAGENT_ROWS + 3; index += 1) {

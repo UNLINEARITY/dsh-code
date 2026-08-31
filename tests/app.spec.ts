@@ -72,7 +72,7 @@ function createTty(columns = 100, rows = 24): TtyHarness {
 function appProps(overrides: Partial<AppProps> = {}): AppProps {
   return {
     store: createTranscriptStore(),
-    subagents: { subscribe: () => unsubscribe, getSnapshot: () => EMPTY_AGENTS },
+    subagents: { subscribe: () => unsubscribe, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
     approval: { subscribe: () => unsubscribe, getSnapshot: () => approvalSnapshot },
     questions: {
       subscribe: () => unsubscribe,
@@ -910,7 +910,7 @@ describe('Ctrl+O history details', () => {
     }))
     const instance = render(createElement(App, {
       store,
-      subagents: { subscribe: () => unsubscribe, getSnapshot: () => EMPTY_AGENTS },
+      subagents: { subscribe: () => unsubscribe, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
       approval: { subscribe: () => unsubscribe, getSnapshot: () => approvalSnapshot },
       questions: {
         subscribe: () => unsubscribe,
@@ -1165,7 +1165,7 @@ describe('DeepSeek model-switch easter egg', () => {
     ]
     const instance = render(createElement(App, {
       store,
-      subagents: { subscribe: () => unsubscribe, getSnapshot: () => EMPTY_AGENTS },
+      subagents: { subscribe: () => unsubscribe, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
       approval: { subscribe: () => unsubscribe, getSnapshot: () => approvalSnapshot },
       questions: {
         subscribe: () => unsubscribe,
@@ -1359,7 +1359,7 @@ describe('DeepSeek model-switch easter egg', () => {
     ]
     const instance = render(createElement(App, {
       store: createTranscriptStore(),
-      subagents: { subscribe: () => unsubscribe, getSnapshot: () => EMPTY_AGENTS },
+      subagents: { subscribe: () => unsubscribe, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
       approval: { subscribe: () => unsubscribe, getSnapshot: () => approvalSnapshot },
       questions: {
         subscribe: () => unsubscribe,
@@ -1513,7 +1513,7 @@ describe('bracketed paste safety', () => {
     const noop = (): void => {}
     const instance = render(createElement(App, {
       store,
-      subagents: { subscribe: () => unsubscribe, getSnapshot: () => EMPTY_AGENTS },
+      subagents: { subscribe: () => unsubscribe, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
       approval: { subscribe: () => unsubscribe, getSnapshot: () => approvalSnapshot },
       questions: {
         subscribe: () => unsubscribe,
@@ -1858,7 +1858,7 @@ describe('Ctrl+R reasoning fold', () => {
     ])
     const instance = render(createElement(App, {
       store,
-      subagents: { subscribe: () => unsubscribe, getSnapshot: () => EMPTY_AGENTS },
+      subagents: { subscribe: () => unsubscribe, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
       approval: { subscribe: () => unsubscribe, getSnapshot: () => approvalSnapshot },
       questions: {
         subscribe: () => unsubscribe,
@@ -1988,7 +1988,7 @@ describe('Ctrl+R reasoning fold', () => {
     const noop = (): void => {}
     const instance = render(createElement(App, {
       store,
-      subagents: { subscribe: () => unsubscribe, getSnapshot: () => EMPTY_AGENTS },
+      subagents: { subscribe: () => unsubscribe, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
       approval: { subscribe: () => unsubscribe, getSnapshot: () => approvalSnapshot },
       questions: {
         subscribe: () => unsubscribe,
@@ -2107,7 +2107,7 @@ describe('Ctrl+R reasoning fold', () => {
     const noop = (): void => {}
     const instance = render(createElement(App, {
       store,
-      subagents: { subscribe: () => unsubscribe, getSnapshot: () => EMPTY_AGENTS },
+      subagents: { subscribe: () => unsubscribe, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
       approval: { subscribe: () => unsubscribe, getSnapshot: () => approvalSnapshot },
       questions: {
         subscribe: () => unsubscribe,
@@ -2226,7 +2226,7 @@ describe('Ctrl+R reasoning fold', () => {
     const noop = (): void => {}
     const instance = render(createElement(App, {
       store,
-      subagents: { subscribe: () => unsubscribe, getSnapshot: () => EMPTY_AGENTS },
+      subagents: { subscribe: () => unsubscribe, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
       approval: { subscribe: () => unsubscribe, getSnapshot: () => approvalSnapshot },
       questions: {
         subscribe: () => unsubscribe,
@@ -2370,7 +2370,7 @@ describe('deferred session remount', () => {
     }))
     const props = {
       store,
-      subagents: { subscribe: () => unsubscribe, getSnapshot: () => EMPTY_AGENTS },
+      subagents: { subscribe: () => unsubscribe, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
       approval: { subscribe: () => unsubscribe, getSnapshot: () => approvalSnapshot },
       questions: {
         subscribe: () => unsubscribe,
@@ -2498,7 +2498,7 @@ describe('deferred session remount', () => {
     }))
     const props = {
       store,
-      subagents: { subscribe: () => unsubscribe, getSnapshot: () => EMPTY_AGENTS },
+      subagents: { subscribe: () => unsubscribe, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
       approval: { subscribe: () => unsubscribe, getSnapshot: () => approvalSnapshot },
       questions: {
         subscribe: () => unsubscribe,
@@ -2667,7 +2667,7 @@ describe('context stepless bar', () => {
     } as unknown as SessionEvent)
     const instance = render(createElement(App, {
       store,
-      subagents: { subscribe: () => unsubscribe, getSnapshot: () => EMPTY_AGENTS },
+      subagents: { subscribe: () => unsubscribe, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
       approval: { subscribe: () => unsubscribe, getSnapshot: () => approvalSnapshot },
       questions: {
         subscribe: () => unsubscribe,
@@ -2776,7 +2776,7 @@ describe('light theme rendering', () => {
     setTheme('light')
     const instance = render(createElement(App, {
       store: createTranscriptStore(),
-      subagents: { subscribe: () => noop, getSnapshot: () => EMPTY_AGENTS },
+      subagents: { subscribe: () => noop, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
       approval: { subscribe: () => noop, getSnapshot: () => approvalSnapshot },
       questions: {
         subscribe: () => noop,
@@ -3276,7 +3276,7 @@ describe('/agents panel', () => {
     ]
     const harness = createTty(100, 24)
     const instance = renderApp(harness, appProps({
-      subagents: { subscribe: () => unsubscribe, getSnapshot: () => agents },
+      subagents: { subscribe: () => unsubscribe, getSnapshot: () => agents, getTotalSeen: () => agents.length },
       loadSubagents: async () => [{
         id: 'child-session-2', createdAt: 2, cwd: 'C:\\repo', workspace: 'repo',
         parent: 'root', subagent: true, resumable: false, live: false, persisted: true, preset: 'standard',

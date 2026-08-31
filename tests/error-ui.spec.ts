@@ -50,7 +50,7 @@ function renderApp(
   const emptyAgents = Object.freeze([])
   const props: AppProps = {
     store,
-    subagents: { subscribe: () => noop, getSnapshot: () => emptyAgents },
+    subagents: { subscribe: () => noop, getSnapshot: () => emptyAgents, getTotalSeen: () => 0 },
     approval: { subscribe: () => noop, getSnapshot: () => approvalSnapshot },
     questions: {
       subscribe: () => noop,

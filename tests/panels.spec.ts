@@ -55,7 +55,7 @@ describe('exclusive panel height budgets', () => {
     const noop = (): void => {}
     const instance = render(createElement(App, {
       store: createTranscriptStore(),
-      subagents: { subscribe: () => () => {}, getSnapshot: () => EMPTY_AGENTS },
+      subagents: { subscribe: () => () => {}, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
       approval: {
         subscribe: (listener: () => void) => {
           approvalListeners.add(listener)
@@ -310,7 +310,7 @@ describe('exclusive panel height budgets', () => {
     let currentItems: readonly string[] = DEFAULT_STATUSLINE_ITEMS
     const instance = render(createElement(App, {
       store: createTranscriptStore(),
-      subagents: { subscribe: () => () => {}, getSnapshot: () => EMPTY_AGENTS },
+      subagents: { subscribe: () => () => {}, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
       approval: {
         subscribe: (listener: () => void) => {
           approvalListeners.add(listener)
@@ -468,7 +468,7 @@ describe('queued messages and global recall', () => {
     })
     const cancelled: string[] = []
     const instance = render(createElement(App, {
-      subagents: { subscribe: () => () => {}, getSnapshot: () => EMPTY_AGENTS },
+      subagents: { subscribe: () => () => {}, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
       store: createTranscriptStore([
         {
           type: 'agent/inbox/spliced',
@@ -603,7 +603,7 @@ describe('queued messages and global recall', () => {
     const questionListeners = new Set<() => void>()
     const instance = render(createElement(App, {
       store: createTranscriptStore(),
-      subagents: { subscribe: () => () => {}, getSnapshot: () => EMPTY_AGENTS },
+      subagents: { subscribe: () => () => {}, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
       approval: {
         subscribe: (listener: () => void) => {
           approvalListeners.add(listener)
@@ -740,7 +740,7 @@ describe('queued messages and global recall', () => {
     })
     const noop = (): void => {}
     const instance = render(createElement(App, {
-      subagents: { subscribe: () => () => {}, getSnapshot: () => EMPTY_AGENTS },
+      subagents: { subscribe: () => () => {}, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
       store: createTranscriptStore([
         { type: 'turn/start', seq: 1, time: 0, data: { turn: 1 } } as never,
       ]),
@@ -892,7 +892,7 @@ describe('/model effort stage', () => {
     ]
     const instance = render(createElement(App, {
       store: createTranscriptStore(),
-      subagents: { subscribe: () => () => {}, getSnapshot: () => EMPTY_AGENTS },
+      subagents: { subscribe: () => () => {}, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
       approval: {
         subscribe: (listener: () => void) => {
           approvalListeners.add(listener)
@@ -1124,7 +1124,7 @@ describe('/effort command', () => {
     ]
     const instance = render(createElement(App, {
       store: createTranscriptStore(),
-      subagents: { subscribe: () => () => {}, getSnapshot: () => EMPTY_AGENTS },
+      subagents: { subscribe: () => () => {}, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
       approval: { subscribe: () => noop, getSnapshot: () => approvalSnapshot },
       questions: {
         subscribe: () => noop,

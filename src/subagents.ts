@@ -7,8 +7,13 @@
  *
  * This is NOT a second transcript: each child folds to ONE row (label,
  * running state, bounded last-activity text), capped at
- * {@link MAX_SUBAGENT_ROWS}. Rows are advisory display state, rebuilt from
- * live events; nothing here persists or replays. Notification is coalesced
+ * {@link MAX_SUBAGENT_ROWS}. The cap is a display budget, not a fan-out
+ * limit: a new running child evicts the OLDEST settled row when one
+ * exists, and while every row is busy the newcomer waits off-screen — but
+ * the observed-session total (getTotalSeen) keeps counting, so status
+ * totals never under-report the fan-out. Rows are advisory display
+ * state, rebuilt from live events; nothing here persists or replays.
+ * Notification is coalesced
  * by the same ~16ms frame throttle as the transcript store (per-burst
  * microtask notify chained SyncLane rerenders past React's nested update
  * limit; a bare macrotask merge repaints a whole turn's bursts at once).
@@ -18,7 +23,7 @@
 
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 
-/** Hard row cap: a fan-out larger than this stays summarized by the head. */
+/** Hard row cap: overflow evicts the oldest settled row; a fully busy feed waits. */
 export const MAX_SUBAGENT_ROWS = 8
 
 /** Render frame budget: the notification cadence's upper bound. */
@@ -47,6 +52,11 @@ export interface SubagentFeedView {
   subscribe(listener: () => void): () => void
   /** Read the current rows (identity-stable between changes). */
   getSnapshot(): readonly SubagentRow[]
+  /**
+   * Distinct child sessions observed since the last reset. The row cap is
+   * a display budget, not a count of the fan-out; totals surface this.
+   */
+  getTotalSeen(): number
 }
 
 /** Single-line bounded preview of an assembled message's text content. */
@@ -130,6 +140,7 @@ export function createSubagentFeed(): SubagentFeedView & {
   reset(): void
 } {
   let rows: readonly SubagentRow[] = Object.freeze([])
+  const seen = new Set<string>()
   const listeners = new Set<() => void>()
   let scheduled = false
   let lastNotifyAt = 0
@@ -150,12 +161,31 @@ export function createSubagentFeed(): SubagentFeedView & {
       const index = rows.findIndex(row => row.id === sessionId)
       const previous = index === -1 ? undefined : rows[index]
       const next = foldSubagentRow(previous, sessionId, event)
-      if (next === previous) return
-      if (index === -1 && rows.length >= MAX_SUBAGENT_ROWS) return
-      rows = Object.freeze(index === -1 ? [...rows, next] : rows.map((row, at) => at === index ? next : row))
+      if (index !== -1) {
+        if (next === previous) return
+        rows = Object.freeze(rows.map((row, at) => at === index ? next : row))
+        notify()
+        return
+      }
+      // A child this feed has not shown yet: the honest total grows even
+      // when every row is busy; admission then prefers evicting the OLDEST
+      // settled row so a new running agent never waits on one that finished.
+      const counted = !seen.has(sessionId)
+      if (counted) seen.add(sessionId)
+      if (rows.length >= MAX_SUBAGENT_ROWS) {
+        const evict = rows.findIndex(row => row.state === 'done')
+        if (evict === -1) {
+          if (counted) notify()
+          return
+        }
+        rows = Object.freeze([...rows.slice(0, evict), next, ...rows.slice(evict + 1)])
+      } else {
+        rows = Object.freeze([...rows, next])
+      }
       notify()
     },
     reset(): void {
+      seen.clear()
       if (rows.length === 0) return
       rows = Object.freeze([])
       notify()
@@ -168,6 +198,9 @@ export function createSubagentFeed(): SubagentFeedView & {
     },
     getSnapshot(): readonly SubagentRow[] {
       return rows
+    },
+    getTotalSeen(): number {
+      return seen.size
     },
   }
 }
