@@ -8,6 +8,7 @@ import {
   matchSessionId,
   mergeSessionTitles,
   newestRootForCwd,
+  planSessionDeletion,
   projectSessionRows,
   sessionArtifactDirectory,
   type SessionRecord,
@@ -127,6 +128,49 @@ describe('session deletion guards', () => {
     expect(collectDeletionSubtree(records, 'root')).toEqual(expect.arrayContaining(['root', 'child', 'grand', 'sibling']))
     expect(collectDeletionSubtree(records, 'child')).toEqual(['child', 'grand'])
     expect(collectDeletionSubtree(records, 'unrelated')).toEqual(['unrelated'])
+  })
+})
+
+describe('session deletion plan', () => {
+  it('refuses an unknown root without producing any nodes', () => {
+    const plan = planSessionDeletion([record('a', 1)], 'nope')
+    expect(plan.ok).toBe(false)
+    if (!plan.ok) expect(plan.reason).toContain('no persisted session matches')
+  })
+
+  it('refuses a live root with the direct message', () => {
+    const plan = planSessionDeletion([{ ...record('root', 1), live: true }], 'root')
+    expect(plan.ok).toBe(false)
+    if (!plan.ok) expect(plan.reason).toBe('cannot delete a live session — it is open in this or another process')
+  })
+
+  it('refuses the whole subtree when any member is live', () => {
+    const records = [
+      record('root', 1),
+      { ...record('child', 2, { parentSession: 'root' }), live: true },
+    ]
+    const plan = planSessionDeletion(records, 'root')
+    expect(plan.ok).toBe(false)
+    if (!plan.ok) {
+      expect(plan.reason).toContain('child session')
+      expect(plan.reason).toContain('live')
+    }
+  })
+
+  it('orders the plan children-first across the lineage', () => {
+    const records = [
+      record('root', 1),
+      record('child', 2, { parentSession: 'root' }),
+      record('grand', 3, { parentSession: 'child' }),
+      record('sibling', 4, { parentSession: 'root' }),
+      record('unrelated', 5),
+    ]
+    const plan = planSessionDeletion(records, 'root')
+    expect(plan.ok).toBe(true)
+    if (plan.ok) {
+      expect(plan.nodes.map(node => node.id)).toEqual(['grand', 'child', 'sibling', 'root'])
+      expect(plan.nodes.map(node => node.depth)).toEqual([2, 1, 1, 0])
+    }
   })
 })
 

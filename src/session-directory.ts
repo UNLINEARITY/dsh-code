@@ -240,6 +240,62 @@ export function collectDeletionSubtree(records: readonly SessionRecord[], id: st
   return [...doomed]
 }
 
+/** One validated node of a deletion plan. */
+export interface DeletionPlanNode {
+  /** Session id to remove. */
+  readonly id: string
+  /** Distance from the deletion root (0 for the root itself). */
+  readonly depth: number
+}
+
+/** A fully preflighted subtree deletion, or the refusal that produced none. */
+export type SessionDeletionPlan =
+  | { readonly ok: true; readonly nodes: readonly DeletionPlanNode[] }
+  | { readonly ok: false; readonly reason: string }
+
+/**
+ * Plan one session-subtree deletion with NO filesystem side effects: collect
+ * the doomed lineage, refuse when the root or ANY member is live (a live
+ * child would outlive its deleted parent) or missing from the listing, and
+ * order the result children-first so the executor can never leave a deleted
+ * parent behind surviving children. Artifact-location guards stay at the
+ * call site; this is the pure preflight they complete.
+ * @param records - the full directory listing.
+ * @param id - the root session id to delete.
+ * @returns the ordered plan, or a user-facing refusal reason.
+ */
+export function planSessionDeletion(records: readonly SessionRecord[], id: string): SessionDeletionPlan {
+  const target = records.find(record => record.header.id === id)
+  if (target === undefined) return { ok: false, reason: `no persisted session matches "${id}"` }
+  if (target.live) return { ok: false, reason: 'cannot delete a live session — it is open in this or another process' }
+  const doomed = collectDeletionSubtree(records, id)
+  const byId = new Map<string, SessionRecord>(records.map(record => [record.header.id, record]))
+  const parentOf = new Map<string, string | undefined>()
+  for (const record of records) parentOf.set(record.header.id, record.header.parentSession)
+  const nodes: DeletionPlanNode[] = []
+  for (const candidate of doomed) {
+    const record = byId.get(candidate)
+    if (record === undefined) return { ok: false, reason: `no persisted session matches "${candidate}"` }
+    if (record.live) {
+      return {
+        ok: false,
+        reason: `cannot delete: child session ${candidate.slice(-12)} is live — close it (and any process using it) first`,
+      }
+    }
+    let depth = 0
+    let ancestor = parentOf.get(candidate)
+    while (ancestor !== undefined && depth < 64) {
+      depth += 1
+      ancestor = parentOf.get(ancestor)
+    }
+    nodes.push({ id: candidate, depth })
+  }
+  // Deepest first: a mid-deletion failure then leaves the shallowest lineage
+  // intact, never a deleted parent with surviving children.
+  nodes.sort((left, right) => right.depth - left.depth)
+  return { ok: true, nodes }
+}
+
 /**
  * Codex-style relative time for session rows ("now", "5m ago", "3h ago",
  * "2d ago"; older than a week falls back to the local date).
