@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from 'vitest'
 import { visibleColumns } from '../src/render/markdown.ts'
-import { settledEntryLines, styledLines, lineSegment, reasoningLines, transcriptEntryLines } from '../src/render/lines.ts'
+import { clampLiveAllocation, settledEntryLines, styledLines, lineSegment, reasoningLines, transcriptEntryLines } from '../src/render/lines.ts'
 import type { TranscriptEntry } from '../src/render/projection.ts'
 
 const textOf = (lines: ReturnType<typeof styledLines>): string => lines
@@ -171,5 +171,31 @@ describe('styled terminal lines', () => {
     expect(rendered).toContain('/wipe\\x1b[2J')
     expect(rendered).not.toContain('\x1b]0;')
     expect(rendered).not.toContain('\x1b[2J')
+  })
+})
+
+describe('live allocation clamp', () => {
+  it('passes allocations that fit the dynamic budget through unchanged', () => {
+    const audit = clampLiveAllocation({ live: 4, reasoning: 2, answer: 3 }, 10)
+    expect(audit.allocation).toEqual({ live: 4, reasoning: 2, answer: 3 })
+    expect(audit.warning).toBeUndefined()
+  })
+
+  it('reduces the answer first, then reasoning, then settled live rows', () => {
+    const audit = clampLiveAllocation({ live: 5, reasoning: 2, answer: 3 }, 7)
+    expect(audit.allocation).toEqual({ live: 5, reasoning: 2, answer: 0 })
+    expect(audit.warning).toBeDefined()
+
+    const deeper = clampLiveAllocation({ live: 5, reasoning: 2, answer: 3 }, 6)
+    expect(deeper.allocation).toEqual({ live: 5, reasoning: 1, answer: 0 })
+
+    const deepest = clampLiveAllocation({ live: 5, reasoning: 2, answer: 3 }, 3)
+    expect(deepest.allocation).toEqual({ live: 3, reasoning: 0, answer: 0 })
+  })
+
+  it('never returns negative rows and floors fractional inputs', () => {
+    const audit = clampLiveAllocation({ live: 2, reasoning: 1.5, answer: 0.5 }, 0)
+    expect(audit.allocation).toEqual({ live: 0, reasoning: 0, answer: 0 })
+    expect(audit.warning).toBeDefined()
   })
 })

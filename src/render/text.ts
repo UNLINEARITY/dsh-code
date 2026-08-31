@@ -12,6 +12,8 @@
  * @module @deepseek-ai/dsh-code/render/text
  */
 
+import { codePointWidth, graphemeWidth, splitGraphemes, stringWidth } from './width.ts'
+
 /** C0 controls except tab (0x09) and newline (0x0a), plus DEL and C1. */
 const CONTROL_ESCAPE = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/gu
 
@@ -44,33 +46,24 @@ export function singleLineText(text: string): string {
   return displayText(text).replace(/\r?\n/gu, ' ↵ ').replace(/\t/gu, '  ')
 }
 
-/** Terminal-cell width matching the TUI's existing CJK-aware wrapping rule. */
-function cellWidth(text: string): number {
-  let columns = 0
-  for (const char of text) {
-    columns += (char.codePointAt(0) ?? 0) > 0x2e7f ? 2 : 1
-  }
-  return columns
-}
-
 /**
  * Truncate one display-safe row without ever exceeding its physical-column
  * budget. The ellipsis is included inside the budget, matching Codex's popup
- * truncation contract; the previous app-local helper appended it after the
- * row was already full and could force an extra terminal wrap.
+ * truncation contract; the cut walks grapheme clusters so emoji and
+ * combining sequences never split mid-cluster.
  */
 export function truncateColumns(text: string, columns: number): string {
   const limit = Math.max(0, Math.floor(columns))
   if (limit === 0) return ''
-  if (cellWidth(text) <= limit) return text
+  if (stringWidth(text) <= limit) return text
 
   const contentLimit = limit - 1
   let used = 0
   let result = ''
-  for (const char of text) {
-    const width = cellWidth(char)
+  for (const cluster of splitGraphemes(text)) {
+    const width = graphemeWidth(cluster)
     if (used + width > contentLimit) break
-    result += char
+    result += cluster
     used += width
   }
   return `${result}…`
@@ -116,6 +109,9 @@ export function displayTail(text: string, columns: number, rows: number): Displa
   let row = 1
   let used = 0
   let end = text.length
+  // A VS16 walked over (backward) ahead of its base: the base must commit
+  // the two cells emoji presentation actually draws, not its text width.
+  let emojiForced = false
 
   while (end > 0) {
     const previous = previousCharacter(text, end)
@@ -124,12 +120,25 @@ export function displayTail(text: string, columns: number, rows: number): Displa
       reversed.push('\n')
       row += 1
       used = 0
+      emojiForced = false
       end = previous.start
       continue
     }
 
     const safe = previous.char === '\t' ? '  ' : displayText(previous.char)
-    const width = cellWidth(safe)
+    if (previous.char === '\uFE0F') {
+      // The selector occupies no cells; the base that follows (walking
+      // backward, the base we meet next) commits the two cells emoji
+      // presentation actually draws.
+      emojiForced = true
+      reversed.push(safe)
+      end = previous.start
+      continue
+    }
+    // safe can be a multi-character escape literal (\xNN / \uXXXX); only
+    // stringWidth budgets the whole visible escape, never its first byte.
+    const width = emojiForced ? Math.max(2, codePointWidth(previous.char)) : stringWidth(safe)
+    emojiForced = false
     if (used > 0 && used + width > columnLimit) {
       if (row >= rowLimit) break
       // Materialize the soft wrap. Ink otherwise reflows at word boundaries

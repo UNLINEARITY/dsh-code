@@ -165,6 +165,7 @@ import {
   selectionWindow,
 } from './render/inspector.ts'
 import {
+  clampLiveAllocation,
   lineSegment,
   markdownLines,
   settledEntryLines,
@@ -4016,6 +4017,8 @@ export function App(props: AppProps): ReactElement {
 
   const busy = view.busy
   const [showReasoning, setShowReasoning] = useState(false)
+  // Dedupe for the dynamic-budget tripwire: one warning per distinct shape.
+  const budgetWarnRef = useRef<string | undefined>(undefined)
   const [verboseOpen, setVerboseOpen] = useState(false)
   const [diffView, setDiffView] = useState<GitDiffView | undefined>(undefined)
   const [helpOpen, setHelpOpen] = useState(false)
@@ -4248,6 +4251,22 @@ export function App(props: AppProps): ReactElement {
           ? Math.max(1, Math.floor(streamRows / 3))
           : 1
   const answerRows = view.streaming === '' ? 0 : Math.max(1, streamRows - reasoningRows)
+  // Dynamic-height tripwire: the allocation must fit dynamicRows by
+  // construction; a future edit that breaks the derivation clamps here
+  // (answer, then reasoning, then settled live rows) and warns once.
+  const liveAudit = clampLiveAllocation(
+    { live: visibleLiveLines.length, reasoning: reasoningRows, answer: answerRows },
+    dynamicRows,
+  )
+  if (liveAudit.warning !== undefined && budgetWarnRef.current !== liveAudit.warning) {
+    budgetWarnRef.current = liveAudit.warning
+    console.warn(`[dsh-code] ${liveAudit.warning}`)
+  }
+  const auditedLiveLines = liveAudit.allocation.live === visibleLiveLines.length
+    ? visibleLiveLines
+    : visibleLiveLines.slice(-liveAudit.allocation.live)
+  const auditedReasoningRows = liveAudit.allocation.reasoning
+  const auditedAnswerRows = liveAudit.allocation.answer
   const transcriptVisible = !modelOpen && !helpOpen && !modeOpen && !permissionOpen && !resumeOpen && !pluginOpen && !jobsOpen && !statuslineOpen && !themeOpen && !historyOpen && !agentsOpen && !subagentOpen && !todosOpen && !verboseOpen && diffView === undefined && !approvalPending && !questionPending
   const inspectorVisible = verboseOpen && !approvalPending && !questionPending
   const modalVisible = modelOpen || helpOpen || modeOpen || permissionOpen || resumeOpen || pluginOpen || jobsOpen || statuslineOpen || themeOpen || historyOpen || agentsOpen || subagentOpen || todosOpen || inspectorVisible || diffView !== undefined || approvalPending || questionPending
@@ -4518,8 +4537,8 @@ export function App(props: AppProps): ReactElement {
         // prefix, so streaming text lands exactly where the composer's input
         // text and the settled reply both render (Codex LIVE_PREFIX).
         { flexDirection: 'column' },
-        visibleLiveLines.length === 0 ? undefined : createElement(StyledRows, { lines: visibleLiveLines }),
-        view.streamingReasoning !== '' && reasoningRows > 0
+        auditedLiveLines.length === 0 ? undefined : createElement(StyledRows, { lines: auditedLiveLines }),
+        view.streamingReasoning !== '' && auditedReasoningRows > 0
           ? showReasoning
             ? createElement(StreamTail, {
               text: view.streamingReasoning,
@@ -4542,15 +4561,15 @@ export function App(props: AppProps): ReactElement {
                 prefix: '✻ ',
                 continuationPrefix: '  ',
                 dim: true,
-                maxRows: reasoningRows,
+                maxRows: auditedReasoningRows,
               })
           : undefined,
-        view.streaming !== '' && answerRows > 0
+        view.streaming !== '' && auditedAnswerRows > 0
           ? createElement(
             StreamTail,
             // The same two-column gutter as settled replies: streamed text
             // lands exactly where the assembled message will render.
-            { text: view.streaming, dim: false, maxRows: answerRows, prefix: '  ' },
+            { text: view.streaming, dim: false, maxRows: auditedAnswerRows, prefix: '  ' },
             busy ? createElement(Caret) : undefined,
           )
           : undefined,

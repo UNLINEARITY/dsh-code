@@ -90,6 +90,40 @@ function toolResultEvent(id: CallId, text: string, isError: boolean, seq: number
   } as SessionEvent
 }
 
+describe('replay equivalence (property)', () => {
+  it('projectEvents matches the sequential projectEvent fold for randomized sequences', () => {
+    // Deterministic LCG so a failure replays exactly.
+    let seed = 0x2a2a_2a2a
+    const rand = (): number => {
+      seed = (seed * 1_664_525 + 1_013_904_223) >>> 0
+      return seed / 0x1_0000_0000
+    }
+    const builders = [userEvent, chunkEvent, reasoningChunkEvent, assistantEvent]
+    for (let trial = 0; trial < 150; trial += 1) {
+      const length = Math.floor(rand() * 28)
+      const events: SessionEvent[] = []
+      let seq = 1
+      for (let index = 0; index < length; index += 1) {
+        const builder = builders[Math.floor(rand() * builders.length)]!
+        events.push(builder(`t${trial}-${index}`, seq++))
+      }
+      const replayed = projectEvents(events)
+      const folded = events.reduce(projectEvent, createTranscriptView())
+      expect(replayed).toStrictEqual(folded)
+    }
+  })
+
+  it('projectEvents is deterministic for repeated folds of the same log', () => {
+    const events = [
+      userEvent('one', 1),
+      chunkEvent('partial ', 2),
+      reasoningChunkEvent('thinking ', 3),
+      assistantEvent('done', 4),
+    ]
+    expect(projectEvents(events)).toStrictEqual(projectEvents(events))
+  })
+})
+
 describe('transcript projection', () => {
   it('renders direct human prompts as full user entries', () => {
     const view = projectEvent(createTranscriptView(), userEvent('hello', 1))

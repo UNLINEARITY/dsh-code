@@ -9,6 +9,7 @@
 
 import { boundContextSummary, type ContentBlock, type ImageBlock, type MessageId } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent, TodoItem } from '@deepseek-ai/dsh-session'
+import { graphemeWidth, splitGraphemes } from './width.ts'
 // Type-only imports merge the plugin-owned SessionEventMap variants
 // (agent/inbox/spliced, command/*, compaction/*, goal/change, llm/retry*,
 // plan/mode, permission/preset, sandbox/mode, session/title) into the union
@@ -368,8 +369,8 @@ function reasoningOf(content: readonly ContentBlock[]): string {
 function estimateTokens(text: string): number {
   let wide = 0
   let narrow = 0
-  for (const char of text) {
-    if ((char.codePointAt(0) ?? 0) > 0x2e7f) wide += 1
+  for (const cluster of splitGraphemes(text)) {
+    if (graphemeWidth(cluster) > 1) wide += 1
     else narrow += 1
   }
   return wide + Math.ceil(narrow / 4)

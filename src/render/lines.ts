@@ -354,3 +354,50 @@ export function transcriptEntryLines(
 export function settledEntryLines(entry: TranscriptEntry, columns: number, showReasoning: boolean): readonly StyledLine[] {
   return transcriptEntryLines(entry, columns, showReasoning, false, showReasoning)
 }
+
+/** The flexible rows of the live region; chrome (composer/notice/status) is never reduced. */
+export interface LiveAllocation {
+  /** Settled tail rows currently rendered in the live tree. */
+  readonly live: number
+  /** Rows reserved for the streaming reasoning tail or its marker. */
+  readonly reasoning: number
+  /** Rows reserved for the streaming answer tail. */
+  readonly answer: number
+}
+
+/** A clamped allocation plus the invariant-trip warning that triggered it. */
+export interface LiveAllocationAudit {
+  readonly allocation: LiveAllocation
+  readonly warning?: string
+}
+
+/**
+ * Clamp the live-region allocation so the flexible dynamic rows never exceed
+ * the post-chrome budget. By construction the caller derives these rows from
+ * the same budget; this is the runtime tripwire for a future edit that breaks
+ * that derivation. Reduction order: answer first (the freshest content is the
+ * live tail), then reasoning, then settled live rows; nothing goes negative.
+ * @param allocation - the intended row allocation.
+ * @param dynamicRows - the post-chrome row budget.
+ * @returns the clamped allocation and a warning string when clamping fired.
+ */
+export function clampLiveAllocation(allocation: LiveAllocation, dynamicRows: number): LiveAllocationAudit {
+  const live = Math.max(0, Math.floor(allocation.live))
+  const reasoning = Math.max(0, Math.floor(allocation.reasoning))
+  const answer = Math.max(0, Math.floor(allocation.answer))
+  const budget = Math.max(0, Math.floor(dynamicRows))
+  let excess = live + reasoning + answer - budget
+  if (excess <= 0) return { allocation: { live, reasoning, answer } }
+  const take = (from: number): number => {
+    const cut = Math.min(from, excess)
+    excess -= cut
+    return from - cut
+  }
+  const clampedAnswer = take(answer)
+  const clampedReasoning = excess > 0 ? take(reasoning) : reasoning
+  const clampedLive = excess > 0 ? take(live) : live
+  return {
+    allocation: { live: clampedLive, reasoning: clampedReasoning, answer: clampedAnswer },
+    warning: `live rows ${live} + ${reasoning} + ${answer} exceed the dynamic budget ${budget}; clamped to ${clampedLive}/${clampedReasoning}/${clampedAnswer}`,
+  }
+}

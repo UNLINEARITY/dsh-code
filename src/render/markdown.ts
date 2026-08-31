@@ -9,6 +9,8 @@
  * @module @deepseek-ai/dsh-code/render/markdown
  */
 
+import { stringWidth } from './width.ts'
+
 /** Style classes the renderer emits; the app maps them to colors/props. */
 export type MdStyle = 'plain' | 'bold' | 'italic' | 'boldItalic' | 'code' | 'accent' | 'accentBold' | 'dim' | 'strike'
 
@@ -30,14 +32,9 @@ function seg(text: string, style: MdStyle = 'plain'): MdSegment {
   return { text, style }
 }
 
-/** Visible width of a run in columns (CJK counts double). */
+/** Visible width of a run in columns (grapheme-cluster and emoji aware). */
 export function visibleColumns(text: string): number {
-  let columns = 0
-  for (const char of text) {
-    const code = char.codePointAt(0) ?? 0
-    columns += code > 0x2e7f ? 2 : 1
-  }
-  return columns
+  return stringWidth(text)
 }
 
 interface WrapUnit {
