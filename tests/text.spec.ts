@@ -104,6 +104,31 @@ describe('displayTail tab normalization', () => {
   })
 
   it('counts tab-expanded rows like wrapped text', () => {
-    expect(displayTail('x\t\ty', 5, 2).text).toBe('x\n    y')
+    // Forward wrapping fills the row with the expanded tab before breaking;
+    // the old backward scan pushed both tab cells onto the next row.
+    expect(displayTail('x\t\ty', 5, 2).text).toBe('x    \ny')
+  })
+
+  it('keeps already-wrapped rows stable as the text grows', () => {
+    // Forward wrapping: appended text never re-wraps earlier rows, so a
+    // streaming tail does not jump between frames (the backward scan the
+    // live region used recomputed every wrap point per chunk).
+    const before = displayTail('一二三四五', 4, 10)
+    expect(before.text).toBe('一二\n三四\n五')
+    const after = displayTail('一二三四五六七', 4, 10)
+    expect(after.text).toBe('一二\n三四\n五六\n七')
+    expect(after.text.startsWith(before.text)).toBe(true)
+  })
+
+  it('applies CJK kinsoku: closing punctuation overhangs, opening moves down', () => {
+    // ，would start the next row at the 8-column budget; it overhangs instead.
+    const tail = displayTail('甲乙丙丁，戊', 8, 10)
+    expect(tail.text.split('\n')[0]!.endsWith('，')).toBe(true)
+    expect(tail.text.split('\n')[1]).toBe('戊')
+    // （must not dangle at a row end; it moves down with the next cluster.
+    const head = displayTail('甲乙丙（丁', 8, 10)
+    const rows = head.text.split('\n')
+    expect(rows[0]).toBe('甲乙丙')
+    expect(rows[1]).toBe('（丁')
   })
 })

@@ -1749,6 +1749,66 @@ describe('Ctrl+R reasoning fold', () => {
     }
   })
 
+  it('defers the fold replay of a busy-turn toggle until the turn settles', async () => {
+    const harness = createTty(100, 30)
+    const store = createTranscriptStore([
+      {
+        type: 'user/message',
+        seq: 1,
+        time: 1,
+        data: createUserMessage({ content: [{ type: 'text', text: 'first' }], source: { kind: 'user' } }),
+      } as SessionEvent,
+      {
+        type: 'assistant/message',
+        seq: 2,
+        time: 2,
+        data: {
+          turn: 1,
+          step: 1,
+          message: createAssistantMessage({
+            content: [
+              { type: 'reasoning', text: 'old settled reasoning' },
+              { type: 'text', text: 'old answer' },
+            ],
+            source: { provider: 'p', model: 'm' },
+          }),
+        },
+      } as SessionEvent,
+      { type: 'turn/end', seq: 3, time: 3, data: { turn: 1, reason: { kind: 'completed' } } } as SessionEvent,
+    ])
+    const instance = renderApp(harness, appProps({ store }))
+    try {
+      await wait()
+      expect(harness.output.text.replace(/\x1b\[[0-9;?]*[A-Za-z]/gu, '')).toContain('Thinking (')
+
+      // A second turn runs; the fold toggles while that turn is busy. The
+      // live region flips without a source-backed clear…
+      harness.output.text = ''
+      store.apply({ type: 'turn/start', seq: 4, time: 4, data: { turn: 2 } } as SessionEvent)
+      store.apply({ type: 'step/start', seq: 5, time: 5, data: { turn: 2, step: 1 } } as SessionEvent)
+      store.apply({
+        type: 'assistant/chunk', seq: 6, time: 6,
+        data: { turn: 2, step: 1, chunk: { type: 'text-delta', text: 'live answer' } },
+      } as unknown as SessionEvent)
+      await wait()
+      harness.stdin.write('\x12')
+      await wait()
+      expect(harness.output.text).not.toContain('\x1b[2J')
+
+      // …and once the turn settles, exactly ONE deferred replay unifies the
+      // whole scrollback to the expanded fold — the OLD settled entry
+      // included, never left behind at the collapsed state.
+      store.apply({ type: 'turn/end', seq: 7, time: 7, data: { turn: 2, reason: { kind: 'completed' } } } as SessionEvent)
+      await wait()
+      expect((harness.output.text.match(/\x1b\[2J/gu) ?? []).length).toBe(1)
+      expect(harness.output.text.replace(/\x1b\[[0-9;?]*[A-Za-z]/gu, '')).toContain('old settled reasoning')
+    } finally {
+      instance.unmount()
+      harness.stdin.destroy()
+      harness.stdout.destroy()
+    }
+  })
+
   it('repaints the settled fold through one source-backed replay on an idle toggle', async () => {
     const stdin = Object.assign(new PassThrough(), {
       isTTY: true,

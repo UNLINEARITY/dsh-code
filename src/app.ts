@@ -4019,6 +4019,10 @@ export function App(props: AppProps): ReactElement {
   const [showReasoning, setShowReasoning] = useState(false)
   // Dedupe for the dynamic-budget tripwire: one warning per distinct shape.
   const budgetWarnRef = useRef<string | undefined>(undefined)
+  // A fold toggle during a busy turn defers its source-backed replay until
+  // the turn settles, so the settled scrollback unifies to the new fold
+  // state instead of staying mixed at the old one.
+  const pendingFoldReplayRef = useRef(false)
   const [verboseOpen, setVerboseOpen] = useState(false)
   const [diffView, setDiffView] = useState<GitDiffView | undefined>(undefined)
   const [helpOpen, setHelpOpen] = useState(false)
@@ -4292,6 +4296,15 @@ export function App(props: AppProps): ReactElement {
   }, [appStdout, refreshEpoch])
   // An idle Ctrl+R fold toggle joins resize and explicit Ctrl+L as a deliberate
   // source-backed rebuild of native scrollback; busy turns never do.
+  // The deferred half of a busy-turn fold toggle: once the turn settles, one
+  // source-backed replay unifies the settled scrollback to the new fold
+  // state. Without it, rows appended after the toggle render at the new
+  // state while older rows keep the old one (the only-recent-expanded mix).
+  useEffect(() => {
+    if (!pendingFoldReplayRef.current || busy || streamingActive) return
+    pendingFoldReplayRef.current = false
+    refreshScreen()
+  }, [busy, streamingActive, refreshScreen])
 
   // Rendered-history cap: when the settled window overflows the trim
   // hysteresis, one source-backed replay re-windows it (the rebuild branch
@@ -4545,7 +4558,7 @@ export function App(props: AppProps): ReactElement {
               prefix: '✻ ',
               continuationPrefix: '  ',
               dim: true,
-              maxRows: reasoningRows,
+              maxRows: auditedReasoningRows,
             })
             // The collapsed marker shimmers only while reasoning streams
             // alone: once answer text flows, a periodically re-rendered
@@ -4855,6 +4868,7 @@ export function App(props: AppProps): ReactElement {
         toggleReasoning: () => {
           setShowReasoning(current => !current)
           if (!busy && !streamingActive) refreshScreen()
+          else pendingFoldReplayRef.current = true
         },
         loadMentions: props.loadMentions,
         inspectImages: props.inspectImages,

@@ -12,7 +12,7 @@
  * @module @deepseek-ai/dsh-code/render/text
  */
 
-import { codePointWidth, graphemeWidth, splitGraphemes, stringWidth } from './width.ts'
+import { graphemeWidth, splitGraphemes, stringWidth } from './width.ts'
 
 /** C0 controls except tab (0x09) and newline (0x0a), plus DEL and C1. */
 const CONTROL_ESCAPE = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/gu
@@ -77,26 +77,26 @@ export interface DisplayTail {
   truncated: boolean
 }
 
-/** Read one Unicode character immediately before `end`. */
-function previousCharacter(text: string, end: number): { char: string; start: number } {
-  const last = text.charCodeAt(end - 1)
-  if (last >= 0xdc00 && last <= 0xdfff && end >= 2) {
-    const first = text.charCodeAt(end - 2)
-    if (first >= 0xd800 && first <= 0xdbff) {
-      return { char: text.slice(end - 2, end), start: end - 2 }
-    }
-  }
-  return { char: text.slice(end - 1, end), start: end - 1 }
-}
+/** Punctuation that must never START a physical row (CJK kinsoku tail set). */
+const ROW_START_FORBIDDEN = '，。、；：！？）】」』〉》…‥'
+
+/** Punctuation that must never END a physical row (CJK kinsoku head set). */
+const ROW_END_FORBIDDEN = '（【「『〈《'
 
 /**
- * Keep only the newest display-safe text that fits a terminal rectangle.
- * The scan walks backward and stops as soon as the suffix is full, so a long
- * reasoning stream does not rescan its entire accumulated prefix per chunk.
- * Explicit newlines and terminal wrapping both consume rows; tabs expand to
- * two spaces so terminal tab stops (which render at contextual column 8
- * boundaries, not at the budgeted cell count) cannot inflate the physical
- * row count of the live region.
+ * Keep the newest display-safe text that fits a terminal rectangle, wrapping
+ * FORWARD from the start of the text and slicing the tail rows.
+ *
+ * Forward wrapping is what keeps a streaming tail calm: rows already produced
+ * never re-wrap as tokens append (a backward scan recomputes every wrap point
+ * per chunk and the whole visible block jumps), and the wrap rules match the
+ * settled text's renderer so the flush at turn end does not reflow the block
+ * a second time. CJK kinsoku applies at both edges: closing punctuation
+ * overhangs up to two cells onto the filled row instead of starting the next
+ * one (within the caret column the caller reserves), and opening punctuation
+ * moves down instead of dangling at a row end. Tabs expand to two spaces so
+ * terminal tab stops cannot inflate the physical row count; clusters carry
+ * emoji presentation and combining marks whole.
  * @param text - raw externally sourced text.
  * @param columns - available terminal columns.
  * @param rows - available terminal rows.
@@ -105,55 +105,48 @@ function previousCharacter(text: string, end: number): { char: string; start: nu
 export function displayTail(text: string, columns: number, rows: number): DisplayTail {
   const columnLimit = Math.max(1, Math.floor(columns))
   const rowLimit = Math.max(1, Math.floor(rows))
-  const reversed: string[] = []
-  let row = 1
+  const wrapped: string[] = []
+  let current = ''
   let used = 0
-  let end = text.length
-  // A VS16 walked over (backward) ahead of its base: the base must commit
-  // the two cells emoji presentation actually draws, not its text width.
-  let emojiForced = false
-
-  while (end > 0) {
-    const previous = previousCharacter(text, end)
-    if (previous.char === '\n') {
-      if (row >= rowLimit) break
-      reversed.push('\n')
-      row += 1
-      used = 0
-      emojiForced = false
-      end = previous.start
-      continue
-    }
-
-    const safe = previous.char === '\t' ? '  ' : displayText(previous.char)
-    if (previous.char === '\uFE0F') {
-      // The selector occupies no cells; the base that follows (walking
-      // backward, the base we meet next) commits the two cells emoji
-      // presentation actually draws.
-      emojiForced = true
-      reversed.push(safe)
-      end = previous.start
-      continue
-    }
-    // safe can be a multi-character escape literal (\xNN / \uXXXX); only
-    // stringWidth budgets the whole visible escape, never its first byte.
-    const width = emojiForced ? Math.max(2, codePointWidth(previous.char)) : stringWidth(safe)
-    emojiForced = false
-    if (used > 0 && used + width > columnLimit) {
-      if (row >= rowLimit) break
-      // Materialize the soft wrap. Ink otherwise reflows at word boundaries
-      // and can turn a cell-counted two-row suffix into three rendered rows.
-      reversed.push('\n')
-      row += 1
-      used = 0
-    }
-    const extraRows = Math.floor(Math.max(0, width - 1) / columnLimit)
-    if (row + extraRows > rowLimit) break
-    row += extraRows
-    reversed.push(safe)
-    used = extraRows === 0 ? used + width : width - extraRows * columnLimit
-    end = previous.start
+  let lastCluster = ''
+  const flush = (): void => {
+    wrapped.push(current)
+    current = ''
+    used = 0
+    lastCluster = ''
   }
 
-  return { text: reversed.reverse().join(''), truncated: end > 0 }
+  for (const cluster of splitGraphemes(text)) {
+    if (cluster === '\n') {
+      flush()
+      continue
+    }
+    const safe = cluster === '\t' ? '  ' : displayText(cluster)
+    // safe can be a multi-character escape literal (\xNN / \uXXXX); only
+    // stringWidth budgets the whole visible escape, never its first byte.
+    const width = stringWidth(safe)
+    if (used > 0 && used + width > columnLimit) {
+      const overhang = width <= 2 && ROW_START_FORBIDDEN.includes(cluster)
+      if (!overhang) {
+        // Kinsoku head: an opening mark at the row edge moves down with the
+        // incoming cluster instead of dangling at the end of the filled row.
+        if (lastCluster !== '' && ROW_END_FORBIDDEN.includes(lastCluster)) {
+          const carried = lastCluster
+          current = current.slice(0, current.length - carried.length)
+          flush()
+          current = carried
+          used = stringWidth(carried)
+        } else {
+          flush()
+        }
+      }
+    }
+    current += safe
+    used += width
+    lastCluster = cluster
+  }
+  if (current !== '' || (wrapped.length > 0 && text.endsWith('\n'))) flush()
+
+  const truncated = wrapped.length > rowLimit
+  return { text: (truncated ? wrapped.slice(-rowLimit) : wrapped).join('\n'), truncated }
 }
