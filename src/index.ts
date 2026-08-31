@@ -35,6 +35,7 @@ import { App, type NoticeTone } from './app.ts'
 import { mountApprovalAnswerer, type ApprovalStore } from './approval.ts'
 import { isSlashLine, watchCommands, type CommandsView } from './commands.ts'
 import { internals, type TuiMount } from './internals.ts'
+import { syncModelCapabilities } from './model-capabilities.ts'
 import { buildModelSelection, applyModelSelectionToConfig, loadModelDirectory, modelSelectionLabel, resolveEffectiveSelection, type ModelRow } from './models.ts'
 import {
   loadProviderSettings,
@@ -545,6 +546,34 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   // process side (unknown commands, switch confirmations, cancels).
   const bridge: AppBridge = { notify: () => {} }
 
+  // Same-id capability inheritance. Catalog capabilities flow by route key,
+  // not model id, so a hand-declared relay model without an explicit
+  // reasoningEfforts declaration serves no reasoning levels and offers no
+  // effort picker. This background pass materializes declarations from
+  // same-id donors (sibling settings entries first, then other routes'
+  // advertised levels) over the panel's settings.mutate path, where the
+  // upstream serviceability gate still rejects invalid writes atomically.
+  // The debounce coalesces the settings/adapters event pair; the applier's
+  // applied-write fingerprints keep the loop convergent after its own write
+  // re-triggers the document event.
+  const capabilitySyncDebounceMs = 400
+  const runCapabilitySync = (): void => {
+    void syncModelCapabilities(ctx, bridge.notify)
+  }
+  let capabilitySyncTimer: ReturnType<typeof setTimeout> | undefined
+  const scheduleCapabilitySync = (): void => {
+    if (capabilitySyncTimer !== undefined) clearTimeout(capabilitySyncTimer)
+    capabilitySyncTimer = setTimeout(() => {
+      capabilitySyncTimer = undefined
+      runCapabilitySync()
+    }, capabilitySyncDebounceMs)
+  }
+  const offCapabilitySync = [
+    ctx.on('settings/document-updated', scheduleCapabilitySync),
+    ctx.on('llm/adapters-updated', scheduleCapabilitySync),
+  ]
+  scheduleCapabilitySync()
+
   // /statusline persistence: one user-level JSON file under the DSH home.
   // Missing file means defaults; a corrupt file degrades to defaults with a
   // surfaced warning (the customization is user-authored, never silent).
@@ -651,6 +680,8 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     quitAbort.abort()
     epoch += 1
     off()
+    for (const dispose of offCapabilitySync) dispose()
+    if (capabilitySyncTimer !== undefined) clearTimeout(capabilitySyncTimer)
     mountRef.current?.unmount()
     const currentSession = session
     const currentActive = active

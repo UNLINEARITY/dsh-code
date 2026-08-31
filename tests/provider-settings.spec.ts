@@ -277,6 +277,72 @@ describe('saveProviderConfiguration', () => {
     ], 7)
   })
 
+  it('round-trips editor-invisible declaration fields through a panel save', async () => {
+    const settings = {
+      writable: true,
+      describe: vi.fn(() => [{
+        ns: 'llm-pi-ai',
+        revision: 7,
+        value: {
+          providers: {
+            'pi-ai': {
+              baseURL: 'https://gateway.example/v1',
+              models: [{
+                id: 'model-a',
+                name: 'Model A',
+                contextWindow: 128_000,
+                maxTokens: 8_192,
+                reasoningEfforts: { off: null, high: 'ultra' },
+                compat: { supportsStore: false },
+              }],
+            },
+          },
+        },
+        base: { providers: {} },
+        user: {},
+      }]),
+      mutate: vi.fn(async () => undefined),
+    }
+    const llm = llmWith([{ id: 'pi-ai', name: 'PI AI' }], [piAiEntry])
+    const ctx = fakeCtx({ llm, settings })
+    const row = (await loadProviderSettings(ctx)).rows[0]!
+    expect(row.configuration.models).toEqual([{
+      id: 'model-a',
+      name: 'Model A',
+      contextWindow: 128_000,
+      maxTokens: 8_192,
+      extras: { reasoningEfforts: { off: null, high: 'ultra' }, compat: { supportsStore: false } },
+    }])
+    // A save that keeps the row checked re-emits the carried fields verbatim;
+    // edited modelled fields (a new output window) win over nothing carried.
+    await saveProviderConfiguration(ctx, row, {
+      baseURL: 'https://gateway.example/v1',
+      models: [{ ...row.configuration.models[0]!, maxTokens: 4_096 }],
+    })
+    expect(settings.mutate).toHaveBeenCalledWith('llm-pi-ai', [
+      { op: 'set', path: ['providers', 'pi-ai', 'baseURL'], value: 'https://gateway.example/v1' },
+      { op: 'set', path: ['providers', 'pi-ai', 'models'], value: [{
+        id: 'model-a',
+        reasoningEfforts: { off: null, high: 'ultra' },
+        compat: { supportsStore: false },
+        name: 'Model A',
+        contextWindow: 128_000,
+        maxTokens: 4_096,
+      }] },
+    ], 7)
+  })
+
+  it('lets a cleared modelled field drop even when extras carry raw values', async () => {
+    const settings = { writable: true, mutate: vi.fn(async () => undefined) }
+    await saveProviderConfiguration(fakeCtx({ settings }), target, {
+      models: [{ id: 'model-a', extras: { input: ['text'] } }],
+    })
+    expect(settings.mutate).toHaveBeenCalledWith('llm-pi-ai', [
+      { op: 'unset', path: ['providers', 'pi-ai', 'baseURL'] },
+      { op: 'set', path: ['providers', 'pi-ai', 'models'], value: [{ id: 'model-a', input: ['text'] }] },
+    ], 7)
+  })
+
   it('rejects invalid endpoints and never invokes settings mutation', async () => {
     const settings = { writable: true, mutate: vi.fn(async () => undefined) }
     await expect(saveProviderConfiguration(fakeCtx({ settings }), target, {

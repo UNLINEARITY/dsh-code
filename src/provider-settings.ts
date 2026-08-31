@@ -138,11 +138,16 @@ function configurationOf(profile: unknown): ProviderConfiguration {
     if (typeof value !== 'object' || value === null) return []
     const entry = value as Record<string, unknown>
     if (typeof entry.id !== 'string' || entry.id.trim() === '') return []
+    // Fields the editor does not understand ride along untouched: dropping
+    // them here would let the next save strip hand-written reasoningEfforts
+    // or compat declarations out of the stored profile.
+    const { id: _id, name: _name, contextWindow: _contextWindow, maxTokens: _maxTokens, ...extras } = entry
     return [{
       id: entry.id,
       ...(typeof entry.name === 'string' && entry.name.trim() !== '' ? { name: entry.name } : {}),
       ...(typeof entry.contextWindow === 'number' && Number.isFinite(entry.contextWindow) ? { contextWindow: entry.contextWindow } : {}),
       ...(typeof entry.maxTokens === 'number' && Number.isFinite(entry.maxTokens) ? { maxTokens: entry.maxTokens } : {}),
+      ...Object.keys(extras).length > 0 ? { extras } : {},
     }]
   })
   return {
@@ -194,6 +199,13 @@ export interface ProviderModelSettings {
   readonly name?: string
   readonly contextWindow?: number
   readonly maxTokens?: number
+  /**
+   * Remaining entry fields the editor does not model (`reasoningEfforts`,
+   * `compat`, `input`, …), carried verbatim so a save preserves them.
+   * Populated by {@link loadProviderSettings}; never contains the four
+   * modelled keys.
+   */
+  readonly extras?: Readonly<Record<string, unknown>>
 }
 
 /** The small, portable subset of a provider profile the terminal edits. */
@@ -514,6 +526,10 @@ export async function saveProviderConfiguration(
     }
     return {
       id,
+      // Editor-invisible fields ride along after the id; the modelled keys
+      // spread last so a panel edit (or clear) always wins over a carried
+      // value. extras never contains those keys — see configurationOf.
+      ...model.extras,
       ...(model.name === undefined || model.name.trim() === '' ? {} : { name: model.name.trim() }),
       ...(model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow }),
       ...(model.maxTokens === undefined ? {} : { maxTokens: model.maxTokens }),
