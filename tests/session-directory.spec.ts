@@ -109,12 +109,15 @@ describe('session deletion guards', () => {
   })
 
   it('accepts only artifact files inside the id-named directory', () => {
-    expect(sessionArtifactDirectory('C:\\root\\--repo--\\session-x\\session.jsonl', 'session-x'))
-      .toBe('C:\\root\\--repo--\\session-x')
-    expect(sessionArtifactDirectory('C:\\root\\--repo--\\session-x\\session.jsonl.zstd', 'session-x'))
-      .toBe('C:\\root\\--repo--\\session-x')
-    expect(sessionArtifactDirectory('C:\\root\\--repo--\\session-x\\notes.txt', 'session-x')).toBeUndefined()
-    expect(sessionArtifactDirectory('C:\\root\\--repo--\\other\\session.jsonl', 'session-x')).toBeUndefined()
+    // The guard splits through node:path, so the fixtures follow the host
+    // separator: windows drives on windows, posix roots elsewhere.
+    const sep = process.platform === 'win32' ? '\\' : '/'
+    const root = process.platform === 'win32' ? 'C:\\root\\--repo--' : '/root/--repo--'
+    const dir = root + sep + 'session-x'
+    expect(sessionArtifactDirectory(dir + sep + 'session.jsonl', 'session-x')).toBe(dir)
+    expect(sessionArtifactDirectory(dir + sep + 'session.jsonl.zstd', 'session-x')).toBe(dir)
+    expect(sessionArtifactDirectory(dir + sep + 'notes.txt', 'session-x')).toBeUndefined()
+    expect(sessionArtifactDirectory(root + sep + 'other' + sep + 'session.jsonl', 'session-x')).toBeUndefined()
   })
 
   it('collects the deletion subtree across listing order', () => {

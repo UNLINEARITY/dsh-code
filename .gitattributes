@@ -1,0 +1,5 @@
+# Normalize every text file to LF in the repository and on checkout.
+# A CRLF bin/deepseek.mjs fails to parse under vitest on Windows CI, and
+# mixed per-machine autocrlf settings otherwise decide what runners get.
+* text=auto eol=lf
+*.png binary

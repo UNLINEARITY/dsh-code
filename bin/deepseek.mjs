@@ -58,6 +58,12 @@ export function globalDshRoots() {
   ].filter(Boolean))]
 }
 
+/** Convert a file URL to a windows-style path even when resolved on a non-windows host. */
+function fileUrlToWindowsPath(url) {
+  const pathname = decodeURIComponent(new URL(url).pathname)
+  return pathname.replace(/^\/([A-Za-z]:)/, '$1').replace(/\//g, '\\')
+}
+
 /** Resolve the DSH entrypoint without passing user arguments through a Windows shell. */
 export function rawDshCommand(args, {
   platform = process.platform,
@@ -67,7 +73,9 @@ export function rawDshCommand(args, {
   resolvePackage = packageRequire.resolve,
 } = {}) {
   if (platform !== 'win32') return { command: 'dsh', args }
-  const adjacentEntrypoint = fileURLToPath(new URL('../../@deepseek-ai/dsh/lib/bin.js', moduleUrl))
+  // fileURLToPath follows the HOST separator; the win32 target needs a
+  // windows-style path regardless of where this resolver itself runs.
+  const adjacentEntrypoint = fileUrlToWindowsPath(new URL('../../@deepseek-ai/dsh/lib/bin.js', moduleUrl))
   if (fileExists(adjacentEntrypoint)) return { command: process.execPath, args: [adjacentEntrypoint, ...args] }
   for (const root of roots) {
     try {
