@@ -33,7 +33,7 @@ import type {} from '@deepseek-ai/cordis-plugin-loader'
 import type {} from '@deepseek-ai/dsh-cmdline'
 import { App, type NoticeTone } from './app.ts'
 import { mountApprovalAnswerer, type ApprovalStore } from './approval.ts'
-import { isSlashLine, watchCommands, type CommandsView } from './commands.ts'
+import { isSlashLine, submissionPayload, watchCommands, type CommandsView } from './commands.ts'
 import { internals, type TuiMount } from './internals.ts'
 import { syncModelCapabilities } from './model-capabilities.ts'
 import { buildModelSelection, applyModelSelectionToConfig, loadModelDirectory, modelSelectionLabel, resolveEffectiveSelection, type ModelRow } from './models.ts'
@@ -241,6 +241,48 @@ export async function runQuitSequence(
     // The exit request itself must not become an unhandled rejection.
   }
   return started
+}
+
+/** One composer submission waiting behind the startup delivery. */
+export interface QueuedSubmission {
+  readonly text: string
+  readonly mode: 'followup' | 'steer'
+  readonly images: readonly ImageBlock[]
+}
+
+/**
+ * Order-preserving gate for composer input while the startup prompt/images
+ * are still preparing. Anything submitted before the startup delivery settles
+ * queues and flushes afterwards in submit order, so the initial request can
+ * never be overtaken by typing that raced a slow image preparation. The flush
+ * also runs when the startup delivery fails: user input is never stranded.
+ */
+export class StartupInputGate {
+  private readonly queued: QueuedSubmission[] = []
+  private pending = false
+  constructor(private readonly deliver: (submission: QueuedSubmission) => void) {}
+
+  /** Submit one line: delivered now while idle, queued behind the startup delivery otherwise. */
+  submit(submission: QueuedSubmission): void {
+    if (this.pending) this.queued.push(submission)
+    else this.deliver(submission)
+  }
+
+  /**
+   * Run the startup delivery — the callback receives the direct-delivery sink
+   * for the startup prompt itself — then flush everything that queued behind
+   * it, in order, even when the callback rejects.
+   */
+  async run(startup: (deliver: (submission: QueuedSubmission) => void) => Promise<void>): Promise<void> {
+    this.pending = true
+    try {
+      await startup(submission => this.deliver(submission))
+    } finally {
+      this.pending = false
+      const queued = this.queued.splice(0)
+      for (const submission of queued) this.deliver(submission)
+    }
+  }
 }
 
 /**
@@ -898,9 +940,11 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   }
 
   /** Deliver one readable line to the agent, expanding session mentions first. */
-  const send = (text: string, mode: 'followup' | 'steer', images: readonly ImageBlock[] = []): void => {
-    const line = text.trim()
-    if (line === '' && images.length === 0) return
+  const sendNow = (text: string, mode: 'followup' | 'steer', images: readonly ImageBlock[] = []): void => {
+    // Blank check on the trimmed form; the payload itself keeps the draft's
+    // exact whitespace unless the line is a syntactic slash command.
+    const line = submissionPayload(text)
+    if (line.trim() === '' && images.length === 0) return
     if (images.length === 0 && line.startsWith('/mode ')) {
       void switchModeAction(line.slice(6).trim()).then(
         selected => bridge.notify(`mode → ${selected}`),
@@ -923,6 +967,13 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       return
     }
     deliverLine(line, mode, images)
+  }
+
+  // Startup serialization: input submitted while the startup prompt/images
+  // are still preparing queues behind the initial request.
+  const inputGate = new StartupInputGate(({ text, mode, images }) => sendNow(text, mode, images))
+  const send = (text: string, mode: 'followup' | 'steer', images: readonly ImageBlock[] = []): void => {
+    inputGate.submit({ text, mode, images })
   }
 
   /** Dispatch one submitted line: slash commands to the registry, other text to the agent. */
@@ -1557,18 +1608,20 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   mountRef.current = io.mount(appElement())
 
   // Startup prompt/images use the same durable delivery path as composer
-  // submissions. Image bytes are committed before the user/message event.
+  // submissions. Image bytes are committed before the user/message event, and
+  // input typed during that preparation queues behind the initial request so
+  // the agent always receives the startup prompt first.
   if (startup.prompt !== undefined || (startup.images?.length ?? 0) > 0) {
     if ((startup.images?.length ?? 0) > 0) {
       bridge.notify(`processing ${startup.images!.length} startup image${startup.images!.length === 1 ? '' : 's'}…`)
     }
-    void saveImagePaths(startup.images ?? [], ctx.get('attachments')).then(
-      images => {
-        if (images.length > 0) bridge.notify(`${images.length} startup image${images.length === 1 ? '' : 's'} attached`)
-        send(startup.prompt ?? '', 'followup', images)
-      },
-      (error: unknown) => bridge.notify(`initial prompt failed: ${error instanceof Error ? error.message : String(error)}`, 'error'),
-    )
+    void inputGate.run(async deliver => {
+      const images = await saveImagePaths(startup.images ?? [], ctx.get('attachments'))
+      if (images.length > 0) bridge.notify(`${images.length} startup image${images.length === 1 ? '' : 's'} attached`)
+      deliver({ text: startup.prompt ?? '', mode: 'followup', images })
+    }).catch((error: unknown) => {
+      bridge.notify(`initial prompt failed: ${error instanceof Error ? error.message : String(error)}`, 'error')
+    })
   }
 
   async function copyLastResponse(): Promise<string> {

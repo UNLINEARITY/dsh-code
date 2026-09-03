@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { CommandDescriptor } from '@deepseek-ai/dsh-commands'
-import { isSlashLine, watchCommands } from '../src/commands.ts'
+import { isSlashLine, submissionPayload, watchCommands } from '../src/commands.ts'
 import { loadModelDirectory } from '../src/models.ts'
 
 describe('isSlashLine', () => {
@@ -19,6 +19,33 @@ describe('isSlashLine', () => {
     expect(isSlashLine('/Hello')).toBe(false)
     expect(isSlashLine('/')).toBe(false)
     expect(isSlashLine('a /help')).toBe(false)
+  })
+})
+
+describe('submissionPayload', () => {
+  it('keeps an ordinary prompt byte-exact, including indentation and trailing space', () => {
+    expect(submissionPayload('  if cond:\n    run()')).toBe('  if cond:\n    run()')
+    expect(submissionPayload('hello ')).toBe('hello ')
+    expect(submissionPayload('\t indent')).toBe('\t indent')
+  })
+
+  it('strips only trailing line terminators (the open-paste Enter artifact)', () => {
+    expect(submissionPayload('hi\n')).toBe('hi')
+    expect(submissionPayload('code\n\n')).toBe('code')
+    // Interior blank lines and the leading indent are content and survive.
+    expect(submissionPayload('  a\n\n  b\n')).toBe('  a\n\n  b')
+  })
+
+  it('normalizes a syntactic slash line so completion trailing spaces still route', () => {
+    expect(submissionPayload('/quit ')).toBe('/quit')
+    expect(submissionPayload('  /mode fast  ')).toBe('/mode fast')
+  })
+
+  it('keeps slash-looking prose raw when it is not a syntactic command', () => {
+    // Multiline drafts never parse as slash lines, and a leading '/(' is not
+    // a command name — both must reach the model exactly as typed.
+    expect(submissionPayload('/* block\ncomment */')).toBe('/* block\ncomment */')
+    expect(submissionPayload('/path/to/file tail')).toBe('/path/to/file tail')
   })
 })
 

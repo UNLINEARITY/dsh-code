@@ -196,8 +196,7 @@ export function ProviderAuthorizationPanel(props: ProviderAuthorizationPanelProp
     if (input !== '' && !key.ctrl && !key.meta) setDraft(current => current + input)
   })
 
-  if (viewport.maxHeight === 0) return createElement(Box, { display: 'none' })
-  if (viewport.compact) {
+  if (viewport.maxHeight === 0 || viewport.compact) {
     return createElement(Text, { wrap: 'truncate-end' }, truncateColumns('provider login · esc cancel', viewport.contentColumns))
   }
 
@@ -271,8 +270,7 @@ export function ProviderAuthorizationLogoutPanel({ row, confirm, done, back }: {
       setError(reason instanceof Error ? reason.message : String(reason))
     })
   })
-  if (viewport.maxHeight === 0) return createElement(Box, { display: 'none' })
-  if (viewport.compact) return createElement(Text, { wrap: 'truncate-end' }, truncateColumns('y logout · n/esc back', viewport.contentColumns))
+  if (viewport.maxHeight === 0 || viewport.compact) return createElement(Text, { wrap: 'truncate-end' }, truncateColumns('y logout · n/esc back', viewport.contentColumns))
   return createElement(
     Box,
     { flexDirection: 'column', width: viewport.outerColumns, paddingX: 1, borderStyle: 'round', borderColor: inkColor(getPalette().warn) },

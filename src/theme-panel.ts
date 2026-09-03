@@ -46,8 +46,7 @@ export function ThemePanel({ current, select, close }: {
     if (key.downArrow) return setCursor(value => (value + 1) % THEME_ROWS.length)
     if (key.return) return select(THEME_ROWS[cursor]!.id)
   })
-  if (viewport.maxHeight === 0) return createElement(Box, { display: 'none' })
-  if (viewport.compact) {
+  if (viewport.maxHeight === 0 || viewport.compact) {
     return createElement(Text, { wrap: 'truncate-end' }, truncateColumns('/theme · esc close', viewport.contentColumns))
   }
   return createElement(

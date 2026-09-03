@@ -47,9 +47,19 @@ function searchLine(searching: boolean | undefined, query: string): string {
 function ListFrame(props: ListFrameProps): ReactElement {
   const stdout = useStdout().stdout
   const viewport = panelViewport(stdout?.columns ?? 80, stdout?.rows ?? 30)
-  if (viewport.maxHeight === 0) return createElement(Box, { display: 'none' })
-  if (viewport.compact) {
-    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(singleLineText(`${props.title} · esc close`), viewport.contentColumns))
+  if (viewport.maxHeight === 0 || viewport.compact) {
+    // One visible row instead of a hidden panel: the current selection (or
+    // load state) is shown so Enter/arrows are never blind keys acting on
+    // invisible state. The selection leads and `esc close` follows it, so a
+    // narrow terminal truncates the panel title — never the actionable facts.
+    const body = props.loading
+      ? `${props.title} · loading…`
+      : props.error !== undefined
+        ? `${props.title} · load failed`
+        : props.rows.length === 0
+          ? `${props.title} · no matching entries`
+          : `❯ ${singleLineText(props.rows[props.cursor]?.text ?? '')}`
+    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(singleLineText(`${body} · esc close`), viewport.contentColumns))
   }
   const stateRows = props.loading
     ? [{ key: 'loading', text: '  loading…' }]
@@ -494,10 +504,10 @@ export function HistoryPanel({ entries, fill, close }: {
   })
   const stdout = useStdout().stdout
   const viewport = panelViewport(stdout?.columns ?? 80, stdout?.rows ?? 30)
-  if (viewport.compact) {
-    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns('/history · esc close', viewport.contentColumns))
+  if (viewport.maxHeight === 0 || viewport.compact) {
+    const picked = matches[cursor]
+    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns('/history · ' + (picked === undefined ? 'no matching prompts' : singleLineText(picked)) + ' · esc close', viewport.contentColumns))
   }
-  if (viewport.maxHeight === 0) return createElement(Box, { display: 'none' })
   const bodyRows = Math.max(1, viewport.bodyRows - 1)
   const offset = revealRow(0, cursor, matches.length, bodyRows)
   const visible = matches.slice(offset, offset + bodyRows)
@@ -586,10 +596,9 @@ export function StatuslinePanel({ enabled, change, close }: {
   })
   const stdout = useStdout().stdout
   const viewport = panelViewport(stdout?.columns ?? 80, stdout?.rows ?? 30)
-  if (viewport.compact) {
+  if (viewport.maxHeight === 0 || viewport.compact) {
     return createElement(Text, { wrap: 'truncate-end' }, truncateColumns('/statusline · esc close', viewport.contentColumns))
   }
-  if (viewport.maxHeight === 0) return createElement(Box, { display: 'none' })
   const bodyRows = Math.max(1, viewport.bodyRows - 1)
   const offset = revealRow(0, cursor, order.length, bodyRows)
   const visible = order.slice(offset, offset + bodyRows)

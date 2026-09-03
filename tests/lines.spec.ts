@@ -2,6 +2,7 @@
 
 import { describe, expect, it } from 'vitest'
 import { visibleColumns } from '../src/render/markdown.ts'
+import { stringWidth } from '../src/render/width.ts'
 import { clampLiveAllocation, settledEntryLines, styledLines, lineSegment, reasoningLines, transcriptEntryLines } from '../src/render/lines.ts'
 import type { TranscriptEntry } from '../src/render/projection.ts'
 
@@ -10,6 +11,19 @@ const textOf = (lines: ReturnType<typeof styledLines>): string => lines
   .join('\n')
 
 describe('styled terminal lines', () => {
+  it('keeps ZWJ emoji families and flags whole inside the column budget', () => {
+    const family = '👨‍👩‍👧'
+    const flag = '🇨🇳'
+    const lines = styledLines([lineSegment('a' + family + flag + 'bcd')], 5)
+    // Every physical row stays within the budget measured in terminal cells…
+    for (const line of lines) {
+      expect(stringWidth(line.segments.map(segment => segment.text).join(''))).toBeLessThanOrEqual(5)
+    }
+    // …and no multi-codepoint cluster is ever split across rows.
+    expect(textOf(lines)).toContain(family)
+    expect(textOf(lines)).toContain(flag)
+  })
+
   it('hard-wraps CJK, long words, tabs, and controls within the column budget', () => {
     const lines = styledLines([lineSegment('甲乙 verylongword\t\x1b[31m')], 6)
     expect(lines.length).toBeGreaterThan(2)

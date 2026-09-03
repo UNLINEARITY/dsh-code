@@ -133,16 +133,31 @@ export function createMentions(ctx: Context, agent: Agent | undefined, cwd: stri
   return {
     async candidates(query: string, signal?: AbortSignal): Promise<readonly MentionCandidate[]> {
       const needle = query.trim()
+      // A failed discovery half is remembered, never masked: when NOTHING came
+      // back the rejection tells the menu "search unavailable" instead of a
+      // silent empty list that reads as "no matches". A half that still
+      // returned rows shows them — partial results beat an error wall.
+      let fileFailure: unknown
+      let sessionFailure: unknown
       const [files, sessions] = await Promise.all([
         agent !== undefined && fileReferences !== undefined
           ? fileReferences
             .list(agent, needle, signal ?? new AbortController().signal)
-            .catch(() => [] as readonly ServiceFileCandidate[])
+            .catch((error: unknown) => {
+              fileFailure = error
+              return [] as readonly ServiceFileCandidate[]
+            })
           : agent === undefined
-            ? preSessionFiles(needle, signal).catch(() => [] as readonly ServiceFileCandidate[])
+            ? preSessionFiles(needle, signal).catch((error: unknown) => {
+              fileFailure = error
+              return [] as readonly ServiceFileCandidate[]
+            })
             : Promise.resolve([] as readonly ServiceFileCandidate[]),
         sessionCapable && needle !== '' && !isPathLikeMentionQuery(needle) && agent !== undefined
-          ? resolver!.listCandidates(agent, needle, 10, signal).catch(() => [] as readonly SessionReferenceCandidate[])
+          ? resolver!.listCandidates(agent, needle, 10, signal).catch((error: unknown) => {
+            sessionFailure = error
+            return [] as readonly SessionReferenceCandidate[]
+          })
           : Promise.resolve([] as readonly SessionReferenceCandidate[]),
       ])
       // The service owns ranking (and the bare-@ default rows); the menu caps
@@ -161,7 +176,15 @@ export function createMentions(ctx: Context, agent: Agent | undefined, cwd: stri
         description: `Session · ${candidate.cwd ?? '(no cwd)'}`,
         kind: 'session',
       }))
-      return [...fileRows, ...sessionRows]
+      const rows = [...fileRows, ...sessionRows]
+      if (rows.length === 0 && (fileFailure !== undefined || sessionFailure !== undefined)) {
+        throw fileFailure instanceof Error
+          ? fileFailure
+          : sessionFailure instanceof Error
+            ? sessionFailure
+            : new Error(String(fileFailure ?? sessionFailure))
+      }
+      return rows
     },
     parse(text: string): ParsedSessionReferenceText {
       return parseSessionReferenceText(text)

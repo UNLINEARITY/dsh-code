@@ -9,7 +9,7 @@
  * @module @deepseek-ai/dsh-code/render/markdown
  */
 
-import { stringWidth } from './width.ts'
+import { graphemeWidth, splitGraphemes, stringWidth } from './width.ts'
 
 /** Style classes the renderer emits; the app maps them to colors/props. */
 export type MdStyle = 'plain' | 'bold' | 'italic' | 'boldItalic' | 'code' | 'accent' | 'accentBold' | 'dim' | 'strike'
@@ -60,15 +60,17 @@ function wrapUnits(segments: readonly MdSegment[]): readonly WrapUnit[] {
       if (word !== '') units.push({ text: word, style: segment.style })
       word = ''
     }
-    for (const char of segment.text) {
-      if (char === ' ') {
+    // Grapheme clusters keep ZWJ families, flags, and combining sequences
+    // whole; a cluster wider than one cell is its own break opportunity.
+    for (const cluster of splitGraphemes(segment.text)) {
+      if (cluster === ' ') {
         flushWord()
-        units.push({ text: char, style: segment.style })
-      } else if (visibleColumns(char) > 1) {
+        units.push({ text: cluster, style: segment.style })
+      } else if (graphemeWidth(cluster) > 1) {
         flushWord()
-        units.push({ text: char, style: segment.style })
+        units.push({ text: cluster, style: segment.style })
       } else {
-        word += char
+        word += cluster
       }
     }
     flushWord()
@@ -99,7 +101,7 @@ function wrapSegments(segments: readonly MdSegment[], width: number): readonly (
   const append = (unit: WrapUnit): void => {
     const columns = visibleColumns(unit.text)
     if (used === 0 && columns > limit) {
-      for (const char of unit.text) appendAtom({ text: char, style: unit.style })
+      for (const cluster of splitGraphemes(unit.text)) appendAtom({ text: cluster, style: unit.style })
       return
     }
     if (used + columns <= limit || current.length === 0) {
@@ -121,7 +123,7 @@ function wrapSegments(segments: readonly MdSegment[], width: number): readonly (
     }
     flush()
     if (columns > limit) {
-      for (const char of unit.text) appendAtom({ text: char, style: unit.style })
+      for (const cluster of splitGraphemes(unit.text)) appendAtom({ text: cluster, style: unit.style })
     } else {
       appendAtom(unit)
     }
@@ -336,12 +338,12 @@ function hardWrapSegments(segments: readonly MdSegment[], width: number): readon
     used = 0
   }
   for (const segment of segments) {
-    for (const char of segment.text) {
-      const cells = visibleColumns(char)
+    for (const cluster of splitGraphemes(segment.text)) {
+      const cells = graphemeWidth(cluster)
       if (used > 0 && used + cells > width) flush()
       const previous = current.at(-1)
-      if (previous?.style === segment.style) previous.text += char
-      else current.push({ text: char, style: segment.style })
+      if (previous?.style === segment.style) previous.text += cluster
+      else current.push({ text: cluster, style: segment.style })
       used += cells
     }
   }

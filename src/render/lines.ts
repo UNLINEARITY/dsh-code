@@ -3,6 +3,7 @@
 import { promptDisplayText, type TranscriptEntry } from './projection.ts'
 import type { ToolDetail } from './tool-detail.ts'
 import { renderMarkdown, visibleColumns, type MdStyle } from './markdown.ts'
+import { graphemeWidth, splitGraphemes } from './width.ts'
 import { formatTokens } from './status.ts'
 import { displayText, truncateColumns } from './text.ts'
 
@@ -53,14 +54,17 @@ export function styledLines(segments: readonly StyledSegment[], columns: number)
 
   for (const segment of segments) {
     const safe = displayText(segment.text).replaceAll('\t', '  ').replaceAll('\r', '')
-    for (const char of safe) {
-      if (char === '\n') {
+    // Grapheme clusters, never bare code points: a ZWJ family or a flag is
+    // one terminal cell run, and splitting it would both split the glyph
+    // across rows and double-count its width against the budget.
+    for (const cluster of splitGraphemes(safe)) {
+      if (cluster === '\n') {
         flush()
         continue
       }
-      const cells = visibleColumns(char)
+      const cells = graphemeWidth(cluster)
       if (used > 0 && used + cells > width) flush()
-      appendSegment(current, char, segment.style)
+      appendSegment(current, cluster, segment.style)
       used += cells
     }
   }
@@ -120,14 +124,14 @@ function hangingStyledLines(
   }
   for (const segment of segments) {
     const safe = displayText(segment.text).replaceAll('\t', '  ').replaceAll('\r', '')
-    for (const char of safe) {
-      if (char === '\n') {
+    for (const cluster of splitGraphemes(safe)) {
+      if (cluster === '\n') {
         flush()
         continue
       }
-      const cells = visibleColumns(char)
+      const cells = graphemeWidth(cluster)
       if (used > 0 && used + cells > budget) flush()
-      appendSegment(current, char, segment.style)
+      appendSegment(current, cluster, segment.style)
       used += cells
     }
   }

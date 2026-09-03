@@ -20,6 +20,15 @@ describe('renderMarkdown', () => {
     expect(text(lines)).toEqual(['one two', 'three four', 'five'])
   })
 
+  it('never splits a ZWJ emoji family across wrapped rows', () => {
+    const family = '👨‍👩‍👧'
+    const lines = renderMarkdown('word ' + family + ' ' + 'x'.repeat(6) + ' tail', 8)
+    for (const row of text(lines)) {
+      expect(visibleColumns(row)).toBeLessThanOrEqual(8)
+    }
+    expect(text(lines).some(row => row.includes(family))).toBe(true)
+  })
+
   it('joins soft line breaks inside a paragraph as spaces', () => {
     expect(text(renderMarkdown('first\nsecond', 80))).toEqual(['first second'])
   })

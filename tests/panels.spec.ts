@@ -1306,6 +1306,34 @@ describe('panel row sanitization', () => {
     }
   })
 
+  it('shows the selected row on compact and too-small terminals instead of hiding the list', async () => {
+    for (const height of [9, 8] as const) {
+      const { stdin, stdout, read } = fakeStreams(60, height)
+      const instance = render(createElement(PermissionPanel, {
+        current: 'workspace-write',
+        load: async () => [
+          { id: 'read-only', description: 'read only' },
+          { id: 'workspace-write', description: 'write within the workspace' },
+        ],
+        select: () => {},
+        close: () => {},
+      }), { stdin, stdout, stderr: stdout, exitOnCtrlC: false, patchConsole: false })
+      try {
+        await wait()
+        const output = read()
+        // One visible line shows the current selection and the exit — never
+        // a hidden surface whose keys still act invisibly. Selection leads so
+        // narrow terminals never truncate the escape hint away.
+        expect(output).toContain('❯ ○ read-only')
+        expect(output).toContain('esc close')
+      } finally {
+        instance.unmount()
+        stdin.destroy()
+        stdout.destroy()
+      }
+    }
+  })
+
   it('sanitizes session titles and workspaces in /resume rows', async () => {
     const { stdin, stdout, read } = fakeStreams()
     const instance = render(createElement(ResumePanel, {

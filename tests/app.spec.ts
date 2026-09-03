@@ -3601,6 +3601,141 @@ describe('completion menu', () => {
   })
 })
 
+describe('prompt fidelity', () => {
+  it('dispatches an ordinary pasted prompt with its exact indentation and line breaks', async () => {
+    const harness = createTty(100, 24)
+    const dispatch = vi.fn()
+    const instance = renderApp(harness, appProps({ dispatch }))
+    try {
+      await wait()
+      // Bracketed paste of indented code: the leading spaces and the inner
+      // newline are content, not noise — the composer must forward the draft
+      // verbatim instead of the trimmed form.
+      harness.stdin.write('\x1b[200~  if cond:\n    run()\x1b[201~')
+      await wait(180)
+      harness.stdin.write('\r')
+      await wait()
+      expect(dispatch).toHaveBeenCalledTimes(1)
+      expect(dispatch).toHaveBeenCalledWith('  if cond:\n    run()')
+    } finally {
+      instance.unmount()
+      harness.stdin.destroy()
+      harness.stdout.destroy()
+    }
+  })
+
+  it('still routes a slash line whose draft carries the completion trailing space', async () => {
+    const harness = createTty(100, 24)
+    const dispatch = vi.fn()
+    const instance = renderApp(harness, appProps({ dispatch }))
+    try {
+      await wait()
+      harness.stdin.write('/help ')
+      await wait()
+      harness.stdin.write('\r')
+      await wait()
+      // '/help ' is a local TUI action: the trimmed command routes to the
+      // overlay, never to dispatch.
+      expect(dispatch).not.toHaveBeenCalled()
+      expect(harness.output.text).toContain('/help — keys and commands')
+    } finally {
+      instance.unmount()
+      harness.stdin.destroy()
+      harness.stdout.destroy()
+    }
+  })
+})
+
+describe('short-terminal surfaces', () => {
+  it('keeps the approval ask visible and answerable on an 8-row terminal', async () => {
+    const harness = createTty(100, 8)
+    const answers: string[] = []
+    const snapshot = Object.freeze({
+      pending: {
+        headline: 'run the build?',
+        toolName: 'bash',
+        command: 'pnpm build',
+        answer: (outcome: string): void => {
+          answers.push(outcome)
+        },
+      },
+      answered: false,
+      queued: 0,
+    })
+    const instance = renderApp(harness, appProps({
+      approval: { subscribe: () => unsubscribe, getSnapshot: () => snapshot },
+    }))
+    try {
+      await wait()
+      // The ask never disappears: one line states the absolute decisions.
+      expect(harness.output.text).toContain('approval')
+      expect(harness.output.text).toContain('y allow')
+      harness.stdin.write('y')
+      await wait()
+      expect(answers).toEqual(['allowed-once'])
+    } finally {
+      instance.unmount()
+      harness.stdin.destroy()
+      harness.stdout.destroy()
+    }
+  })
+
+  it('disables blind question picks when the options cannot render', async () => {
+    const harness = createTty(100, 8)
+    const submit = vi.fn()
+    const cancel = vi.fn()
+    const pending = {
+      request: { questions: [{ id: 'pick', question: 'Which?', options: [{ label: 'A' }, { label: 'B' }] }] },
+      resolve: noop,
+      reject: noop,
+    } as unknown as PendingQuestion
+    const snapshot: QuestionSnapshot = { pending }
+    const instance = renderApp(harness, appProps({
+      questions: { subscribe: () => unsubscribe, getSnapshot: () => snapshot, submit, cancel },
+    }))
+    try {
+      await wait()
+      expect(harness.output.text).toContain('question · esc cancel')
+      // Digit picks are disabled: the options are not on screen, so a blind
+      // answer must not fire.
+      harness.stdin.write('1')
+      await wait()
+      expect(submit).not.toHaveBeenCalled()
+      expect(cancel).not.toHaveBeenCalled()
+      harness.stdin.write('')
+      await wait()
+      expect(cancel).toHaveBeenCalledTimes(1)
+    } finally {
+      instance.unmount()
+      harness.stdin.destroy()
+      harness.stdout.destroy()
+    }
+  })
+})
+
+describe('mention discovery failures', () => {
+  it('shows an explicit unavailable row instead of an empty menu when the search fails', async () => {
+    const harness = createTty(100, 24)
+    const instance = renderApp(harness, appProps({
+      loadMentions: async () => {
+        throw new Error('index offline')
+      },
+    }))
+    try {
+      await wait()
+      harness.stdin.write('@src')
+      await wait(200)
+      expect(harness.output.text).toContain('workspace search unavailable')
+      expect(harness.output.text).toContain('index offline')
+      expect(harness.output.text).toContain('keep typing to retry')
+    } finally {
+      instance.unmount()
+      harness.stdin.destroy()
+      harness.stdout.destroy()
+    }
+  })
+})
+
 describe('/agents panel', () => {
   it('opens from the composer and lists live feed rows with transcript entry', async () => {
     const agents = [

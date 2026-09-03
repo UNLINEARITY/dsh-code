@@ -94,9 +94,19 @@ describe('createMentions.candidates (fileReferences service)', () => {
     expect(menu[0]).toEqual({ label: 'f0.ts', description: 'File', kind: 'file', path: join(nowhere, 'f0.ts') })
   })
 
-  it('returns empty file rows without the service (agent present) or on service failure', async () => {
+  it('returns empty without the service, but surfaces a service failure as a rejection', async () => {
     await expect(createMentions(bareContext(), agent, nowhere).candidates('app')).resolves.toEqual([])
-    await expect(createMentions(serviceContext(new Error('index unavailable')), agent, nowhere).candidates('app')).resolves.toEqual([])
+    // A silent empty list used to read as "no matches"; the rejection lets
+    // the menu say the search itself is unavailable.
+    await expect(createMentions(serviceContext(new Error('index unavailable')), agent, nowhere).candidates('app'))
+      .rejects.toThrow('index unavailable')
+  })
+
+  it('still shows the healthy half when only one discovery side fails', async () => {
+    const sessions = [{ sessionId: 's1', label: 'fix login' }] as unknown as SessionReferenceCandidate[]
+    const api = createMentions(serviceContext(new Error('index unavailable'), { sessions }), agent, nowhere)
+    const rows = await api.candidates('fix')
+    expect(rows.map(row => row.kind)).toEqual(['session'])
   })
 
   it('falls back to the official search over the launch cwd before any session exists', async () => {

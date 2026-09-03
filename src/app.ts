@@ -60,7 +60,7 @@ import {
   type DeepseekWaveTier,
 } from './render/animations.ts'
 import type { ApprovalSnapshot, ApprovalStore } from './approval.ts'
-import type { CommandsView } from './commands.ts'
+import { submissionPayload, type CommandsView } from './commands.ts'
 import type { ModelDirectory, ModelRow } from './models.ts'
 import type { ProviderConfiguration, ProviderSettingsDirectory, ProviderTargetView } from './provider-settings.ts'
 import type { QuestionSnapshot, QuestionStore } from './questions.ts'
@@ -802,8 +802,7 @@ function TodoListPanel({ todos, onClose }: { todos: readonly TodoItem[]; onClose
     else if (input === 'G') setScroll(Math.max(0, rows.length - viewport.bodyRows))
   })
 
-  if (viewport.maxHeight === 0) return createElement(Box, { display: 'none' })
-  if (viewport.compact) {
+  if (viewport.maxHeight === 0 || viewport.compact) {
     return createElement(Text, { wrap: 'truncate-end' }, truncateColumns('todos · esc/q close', viewport.contentColumns))
   }
 
@@ -1102,9 +1101,8 @@ function ApprovalBar({ snapshot, locked, notify }: {
   }, { isActive: active })
 
   if (pending === undefined) return undefined
-  if (viewport.maxHeight === 0) return createElement(Box, { display: 'none' })
   const queuedSuffix = snapshot.queued > 0 ? ` · +${snapshot.queued} queued` : ''
-  if (viewport.compact) {
+  if (viewport.maxHeight === 0 || viewport.compact) {
     return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(`approval${queuedSuffix} · enter/y allow · esc/n reject`, viewport.contentColumns))
   }
   // Body budget: title + options + footer consume fixed rows; the command
@@ -1360,6 +1358,12 @@ function QuestionBar({ store, snapshot, locked }: { store: QuestionStore; snapsh
 
   useStableInput((input, key) => {
     if (pending === undefined || question === undefined || submitted) return
+    if (viewport.maxHeight === 0) {
+      // Options are not rendered at this height, so blind picks stay
+      // disabled; only the explicit cancel remains available.
+      if (key.escape || (key.ctrl && input === 'c')) store.cancel(pending)
+      return
+    }
     if (key.ctrl && input === 'c') {
       store.cancel(pending)
       return
@@ -1508,8 +1512,7 @@ function QuestionBar({ store, snapshot, locked }: { store: QuestionStore; snapsh
   }, active)
 
   if (pending === undefined || question === undefined) return undefined
-  if (viewport.maxHeight === 0) return createElement(Box, { display: 'none' })
-  if (viewport.compact) {
+  if (viewport.maxHeight === 0 || viewport.compact) {
     return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(isPlan ? 'plan review · esc cancel' : 'question · esc cancel', viewport.contentColumns))
   }
   const footerBase = submitted
@@ -1621,10 +1624,16 @@ function ModelPanel({ directory, error, current, onSelect, onProviders, onRetry,
     }
   })
 
-  if (viewport.maxHeight === 0) return createElement(Box, { display: 'none' })
-  if (viewport.compact) {
+  if (viewport.maxHeight === 0 || viewport.compact) {
     const providers = onProviders === undefined ? '' : ' · a providers'
-    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(`/model${providers} · r retry · esc/q close`, viewport.contentColumns))
+    const state = rows.length === 0
+      ? directory === undefined && error === undefined
+        ? 'loading…'
+        : error !== undefined
+          ? 'error'
+          : 'no models'
+      : `❯ ${rows[cursor]?.modelName ?? rows[cursor]?.model ?? ''}`
+    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(`/model · ${state}${providers} · r retry · esc/q close`, viewport.contentColumns))
   }
 
   const stateRows: ReactElement[] = directory === undefined && error === undefined
@@ -1806,8 +1815,7 @@ function ProviderPanel({ directory, error, authorizations, authorizationError, o
     }
   }, true)
 
-  if (viewport.maxHeight === 0) return createElement(Box, { display: 'none' })
-  if (viewport.compact) {
+  if (viewport.maxHeight === 0 || viewport.compact) {
     return createElement(Text, { wrap: 'truncate-end' }, truncateColumns('/model providers · enter key · d remove key · esc back', viewport.contentColumns))
   }
   const stateRows: ReactElement[] = directory === undefined && error === undefined
@@ -1942,7 +1950,11 @@ function ProviderConfigurationPanel({ target, catalog, save, done, back }: {
       }
     }
   }, true)
-  if (viewport.maxHeight === 0) return createElement(Box, { display: 'none' })
+  if (viewport.maxHeight === 0) {
+    // Never hide a live input surface: one visible row keeps the escape
+    // route honest on extremely short terminals.
+    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns('provider configuration · terminal too small · esc back', viewport.contentColumns))
+  }
   const stateRows = error === undefined ? [] : [createElement(Text, { key: 'error', color: inkColor(getPalette().error), wrap: 'truncate-end' }, truncateColumns(`  ${error}`, viewport.contentColumns))]
   const rowBudget = Math.max(0, viewport.bodyRows - stateRows.length - 1)
   const first = selectionWindow(cursor, choices.length, rowBudget)
@@ -2025,10 +2037,9 @@ function ProviderCredentialPanel({ target, save, done, back }: {
     setDraft(next)
   }, true)
 
-  if (viewport.maxHeight === 0) return createElement(Box, { display: 'none' })
   const keyBudget = Math.max(1, viewport.contentColumns - 4)
   const bullets = '•'.repeat(Math.min([...draft].length, keyBudget))
-  if (viewport.compact) {
+  if (viewport.maxHeight === 0 || viewport.compact) {
     return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(`API key ${bullets}${busy ? ' saving…' : ' ▏'} · esc back`, viewport.contentColumns))
   }
   const identity = target.displayName === target.provider ? target.provider : `${target.displayName} (${target.provider})`
@@ -2089,9 +2100,8 @@ function ProviderConfirmPanel({ target, kind, confirm, done, back }: {
     if (input === 'y') run()
   }, true)
 
-  if (viewport.maxHeight === 0) return createElement(Box, { display: 'none' })
   const action = kind === 'credential' ? 'remove API key' : 'remove provider'
-  if (viewport.compact) {
+  if (viewport.maxHeight === 0 || viewport.compact) {
     return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(`${action} ${target.displayName}? · y confirm · n/esc back`, viewport.contentColumns))
   }
   const identity = target.displayName === target.provider ? target.provider : `${target.displayName} (${target.provider})`
@@ -2205,8 +2215,7 @@ function HelpPanel({ descriptors, skills, commandError, skillError, onClose }: {
     else if (input === 'G') setScroll(Math.max(0, content.length - viewport.bodyRows))
   })
 
-  if (viewport.maxHeight === 0) return createElement(Box, { display: 'none' })
-  if (viewport.compact) {
+  if (viewport.maxHeight === 0 || viewport.compact) {
     return createElement(Text, { wrap: 'truncate-end' }, truncateColumns('/help · esc/q close', viewport.contentColumns))
   }
 
@@ -2376,8 +2385,7 @@ function VerbosePanel({ entries, onClose }: { entries: readonly TranscriptEntry[
     }
   })
 
-  if (viewport.maxHeight === 0) return createElement(Box, { display: 'none' })
-  if (viewport.compact) {
+  if (viewport.maxHeight === 0 || viewport.compact) {
     return createElement(
       Text,
       { wrap: 'truncate-end' },
@@ -2505,11 +2513,13 @@ export function completionCandidates(
  * editor's live completion state, so no cross-component effect ever resyncs
  * it (a state lift here previously deadlocked the menu after a resize).
  */
-function CompletionMenu({ active, mention, index, rows }: {
+function CompletionMenu({ active, mention, index, rows, error }: {
   active: boolean
   mention: boolean
   index: number
   rows: readonly CompletionCandidate[]
+  /** Live mention-discovery failure; replaces the empty "searching…" row. */
+  error?: string
 }): ReactElement | undefined {
   // Hook order is unconditional: `active` toggling must not change the hook
   // count (the early return used to sit above useStdout).
@@ -2536,7 +2546,13 @@ function CompletionMenu({ active, mention, index, rows }: {
     Box,
     { flexDirection: 'column', marginLeft: 2, paddingY: verticalPadding },
     ...(rows.length === 0
-      ? [createElement(Text, { key: 'loading', dimColor: true }, 'searching…')]
+      ? [error === undefined
+        ? createElement(Text, { key: 'loading', dimColor: true }, 'searching…')
+        : createElement(
+          Text,
+          { key: 'error', color: inkColor(getPalette().error), wrap: 'truncate-end' },
+          truncateColumns(`workspace search unavailable: ${singleLineText(error)} · keep typing to retry`, contentColumns),
+        )]
       : visible.map((candidate, at) => {
         const absolute = first + at
         return createElement(
@@ -2777,6 +2793,8 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
     : { start: beforeCursor.length - lastLine.length + (tokenMatch.index ?? 0) + (tokenMatch[1]?.length ?? 0), query: tokenMatch[2] ?? '' }
   const mentionActive = mentionToken !== undefined
   const [mentionRows, setMentionRows] = useState<readonly MentionCandidate[]>([])
+  /** Latest mention-discovery failure; shown in the menu instead of an empty list. */
+  const [mentionError, setMentionError] = useState<string | undefined>(undefined)
   const mentionRequestRef = useRef(0)
 
   const sameImagePath = (left: string, right: string): boolean => (
@@ -2854,8 +2872,10 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
     mentionRequestRef.current = requestId
     if (!active || !mentionActive) {
       setMentionRows([])
+      setMentionError(undefined)
       return
     }
+    setMentionError(undefined)
     const controller = new AbortController()
     const query = mentionToken.query
     const timer = setTimeout(() => {
@@ -2863,7 +2883,12 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
         rows => {
           if (!controller.signal.aborted && mentionRequestRef.current === requestId) setMentionRows(rows)
         },
-        () => {},
+        (reason: unknown) => {
+          if (!controller.signal.aborted && mentionRequestRef.current === requestId) {
+            setMentionRows([])
+            setMentionError(reason instanceof Error ? reason.message : String(reason))
+          }
+        },
       )
     }, 50)
     return () => {
@@ -3186,7 +3211,12 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
           return
         }
       }
-      const text = liveValue.trim()
+      // Payload fidelity: trim() is a blank check, not a rewrite. Ordinary
+      // prompts keep their exact indentation and trailing whitespace (pasted
+      // code must reach the model verbatim); slash lines normalize so the
+      // completion-inserted trailing space still routes `/quit ` correctly.
+      const trimmed = liveValue.trim()
+      const text = submissionPayload(liveValue)
       if (draftImagesRef.current.length > 0) {
         const controller = new AbortController()
         const epoch = prepareEpochRef.current + 1
@@ -3208,7 +3238,7 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
           setCompletionIndex(0)
           setDismissedMenuValue(undefined)
           dismissNotice()
-          if (text !== '') {
+          if (trimmed !== '') {
             recordLocal(text)
             recordHistory(text)
           }
@@ -3230,7 +3260,7 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
       resetCursorBlink()
       setCompletionIndex(0)
       setDismissedMenuValue(undefined)
-      if (text === '') return
+      if (trimmed === '') return
       dismissNotice()
       // Global recall records non-slash submissions only (slash lines are
       // commands, not prompts) — Codex record_local_submission semantics;
@@ -3632,6 +3662,7 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
     mention: mentionActive,
     index: completionIndex,
     rows: menuRows,
+    error: mentionActive ? mentionError : undefined,
   })
 
   // Every state reuses this exact multiline editor window. Only the caret row

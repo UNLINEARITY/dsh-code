@@ -7,6 +7,8 @@ import {
   exportSessionIdSuffix,
   resolveTarget,
   runQuitSequence,
+  StartupInputGate,
+  type QueuedSubmission,
   type QuitCleanupStep,
 } from '../src/index.ts'
 
@@ -177,5 +179,46 @@ describe('runQuitSequence (quit cleanup ordering)', () => {
     ], code => { order.push(`exit:${code}`) }, () => { throw new Error('sink broke') })
     expect(ran).toEqual(['flush', 'history'])
     expect(order).toEqual(['flush', 'history', 'exit:0'])
+  })
+})
+
+describe('StartupInputGate (startup input ordering)', () => {
+  const sub = (text: string): QueuedSubmission => ({ text, mode: 'followup', images: [] })
+
+  it('delivers immediately while idle', () => {
+    const delivered: string[] = []
+    const gate = new StartupInputGate(({ text }) => {
+      delivered.push(text)
+    })
+    gate.submit(sub('hello'))
+    expect(delivered).toEqual(['hello'])
+  })
+
+  it('queues user input behind the startup delivery and flushes it in order', async () => {
+    const delivered: string[] = []
+    const gate = new StartupInputGate(({ text }) => {
+      delivered.push(text)
+    })
+    await gate.run(async deliver => {
+      gate.submit(sub('user-1'))
+      gate.submit(sub('user-2'))
+      expect(delivered).toEqual([])
+      deliver(sub('startup prompt'))
+      expect(delivered).toEqual(['startup prompt'])
+    })
+    expect(delivered).toEqual(['startup prompt', 'user-1', 'user-2'])
+  })
+
+  it('flushes queued input even when the startup delivery fails', async () => {
+    const delivered: string[] = []
+    const gate = new StartupInputGate(({ text }) => {
+      delivered.push(text)
+    })
+    await expect(gate.run(async () => {
+      gate.submit(sub('first'))
+      gate.submit(sub('second'))
+      throw new Error('image preparation failed')
+    })).rejects.toThrow('image preparation failed')
+    expect(delivered).toEqual(['first', 'second'])
   })
 })

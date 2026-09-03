@@ -83,3 +83,21 @@ export function watchCommands(ctx: Context): CommandsView {
 export function isSlashLine(line: string): boolean {
   return /^\/[a-z][a-z0-9_-]*(?=$|[\t ])/u.test(line)
 }
+
+/**
+ * The submission payload for one composer line. Trim is a blank check, not a
+ * rewrite: an ordinary prompt keeps its exact leading indentation, inner
+ * layout, and trailing spaces (pasted code must reach the model verbatim).
+ * Only trailing line terminators are stripped — a draft's final newline is a
+ * paste/Enter artifact (an open bracketed paste turns Enter into an inserted
+ * newline), never deliberate content. A syntactic slash line still normalizes
+ * fully so command routing stays stable (completion inserts a trailing space
+ * after `/name`).
+ * @param line - the complete draft text.
+ * @returns the text to submit verbatim.
+ */
+export function submissionPayload(line: string): string {
+  const withoutTrailingNewlines = line.replace(/[\r\n]+$/u, '')
+  const trimmed = withoutTrailingNewlines.trim()
+  return isSlashLine(trimmed) ? trimmed : withoutTrailingNewlines
+}
