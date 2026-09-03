@@ -18,6 +18,7 @@ import {
   isVsCodeTerminalEnv,
   shouldEnableKeyboardEnhancement,
 } from './keyboard.ts'
+import { createSplitStdin } from './input-split.ts'
 
 /** A mounted terminal app instance; the runner owns unmount ordering. */
 export interface TuiMount {
@@ -52,13 +53,23 @@ export const internals: {
     // draft, quit). Ink's default `exitOnCtrlC: true` would intercept the
     // normalized control byte first, unmount only its renderer, and leave the
     // Harness runner plus the pushed keyboard protocol alive.
-    const instance = render(element, { exitOnCtrlC: false })
+    // stdin travels through the keypress splitter: Ink parses one chunk as
+    // one keypress, so a coalesced space-then-enter would drop both keys.
+    const tuiStdin = createSplitStdin(process.stdin)
+    // Ink only touches isTTY/setRawMode/ref/read on stdin; the object-mode
+    // proxy satisfies that contract without the full ReadStream surface.
+    const instance = render(element, {
+      exitOnCtrlC: false,
+      stdin: tuiStdin.stdin as unknown as NodeJS.ReadStream,
+      stdout: process.stdout,
+    })
     return {
       rerender(element: ReactElement): void {
         instance.rerender(element)
       },
       unmount(): void {
         instance.unmount()
+        tuiStdin.dispose()
         // Pop only a stack this mount pushed, then disable bracketed paste.
         process.stdout.write(
           (keyboardEnhanced ? KEYBOARD_ENHANCE_DISABLE : '')

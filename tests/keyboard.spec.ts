@@ -78,6 +78,16 @@ describe('normalizeKeyboardChunk', () => {
     expect(normalizeKeyboardChunk('\x1b[98;3u')).toBe('\x1bb')
     expect(normalizeKeyboardChunk('\x1b[97;2;65u')).toBe('A')
   })
+  it('maps plain printable CSI-u keys such as space and option digits', () => {
+    expect(normalizeKeyboardChunk('\x1b[32u')).toBe(' ')
+    expect(normalizeKeyboardChunk('\x1b[49u')).toBe('1')
+    expect(normalizeKeyboardChunk('\x1b[50;1u')).toBe('2')
+    expect(normalizeKeyboardChunk('\x1b[32;3u')).toBe('\x1b ')
+    expect(normalizeKeyboardChunk('\x1b[32;1:1u')).toBe(' ')
+    expect(normalizeKeyboardChunk('\x1b[49;1:1u')).toBe('1')
+    expect(normalizeKeyboardChunk('\x1b[57400u')).toBe('1')
+    expect(normalizeKeyboardChunk('\x1b[57401;1:1u')).toBe('2')
+  })
   it('normalizes repeated enhanced Ctrl+C sequences without leaking CSI text', () => {
     expect(normalizeKeyboardChunk('\x1b[99;5u\x1b[99;5u')).toBe('\x03\x03')
   })

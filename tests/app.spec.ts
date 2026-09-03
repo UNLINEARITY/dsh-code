@@ -12,6 +12,7 @@ import { createAssistantMessage, createToolResultMessage, createUserMessage, typ
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type { TodoItem } from '@deepseek-ai/dsh-session'
 import { App, computeSettledRows, type AppProps } from '../src/app.ts'
+import { createSplitStdin } from '../src/input-split.ts'
 import { createTranscriptStore } from '../src/store.ts'
 import type { TranscriptEntry } from '../src/render/projection.ts'
 import { DEFAULT_STATUSLINE_ITEMS } from '../src/render/status.ts'
@@ -472,6 +473,331 @@ describe('structured question custom answers', () => {
       })
     } finally {
       instance.unmount()
+    }
+  })
+})
+
+describe('structured question multi-select', () => {
+  it('toggles options with space and submits the full selection', async () => {
+    const harness = createTty(100, 24)
+    const submit = vi.fn()
+    const pending = {
+      request: {
+        questions: [{
+          id: 'pick',
+          question: 'Which ones?',
+          options: [{ label: 'A' }, { label: 'B' }, { label: 'C' }],
+          multiSelect: true,
+        }],
+      },
+      resolve: noop,
+      reject: noop,
+    } as unknown as PendingQuestion
+    const snapshot: QuestionSnapshot = { pending }
+    const instance = renderApp(harness, appProps({
+      questions: {
+        subscribe: () => unsubscribe,
+        getSnapshot: () => snapshot,
+        submit,
+        cancel: noop,
+      },
+    }))
+    try {
+      await wait()
+      harness.stdin.write(' ')
+      await wait()
+      expect(harness.output.text).toContain('◉')
+      harness.stdin.write('\x1b[B')
+      await wait()
+      harness.stdin.write(' ')
+      await wait()
+      harness.stdin.write('\r')
+      await wait()
+      expect(submit).toHaveBeenCalledWith(pending, {
+        answers: [{ id: 'pick', selected: ['A', 'B'] }],
+      })
+    } finally {
+      instance.unmount()
+      harness.stdin.destroy()
+      harness.stdout.destroy()
+    }
+  })
+
+  it('toggles options by their number keys and submits the set', async () => {
+    const harness = createTty(100, 24)
+    const submit = vi.fn()
+    const pending = {
+      request: {
+        questions: [{
+          id: 'pick',
+          question: 'Which ones?',
+          options: [{ label: 'A' }, { label: 'B' }, { label: 'C' }],
+          multiSelect: true,
+        }],
+      },
+      resolve: noop,
+      reject: noop,
+    } as unknown as PendingQuestion
+    const snapshot: QuestionSnapshot = { pending }
+    const instance = renderApp(harness, appProps({
+      questions: {
+        subscribe: () => unsubscribe,
+        getSnapshot: () => snapshot,
+        submit,
+        cancel: noop,
+      },
+    }))
+    try {
+      await wait()
+      harness.stdin.write('1')
+      await wait()
+      harness.stdin.write('3')
+      await wait()
+      expect(harness.output.text).toContain('◉ 1. A')
+      expect(harness.output.text).toContain('◉ 3. C')
+      harness.stdin.write('\r')
+      await wait()
+      expect(submit).toHaveBeenCalledWith(pending, {
+        answers: [{ id: 'pick', selected: ['A', 'C'] }],
+      })
+    } finally {
+      instance.unmount()
+      harness.stdin.destroy()
+      harness.stdout.destroy()
+    }
+  })
+
+  it('picks a single-select option immediately by its number key', async () => {
+    const harness = createTty(100, 24)
+    const submit = vi.fn()
+    const pending = {
+      request: {
+        questions: [{
+          id: 'pick',
+          question: 'Which one?',
+          options: [{ label: 'A' }, { label: 'B' }, { label: 'C' }],
+        }],
+      },
+      resolve: noop,
+      reject: noop,
+    } as unknown as PendingQuestion
+    const snapshot: QuestionSnapshot = { pending }
+    const instance = renderApp(harness, appProps({
+      questions: {
+        subscribe: () => unsubscribe,
+        getSnapshot: () => snapshot,
+        submit,
+        cancel: noop,
+      },
+    }))
+    try {
+      await wait()
+      harness.stdin.write('2')
+      await wait()
+      expect(submit).toHaveBeenCalledTimes(1)
+      expect(submit).toHaveBeenCalledWith(pending, {
+        answers: [{ id: 'pick', selected: ['B'] }],
+      })
+    } finally {
+      instance.unmount()
+      harness.stdin.destroy()
+      harness.stdout.destroy()
+    }
+  })
+
+  it('answers a coalesced space-then-enter chunk as toggle plus submit', async () => {
+    const harness = createTty(100, 24)
+    const submit = vi.fn()
+    const pending = {
+      request: {
+        questions: [{
+          id: 'pick',
+          question: 'Which ones?',
+          options: [{ label: 'A' }, { label: 'B' }, { label: 'C' }],
+          multiSelect: true,
+        }],
+      },
+      resolve: noop,
+      reject: noop,
+    } as unknown as PendingQuestion
+    const snapshot: QuestionSnapshot = { pending }
+    const stdinProxy = createSplitStdin(harness.stdin as unknown as NodeJS.ReadStream)
+    const instance = render(createElement(App, appProps({
+      questions: {
+        subscribe: () => unsubscribe,
+        getSnapshot: () => snapshot,
+        submit,
+        cancel: noop,
+      },
+    })), {
+      stdin: stdinProxy.stdin,
+      stdout: harness.stdout,
+      stderr: harness.stdout,
+      exitOnCtrlC: false,
+      patchConsole: false,
+    })
+    try {
+      await wait()
+      // One write, two keypresses: the exact shape that lost both keys.
+      harness.stdin.write(' \r')
+      await wait()
+      expect(submit).toHaveBeenCalledWith(pending, {
+        answers: [{ id: 'pick', selected: ['A'] }],
+      })
+    } finally {
+      stdinProxy.dispose()
+      instance.unmount()
+      harness.stdin.destroy()
+      harness.stdout.destroy()
+    }
+  })
+
+  it('handles printable CSI-u space and number keys through the production stdin proxy', async () => {
+    const harness = createTty(100, 24)
+    const submit = vi.fn()
+    const pending = {
+      request: {
+        questions: [{
+          id: 'pick',
+          question: 'Which ones?',
+          options: [{ label: 'A' }, { label: 'B' }, { label: 'C' }],
+          multiSelect: true,
+        }],
+      },
+      resolve: noop,
+      reject: noop,
+    } as unknown as PendingQuestion
+    const snapshot: QuestionSnapshot = { pending }
+    const stdinProxy = createSplitStdin(harness.stdin as unknown as NodeJS.ReadStream)
+    const instance = render(createElement(App, appProps({
+      questions: {
+        subscribe: () => unsubscribe,
+        getSnapshot: () => snapshot,
+        submit,
+        cancel: noop,
+      },
+    })), {
+      stdin: stdinProxy.stdin,
+      stdout: harness.stdout,
+      stderr: harness.stdout,
+      exitOnCtrlC: false,
+      patchConsole: false,
+    })
+    try {
+      await wait()
+      harness.stdin.write('\x1b[32u')
+      await wait()
+      harness.stdin.write('\x1b[50u')
+      await wait()
+      harness.stdin.write('\r')
+      await wait()
+      expect(submit).toHaveBeenCalledWith(pending, {
+        answers: [{ id: 'pick', selected: ['A', 'B'] }],
+      })
+    } finally {
+      stdinProxy.dispose()
+      instance.unmount()
+      harness.stdin.destroy()
+      harness.stdout.destroy()
+    }
+  })
+
+  it('cancels the question panel on Ctrl+C instead of handing the key to the composer', async () => {
+    const harness = createTty(100, 24)
+    const cancel = vi.fn()
+    const pending = {
+      request: {
+        questions: [{
+          id: 'pick',
+          question: 'Which one?',
+          options: [{ label: 'A' }, { label: 'B' }],
+        }],
+      },
+      resolve: noop,
+      reject: noop,
+    } as unknown as PendingQuestion
+    const snapshot: QuestionSnapshot = { pending }
+    const instance = renderApp(harness, appProps({
+      questions: {
+        subscribe: () => unsubscribe,
+        getSnapshot: () => snapshot,
+        submit: noop,
+        cancel,
+      },
+    }))
+    try {
+      await wait()
+      harness.stdin.write('\x03')
+      await wait()
+      expect(cancel).toHaveBeenCalledWith(pending)
+    } finally {
+      instance.unmount()
+      harness.stdin.destroy()
+      harness.stdout.destroy()
+    }
+  })
+
+  it('switches between multiple questions without losing selections', async () => {
+    const harness = createTty(100, 24)
+    const submit = vi.fn()
+    const pending = {
+      request: {
+        questions: [
+          {
+            id: 'first',
+            question: 'First?',
+            options: [{ label: 'A' }, { label: 'B' }],
+            multiSelect: true,
+          },
+          {
+            id: 'second',
+            question: 'Second?',
+            options: [{ label: 'C' }, { label: 'D' }],
+            multiSelect: true,
+          },
+        ],
+      },
+      resolve: noop,
+      reject: noop,
+    } as unknown as PendingQuestion
+    const snapshot: QuestionSnapshot = { pending }
+    const instance = renderApp(harness, appProps({
+      questions: {
+        subscribe: () => unsubscribe,
+        getSnapshot: () => snapshot,
+        submit,
+        cancel: noop,
+      },
+    }))
+    try {
+      await wait()
+      harness.stdin.write('1')
+      await wait()
+      harness.stdin.write('\x1b[C')
+      await wait()
+      expect(harness.output.text).toContain('❓ question 2/2')
+      harness.stdin.write('2')
+      await wait()
+      harness.stdin.write('\x1b[D')
+      await wait()
+      expect(harness.output.text).toContain('❓ question 1/2')
+      expect(harness.output.text).toContain('◉ 1. A')
+      // The first selection is already part of the per-question draft; only
+      // the final question needs Enter to submit the full ordered answer set.
+      harness.stdin.write('\x1b[C')
+      await wait()
+      harness.stdin.write('\r')
+      await wait()
+      expect(submit).toHaveBeenCalledWith(pending, {
+        answers: [
+          { id: 'first', selected: ['A'] },
+          { id: 'second', selected: ['D'] },
+        ],
+      })
+    } finally {
+      instance.unmount()
+      harness.stdin.destroy()
+      harness.stdout.destroy()
     }
   })
 })

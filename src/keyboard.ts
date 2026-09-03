@@ -96,7 +96,22 @@ interface CsiUKey {
 }
 
 /** Match one CSI-u sequence (code, optional ;modifiers, then :event or ;alternate). */
-const CSI_U_SOURCE = '\x1b\\[(\\d+)(?:;(\\d+))?(?:[:;](\\d+))?u'
+const CSI_U_SOURCE = '\x1b\\[(\\d+)(?:;(\\d+))?(?:(:|;)(\\d+))?u'
+
+/** Kitty private-use keycodes for the numeric keypad and keypad Enter. */
+const KITTY_KEYPAD_CODES: Readonly<Record<number, string>> = {
+  57399: '0',
+  57400: '1',
+  57401: '2',
+  57402: '3',
+  57403: '4',
+  57404: '5',
+  57405: '6',
+  57406: '7',
+  57407: '8',
+  57408: '9',
+  57414: '\r',
+}
 
 /** Legacy equivalent for one decoded CSI-u key, or undefined to pass through. */
 function legacyForKey(key: CsiUKey): string | undefined {
@@ -114,6 +129,11 @@ function legacyForKey(key: CsiUKey): string | undefined {
   if (key.code === 27) return '\x1b'
   if (key.code === 9) return shift ? '\x1b[Z' : '\t'
   if (key.code === 127) return alt || ctrl ? '\x1b\x7f' : '\x7f'
+  const keypad = KITTY_KEYPAD_CODES[key.code]
+  if (keypad !== undefined) {
+    if (alt) return '\x1b' + keypad
+    return keypad
+  }
   // Kitty disambiguate mode reports the six legacy functional keys as CSI u
   // codes 1-6 (Home, Insert, Delete, End, PageUp, PageDown). Ink 5 cannot
   // parse these forms and would insert literal "[3u" text into the draft, so
@@ -140,11 +160,15 @@ function legacyForKey(key: CsiUKey): string | undefined {
     if (alt) return '\x1b' + String.fromCodePoint(key.code + 32)
     return String.fromCodePoint(key.code)
   }
-  if (key.code >= 32 && key.code <= 126 && key.alternate !== undefined) {
-    const base = key.alternate >= 97 && key.alternate <= 122 ? key.alternate : key.code
+  if (key.code >= 32 && key.code <= 126) {
+    // Kitty reports ordinary printable keys as CSI-u with no alternate code
+    // (for example space is `ESC[32u` and `1` is `ESC[49u`). Keep the
+    // alternate form when present, but never leave a plain printable key as
+    // an unknown escape sequence for Ink to swallow.
+    const base = key.alternate ?? key.code
     if (ctrl && base - 96 >= 1 && base - 96 <= 26) return String.fromCodePoint(base - 96)
-    if (alt) return '\x1b' + String.fromCodePoint(key.alternate)
-    return String.fromCodePoint(key.alternate)
+    if (alt) return '\x1b' + String.fromCodePoint(base)
+    return String.fromCodePoint(base)
   }
   return undefined
 }
@@ -158,11 +182,13 @@ function legacyForKey(key: CsiUKey): string | undefined {
 export function normalizeKeyboardChunk(chunk: string): string {
   if (!chunk.includes('\x1b[') || !chunk.includes('u')) return chunk
   const pattern = new RegExp(CSI_U_SOURCE, 'g')
-  return chunk.replace(pattern, (whole, code: string, mods?: string, third?: string) => {
+  return chunk.replace(pattern, (whole, code: string, mods?: string, separator?: ':' | ';', third?: string) => {
     const legacy = legacyForKey({
       code: Number.parseInt(code, 10),
       modifiers: mods === undefined || mods === '' ? 1 : Math.max(1, Number.parseInt(mods, 10)),
-      alternate: third !== undefined && third !== '' ? Number.parseInt(third, 10) : undefined,
+      // A colon introduces Kitty's optional event type (`:1` = press), not
+      // an alternate key code. Semicolon introduces the alternate code.
+      alternate: separator === ';' && third !== undefined && third !== '' ? Number.parseInt(third, 10) : undefined,
     })
     return legacy ?? whole
   })

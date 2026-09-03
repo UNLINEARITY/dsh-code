@@ -22,7 +22,7 @@ import { Box, Static, Text, useInput, useStdin, useStdout, type Key } from 'ink'
 import type { CommandDescriptor } from '@deepseek-ai/dsh-commands'
 import type { ImageBlock } from '@deepseek-ai/dsh-llm'
 import type { TodoItem } from '@deepseek-ai/dsh-session'
-import type { AskUserQuestionAnswerItem } from '@deepseek-ai/dsh-user-questions'
+import type { AskUserQuestionAnswerItem, AskUserQuestionItem } from '@deepseek-ai/dsh-user-questions'
 import type { AuthorizationInteraction, AuthorizationStatus } from '@deepseek-ai/dsh-authorization'
 import {
   dim,
@@ -1146,13 +1146,57 @@ function ApprovalBar({ snapshot, locked, notify }: {
   )
 }
 
+interface QuestionDraftState {
+  readonly selected: readonly number[]
+  readonly custom: string
+  readonly cursor: number
+  readonly mode: 'options' | 'custom'
+  readonly scroll: number
+  readonly manualScroll: boolean
+  readonly followCustomTail: boolean
+  readonly committed: boolean
+}
+
+function initialQuestionDraft(question: AskUserQuestionItem | undefined): QuestionDraftState {
+  const hasOptions = (question?.options?.length ?? 0) > 0
+  return {
+    selected: [],
+    custom: '',
+    cursor: 0,
+    mode: hasOptions ? 'options' : 'custom',
+    scroll: 0,
+    manualScroll: false,
+    followCustomTail: !hasOptions,
+    committed: false,
+  }
+}
+
+function answerFromQuestionDraft(question: AskUserQuestionItem, draft: QuestionDraftState): AskUserQuestionAnswerItem {
+  // Multi-select changes are answers as soon as a value is toggled, matching
+  // Claude-Code's draft store. `committed` still records an explicit Enter so
+  // an intentionally empty answer can be submitted, while navigation away
+  // from a non-empty draft never discards the user's selection.
+  const hasAnswer = question.multiSelect === true
+    ? draft.committed || draft.selected.length > 0 || draft.custom.trim() !== ''
+    : draft.committed
+  if (!hasAnswer) {
+    return { id: question.id, selected: [] }
+  }
+  const options = question.options ?? []
+  const selected = draft.selected
+    .map(at => options[at]?.label)
+    .filter((label): label is string => label !== undefined)
+  const custom = draft.custom.trim()
+  return { id: question.id, selected, ...(custom === '' ? {} : { custom }) }
+}
+
 /**
  * The ask_user_question bar: walks one request question by question,
- * renders the option menu (Claude-Code style: arrows move, space toggles a
- * multi-select, enter submits, `c` opens the custom-answer box, Esc
- * interrupts the question as aborted). Plan reviews arrive through the same
- * service with a `plan-review` intent — the approve option gets a ✓ mark,
- * the answer encoding stays identical.
+ * retaining an independent draft for every question. Options use Space/1-9
+ * to toggle a multi-select, Enter to confirm, and arrows/Ctrl+P/N to move
+ * between questions. Plan reviews arrive through the same service with a
+ * `plan-review` intent — the approve option gets a ✓ mark, the answer
+ * encoding stays identical.
  */
 function QuestionBar({ store, snapshot, locked }: { store: QuestionStore; snapshot: QuestionSnapshot; locked: boolean }): ReactElement | undefined {
   const stdout = useStdout().stdout
@@ -1160,39 +1204,32 @@ function QuestionBar({ store, snapshot, locked }: { store: QuestionStore; snapsh
   const pending = snapshot.pending
   const request = pending?.request
   const [index, setIndex] = useState(0)
-  const [cursor, setCursor] = useState(0)
-  const [selected, setSelected] = useState<readonly number[]>([])
-  const [mode, setMode] = useState<'options' | 'custom'>('options')
-  const [custom, setCustom] = useState('')
-  const [answers, setAnswers] = useState<readonly AskUserQuestionAnswerItem[]>([])
+  const [drafts, setDrafts] = useState<readonly QuestionDraftState[]>(() => request?.questions.map(question => initialQuestionDraft(question)) ?? [])
   const [submitted, setSubmitted] = useState(false)
-  const [scroll, setScroll] = useState(0)
-  const [manualScroll, setManualScroll] = useState(false)
-  const [followCustomTail, setFollowCustomTail] = useState(false)
+  const draftsRef = useRef<readonly QuestionDraftState[]>([])
+  const indexRef = useRef(0)
+  draftsRef.current = drafts
+  indexRef.current = index
 
   // A new request resets the walk; questions without options start in the
   // custom-answer box (a free-form question). Depend on the request rather
   // than its wrapper snapshot: external stores may refresh that wrapper while
   // a question is still active, and a reset must never become a render loop.
   useEffect(() => {
-    const first = request?.questions[0]
-    const initialMode = first?.options === undefined || first.options.length === 0 ? 'custom' : 'options'
-    setIndex(current => current === 0 ? current : 0)
-    setCursor(current => current === 0 ? current : 0)
-    setSelected(current => current.length === 0 ? current : [])
-    setMode(current => current === initialMode ? current : initialMode)
-    setCustom(current => current === '' ? current : '')
-    setAnswers(current => current.length === 0 ? current : [])
-    setSubmitted(current => current ? false : current)
-    setScroll(current => current === 0 ? current : 0)
-    setManualScroll(current => current ? false : current)
-    setFollowCustomTail(current => current === (initialMode === 'custom') ? current : initialMode === 'custom')
+    const next = request?.questions.map(question => initialQuestionDraft(question)) ?? []
+    draftsRef.current = next
+    indexRef.current = 0
+    setDrafts(next)
+    setIndex(0)
+    setSubmitted(false)
   }, [request])
 
   const question = pending?.request.questions[index]
   const options = question?.options ?? []
   const isPlan = question?.intent?.kind === 'plan-review'
   const isMulti = question?.multiSelect === true
+  const currentDraft = drafts[index] ?? initialQuestionDraft(question)
+  const { cursor, selected, mode, custom, scroll, manualScroll, followCustomTail } = currentDraft
   const active = !locked && pending !== undefined && question !== undefined && !submitted
   const rendered = useMemo(() => {
     if (question === undefined) return { lines: [] as readonly StyledLine[], optionRows: [] as readonly number[] }
@@ -1224,6 +1261,9 @@ function QuestionBar({ store, snapshot, locked }: { store: QuestionStore; snapsh
         const style: LineStyle = at === cursor ? 'brand' : chosen || approve ? 'success' : 'plain'
         lines.push(...styledLines([
           lineSegment(mark, style),
+          // Claude-Code numbering: the digit addresses the row from the
+          // keyboard, so the prefix advertises the binding it enables.
+          lineSegment(at < 9 ? `${at + 1}. ` : '', 'dim'),
           lineSegment(option.label, style),
           lineSegment(option.description === undefined ? '' : ` — ${option.description}`, 'dim'),
         ], viewport.contentColumns))
@@ -1244,39 +1284,65 @@ function QuestionBar({ store, snapshot, locked }: { store: QuestionStore; snapsh
       : scroll
   const visibleScroll = clampScroll(automaticScroll, rendered.lines.length, viewport.bodyRows)
 
+  const updateDrafts = (update: (current: readonly QuestionDraftState[]) => readonly QuestionDraftState[]): void => {
+    const next = update(draftsRef.current)
+    draftsRef.current = next
+    setDrafts(next)
+  }
+
+  const updateCurrentDraft = (update: (current: QuestionDraftState) => QuestionDraftState): void => {
+    const currentIndex = indexRef.current
+    updateDrafts(current => current.map((draft, at) => at === currentIndex ? update(draft) : draft))
+  }
+
+  const moveQuestion = (direction: -1 | 1): void => {
+    const total = request?.questions.length ?? 0
+    if (total <= 1) return
+    const currentIndex = indexRef.current
+    const nextIndex = Math.max(0, Math.min(total - 1, currentIndex + direction))
+    if (nextIndex === currentIndex) return
+    indexRef.current = nextIndex
+    setIndex(nextIndex)
+  }
+
   const commit = (answer: AskUserQuestionAnswerItem): void => {
-    if (pending === undefined) return
-    const next = [...answers, answer]
+    if (pending === undefined || question === undefined) return
+    const currentIndex = indexRef.current
+    const optionLabels = new Set(answer.selected)
+    const selectedIndices = (question.options ?? [])
+      .map((option, at) => optionLabels.has(option.label) ? at : -1)
+      .filter((at): at is number => at >= 0)
+    const nextDrafts = draftsRef.current.map((draft, at) => at === currentIndex
+      ? { ...draft, selected: selectedIndices, custom: answer.custom ?? '', committed: true }
+      : draft)
+    draftsRef.current = nextDrafts
+    setDrafts(nextDrafts)
     const total = pending.request.questions.length
-    if (index + 1 >= total) {
+    if (currentIndex + 1 >= total) {
       setSubmitted(true)
-      store.submit(pending, { answers: next })
+      store.submit(pending, {
+        answers: pending.request.questions.map((item, at) => answerFromQuestionDraft(item, nextDrafts[at] ?? initialQuestionDraft(item))),
+      })
       return
     }
-    setAnswers(next)
-    const nextIndex = index + 1
-    const nextQuestion = pending.request.questions[nextIndex]
+    const nextIndex = currentIndex + 1
+    indexRef.current = nextIndex
     setIndex(nextIndex)
-    setCursor(0)
-    setSelected([])
-    setMode(nextQuestion?.options === undefined || nextQuestion.options.length === 0 ? 'custom' : 'options')
-    setCustom('')
-    setScroll(0)
-    setManualScroll(false)
-    setFollowCustomTail(nextQuestion?.options === undefined || nextQuestion.options.length === 0)
   }
 
   const commitOption = (): void => {
     if (pending === undefined || question === undefined) return
+    const currentIndex = indexRef.current
+    const current = draftsRef.current[currentIndex] ?? initialQuestionDraft(question)
     if (isMulti) {
-      const labels = selected
+      const labels = current.selected
         .map(at => options[at]?.label)
         .filter((label): label is string => label !== undefined)
-      const customText = custom.trim()
+      const customText = current.custom.trim()
       commit({ id: question.id, selected: labels, ...(customText === '' ? {} : { custom: customText }) })
       return
     }
-    const option = options[cursor]
+    const option = options[current.cursor]
     if (option === undefined) return
     commit({ id: question.id, selected: [option.label] })
   }
@@ -1284,20 +1350,20 @@ function QuestionBar({ store, snapshot, locked }: { store: QuestionStore; snapsh
   /**
    * A question with choices has two local focus surfaces, just like Codex:
    * the choice list and the optional custom-answer editor. Returning to the
-   * list keeps the user's current choice (and multi-select state), but drops
-   * the transient custom draft so a second Escape can cancel the question.
+   * list keeps the user's current choice and multi-select state, but drops the
+   * transient custom draft so a second Escape can cancel the question.
    */
   const returnToOptions = (): void => {
     if (options.length === 0) return
-    setMode('options')
-    setCustom('')
-    setScroll(0)
-    setManualScroll(false)
-    setFollowCustomTail(false)
+    updateCurrentDraft(current => ({ ...current, mode: 'options', custom: '', scroll: 0, manualScroll: false, followCustomTail: false }))
   }
 
   useStableInput((input, key) => {
     if (pending === undefined || question === undefined || submitted) return
+    if (key.ctrl && input === 'c') {
+      store.cancel(pending)
+      return
+    }
     if (key.escape) {
       if (mode === 'custom' && options.length > 0) {
         returnToOptions()
@@ -1306,16 +1372,34 @@ function QuestionBar({ store, snapshot, locked }: { store: QuestionStore; snapsh
       store.cancel(pending)
       return
     }
+    if (key.tab && key.shift) {
+      moveQuestion(-1)
+      return
+    }
+    if (key.leftArrow || (key.ctrl && input === 'p')) {
+      moveQuestion(-1)
+      return
+    }
+    if (key.rightArrow || (key.ctrl && input === 'n')) {
+      moveQuestion(1)
+      return
+    }
     if (key.pageUp) {
-      setManualScroll(true)
-      setFollowCustomTail(false)
-      setScroll(moveScroll(visibleScroll, -Math.max(1, viewport.bodyRows - 1), rendered.lines.length, viewport.bodyRows))
+      updateCurrentDraft(current => ({
+        ...current,
+        manualScroll: true,
+        followCustomTail: false,
+        scroll: moveScroll(visibleScroll, -Math.max(1, viewport.bodyRows - 1), rendered.lines.length, viewport.bodyRows),
+      }))
       return
     }
     if (key.pageDown) {
-      setManualScroll(true)
-      setFollowCustomTail(false)
-      setScroll(moveScroll(visibleScroll, Math.max(1, viewport.bodyRows - 1), rendered.lines.length, viewport.bodyRows))
+      updateCurrentDraft(current => ({
+        ...current,
+        manualScroll: true,
+        followCustomTail: false,
+        scroll: moveScroll(visibleScroll, Math.max(1, viewport.bodyRows - 1), rendered.lines.length, viewport.bodyRows),
+      }))
       return
     }
     if (mode === 'custom' || options.length === 0) {
@@ -1324,13 +1408,19 @@ function QuestionBar({ store, snapshot, locked }: { store: QuestionStore; snapsh
         return
       }
       if (key.upArrow) {
-        setFollowCustomTail(false)
-        setScroll(moveScroll(visibleScroll, -1, rendered.lines.length, viewport.bodyRows))
+        updateCurrentDraft(current => ({
+          ...current,
+          followCustomTail: false,
+          scroll: moveScroll(visibleScroll, -1, rendered.lines.length, viewport.bodyRows),
+        }))
         return
       }
       if (key.downArrow) {
-        setFollowCustomTail(false)
-        setScroll(moveScroll(visibleScroll, 1, rendered.lines.length, viewport.bodyRows))
+        updateCurrentDraft(current => ({
+          ...current,
+          followCustomTail: false,
+          scroll: moveScroll(visibleScroll, 1, rendered.lines.length, viewport.bodyRows),
+        }))
         return
       }
       if (key.return) {
@@ -1352,25 +1442,31 @@ function QuestionBar({ store, snapshot, locked }: { store: QuestionStore; snapsh
           returnToOptions()
           return
         }
-        setCustom(current => deleteLastGrapheme(current))
+        updateCurrentDraft(current => ({ ...current, custom: deleteLastGrapheme(current.custom), committed: false }))
         return
       }
       if (input !== '' && !key.ctrl && !key.meta) {
         // Panel drafts see paste markers as literal text (Ink strips only the
         // leading ESC); strip them so a pasted answer never persists "[200~".
         const text = stripPasteMarkers(input)
-        if (text !== '') setCustom(current => current + text)
+        if (text !== '') updateCurrentDraft(current => ({ ...current, custom: current.custom + text, committed: false }))
       }
       return
     }
     if (key.upArrow) {
-      setManualScroll(false)
-      setCursor(current => (current + options.length - 1) % options.length)
+      updateCurrentDraft(current => ({
+        ...current,
+        cursor: (current.cursor + options.length - 1) % options.length,
+        manualScroll: false,
+      }))
       return
     }
     if (key.downArrow) {
-      setManualScroll(false)
-      setCursor(current => (current + 1) % options.length)
+      updateCurrentDraft(current => ({
+        ...current,
+        cursor: (current.cursor + 1) % options.length,
+        manualScroll: false,
+      }))
       return
     }
     if (key.return) {
@@ -1378,13 +1474,36 @@ function QuestionBar({ store, snapshot, locked }: { store: QuestionStore; snapsh
       return
     }
     if (key.tab || input === 'c' || input === 'C') {
-      setMode('custom')
-      setManualScroll(false)
-      setFollowCustomTail(true)
+      updateCurrentDraft(current => ({ ...current, mode: 'custom', manualScroll: false, followCustomTail: true }))
       return
     }
     if (input === ' ' && isMulti) {
-      setSelected(current => current.includes(cursor) ? current.filter(at => at !== cursor) : [...current, cursor])
+      updateCurrentDraft(current => ({
+        ...current,
+        selected: current.selected.includes(current.cursor)
+          ? current.selected.filter(at => at !== current.cursor)
+          : [...current.selected, current.cursor],
+        committed: false,
+      }))
+      return
+    }
+    // Claude-Code option numbers: the digit addresses a row directly — a
+    // toggle in multi-select, an immediate pick in single-select.
+    if (/^[1-9]$/.test(input)) {
+      const at = Number(input) - 1
+      if (at >= options.length) return
+      if (isMulti) {
+        updateCurrentDraft(current => ({
+          ...current,
+          selected: current.selected.includes(at)
+            ? current.selected.filter(row => row !== at)
+            : [...current.selected, at],
+          committed: false,
+        }))
+      } else {
+        const option = options[at]
+        if (option !== undefined) commit({ id: question.id, selected: [option.label] })
+      }
     }
   }, active)
 
@@ -1393,7 +1512,7 @@ function QuestionBar({ store, snapshot, locked }: { store: QuestionStore; snapsh
   if (viewport.compact) {
     return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(isPlan ? 'plan review · esc cancel' : 'question · esc cancel', viewport.contentColumns))
   }
-  const footer = submitted
+  const footerBase = submitted
     ? 'submitted…'
     : mode === 'custom'
       ? options.length === 0
@@ -1402,8 +1521,11 @@ function QuestionBar({ store, snapshot, locked }: { store: QuestionStore; snapsh
       : options.length === 0
         ? '↑↓/pgup/pgdn scroll · type answer · enter submit · esc interrupt'
       : isMulti
-        ? '↑↓ choose · pgup/pgdn scroll · space toggle · enter submit · c custom · esc interrupt'
-        : '↑↓ choose · pgup/pgdn scroll · enter submit · c custom · esc interrupt'
+        ? '↑↓ choose · pgup/pgdn scroll · space/1-9 toggle · enter submit · c custom · esc interrupt'
+        : '↑↓ choose · pgup/pgdn scroll · 1-9 pick · enter submit · c custom · esc interrupt'
+  const footer = pending.request.questions.length > 1 && !submitted
+    ? `${footerBase} · ←→/ctrl+p/n switch question`
+    : footerBase
   return createElement(
     Box,
     { flexDirection: 'column', width: viewport.outerColumns, paddingX: 1, borderStyle: 'round', borderColor: inkColor(isPlan ? getPalette().brand : getPalette().brandDeep) },

@@ -1,6 +1,7 @@
 /** Production Ink mount and terminal-mode ownership regressions. */
 
 import type { ReactElement } from 'react'
+import { PassThrough } from 'node:stream'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   BRACKETED_PASTE_DISABLE,
@@ -12,14 +13,28 @@ import {
 } from '../src/keyboard.ts'
 
 const ink = vi.hoisted(() => ({ render: vi.fn() }))
+const inputSplit = vi.hoisted(() => {
+  const calls: { stdin: unknown; dispose: ReturnType<typeof vi.fn> }[] = []
+  return {
+    calls,
+    createSplitStdin: vi.fn(() => {
+      const entry = { stdin: new PassThrough({ objectMode: true }), dispose: vi.fn() }
+      calls.push(entry)
+      return entry
+    }),
+  }
+})
 
 vi.mock('ink', () => ({ render: ink.render }))
+vi.mock('../src/input-split.ts', () => ({ createSplitStdin: inputSplit.createSplitStdin }))
 
 const { internals } = await import('../src/internals.ts')
 
 describe('production TUI mount', () => {
   beforeEach(() => {
     ink.render.mockReset()
+    inputSplit.createSplitStdin.mockClear()
+    inputSplit.calls.length = 0
   })
 
   it('leaves Ctrl+C with App and restores terminal protocols through its wrapper', () => {
@@ -33,7 +48,13 @@ describe('production TUI mount', () => {
 
     try {
       const mounted = internals.mount(element)
-      expect(ink.render).toHaveBeenCalledWith(element, { exitOnCtrlC: false })
+      // stdin rides the keypress splitter so a coalesced chunk never
+      // becomes one lost keypress; stdout stays the real terminal stream.
+      expect(ink.render).toHaveBeenCalledWith(element, {
+        exitOnCtrlC: false,
+        stdin: inputSplit.calls[0]?.stdin,
+        stdout: process.stdout,
+      })
       expect(stdoutWrite).toHaveBeenNthCalledWith(1, KEYBOARD_ENHANCE_ENABLE + BRACKETED_PASTE_ENABLE)
 
       const next = {} as ReactElement
@@ -42,6 +63,7 @@ describe('production TUI mount', () => {
 
       mounted.unmount()
       expect(unmount).toHaveBeenCalledTimes(1)
+      expect(inputSplit.calls[0]?.dispose).toHaveBeenCalledTimes(1)
       expect(stdoutWrite).toHaveBeenNthCalledWith(2, KEYBOARD_ENHANCE_DISABLE + BRACKETED_PASTE_DISABLE)
     } finally {
       stdoutWrite.mockRestore()
