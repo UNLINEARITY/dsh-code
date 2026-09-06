@@ -80,7 +80,10 @@ export function textLines(text: string, columns: number, style: LineStyle = 'pla
 /** Prefix every wrapped physical row without exceeding the column budget. */
 function prefixedStyledLines(segments: readonly StyledSegment[], columns: number, prefix: string, prefixStyle: LineStyle = 'plain'): readonly StyledLine[] {
   const width = Math.max(1, Math.floor(columns))
-  const prefixWidth = Math.min(width, visibleColumns(prefix))
+  // Keep one column for the body even when the prefix alone would fill the
+  // row: a prefix allowed to claim the whole width pushed prefix+body one
+  // column past the budget on very narrow terminals.
+  const prefixWidth = Math.min(width - 1, visibleColumns(prefix))
   const bodyWidth = Math.max(1, width - prefixWidth)
   return styledLines(segments, bodyWidth).map(line => ({
     segments: [lineSegment(prefix, prefixStyle), ...line.segments],
@@ -159,7 +162,10 @@ function hangingTextLines(
 /** Markdown rows re-hardened so a single long word cannot escape the budget. */
 export function markdownLines(text: string, columns: number): readonly StyledLine[] {
   const width = Math.max(1, Math.floor(columns))
-  const parsed = renderMarkdown(displayText(text), Math.max(10, width))
+  // The markdown pass formats at the real width — a 10-column floor on a
+  // narrower terminal silently pushed rows past the budget (styledLines
+  // re-hardens long words at `width` either way).
+  const parsed = renderMarkdown(displayText(text), width)
   return parsed.flatMap(line => styledLines(
     line.segments.map(segment => lineSegment(segment.text, segment.style)),
     width,
@@ -284,7 +290,7 @@ export function transcriptEntryLines(
       // Every reply row carries the composer's two-column gutter, so reply
       // text aligns with the input cursor (Codex LIVE_PREFIX alignment); the
       // wrap budget shrinks by the same amount so no line double-wraps.
-      const body = markdownLines(entry.text, Math.max(10, width - 2))
+      const body = markdownLines(entry.text, Math.max(1, width - 2))
         .map(line => ({ segments: [{ text: '  ', style: 'plain' as const }, ...line.segments] }))
       // A cancelled stream's delivered prefix settles as this entry; one
       // bounded dim marker row distinguishes it from a completed reply.
@@ -334,7 +340,9 @@ export function transcriptEntryLines(
         : `  ⧉ compaction failed: ${entry.error}`, width, 'dim')
     case 'retry':
       return textLines(
-        `  ↻ retry ${entry.attempt}/${entry.max} · ${entry.code} · ${Math.round(entry.delayMs / 100) / 10}s`,
+        entry.mode === 'always'
+          ? `  ↻ retry ${entry.attempt} · ${entry.code} · ${Math.round(entry.delayMs / 100) / 10}s`
+          : `  ↻ retry ${entry.attempt}/${entry.max} · ${entry.code} · ${Math.round(entry.delayMs / 100) / 10}s`,
         width,
         entry.state === 'running' ? 'warn' : 'dim',
       )

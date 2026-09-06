@@ -127,7 +127,10 @@ export function ModePanel({ current, load, select, close }: {
     if (input === 'r' && query === '') return refresh()
     if (key.upArrow) return setCursor(value => visible.length === 0 ? 0 : (value + visible.length - 1) % visible.length)
     if (key.downArrow) return setCursor(value => visible.length === 0 ? 0 : (value + 1) % visible.length)
-    if (key.return && visible[cursor]?.broken === undefined) return select(visible[cursor]!.id)
+    // Empty/loading/filtered-out lists have no row at the cursor: a bare
+    // `?.broken === undefined` check passes on undefined and crashes the
+    // process on the `!.id` access (PermissionPanel guards this correctly).
+    if (key.return && visible[cursor] !== undefined && visible[cursor]!.broken === undefined) return select(visible[cursor]!.id)
     const next = editQuery(query, input, key)
     if (next !== undefined) { setQuery(next); setCursor(0) }
   })

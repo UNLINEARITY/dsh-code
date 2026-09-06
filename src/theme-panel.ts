@@ -9,7 +9,7 @@
 
 import { createElement, useState, type ReactElement } from 'react'
 import { Box, Text, useInput, useStdout } from 'ink'
-import { panelViewport } from './render/inspector.ts'
+import { clampScroll, panelViewport } from './render/inspector.ts'
 import { truncateColumns } from './render/text.ts'
 import { getPalette, inkColor, type ThemeName } from './theme.ts'
 
@@ -49,12 +49,20 @@ export function ThemePanel({ current, select, close }: {
   if (viewport.maxHeight === 0 || viewport.compact) {
     return createElement(Text, { wrap: 'truncate-end' }, truncateColumns('/theme · esc close', viewport.contentColumns))
   }
+  // The theme rows share the panel's body budget like every other panel: an
+  // unsliced three-row list reached terminal-height equality on short
+  // terminals, where Ink rewrites the whole Static region every frame.
+  // Reveal-cursor slicing keeps the focused row visible instead.
+  const rowBudget = Math.max(1, viewport.bodyRows)
+  const first = clampScroll(cursor, THEME_ROWS.length, rowBudget)
+  const visibleThemes = THEME_ROWS.slice(first, first + rowBudget)
+  const hiddenThemes = THEME_ROWS.length - visibleThemes.length
   return createElement(
     Box,
     { width: viewport.outerColumns, borderStyle: 'round', borderColor: inkColor(getPalette().dim), flexDirection: 'column', paddingX: 1 },
     createElement(Text, { color: inkColor(getPalette().brandBright), wrap: 'truncate-end' }, truncateColumns('/theme — color palette', viewport.contentColumns)),
-    ...THEME_ROWS.map((theme, index) => {
-      const selected = index === cursor
+    ...visibleThemes.map((theme, index) => {
+      const selected = first + index === cursor
       const active = theme.id === current
       return createElement(
         Text,
@@ -66,6 +74,6 @@ export function ThemePanel({ current, select, close }: {
         truncateColumns(`${selected ? '› ' : '  '}${active ? '● ' : '○ '}${theme.label}${active ? ' · current' : ''} · ${theme.description}`, viewport.contentColumns),
       )
     }),
-    createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns('↑↓ choose · enter apply · esc/q close', viewport.contentColumns)),
+    createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns(`↑↓ choose · enter apply · esc/q close${hiddenThemes > 0 ? ` · +${hiddenThemes} more` : ''}`, viewport.contentColumns)),
   )
 }

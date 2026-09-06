@@ -61,35 +61,48 @@ function toRows(skills: readonly SkillSummary[]): readonly SkillRow[] {
  * @param ctx - context carrying the `skills` service (optional).
  * @returns the view the completion menu subscribes to.
  */
-export function watchSkills(ctx: Context): SkillsWatch {
+export function watchSkills(ctx: Context, fallbackCwd?: string): SkillsWatch {
   const skills = ctx.get('skills')
   let agent: Agent | undefined
   let rows: readonly SkillRow[] = []
   let error: string | undefined
+  // The agent whose workspace the current rows were last successfully read
+  // from: a failure for an agent that never loaded must clear the rows, not
+  // keep another workspace's catalog answerable in this session.
+  let loadedFor: Agent | undefined
   const listeners = new Set<() => void>()
 
   const reload = (): void => {
     const target = agent
     if (skills === undefined || target === undefined) return
     Promise.resolve().then(() => skills.list({
-      cwd: target.session.header.cwd,
+      cwd: target.session.header.cwd ?? fallbackCwd,
       scope: target,
     })).then((summaries: readonly SkillSummary[]) => {
       // A retarget landed while this catalog was loading: the rows belong to
       // another agent's workspace and must never overwrite the current view.
       if (agent !== target) return
       const next = toRows(summaries)
-      const unchanged = next.length === rows.length && next.every((row, index) => row.name === rows[index]?.name)
+      // Description and invocation-flag edits must surface too: a name-only
+      // comparison silently dropped those change notifications.
+      const unchanged = next.length === rows.length && next.every((row, index) =>
+        row.name === rows[index]?.name
+        && row.description === rows[index]?.description
+        && row.modelInvocable === rows[index]?.modelInvocable)
       rows = next
+      loadedFor = target
       const recovered = error !== undefined
       error = undefined
       if (unchanged && !recovered) return
       for (const listener of listeners) listener()
     }).catch((cause: unknown) => {
       if (agent !== target) return
-      // Discovery failure keeps the last good rows; the next skills/change
-      // notification is the retry surface (mirrors the web directory).
-      rows = [...rows]
+      // Discovery failure keeps the last good rows for the SAME agent (the
+      // next skills/change notification is the retry surface, mirroring the
+      // web directory); an agent that never loaded starts from empty rows —
+      // stale rows from a previous workspace must not keep completing here.
+      if (loadedFor !== target) rows = []
+      else rows = [...rows]
       error = cause instanceof Error ? cause.message : String(cause)
       for (const listener of listeners) listener()
     })

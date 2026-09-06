@@ -80,6 +80,26 @@ export function mountQuestionProvider(ctx: Context): QuestionStore {
   }
 
   if (service !== undefined) {
+    // Capability guard against contract drift: the pinned release exposes
+    // registerProvider, but an upstream alignment may replace it with the
+    // 'user-questions/request' waterfall. Degrade to the permanently-empty
+    // store (the no-service path) instead of failing startup with a
+    // TypeError on a missing method.
+    if (typeof (service as unknown as { registerProvider?: unknown }).registerProvider !== 'function') {
+      return {
+        subscribe(listener: () => void): () => void {
+          listeners.add(listener)
+          return () => {
+            listeners.delete(listener)
+          }
+        },
+        getSnapshot(): QuestionSnapshot {
+          return snapshot
+        },
+        submit(): void {},
+        cancel(): void {},
+      }
+    }
     service.registerProvider({
       ask(request: AskUserQuestionRequest): Promise<AskUserQuestionAnswer> {
         return new Promise((resolve, reject) => {

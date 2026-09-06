@@ -120,13 +120,23 @@ export function createMentions(ctx: Context, agent: Agent | undefined, cwd: stri
   const sessionCapable = agent !== undefined && resolver !== undefined
   // Pre-session fallback: one lazily built search over the launch cwd with
   // the official defaults — pure in-memory index, no handles to release.
+  // The mounted service invalidates its per-agent index after every tool
+  // result; nothing drives that for this bare instance, so a time window
+  // refreshes it instead — without it, files created or deleted before the
+  // first session never appear in (or never leave) the fuzzy @ menu.
+  const PRE_SESSION_INDEX_TTL_MS = 30_000
   let preSessionSearch: WorkspaceFileSearch | undefined
+  let preSessionIndexedAt = 0
   const preSessionFiles = (query: string, signal?: AbortSignal): Promise<readonly ServiceFileCandidate[]> => {
-    preSessionSearch ??= new WorkspaceFileSearch(cwd, {
-      maxResults: DEFAULT_FILE_SEARCH_MAX_RESULTS,
-      maxEntries: DEFAULT_FILE_SEARCH_MAX_ENTRIES,
-      excludedDirectories: [...DEFAULT_FILE_SEARCH_EXCLUDED_DIRECTORIES],
-    })
+    if (preSessionSearch === undefined || Date.now() - preSessionIndexedAt > PRE_SESSION_INDEX_TTL_MS) {
+      preSessionSearch?.invalidate()
+      preSessionSearch = new WorkspaceFileSearch(cwd, {
+        maxResults: DEFAULT_FILE_SEARCH_MAX_RESULTS,
+        maxEntries: DEFAULT_FILE_SEARCH_MAX_ENTRIES,
+        excludedDirectories: [...DEFAULT_FILE_SEARCH_EXCLUDED_DIRECTORIES],
+      })
+      preSessionIndexedAt = Date.now()
+    }
     return preSessionSearch.list(query, signal ?? new AbortController().signal)
   }
 

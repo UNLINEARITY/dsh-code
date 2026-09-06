@@ -38,16 +38,22 @@ export function watchCommands(ctx: Context): CommandsView {
   let agent: Agent | undefined
   let descriptors: readonly CommandDescriptor[] = []
   let error: string | undefined
+  // The agent whose scoped view the current descriptors were read for: a
+  // failure before this agent ever loaded clears the list instead of keeping
+  // another session's commands completable here.
+  let loadedFor: Agent | undefined
   const listeners = new Set<() => void>()
   const refresh = (): void => {
     if (commands === undefined || agent === undefined) return
     try {
       descriptors = commands.list(agent)
+      loadedFor = agent
       error = undefined
     } catch (cause: unknown) {
-      // Keep the last good catalog, but change its identity so subscribers
-      // can render the recoverable failure in /help.
-      descriptors = [...descriptors]
+      // Keep the last good catalog for the SAME agent, but change its identity
+      // so subscribers can render the recoverable failure in /help; an agent
+      // that never loaded starts from empty.
+      descriptors = loadedFor === agent ? [...descriptors] : []
       error = cause instanceof Error ? cause.message : String(cause)
     }
     for (const listener of listeners) listener()

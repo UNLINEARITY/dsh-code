@@ -117,12 +117,9 @@ function readSettledRowCap(): number {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : 3_000
 }
 
-/**
- * Safety net for a bracketed paste whose end marker never arrives (terminal
- * defect or crash mid-paste): past this window the open-paste flag resets so
- * Enter submits again instead of inserting newlines forever.
- */
-const PASTE_BRACKET_TIMEOUT_MS = 1_000
+// The paste safety-net window itself lives in keyboard.ts next to the paste
+// markers: the input splitter's stale-paste escape hatch and this reset net
+// must always share one window.
 
 /** Reset region/style, clear the visible screen and scrollback, then home. */
 const RESIZE_REFLOW_CLEAR = '\x1b[r\x1b[0m\x1b[H\x1b[2J\x1b[3J\x1b[H'
@@ -147,6 +144,7 @@ import { displayTail, displayText, singleLineText, truncateColumns } from './ren
 import {
   isVsCodeTerminalEnv,
   normalizeKeyboardChunk,
+  PASTE_BRACKET_TIMEOUT_MS,
   PASTE_END_MARKER,
   PASTE_START_MARKER,
   stripPasteMarkers,
@@ -496,7 +494,12 @@ function StreamTail({ text, dim, maxRows, prefix = '', continuationPrefix = pref
   // row. Both prefixes participate because every physical row repeats its
   // hanging indent.
   const prefixColumns = Math.max(visibleColumns(prefix), visibleColumns(continuationPrefix))
-  const contentColumns = Math.max(10, columns - 1 - prefixColumns)
+  // Content takes the full physical row minus prefixes and the final wrap
+  // column — a forced 10-column FLOOR on a narrower terminal made every row
+  // autowrap onto a second, unbudgeted row (the live budget then
+  // under-counted and the tree overflowed), so the width now shrinks with
+  // the real terminal instead of flooring at 10.
+  const contentColumns = Math.max(1, columns - 1 - prefixColumns)
   const initial = displayTail(text, contentColumns, safeRows)
   // Reserve one row for the omission marker only when a marker is needed.
   const tail = initial.truncated && safeRows > 1
@@ -511,7 +514,9 @@ function StreamTail({ text, dim, maxRows, prefix = '', continuationPrefix = pref
       : undefined,
     ...rows.map((row, index) => createElement(
       Text,
-      { key: index, dimColor: dim || undefined },
+      // truncate-end is the same belt-and-braces StyledRows uses: any width
+      // miscalculation clips a row instead of wrapping it out of budget.
+      { key: index, dimColor: dim || undefined, wrap: 'truncate-end' },
       index === 0 ? prefix : continuationPrefix,
       row,
       index + 1 === rows.length ? children : undefined,
@@ -1032,10 +1037,15 @@ const APPROVAL_OPTIONS: readonly ApprovalOption[] = [
  * `rejected`): "tell it what to do differently" rejects and hands the
  * composer back with a hint notice, exactly Codex's decline-then-type flow.
  */
-function ApprovalBar({ snapshot, locked, notify }: {
+function ApprovalBar({ snapshot, locked, notify, interrupt, summarize }: {
   snapshot: ApprovalSnapshot
   locked: boolean
   notify(text: string, tone?: NoticeTone): void
+  /** Cancel the running turn (Ctrl+C), matching the composer's busy branch. */
+  interrupt(): boolean
+  /** Render as the bounded one-line form even on tall terminals (another
+   * human-asked surface already owns the full panel budget). */
+  summarize?: boolean
 }): ReactElement | undefined {
   const stdout = useStdout().stdout
   const viewport = panelViewport(stdout?.columns ?? 80, stdout?.rows ?? 30)
@@ -1066,6 +1076,14 @@ function ApprovalBar({ snapshot, locked, notify }: {
   useInput((input, key) => {
     const ask = snapshot.pending
     if (ask === undefined || snapshot.answered) return
+    // Ctrl+C keeps its app-wide meaning while the ask owns the keys: cancel
+    // the running turn (the ask's abort signal withdraws the question).
+    // Without this branch the keystroke died here silently — the ask was the
+    // only reachable surface and offered no way out.
+    if (key.ctrl && input === 'c') {
+      interrupt()
+      return
+    }
     if (key.upArrow) {
       setCursor(current => (current + APPROVAL_OPTIONS.length - 1) % APPROVAL_OPTIONS.length)
       return
@@ -1102,7 +1120,7 @@ function ApprovalBar({ snapshot, locked, notify }: {
 
   if (pending === undefined) return undefined
   const queuedSuffix = snapshot.queued > 0 ? ` · +${snapshot.queued} queued` : ''
-  if (viewport.maxHeight === 0 || viewport.compact) {
+  if (viewport.maxHeight === 0 || viewport.compact || summarize === true) {
     return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(`approval${queuedSuffix} · enter/y allow · esc/n reject`, viewport.contentColumns))
   }
   // Body budget: title + options + footer consume fixed rows; the command
@@ -2505,6 +2523,31 @@ export function completionCandidates(
 }
 
 /**
+ * Shared completion-menu geometry: the menu view and the App's dynamic-row
+ * budget MUST derive the exact same physical height, or an open menu silently
+ * overflows the terminal during streaming (the cursor creeps past the top and
+ * the live region freezes). One helper, two consumers — never drift.
+ */
+function completionMenuMetrics(terminalRows: number): { limit: number; showFooter: boolean; verticalPadding: number } {
+  const showFooter = terminalRows >= 12
+  const verticalPadding = terminalRows >= 14 ? 1 : 0
+  const limit = Math.max(1, Math.min(6, terminalRows - (showFooter ? 11 : 10) - verticalPadding * 2))
+  return { limit, showFooter, verticalPadding }
+}
+
+/**
+ * The menu's total physical row count at this terminal height: visible
+ * candidates (or the single "searching…" row), the overflow marker, the
+ * footer, and both padding rows.
+ */
+function completionMenuRowCount(terminalRows: number, rowCount: number): number {
+  const { limit, showFooter, verticalPadding } = completionMenuMetrics(terminalRows)
+  const visible = rowCount === 0 ? 1 : Math.min(rowCount, limit)
+  const hidden = rowCount === 0 ? 0 : rowCount - visible
+  return visible + (hidden > 0 ? 1 : 0) + (showFooter ? 1 : 0) + verticalPadding * 2
+}
+
+/**
  * The completion menu, rendered inside the composer's subtree directly above
  * the composer band — attached the way Claude-Code anchors its dropdown. Opening
  * it grows the stack downward: the composer stays the last element on screen
@@ -2528,16 +2571,15 @@ function CompletionMenu({ active, mention, index, rows, error }: {
   const terminalRows = stdout?.rows ?? 30
   if (!active) return undefined
   const contentColumns = Math.max(1, columns - 4)
+  // Geometry comes from the shared helper so the menu and the App's dynamic
+  // budget always agree on its exact physical height.
   // File paths are the decision-making data in an @ menu. Give mentions the
   // full available line and sacrifice their repetitive kind label first.
   const nameWidth = mention
     ? Math.max(1, contentColumns - 2)
     : Math.min(18, Math.max(1, contentColumns - 2), Math.max(0, ...rows.map(row => visibleColumns(row.label))) + 2)
   const descBudget = Math.max(0, contentColumns - nameWidth - 2)
-  const showFooter = terminalRows >= 12
-  const spacious = terminalRows >= 14
-  const verticalPadding = spacious ? 1 : 0
-  const limit = Math.max(1, Math.min(6, terminalRows - (showFooter ? 11 : 10) - verticalPadding * 2))
+  const { limit, showFooter, verticalPadding } = completionMenuMetrics(terminalRows)
   const selected = rows.length === 0 ? 0 : index % rows.length
   const first = selectionWindow(selected, rows.length, limit)
   const visible = rows.slice(first, first + limit)
@@ -2584,7 +2626,7 @@ interface DraftImage extends ImagePathInspection {
  * While a modal (approval / question / model panel) owns the keys, the
  * box passes every key through untouched.
  */
-function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openEffort, openHelp, openMode, openPermission, openResume, openPlugin, openJobs, openStatusline, openTheme, openHistory, openAgents, openSubagent, openTodos, openDelete, openDiff, reviewChanges, deleteConfirm, confirmDelete, cancelDelete, createSession, forkSession, cancelSessionSwitch, notify, applyEditorKeys, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, inspectImages, prepareImages, cyclePermission, exportTranscript, renameTitle, copyLastResponse, recallSpace, recordLocal, recordHistory, queued, cancelQueued, historyFill, historyConsumed, waveTier, waveStyle, maxRows, onEditorRows }: {
+function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openEffort, openHelp, openMode, openPermission, openResume, openPlugin, openJobs, openStatusline, openTheme, openHistory, openAgents, openSubagent, openTodos, openDelete, openDiff, reviewChanges, deleteConfirm, confirmDelete, cancelDelete, createSession, forkSession, cancelSessionSwitch, notify, applyEditorKeys, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, inspectImages, prepareImages, cyclePermission, exportTranscript, renameTitle, copyLastResponse, recallSpace, recordLocal, recordHistory, queued, cancelQueued, historyFill, historyConsumed, waveTier, waveStyle, maxRows, onEditorRows, onMenuRows }: {
   active: boolean
   frozen: boolean
   busy: boolean
@@ -2666,8 +2708,12 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   maxRows: number
   /** Reports the editor's current physical row count so the live budget stays exact. */
   onEditorRows(rows: number): void
+  /** Reports the open completion menu's physical row count (0 when closed)
+   * for the same reason: the dynamic budget must reserve it, not overflow. */
+  onMenuRows(rows: number): void
 }): ReactElement {
   const columns = useStdout().stdout?.columns ?? 80
+  const inputTerminalRows = useStdout().stdout?.rows ?? 30
   const editorColumns = Math.max(1, columns - 6)
   const stdin = useStdin().stdin
   const focusReporting = isVsCodeTerminalEnv()
@@ -2913,6 +2959,10 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
       origin: 'mention',
     }))
     : candidates
+  // Exact physical height of the open menu, derived from the same shared
+  // geometry the menu view uses — reported one-way (onEditorRows pattern) so
+  // the App's dynamic budget can reserve it instead of overflowing.
+  const menuHeightRows = menuActive ? completionMenuRowCount(inputTerminalRows, menuRows.length) : 0
 
   /** Accept the highlighted completion-menu candidate into the draft. */
   const acceptMenuCandidate = (): void => {
@@ -3190,8 +3240,16 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
     // Delete on the empty composer cancels the newest queued message (the
     // web queue-mirror contract: the durable splice drops the pending row).
     if (key.delete && liveValue === '' && queued.length > 0) {
-      cancelQueued(queued[queued.length - 1]!.messageId)
-      return
+      // Ink gives Backspace (\x7f) and forward Delete the same `key.delete`
+      // identity; only the raw editor tokens separate them. The destructive
+      // queue cancel is Delete-only (the footer says "Delete on the empty
+      // composer cancels") — a habitual Backspace must stay inert here.
+      const forwardDelete = rawEditorTokens.current?.some(token =>
+        token.kind === 'delete-forward' || token.kind === 'delete-word-forward') === true
+      if (forwardDelete) {
+        cancelQueued(queued[queued.length - 1]!.messageId)
+        return
+      }
     }
     if (key.return) {
       // A newline inside an open bracketed paste inserts; it never submits.
@@ -3618,6 +3676,12 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   useEffect(() => {
     onEditorRows(editorRowCount)
   }, [editorRowCount, onEditorRows])
+  // The menu's physical rows ride the same one-way report; the cleanup keeps
+  // the reserve from outliving the menu (unmount or inactive handoff).
+  useEffect(() => {
+    onMenuRows(menuHeightRows)
+    return () => onMenuRows(0)
+  }, [menuHeightRows, onMenuRows])
   // The composer band: the old border's three-row footprint repainted as a
   // background-color band (the Codex-style shaded composer strip) — one
   // blank band row above and below the content rows, full width minus the
@@ -4020,6 +4084,15 @@ export function computeSettledRows(
 /** The whole terminal app; state arrives via the store, output via Ink. */
 export function App(props: AppProps): ReactElement {
   const view = useSyncExternalStore(props.store.subscribe, props.store.getView)
+  // Terminal input anchor: Ink reference-counts raw mode across every active
+  // `useInput` hook, so mutually exclusive surfaces (composer <-> approval
+  // bar <-> panels) drop the count to zero inside each handoff commit — the
+  // cooked-mode window on the real console strands keystrokes in the line
+  // buffer until the next Enter, which intermittently wedged terminals after
+  // approval answers. This always-active hook keeps the count >= 1 for the
+  // app's whole lifetime; its handler consumes nothing (Ink broadcasts every
+  // key to all active handlers, so real owners stay unaffected).
+  useStableInput(() => {}, true)
   // getSnapshot must be a STABLE reference (the React contract): an inline
   // arrow here re-subscribes the store hook on every render and cascades
   // force-updates — during a fast reasoning stream that chain crossed React's
@@ -4368,16 +4441,31 @@ export function App(props: AppProps): ReactElement {
   const handleEditorRows = useCallback((rows: number): void => {
     setComposerRows(current => (current === rows ? current : rows))
   }, [])
+  // The open completion menu's exact row count, reported one-way by the
+  // composer (0 when closed). The menu rides ABOVE the composer band, so its
+  // height must come out of the live budget exactly like editor growth —
+  // before this report the menu drew from an unnamed 5-row slack and a tall
+  // menu during streaming pushed the dynamic tree past the terminal edge.
+  const [menuRows, setMenuRows] = useState(0)
+  const handleMenuRows = useCallback((rows: number): void => {
+    setMenuRows(current => (current === rows ? current : rows))
+  }, [])
   const composerEditorCap = composerMaxRows(terminalRows)
-  // Bottom chrome is composer (2 borders + composerRows) + menu + status
-  // (up to 2 rows); the budget keeps the live/streaming area strictly below
-  // the terminal height as the editor grows.
-  const dynamicRows = Math.max(1, terminalRows - 13 - composerGutterRows - (composerRows - 1))
+  // Bottom chrome is composer (2 borders + composerRows) + status (up to 2
+  // rows) + todo/agents/notice (3) = 8 resting rows, plus the historical
+  // 5-row menu reserve: small menus still fit without shrinking the live
+  // area (unchanged behavior), and menu rows beyond the reserve are budgeted
+  // exactly so the live/streaming area stays strictly below the terminal
+  // height as the editor or the menu grows.
+  const MENU_RESERVE_ROWS = 5
+  const dynamicRows = Math.max(1, terminalRows - 8 - MENU_RESERVE_ROWS - composerGutterRows - (composerRows - 1) - Math.max(0, menuRows - MENU_RESERVE_ROWS))
   const streamingActive = view.streaming !== '' || view.streamingReasoning !== ''
   const deepDivingVisible = busy && !streamingActive
   const allLiveLines = useMemo(
     () => view.entries.slice(settled).flatMap(
-      entry => transcriptEntryLines(entry, Math.max(10, terminalColumns - 2), showReasoning),
+      // Width shrinks with the real terminal (no 10-column floor: on a
+      // narrower terminal the floor silently overflowed every row).
+      entry => transcriptEntryLines(entry, Math.max(1, terminalColumns - 2), showReasoning),
     ),
     [view.entries, settled, terminalColumns, showReasoning],
   )
@@ -4741,7 +4829,7 @@ export function App(props: AppProps): ReactElement {
       })
       : undefined,
     createElement(QuestionBar, { store: props.questions, snapshot: questionSnapshot, locked: false }),
-    createElement(ApprovalBar, { snapshot: approvalSnapshot, locked: questionPending, notify }),
+    createElement(ApprovalBar, { snapshot: approvalSnapshot, locked: questionPending, notify, interrupt: props.interrupt, summarize: questionPending }),
     modelSurface,
     helpOpen && !approvalPending && !questionPending
       ? createElement(HelpPanel, {
@@ -5029,6 +5117,7 @@ export function App(props: AppProps): ReactElement {
         waveStyle,
         maxRows: composerEditorCap,
         onEditorRows: handleEditorRows,
+        onMenuRows: handleMenuRows,
       }),
       createElement(StatusLine, {
         facts: {

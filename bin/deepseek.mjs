@@ -119,7 +119,12 @@ function printDoctor(resolveCommand = rawDshCommand, spawnCommand = spawnSync) {
 }
 
 function launchChild(command, args) {
-  const child = spawn(command, args, { stdio: 'inherit' })
+  // Windows .cmd/.bat shims (npm.cmd) need a shell since Node's
+  // CVE-2024-27980 fix rejects spawning them directly with EINVAL. Every
+  // launch through here uses fixed, wrapper-owned arguments, so the shell
+  // surface adds no injection risk.
+  const needsShell = process.platform === 'win32' && /\.(cmd|bat)$/iu.test(command)
+  const child = spawn(command, args, { stdio: 'inherit', ...(needsShell ? { shell: true } : {}) })
   child.once('error', error => {
     console.error(`dsh-code: command failed: ${error.message}`)
     process.exitCode = 1
@@ -160,8 +165,9 @@ export function launchOperation(args = process.argv.slice(2)) {
     return launchChild(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['install', '-g', '@deepseek-ai/dsh', 'dsh-code'])
   }
   const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm'
+  const needsShell = process.platform === 'win32' && /\.(cmd|bat)$/iu.test(npm)
   for (const name of ['@deepseek-ai/dsh', 'dsh-code']) {
-    const result = spawnSync(npm, ['view', name, 'version'], { encoding: 'utf8', windowsHide: true })
+    const result = spawnSync(npm, ['view', name, 'version'], { encoding: 'utf8', windowsHide: true, ...(needsShell ? { shell: true } : {}) })
     console.log(`${name}: ${result.status === 0 ? String(result.stdout).trim() : 'version check failed'}`)
   }
   console.log('Run `deepseek update --apply` to install the latest versions.')
@@ -174,9 +180,18 @@ export function launchDsh(
   spawnProcess = spawn,
   resolveCommand = dshCommand,
   isProfileReady = profileHasDshCode,
+  isInteractiveStdin = () => process.stdin.isTTY === true,
 ) {
   if (!isProfileReady()) {
     console.error('dsh-code: the cli profile does not mount dsh-code yet. Run: dsh plugin --profile cli add dsh-code')
+    process.exitCode = 1
+    return undefined
+  }
+  // The interactive TUI is a raw-mode terminal application: with piped or
+  // otherwise non-TTY stdin it would die deep inside Ink's raw-mode gate
+  // with a cryptic stack. Fail here with one actionable line instead.
+  if (!isInteractiveStdin()) {
+    console.error('dsh-code: this terminal UI requires an interactive TTY on stdin; run it in a real terminal instead of a pipe')
     process.exitCode = 1
     return undefined
   }

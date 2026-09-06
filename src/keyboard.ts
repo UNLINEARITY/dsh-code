@@ -76,6 +76,15 @@ export const PASTE_START_MARKER = '[200~'
 export const PASTE_END_MARKER = '[201~'
 
 /**
+ * How long an unterminated bracketed-paste block may hold buffered bytes
+ * before the input splitter strips its start marker and releases them: a
+ * terminal that loses the end marker must never take the whole keyboard
+ * hostage (Esc/Ctrl+C included). Shared by the splitter and the composer's
+ * lost-paste safety net so both use one window.
+ */
+export const PASTE_BRACKET_TIMEOUT_MS = 1_000
+
+/**
  * Remove bracketed paste markers from one input chunk. Panel drafts accept raw
  * `input` text, where an unhandled paste would otherwise persist the literal
  * "[200~"/"[201~" markers Ink leaves after stripping the ESC byte.

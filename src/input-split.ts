@@ -12,6 +12,7 @@
  */
 
 import { PassThrough } from 'node:stream'
+import { PASTE_BRACKET_TIMEOUT_MS } from './keyboard.ts'
 
 /** Bracketed-paste wrapper bytes; the whole block travels as one unit. */
 const PASTE_START = '\x1b[200~'
@@ -21,6 +22,15 @@ const PASTE_END = '\x1b[201~'
 export interface KeypressSplitter {
   /** Feed one chunk; returns every keypress unit this chunk completed. */
   push(chunk: string): string[]
+  /** Whether an unterminated bracketed-paste block is currently held. */
+  openPaste(): boolean
+  /**
+   * Last-resort escape hatch for a paste whose end marker never arrived:
+   * drop the start marker and emit the held bytes as plain keypress units so
+   * nothing (Esc and Ctrl+C included) stays hostage. Inert when no paste is
+   * open.
+   */
+  releaseStalePaste(): string[]
 }
 
 /** Final byte of a CSI sequence (\x40-\x7e per ECMA-48). */
@@ -35,8 +45,7 @@ const isCsiFinal = (char: string): boolean => char >= '@' && char <= '~'
  */
 export function createKeypressSplitter(): KeypressSplitter {
   let buffer = ''
-  return {
-    push(chunk: string): string[] {
+  const push = (chunk: string): string[] => {
       buffer += chunk
       const units: string[] = []
       while (buffer !== '') {
@@ -92,9 +101,22 @@ export function createKeypressSplitter(): KeypressSplitter {
         buffer = buffer.slice(2)
       }
       return units
+    }
+  return {
+    push,
+    openPaste(): boolean {
+      return buffer.startsWith(PASTE_START)
+    },
+    releaseStalePaste(): string[] {
+      if (!buffer.startsWith(PASTE_START)) return []
+      // Strip the unterminated start marker, then re-run the unit loop: the
+      // held bytes flow as ordinary keypresses under all the normal rules.
+      buffer = buffer.slice(PASTE_START.length)
+      return push('')
     },
   }
 }
+
 
 /** The stdin-shaped stream the Ink mount renders through. */
 export interface TuiStdin extends PassThrough {
@@ -118,8 +140,30 @@ export function createSplitStdin(source: NodeJS.ReadStream): { stdin: TuiStdin; 
   // exists to separate. In object mode every pushed unit reads back alone.
   const stream = new PassThrough({ objectMode: true }) as TuiStdin
   const splitter = createKeypressSplitter()
+  let stalePasteTimer: ReturnType<typeof setTimeout> | undefined
+  const disarmStalePasteTimer = (): void => {
+    if (stalePasteTimer === undefined) return
+    clearTimeout(stalePasteTimer)
+    stalePasteTimer = undefined
+  }
+  // A terminal that drops the end marker must not swallow every following
+  // keypress forever: past the shared paste window the held block is released
+  // as plain text, keeping Esc/Ctrl+C reachable. The App-level paste flag has
+  // its own reset net with the same window, but it can only see markers that
+  // reach Ink — this one guards the bytes that never do.
+  const armStalePasteTimer = (): void => {
+    if (stalePasteTimer !== undefined || !splitter.openPaste()) return
+    stalePasteTimer = setTimeout(() => {
+      stalePasteTimer = undefined
+      for (const unit of splitter.releaseStalePaste()) stream.write(unit)
+      armStalePasteTimer()
+    }, PASTE_BRACKET_TIMEOUT_MS)
+    stalePasteTimer.unref?.()
+  }
   const onChunk = (chunk: string): void => {
     for (const unit of splitter.push(String(chunk))) stream.write(unit)
+    if (splitter.openPaste()) armStalePasteTimer()
+    else disarmStalePasteTimer()
   }
   const proxy = Object.assign(stream, {
     isTTY: source.isTTY === true,
@@ -139,6 +183,7 @@ export function createSplitStdin(source: NodeJS.ReadStream): { stdin: TuiStdin; 
   return {
     stdin: proxy,
     dispose(): void {
+      disarmStalePasteTimer()
       source.removeListener('data', onChunk)
       source.pause()
     },

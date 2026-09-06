@@ -547,7 +547,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   const commands: CommandsView = watchCommands(ctx)
   if (agent !== undefined) commands.setAgent(agent)
 
-  const skills: SkillsView = watchSkills(ctx)
+  const skills: SkillsView = watchSkills(ctx, cwd)
   if (agent !== undefined) skills.setAgent(agent)
 
   // Approval answerer: renders the ask as a y/n bar; only this TUI's agent is
@@ -572,9 +572,17 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     const subject = payload.agent
     const header = subject.session.header
     if (header.parentSession === undefined && header.origin !== 'subagent') return next()
+    // Only the ACTIVE session's explicit pick may steer a subagent request.
+    // During a switch window the old agent can still be mid-flight; routing
+    // it by the NEW session's pick sent one of its requests to the wrong
+    // model. A subject outside the active tree falls back to its own request
+    // header (plus any explicit /subagent override, which is user intent).
+    const activeAgent = active
+    const belongsToActive = activeAgent !== undefined
+      && (header.parentSession ?? subject.session.id) === activeAgent.session.id
     const picked = subagentOverride
       ?? resolveEffectiveSelection(
-        active?.selection.picked ?? pendingSelection,
+        belongsToActive && activeAgent !== undefined ? (activeAgent.selection.picked ?? pendingSelection) : undefined,
         subject.session.requestHeader()?.config,
         currentDefaults(),
       )
@@ -737,11 +745,17 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     off()
     for (const dispose of offCapabilitySync) dispose()
     if (capabilitySyncTimer !== undefined) clearTimeout(capabilitySyncTimer)
-    mountRef.current?.unmount()
     const currentSession = session
     const currentActive = active
     const report = (name: string, error: unknown): void => {
       internals.stderr.write(`dsh: quit ${name} failed: ${error instanceof Error ? error.message : String(error)}\n`)
+    }
+    // A throwing unmount must not strand the terminal (stdin tap alive,
+    // keyboard protocol stacks unpopped) or skip the exit sequence below.
+    try {
+      mountRef.current?.unmount()
+    } catch (error: unknown) {
+      report('unmount', error)
     }
     // One ordered cleanup: settle the visible session (if any — a bare launch
     // that never composed one resolves immediately), then wait for the final
@@ -812,6 +826,9 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     })
   }
 
+  /** Delivery serialization state: the chain's epoch pins it to one session. */
+  let deliveryChain: { epoch: number; tail: Promise<void> } = { epoch: 0, tail: Promise.resolve() }
+
   /** Deliver one trimmed line to the live session, expanding mentions first. */
   const deliverLine = (line: string, mode: 'followup' | 'steer', images: readonly ImageBlock[] = []): void => {
     const currentAgent = agent!
@@ -829,6 +846,15 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     } catch (error: unknown) {
       bridge.notify(`invalid session reference: ${error instanceof Error ? error.message : String(error)}`, 'error')
       return
+    }
+    // Ordered delivery: the inbox order IS the user's message order. A line
+    // with session mentions prepares asynchronously, and a later plain line
+    // used to deliver synchronously past it. Every line now waits for the
+    // previous line of the same session; an epoch change (switch/quit)
+    // abandons the chain instead of gating the next session on the old one.
+    if (deliveryChain.epoch !== epoch) deliveryChain = { epoch, tail: Promise.resolve() }
+    const enqueueDelivery = (run: () => void): void => {
+      deliveryChain.tail = deliveryChain.tail.then(run)
     }
     const atEpoch = epoch
     const deliver = (readable: string, context?: UserMessage): void => {
@@ -860,19 +886,19 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       }
     }
     if (parsed.references.length === 0) {
-      deliver(parsed.text)
+      enqueueDelivery(() => deliver(parsed.text))
       return
     }
     const controller = new AbortController()
     pendingControllers.add(controller)
-    void currentMentions.prepare(parsed, controller.signal).then((prepared) => {
+    enqueueDelivery(() => currentMentions.prepare(parsed, controller.signal).then((prepared) => {
       pendingControllers.delete(controller)
       deliver(prepared.text, prepared.additionalContext)
     }, (error: unknown) => {
       pendingControllers.delete(controller)
       if (controller.signal.aborted || epoch !== atEpoch) return
       bridge.notify(`session reference failed: ${error instanceof Error ? error.message : String(error)}`, 'error')
-    })
+    }))
   }
 
   // Deferred first-session creation for a bare launch: the session is composed
@@ -910,22 +936,45 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
           void next.handle.dispose().catch(() => {})
           return
         }
-        active = next
-        agent = next.agent
-        session = next.session
-        store = next.store
-        mentions = next.mentions
-        subagents.reset()
-        pendingMode = undefined
-        pendingPermission = undefined
-        commands.setAgent(agent)
-        skills.setAgent(agent)
-        // The App mounts with a placeholder key until the first input; the
-        // key-change remount below must start from a clean screen or the ghost
-        // static header stays visible above the new one (same source-backed
-        // clear the session-switch path performs).
-        process.stdout.write('\x1b[r\x1b[0m\x1b[H\x1b[2J\x1b[3J\x1b[H')
-        renderCurrent()
+        const previous = { active, agent, session, store, mentions }
+        try {
+          active = next
+          agent = next.agent
+          session = next.session
+          store = next.store
+          mentions = next.mentions
+          subagents.reset()
+          pendingMode = undefined
+          pendingPermission = undefined
+          commands.setAgent(agent)
+          skills.setAgent(agent)
+          // The App mounts with a placeholder key until the first input; the
+          // key-change remount below must start from a clean screen or the ghost
+          // static header stays visible above the new one (same source-backed
+          // clear the session-switch path performs).
+          process.stdout.write('\x1b[r\x1b[0m\x1b[H\x1b[2J\x1b[3J\x1b[H')
+          renderCurrent()
+        } catch (error: unknown) {
+          // The session composed but the screen handoff threw (stdout EPIPE,
+          // a render-time failure). Roll the published state back exactly
+          // like the switch path does — otherwise the runner reports "session
+          // creation failed" while the new session is actually live, clears
+          // the queued inputs, and every later line lands in the ghost. The
+          // queued inputs are KEPT for the next attempt.
+          active = previous.active
+          agent = previous.agent
+          session = previous.session
+          store = previous.store === undefined ? createTranscriptStore() : previous.store
+          mentions = previous.mentions === undefined ? createMentions(ctx, undefined, cwd) : previous.mentions
+          if (agent !== undefined) {
+            commands.setAgent(agent)
+            skills.setAgent(agent)
+          }
+          await next.handle.dispose().catch(() => {})
+          if (!quitting) renderCurrent()
+          bridge.notify(`session activation failed: ${error instanceof Error ? error.message : String(error)}`, 'error')
+          return
+        }
         abortPendingControllers()
         epoch += 1
         const queued = pendingInputs.splice(0)
@@ -1312,14 +1361,19 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       session = next.session
       store = next.store
       mentions = next.mentions
-      subagents.reset()
-      pendingMode = undefined
-      pendingPermission = undefined
       commands.setAgent(agent)
       skills.setAgent(agent)
       try {
         process.stdout.write('\x1b[r\x1b[0m\x1b[H\x1b[2J\x1b[3J\x1b[H')
         renderCurrent()
+        // Only a successful handoff may clear the transient per-session
+        // surfaces: a rolled-back switch keeps the previous session's
+        // subagent feed plus the user's pre-session /mode and permission
+        // picks (the bare-launch promise: explicit choices survive until
+        // composition takes them).
+        subagents.reset()
+        pendingMode = undefined
+        pendingPermission = undefined
       } catch (error: unknown) {
         active = previous
         agent = previous?.agent
@@ -1339,7 +1393,13 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       // No previous session (a bare launch switched straight into a resume):
       // nothing to flush or dispose, so just confirm the activation.
       if (previous === undefined) {
-        bridge.notify(`${next.resumed ? 'resumed' : 'created'} ${next.session.id.slice(-12)} · mode ${next.mode}`)
+        // The key-change remount above swaps the App in this same synchronous
+        // continuation; the new App registers its bridge.notify in a passive
+        // effect AFTER it, so an immediate notice reaches the UNMOUNTED
+        // instance and React drops it silently. Defer past the commit.
+        setTimeout(() => {
+          bridge.notify(`${next.resumed ? 'resumed' : 'created'} ${next.session.id.slice(-12)} · mode ${next.mode}`)
+        }, 0)
         return
       }
       let cleanupWarning: string | undefined

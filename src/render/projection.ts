@@ -159,6 +159,8 @@ export interface RetryEntry {
   kind: 'retry'
   /** Correlation id shared with the matching `llm/retry-started`. */
   retryId: string
+  /** Retry policy mode from the event: `always` has no attempt cap. */
+  mode: 'normal' | 'always'
   /** Attempt ordinal and its cap. */
   attempt: number
   max: number
@@ -166,7 +168,11 @@ export interface RetryEntry {
   code: string
   /** Backoff wait before the next attempt, in ms. */
   delayMs: number
-  /** `running` while the backoff waits, `done` once the attempt started. */
+  /**
+   * `running` while the backoff waits, `done` once the attempt started — or
+   * when the turn ended first (the turn-end sweep finalizes orphans so they
+   * never pin the settled boundary).
+   */
   state: 'running' | 'done'
 }
 
@@ -328,6 +334,25 @@ function textOf(content: readonly ContentBlock[]): string {
   return content.filter(block => block.type === 'text').map(block => block.text).join('')
 }
 
+/**
+ * Snapshot-isolate one anchors block (Maps and their nested Sets): a view
+ * already handed to the renderer must never observe a later fold through a
+ * shared container. The collections are small and turn-bounded, so cloning
+ * per event is cheap next to the entries copy the reducer already makes.
+ */
+function cloneViewAnchors(anchors: TranscriptView['anchors']): TranscriptView['anchors'] {
+  return {
+    stepStart: new Map(anchors.stepStart),
+    toolStart: new Map(anchors.toolStart),
+    firstChunkAt: new Map(anchors.firstChunkAt),
+    compactionTokens: new Map(anchors.compactionTokens),
+    lastPruneTokens: anchors.lastPruneTokens,
+    turnFiles: new Map([...anchors.turnFiles].map(([turn, files]) => [turn, new Set(files)])),
+    turnSteps: new Map(anchors.turnSteps),
+    turnTools: new Map([...anchors.turnTools].map(([turn, tools]) => [turn, new Set(tools)])),
+  }
+}
+
 /** Durable image references in their model-visible order. */
 function imagesOf(content: readonly ContentBlock[]): readonly ImageBlock['attachment'][] {
   return content.filter((block): block is ImageBlock => block.type === 'image').map(block => block.attachment)
@@ -410,6 +435,10 @@ function pendingText(content: readonly ContentBlock[]): string {
  * @returns the view after the event; the input view is never mutated.
  */
 export function projectEvent(view: TranscriptView, event: SessionEvent): TranscriptView {
+  // Fold against a private anchors block so the documented contract holds —
+  // "the input view is never mutated" — even for the in-place anchor sweeps
+  // below; without this, every handed-out view shared live Maps.
+  view = { ...view, anchors: cloneViewAnchors(view.anchors) }
   switch (event.type) {
     case 'user/message': {
       // A queued row retires when its durable user message lands (the agent
@@ -467,10 +496,16 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
       const { target, start, removedCount = 0, inserted } = event.data
       const ids = view.pending[target]
       const removed = ids.slice(start, start + removedCount)
+      // In-place upstream semantics: the kernel's authoritative fold is
+      // `inbox.splice(start, removedCount, ...inserted)` — inserted ids land
+      // AT the splice position (prepend/replace shapes), never at the tail.
+      // A tail append diverged the id order, so later coordinate-based events
+      // (next-turn head claims, positioned remove/replace) tombstoned the
+      // wrong pending row.
       const nextIds = [
         ...ids.slice(0, start),
-        ...ids.slice(start + removedCount),
         ...inserted.map(message => message.id),
+        ...ids.slice(start + removedCount),
       ]
       let entries = view.entries
       if (removed.length > 0) {
@@ -714,8 +749,26 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
         for (const callId of turnToolSet) view.anchors.toolStart.delete(callId)
         view.anchors.turnTools.delete(event.data.turn)
       }
+      // Orphaned retry/command rows can never be resolved after the turn
+      // ends: an aborted retry backoff returns upstream without its
+      // `llm/retry-started`, and crash repair synthesizes only tool/step/
+      // turn closers. Left `running` they pin the settled boundary forever,
+      // so the turn end finalizes them exactly like the anchor sweep above.
+      let orphans = false
+      const swept = view.entries.map((entry) => {
+        if (entry.kind === 'retry' && entry.state === 'running') {
+          orphans = true
+          return { ...entry, state: 'done' as const }
+        }
+        if (entry.kind === 'command' && entry.state === 'running') {
+          orphans = true
+          return { ...entry, state: 'error' as const, summary: 'interrupted before the turn ended' }
+        }
+        return entry
+      })
+      const entries = orphans ? swept : view.entries
       if (appended.length === 0) {
-        return { ...view, busy: false, busySince: 0, streaming: '', streamingReasoning: '' }
+        return { ...view, busy: false, busySince: 0, streaming: '', streamingReasoning: '', entries }
       }
       return {
         ...view,
@@ -723,7 +776,7 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
         busySince: 0,
         streaming: '',
         streamingReasoning: '',
-        entries: [...view.entries, ...appended],
+        entries: [...entries, ...appended],
       }
     }
     case 'llm/retry': {
@@ -735,6 +788,7 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
         entries: [...view.entries, {
           kind: 'retry',
           retryId: data.retryId,
+          mode: data.mode,
           attempt: data.retry,
           max: 'maxRetries' in data ? data.maxRetries : data.retry,
           code: data.failure.code,
@@ -996,6 +1050,31 @@ function indexList(map: Map<string, number[]>, id: string): number[] {
 }
 
 /**
+ * Finalize replay rows the ended turn left `running`, mirroring the reducer's
+ * turn-end orphan sweep: an orphaned retry settles `done`, an orphaned command
+ * settles `error` with an interruption note. Only the id-indexed rows are
+ * visited, so the sweep stays O(retries+commands of the log), never a scan.
+ */
+function finalizeReplayOrphans(acc: ReplayAccumulator): void {
+  for (const list of acc.retryIndex.values()) {
+    for (const index of list) {
+      const entry = acc.entries[index]
+      if (entry !== undefined && entry.kind === 'retry' && entry.state === 'running') {
+        acc.entries[index] = { ...entry, state: 'done' }
+      }
+    }
+  }
+  for (const list of acc.commandIndex.values()) {
+    for (const index of list) {
+      const entry = acc.entries[index]
+      if (entry !== undefined && entry.kind === 'command' && entry.state === 'running') {
+        acc.entries[index] = { ...entry, state: 'error', summary: 'interrupted before the turn ended' }
+      }
+    }
+  }
+}
+
+/**
  * Apply an id-keyed update to every row that registered the id, mirroring the
  * copy-on-write reducer's full-array map semantics (all matching rows update,
  * in order). Each registered index is O(1), so a duplicate id costs
@@ -1103,11 +1182,15 @@ export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent):
           }
         }
       }
+      // Mirror the reducer's in-place order: inserted ids join at the splice
+      // position (upstream `splice(start, removedCount, ...inserted)`), never
+      // at the tail — the id list must stay coordinate-compatible with every
+      // later inbox event.
+      ids.splice(start, 0, ...inserted.map(message => message.id))
       for (const message of inserted) {
         const images = imagesOf(message.content)
         appendReplayEntry(acc, { kind: 'pending', messageId: message.id, target, text: pendingText(message.content), ...(images.length === 0 ? {} : { images }) })
         indexList(acc.pendingIndex, message.id).push(acc.entries.length - 1)
-        ids.push(message.id)
         acc.ops += 1
       }
       return true
@@ -1298,6 +1381,7 @@ export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent):
         for (const callId of turnToolSet) acc.toolStart.delete(callId)
         acc.turnTools.delete(event.data.turn)
       }
+      finalizeReplayOrphans(acc)
       acc.busy = false
       acc.busySince = 0
       for (const entry of appended) appendReplayEntry(acc, entry)
@@ -1310,6 +1394,7 @@ export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent):
       appendReplayEntry(acc, {
         kind: 'retry',
         retryId: data.retryId,
+        mode: data.mode,
         attempt: data.retry,
         max: 'maxRetries' in data ? data.maxRetries : data.retry,
         code: data.failure.code,
@@ -1474,15 +1559,17 @@ function materializeReplayView(acc: ReplayAccumulator, copy: boolean): Transcrip
     goal: acc.goal,
     pending: { 'next-turn': [...acc.pendingTurn], 'next-step': [...acc.pendingStep] },
     stats: acc.stats,
+    // Handed-out views get their own anchors snapshot: the accumulator keeps
+    // folding its live containers, and no consumer may observe that.
     anchors: {
-      stepStart: acc.stepStart,
-      toolStart: acc.toolStart,
-      firstChunkAt: acc.firstChunkAt,
-      compactionTokens: acc.compactionTokens,
+      stepStart: new Map(acc.stepStart),
+      toolStart: new Map(acc.toolStart),
+      firstChunkAt: new Map(acc.firstChunkAt),
+      compactionTokens: new Map(acc.compactionTokens),
       lastPruneTokens: acc.lastPruneTokens,
-      turnFiles: acc.turnFiles,
-      turnSteps: acc.turnSteps,
-      turnTools: acc.turnTools,
+      turnFiles: new Map([...acc.turnFiles].map(([turn, files]) => [turn, new Set(files)])),
+      turnSteps: new Map(acc.turnSteps),
+      turnTools: new Map([...acc.turnTools].map(([turn, tools]) => [turn, new Set(tools)])),
     },
   }
 }

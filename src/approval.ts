@@ -96,6 +96,13 @@ export function mountApprovalAnswerer(
 
     let resolved = false
     let settle!: (outcome: ApprovalOutcome) => void
+    // Established BEFORE the abort listener mounts: a synchronous throw
+    // between the listener registration and a later construction site would
+    // otherwise leave a subsequent abort invoking an unassigned settle from
+    // inside the AbortSignal listener (an uncaughtException).
+    const settled = new Promise<ApprovalOutcome>((resolve) => {
+      settle = resolve
+    })
     const signal = request.signal
     const onAbort = (): void => withdraw()
     // Detach on every settle so an answered ask never retains a listener on
@@ -136,9 +143,7 @@ export function mountApprovalAnswerer(
     queue.push(slot)
     publish()
 
-    return new Promise<ApprovalOutcome>((resolve) => {
-      settle = resolve
-    }).then((outcome) => {
+    return settled.then((outcome) => {
       if (outcome !== 'cancelled') {
         removeSlot(slot)
         publish()

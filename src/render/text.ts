@@ -145,8 +145,14 @@ export function displayTail(text: string, columns: number, rows: number): Displa
     used += width
     lastCluster = cluster
   }
-  if (current !== '' || (wrapped.length > 0 && text.endsWith('\n'))) flush()
-
+  // A trailing newline means one deliberate empty caret row, but that row
+  // must never evict real content or fake a truncation marker: flush the
+  // content first, decide truncation on content alone, then append the blank
+  // row only when the whole tail still fits the budget.
+  const trailingBlank = current === '' && wrapped.length > 0 && text.endsWith('\n')
+  if (current !== '') flush()
   const truncated = wrapped.length > rowLimit
-  return { text: (truncated ? wrapped.slice(-rowLimit) : wrapped).join('\n'), truncated }
+  const kept = truncated ? wrapped.slice(-rowLimit) : wrapped
+  const keptRows = trailingBlank && kept.length < rowLimit ? [...kept, ''] : kept
+  return { text: keptRows.join('\n'), truncated }
 }

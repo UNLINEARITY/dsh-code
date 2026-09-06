@@ -645,7 +645,7 @@ describe('transcript projection', () => {
       },
     } as unknown as SessionEvent)
     expect(view.entries).toEqual([{
-      kind: 'retry', retryId: 'r1', attempt: 2, max: 4, code: 'SERVER', delayMs: 1_500, state: 'running',
+      kind: 'retry', retryId: 'r1', mode: 'normal', attempt: 2, max: 4, code: 'SERVER', delayMs: 1_500, state: 'running',
     }])
     expect(view.streamingReasoning).toBe('')
     expect(view.streaming).toBe('')

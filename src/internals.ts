@@ -68,14 +68,21 @@ export const internals: {
         instance.rerender(element)
       },
       unmount(): void {
-        instance.unmount()
-        tuiStdin.dispose()
-        // Pop only a stack this mount pushed, then disable bracketed paste.
-        process.stdout.write(
-          (keyboardEnhanced ? KEYBOARD_ENHANCE_DISABLE : '')
-          + BRACKETED_PASTE_DISABLE
-          + (focusReporting ? TERMINAL_FOCUS_REPORT_DISABLE : ''),
-        )
+        // The cleanup below must run even when Ink's unmount throws (a
+        // render-teardown failure): a stdin tap or pushed terminal-protocol
+        // stack outliving the app wedges the terminal for whatever runs
+        // next, and a stray exception here must not skip the exit sequence.
+        try {
+          instance.unmount()
+        } finally {
+          tuiStdin.dispose()
+          // Pop only a stack this mount pushed, then disable bracketed paste.
+          process.stdout.write(
+            (keyboardEnhanced ? KEYBOARD_ENHANCE_DISABLE : '')
+            + BRACKETED_PASTE_DISABLE
+            + (focusReporting ? TERMINAL_FOCUS_REPORT_DISABLE : ''),
+          )
+        }
       },
     }
   },

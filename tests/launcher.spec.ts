@@ -33,7 +33,7 @@ describe('global launcher aliases', () => {
       launchDsh(['--help'], (command, args, options) => {
         calls.push({ command, args, options })
         return child
-      }, args => ({ command: 'dsh', args: profileArgs(args) }), () => true)
+      }, args => ({ command: 'dsh', args: profileArgs(args) }), () => true, () => true)
       expect(calls).toEqual([{
         command: 'dsh',
         args: ['--profile', 'cli', '--help'],
