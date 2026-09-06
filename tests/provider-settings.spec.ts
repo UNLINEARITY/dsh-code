@@ -8,6 +8,8 @@ import type { Context } from '@deepseek-ai/cordis'
 import {
   ProviderSettingsError,
   discoverProviderModels,
+  parseReasoningEffortsDraft,
+  serializeReasoningEfforts,
   deriveCredentialRef,
   loadProviderSettings,
   removeProviderSettings,
@@ -255,6 +257,52 @@ describe('loadProviderSettings', () => {
   it('returns an empty directory when the llm service is unavailable', async () => {
     const directory = await loadProviderSettings(fakeCtx({}))
     expect(directory).toEqual({ rows: [], writable: false, failures: [] })
+  })
+})
+
+describe('parseReasoningEffortsDraft', () => {
+  it('parses identity pairs, null wire values, and dialect spellings', () => {
+    expect(parseReasoningEffortsDraft('low:low high:high max:max')).toEqual({
+      ok: true,
+      value: { low: 'low', high: 'high', max: 'max' },
+    })
+    expect(parseReasoningEffortsDraft('off:null low:high max:max')).toEqual({
+      ok: true,
+      value: { off: null, low: 'high', max: 'max' },
+    })
+  })
+
+  it('clears to inherit on empty and disables on the single false token', () => {
+    expect(parseReasoningEffortsDraft('   ')).toEqual({ ok: true, value: undefined })
+    expect(parseReasoningEffortsDraft('false')).toEqual({ ok: true, value: false })
+  })
+
+  it('rejects unknown levels, duplicates, and malformed tokens with one line', () => {
+    expect(parseReasoningEffortsDraft('low:low turbo:max')).toEqual({
+      ok: false,
+      error: expect.stringContaining('"turbo" is not a level'),
+    })
+    expect(parseReasoningEffortsDraft('low:low low:high')).toEqual({
+      ok: false,
+      error: expect.stringContaining('appears twice'),
+    })
+    expect(parseReasoningEffortsDraft('low')).toEqual({
+      ok: false,
+      error: expect.stringContaining('needs level:wire'),
+    })
+    expect(parseReasoningEffortsDraft('low:')).toEqual({
+      ok: false,
+      error: expect.stringContaining('needs level:wire'),
+    })
+  })
+
+  it('round-trips a stored declaration through serialize', () => {
+    const stored = { off: null, low: 'low', medium: 'medium', high: 'high' }
+    const serialized = serializeReasoningEfforts(stored)
+    expect(serialized).toBe('off:null low:low medium:medium high:high')
+    expect(parseReasoningEffortsDraft(serialized)).toEqual({ ok: true, value: stored })
+    expect(serializeReasoningEfforts(undefined)).toBe('')
+    expect(serializeReasoningEfforts(false)).toBe('false')
   })
 })
 

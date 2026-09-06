@@ -256,6 +256,79 @@ export interface DiscoveredModelView {
   readonly maxTokens?: number
 }
 
+/** One model an endpoint reported about itself (mirrors LlmDiscoveredModel). */
+export interface DiscoveredModelView {
+  /** Model id the endpoint accepts. */
+  readonly id: string
+  /** Human-readable name when the endpoint supplies one. */
+  readonly name?: string
+  /** Context window when disclosed; adoption still owes it if absent. */
+  readonly contextWindow?: number
+  /** Output cap when disclosed. */
+  readonly maxTokens?: number
+}
+
+/**
+ * The seven canonical reasoning levels a reasoningEfforts key may name -
+ * pi-ai's THINKING_LEVELS. A pi-ai upgrade that adds or removes one fails
+ * upstream's own drift gate; this mirror exists so the terminal editor can
+ * validate drafts without importing the pi-ai package.
+ */
+export const REASONING_EFFORT_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
+
+/**
+ * One stored reasoningEfforts declaration: a display-level to wire-value map
+ * (null sends no reasoning parameter), an explicit false disabling the
+ * picker, or undefined leaving the entry to inherit.
+ */
+export type ReasoningEffortsValue = Record<string, string | null> | false | undefined
+
+/** Whether a raw extras value is a declared efforts dict (non-empty, non-false). */
+export function isDeclaredReasoningEfforts(value: unknown): value is Record<string, string | null> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value) && Object.keys(value).length > 0
+}
+
+/**
+ * Parse the setup page's compact efforts draft into a storable declaration.
+ * Grammar: empty = clear back to inherit; the single token "false" = disable
+ * the picker; otherwise space-separated level:wire pairs where level is one
+ * of REASONING_EFFORT_LEVELS and wire is any non-empty string or the literal
+ * "null" (send no parameter).
+ */
+export function parseReasoningEffortsDraft(draft: string):
+  | { readonly ok: true; readonly value: ReasoningEffortsValue }
+  | { readonly ok: false; readonly error: string } {
+  const text = draft.trim()
+  if (text === '') return { ok: true, value: undefined }
+  if (text === 'false') return { ok: true, value: false }
+  const value: Record<string, string | null> = {}
+  for (const token of text.split(/\s+/u)) {
+    const split = token.indexOf(':')
+    if (split <= 0 || split === token.length - 1) {
+      return { ok: false, error: 'each entry needs level:wire, got "' + token + '"' }
+    }
+    const level = token.slice(0, split)
+    const wire = token.slice(split + 1)
+    if (!(REASONING_EFFORT_LEVELS as readonly string[]).includes(level)) {
+      return { ok: false, error: '"' + level + '" is not a level; use one of ' + REASONING_EFFORT_LEVELS.join('/') }
+    }
+    if (level in value) {
+      return { ok: false, error: 'level "' + level + '" appears twice' }
+    }
+    value[level] = wire === 'null' ? null : wire
+  }
+  return { ok: true, value }
+}
+
+/** Serialize a stored declaration back to the compact draft form (stored key order preserved). */
+export function serializeReasoningEfforts(value: unknown): string {
+  if (value === false) return 'false'
+  if (!isDeclaredReasoningEfforts(value)) return ''
+  return Object.entries(value)
+    .map(([level, wire]) => level + ':' + (wire === null ? 'null' : String(wire)))
+    .join(' ')
+}
+
 /**
  * One provider row in the TUI provider-management panel: the configurable
  * directory entry joined with its settings profile and credential facts.

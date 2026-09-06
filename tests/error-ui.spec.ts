@@ -530,6 +530,125 @@ describe('/model provider credentials', () => {
     }
   })
 
+  it('edits a model efforts declaration inline and saves it through extras', async () => {
+    let saved: unknown
+    const app = renderApp({
+      loadModels: async () => ({ rows: [], failures: [] }),
+      loadModelProviders: async () => ({
+        rows: [provider({ configuration: { models: [{ id: 'glm-5.3' }] } })],
+        writable: true,
+        failures: [],
+      }),
+      saveModelProviderCredential: async () => {},
+      saveModelProviderConfiguration: async (_target, configuration) => { saved = configuration },
+      unsetModelProviderCredential: async () => {},
+      removeModelProvider: async () => {},
+    }, { columns: 120, rows: 24 })
+    try {
+      await wait()
+      app.stdin.push('/model')
+      await wait()
+      app.stdin.push('\r')
+      await wait()
+      app.stdin.push('a')
+      await wait()
+      app.stdin.push('\r')
+      await wait()
+      app.stdin.push('\x1b[B')
+      await wait()
+      app.stdin.push('\x1b[B')
+      await wait()
+      // 'e' opens the micro-editor seeded from the (absent) declaration.
+      app.stdin.push('e')
+      await wait()
+      app.stdin.push('low:low high:high max:max')
+      await wait()
+      app.stdin.push('\r')
+      await wait()
+      expect(app.output()).toContain('eff:3')
+      app.stdin.push('\r')
+      await wait()
+      expect(saved).toEqual({
+        models: [{ id: 'glm-5.3', extras: { reasoningEfforts: { low: 'low', high: 'high', max: 'max' } } }],
+      })
+    } finally {
+      app.unmount()
+    }
+  })
+
+  it('copies a donor declaration verbatim with c and rejects invalid drafts', async () => {
+    let saved: unknown
+    const donorProvider = provider({
+      provider: 'zai',
+      displayName: 'ZAI',
+      settingsNs: 'llm-pi-ai',
+      settingsPath: ['providers', 'zai'],
+      configuration: {
+        models: [{
+          id: 'glm-5.3',
+          extras: { reasoningEfforts: { low: 'low', high: 'high', max: 'max' } },
+        }],
+      },
+    })
+    const targetProvider = provider({
+      configuration: { models: [{ id: 'gpt-6' }] },
+    })
+    const app = renderApp({
+      loadModels: async () => ({ rows: [], failures: [] }),
+      loadModelProviders: async () => ({ rows: [donorProvider, targetProvider], writable: true, failures: [] }),
+      saveModelProviderCredential: async () => {},
+      saveModelProviderConfiguration: async (_target, configuration) => { saved = configuration },
+      unsetModelProviderCredential: async () => {},
+      removeModelProvider: async () => {},
+    }, { columns: 120, rows: 24 })
+    try {
+      await wait()
+      app.stdin.push('/model')
+      await wait()
+      app.stdin.push('\r')
+      await wait()
+      app.stdin.push('a')
+      await wait()
+      // Cursor on the second provider (the gateway target with gpt-6).
+      app.stdin.push('\x1b[B')
+      await wait()
+      app.stdin.push('\r')
+      await wait()
+      app.stdin.push('\x1b[B')
+      await wait()
+      app.stdin.push('\x1b[B')
+      await wait()
+      expect(app.output()).toContain('gpt-6')
+      // 'c' opens the donor picker; the zai declaration is listed verbatim.
+      app.stdin.push('c')
+      await wait()
+      expect(app.output()).toContain('/model — copy efforts')
+      expect(app.output()).toContain('zai/glm-5.3')
+      app.stdin.push('\r')
+      await wait()
+      expect(app.output()).toContain('eff:3')
+      // An invalid draft (unknown level) refuses to commit with one line.
+      app.stdin.push('e')
+      await wait()
+      app.stdin.push('\x15')
+      await wait()
+      app.stdin.push('turbo:max')
+      await wait()
+      app.stdin.push('\r')
+      await wait()
+      expect(app.output()).toContain('is not a level')
+      app.stdin.push('\x1b')
+      await wait()
+      app.stdin.push('\r')
+      await wait()
+      expect(saved).toEqual({
+        models: [{ id: 'gpt-6', extras: { reasoningEfforts: { low: 'low', high: 'high', max: 'max' } } }],
+      })
+    } finally {
+      app.unmount()
+    }
+  })
+
   it('keeps masked input and save failures inside the five-row panel budget', async () => {
     const row = provider()
     const app = renderApp({

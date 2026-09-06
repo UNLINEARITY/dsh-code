@@ -62,7 +62,17 @@ import {
 import type { ApprovalSnapshot, ApprovalStore } from './approval.ts'
 import { submissionPayload, type CommandsView } from './commands.ts'
 import type { ModelDirectory, ModelRow } from './models.ts'
-import type { DiscoveredModelView, ProviderConfiguration, ProviderModelSettings, ProviderSettingsDirectory, ProviderTargetView } from './provider-settings.ts'
+import {
+  isDeclaredReasoningEfforts,
+  parseReasoningEffortsDraft,
+  serializeReasoningEfforts,
+  type DiscoveredModelView,
+  type ProviderConfiguration,
+  type ProviderModelSettings,
+  type ProviderSettingsDirectory,
+  type ProviderTargetView,
+  type ReasoningEffortsValue,
+} from './provider-settings.ts'
 import type { QuestionSnapshot, QuestionStore } from './questions.ts'
 import type { SkillsView, SkillRow } from './skills.ts'
 import { isPathLikeMentionQuery, type MentionCandidate } from './mentions.ts'
@@ -1901,8 +1911,20 @@ function ProviderPanel({ directory, error, authorizations, authorizationError, o
  * discovery page, which interrogates the real endpoint and returns checkable
  * models for adoption; the last row also accepts hand-typed model ids.
  */
-function ProviderSetupPanel({ target, save, saveCredential, discover, done, back }: {
+/** One declarable donor the setup page can copy reasoning efforts from verbatim. */
+interface EffortDonor {
+  /** Provider route the declaration lives on. */
+  readonly provider: string
+  /** Model id the declaration belongs to. */
+  readonly id: string
+  /** The stored display-level to wire-value map, copied verbatim. */
+  readonly efforts: Record<string, string | null>
+}
+
+function ProviderSetupPanel({ target, save, saveCredential, discover, effortDonors, done, back }: {
   target: ProviderTargetView
+  /** Models with declared efforts (settings first, catalog-advertised after) a model row can copy from. */
+  effortDonors: readonly EffortDonor[]
   save(target: ProviderTargetView, configuration: ProviderConfiguration): Promise<void>
   saveCredential: ((target: ProviderTargetView, key: string) => Promise<void>) | undefined
   discover(target: ProviderTargetView, request: { readonly apiKey?: string; readonly baseURL?: string }, signal?: AbortSignal): Promise<readonly DiscoveredModelView[]>
@@ -1912,7 +1934,7 @@ function ProviderSetupPanel({ target, save, saveCredential, discover, done, back
 }): ReactElement {
   const stdout = useStdout().stdout
   const viewport = panelViewport(stdout?.columns ?? 80, stdout?.rows ?? 30)
-  const [page, setPage] = useState<'setup' | 'discover'>('setup')
+  const [page, setPage] = useState<'setup' | 'discover' | 'donor'>('setup')
   const [keyDraft, setKeyDraft] = useState('')
   const [baseURL, setBaseURL] = useState(target.configuration.baseURL ?? '')
   const [models, setModels] = useState<readonly ProviderModelSettings[]>(target.configuration.models)
@@ -1920,6 +1942,10 @@ function ProviderSetupPanel({ target, save, saveCredential, discover, done, back
   const [zone, setZone] = useState<'key' | 'url' | 'models'>('key')
   const [field, setField] = useState<'none' | 'ctx' | 'out'>('none')
   const [addDraft, setAddDraft] = useState('')
+  /** Micro-editor for the selected model's reasoningEfforts declaration. */
+  const [effEditing, setEffEditing] = useState(false)
+  const [effDraft, setEffDraft] = useState('')
+  const [donorCursor, setDonorCursor] = useState(0)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | undefined>(undefined)
   const credential = target.credential
@@ -1956,6 +1982,32 @@ function ProviderSetupPanel({ target, save, saveCredential, discover, done, back
     setAddDraft('')
   }
 
+  /** Compact declaration summary for the row label: count, off, or inherit. */
+  const effortsSummary = (model: ProviderModelSettings): string => {
+    const raw = (model.extras as Record<string, unknown> | undefined)?.reasoningEfforts
+    if (raw === false) return 'off'
+    if (isDeclaredReasoningEfforts(raw)) return String(Object.keys(raw).length)
+    return '~'
+  }
+
+  /** Write (or clear) the selected model's declaration through extras. */
+  const applyDeclaration = (value: ReasoningEffortsValue): void => {
+    setModels(current => current.map((model, index) => {
+      if (index !== cursor) return model
+      const extras: Record<string, unknown> = { ...model.extras }
+      if (value === undefined) delete extras.reasoningEfforts
+      else extras.reasoningEfforts = value
+      return { ...model, ...Object.keys(extras).length === 0 ? {} : { extras } }
+    }))
+  }
+
+  /** Donors excluding the row being edited (copying from itself is a no-op). */
+  const donorRows = selected === undefined
+    ? []
+    : effortDonors.filter(donor => !(donor.provider === target.provider && donor.id === selected.id))
+  const donorIndex = Math.min(donorCursor, Math.max(0, donorRows.length - 1))
+  const donorRow = donorRows[donorIndex]
+
   const submit = (): void => {
     if (busy) return
     const key = keyDraft.trim()
@@ -1982,6 +2034,40 @@ function ProviderSetupPanel({ target, save, saveCredential, discover, done, back
 
   useStableInput((input, key) => {
     if (busy) return
+    // Efforts micro-editor: consumes every key while open (space is the
+    // pair separator, so the composer-style remove must not fire here).
+    if (effEditing) {
+      if (key.escape) { setEffEditing(false); setEffDraft(''); return }
+      if (key.return) {
+        const parsed = parseReasoningEffortsDraft(effDraft)
+        if (!parsed.ok) { setError(parsed.error); return }
+        setError(undefined)
+        applyDeclaration(parsed.value)
+        setEffEditing(false)
+        setEffDraft('')
+        return
+      }
+      if (key.backspace || key.delete) { setError(undefined); setEffDraft(current => deleteLastGrapheme(current)); return }
+      if (key.ctrl && input === 'u') { setError(undefined); setEffDraft(''); return }
+      if (key.ctrl || key.meta || input.length === 0) return
+      if (effDraft.length > 200) { setError('efforts draft is too long'); return }
+      setError(undefined)
+      setEffDraft(current => current + stripPasteMarkers(input))
+      return
+    }
+    // Donor picker: one page, up/down move, enter copies verbatim.
+    if (page === 'donor') {
+      if (key.escape || input === 'q') { setPage('setup'); return }
+      if (donorRows.length === 0) return
+      if (key.upArrow) { setDonorCursor(current => current > 0 ? current - 1 : donorRows.length - 1); return }
+      if (key.downArrow) { setDonorCursor(current => current < donorRows.length - 1 ? current + 1 : 0); return }
+      if (key.return && donorRow !== undefined) {
+        applyDeclaration(donorRow.efforts)
+        setError(undefined)
+        setPage('setup')
+      }
+      return
+    }
     if (key.escape || input === 'q') { back(); return }
     if (key.tab) { setPage('discover'); return }
     if (key.return) { submit(); return }
@@ -2044,6 +2130,18 @@ function ProviderSetupPanel({ target, save, saveCredential, discover, done, back
       setAddDraft(current => current + stripPasteMarkers(input))
       return
     }
+    if (input === 'e' && selected !== undefined) {
+      setError(undefined)
+      setEffDraft(serializeReasoningEfforts((selected.extras as Record<string, unknown> | undefined)?.reasoningEfforts))
+      setEffEditing(true)
+      return
+    }
+    if ((input === 'c' || input === 'C') && selected !== undefined) {
+      setError(undefined)
+      setDonorCursor(0)
+      setPage('donor')
+      return
+    }
     if (field !== 'none' && selected !== undefined) {
       const name = field === 'ctx' ? 'contextWindow' : 'maxTokens'
       const current = String(selected[name] ?? '')
@@ -2057,12 +2155,34 @@ function ProviderSetupPanel({ target, save, saveCredential, discover, done, back
         if (/^[0-9]+$/u.test(digits)) updateSelected({ [name]: Number(current + digits) })
       }
     }
-  }, page === 'setup')
+  }, page !== 'discover')
   if (viewport.maxHeight === 0 || viewport.bodyRows < 3) {
     // Never hide a live input surface: one visible row keeps the escape
     // route honest on extremely short terminals (the three fixed rows - key,
     // url, add-by-id - cannot fit below a three-row body).
     return createElement(Text, { wrap: 'truncate-end' }, truncateColumns('provider setup · terminal too small · esc back', viewport.contentColumns))
+  }
+  if (page === 'donor') {
+    const stateRow = donorRows.length === 0
+      ? createElement(Text, { key: 'empty', color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns('  no model with declared efforts yet; declare one with e, or hand-write settings', viewport.contentColumns))
+      : createElement(Text, { key: 'hint', color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns('  copy verbatim into ' + displayText(selected?.id ?? ''), viewport.contentColumns))
+    const donorBudget = Math.max(0, viewport.bodyRows - 2)
+    const donorFirst = selectionWindow(donorIndex, donorRows.length, donorBudget)
+    const donorVisible = donorRows.slice(donorFirst, donorFirst + donorBudget)
+    return createElement(
+      Box,
+      { flexDirection: 'column', width: viewport.outerColumns, paddingX: 1, borderStyle: 'round', borderColor: inkColor(getPalette().brand) },
+      createElement(Text, { color: inkColor(getPalette().brand), bold: true, wrap: 'truncate-end' }, truncateColumns('/model — copy efforts', viewport.contentColumns)),
+      createElement(PanelGap, { visible: viewport.gapRows > 0 }),
+      stateRow,
+      ...donorVisible.map((donor, index) => {
+        const active = donorFirst + index === donorIndex
+        const label = (active ? '>' : ' ') + ' ' + donor.provider + '/' + displayText(donor.id) + ' · ' + serializeReasoningEfforts(donor.efforts)
+        return createElement(Text, { key: donor.provider + '/' + donor.id, color: active ? inkColor(getPalette().brandBright) : inkColor(getPalette().text), wrap: 'truncate-end' }, truncateColumns(label, viewport.contentColumns))
+      }),
+      createElement(PanelGap, { visible: viewport.gapRows > 0 }),
+      createElement(Text, { color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns('↑↓ move · enter copy · esc back', viewport.contentColumns)),
+    )
   }
   if (page === 'discover') {
     return createElement(ProviderDiscoveryPanel, {
@@ -2104,7 +2224,11 @@ function ProviderSetupPanel({ target, save, saveCredential, discover, done, back
     const active = index === cursor
     const context = model.contextWindow === undefined ? '-' : String(model.contextWindow)
     const output = model.maxTokens === undefined ? '-' : String(model.maxTokens)
-    modelRows.push(createElement(Text, { key: model.id, color: active ? inkColor(getPalette().brandBright) : inkColor(getPalette().success), wrap: 'truncate-end' }, truncateColumns('  ' + (active ? '>' : ' ') + ' [x] ' + displayText(model.id) + '  in:' + (active && field === 'ctx' ? '[' + context + ']' : context) + ' out:' + (active && field === 'out' ? '[' + output + ']' : output), viewport.contentColumns)))
+    const editing = active && effEditing
+    const tail = editing
+      ? '  eff:' + effDraft + '▏'
+      : '  in:' + (active && field === 'ctx' ? '[' + context + ']' : context) + ' out:' + (active && field === 'out' ? '[' + output + ']' : output) + ' eff:' + effortsSummary(model)
+    modelRows.push(createElement(Text, { key: model.id, color: active ? inkColor(getPalette().brandBright) : inkColor(getPalette().success), wrap: 'truncate-end' }, truncateColumns('  ' + (active ? '>' : ' ') + ' [x] ' + displayText(model.id) + tail, viewport.contentColumns)))
   }
   return createElement(
     Box,
@@ -2116,7 +2240,7 @@ function ProviderSetupPanel({ target, save, saveCredential, discover, done, back
     ...stateRows,
     ...modelRows,
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
-    createElement(Text, { color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns('↑↓ key/url/models · ←→ in/out · space remove/add · digits edit · tab discover · enter save · esc back', viewport.contentColumns)),
+    createElement(Text, { color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns('↑↓ move · ←→ in/out · space remove · e efforts · c copy efforts · tab discover · enter save · esc back', viewport.contentColumns)),
   )
 }
 
@@ -4718,6 +4842,34 @@ export function App(props: AppProps): ReactElement {
     setProviderAction(undefined)
     setEffortFor(undefined)
   }
+  // Declarable effort donors: settings declarations first (verbatim, dialect
+  // spellings preserved), then catalog-advertised levels as identity maps -
+  // a newly added model copies a known family's mapping in one keystroke.
+  const effortDonors = useMemo(() => {
+    const donors: EffortDonor[] = []
+    const seen = new Set<string>()
+    for (const row of providerDirectory?.rows ?? []) {
+      for (const model of row.configuration.models) {
+        const raw = (model.extras as Record<string, unknown> | undefined)?.reasoningEfforts
+        if (!isDeclaredReasoningEfforts(raw)) continue
+        const key = row.provider + '/' + model.id
+        if (seen.has(key)) continue
+        seen.add(key)
+        donors.push({ provider: row.provider, id: model.id, efforts: raw })
+      }
+    }
+    for (const row of directory?.rows ?? []) {
+      const levels = row.reasoning?.efforts.map(effort => effort.id) ?? []
+      if (levels.filter(level => level !== 'off').length === 0) continue
+      const key = row.provider + '/' + row.model
+      if (seen.has(key)) continue
+      seen.add(key)
+      const efforts: Record<string, string | null> = {}
+      for (const level of levels) efforts[level] = level === 'off' ? null : level
+      donors.push({ provider: row.provider, id: row.model, efforts })
+    }
+    return donors
+  }, [providerDirectory, directory])
   let modelSurface: ReactElement | undefined
   if (modelOpen && !approvalPending && !questionPending) {
     if (providerAction?.kind === 'login'
@@ -4756,22 +4908,23 @@ export function App(props: AppProps): ReactElement {
         },
         back: () => setProviderAction(undefined),
       })
-} else if (providerAction?.kind === 'configure' && props.saveModelProviderConfiguration !== undefined) {
-modelSurface = createElement(ProviderSetupPanel, {
-target: providerAction.target,
-save: props.saveModelProviderConfiguration,
-saveCredential: props.saveModelProviderCredential,
-discover: props.discoverModelProvider
-?? (async () => { throw new Error('model discovery is unavailable in this profile; enter models by hand') }),
-done: result => {
-const target = providerAction.target
-setProviderAction(undefined)
-setProviderOpen(true)
-reloadModelSurfaces()
+    } else if (providerAction?.kind === 'configure' && props.saveModelProviderConfiguration !== undefined) {
+      modelSurface = createElement(ProviderSetupPanel, {
+        target: providerAction.target,
+        effortDonors,
+        save: props.saveModelProviderConfiguration,
+        saveCredential: props.saveModelProviderCredential,
+        discover: props.discoverModelProvider
+          ?? (async () => { throw new Error('model discovery is unavailable in this profile; enter models by hand') }),
+        done: result => {
+          const target = providerAction.target
+          setProviderAction(undefined)
+          setProviderOpen(true)
+          reloadModelSurfaces()
           notify(`provider configuration saved: ${target.displayName}` + (result.key ? ' · API key updated' : ''))
-},
-back: () => setProviderAction(undefined),
-})
+        },
+        back: () => setProviderAction(undefined),
+      })
     } else if (providerAction?.kind === 'unset' && props.unsetModelProviderCredential !== undefined) {
       modelSurface = createElement(ProviderConfirmPanel, {
         target: providerAction.target,
