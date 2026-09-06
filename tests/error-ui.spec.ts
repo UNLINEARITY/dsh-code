@@ -259,6 +259,7 @@ describe('/model provider credentials', () => {
       }),
       loadModelProviders: async () => ({ rows: [provider()], writable: true, failures: [] }),
       saveModelProviderCredential: async () => {},
+      saveModelProviderConfiguration: async () => {},
       loadProviderAuthorizations: async () => ({ rows: [authorization], failures: [] }),
       subscribeProviderAuthorizations: () => () => {},
       beginProviderAuthorization: async (_row, method) => {
@@ -293,49 +294,37 @@ describe('/model provider credentials', () => {
     }
   })
 
-  it('opens from the model list, masks the key, saves it, and returns to model selection', async () => {
-    let saved = ''
-    let current = provider()
-    let invalidate: (() => void) | undefined
-    let unsubscribed = false
+  it('configures key and models on one page and saves both together', async () => {
+    let savedKey = ''
+    let savedConfig: unknown
     const app = renderApp({
       loadModels: async () => ({
         rows: [{ provider: 'deepseek-official', providerName: 'DeepSeek', model: 'flash', modelName: 'Flash' }],
         failures: [],
       }),
-      loadModelProviders: async () => ({ rows: [current], writable: true, failures: [] }),
-      subscribeModelProviders: listener => {
-        invalidate = listener
-        return () => { unsubscribed = true; invalidate = undefined }
-      },
-      saveModelProviderCredential: async (_target, key) => { saved = key },
+      loadModelProviders: async () => ({ rows: [provider()], writable: true, failures: [] }),
+      saveModelProviderCredential: async (_target, key) => { savedKey = key },
+      saveModelProviderConfiguration: async (_target, configuration) => { savedConfig = configuration },
       unsetModelProviderCredential: async () => {},
       removeModelProvider: async () => {},
-    })
+    }, { columns: 100, rows: 24 })
     try {
       await wait()
       app.stdin.push('/model')
       await wait()
       app.stdin.push('\r')
       await wait()
-      expect(app.output()).toContain('a providers')
-
-      app.clearOutput()
       app.stdin.push('a')
       await wait()
-      expect(app.output()).toContain('/model — providers')
-      expect(app.output()).toContain('key missing')
-
-      current = provider({ credential: { kind: 'facts', configured: true, source: 'file', writable: true } })
-      invalidate?.()
-      await wait()
-      expect(app.output()).toContain('key file')
-      expect(app.output()).not.toContain('key file · not logged in')
-
-      app.clearOutput()
+      // Enter opens the unified setup page: key, endpoint, and models on one
+      // screen (the old split hid configuration behind Tab).
       app.stdin.push('\r')
       await wait()
-      expect(app.output()).toContain('/model — add API key')
+      expect(app.output()).toContain('/model — configure DeepSeek')
+      expect(app.output()).toContain('key')
+      expect(app.output()).toContain('url')
+      expect(app.output()).toContain('official default')
+
       app.clearOutput()
       app.stdin.push('sk-super-secret')
       await wait()
@@ -344,29 +333,25 @@ describe('/model provider credentials', () => {
 
       app.stdin.push('\r')
       await wait()
-      expect(saved).toBe('sk-super-secret')
-      expect(app.output()).toContain('API key saved for DeepSeek; select a model')
-      expect(app.output()).toContain('DeepSeek · Flash')
+      expect(savedKey).toBe('sk-super-secret')
+      expect(savedConfig).toEqual({ models: [] })
+      expect(app.output()).toContain('provider configuration saved: DeepSeek · API key updated')
+      expect(app.output()).toContain('/model — providers')
     } finally {
       app.unmount()
     }
-    await wait()
-    expect(unsubscribed).toBe(true)
   })
 
-  it('edits an explicit provider model allow-list and its token windows from the provider panel', async () => {
+  it('hand-adds a model id and edits its context/output windows on the setup page', async () => {
     let saved: unknown
     const app = renderApp({
-      loadModels: async () => ({
-        rows: [{ provider: 'deepseek-official', providerName: 'DeepSeek', model: 'flash', modelName: 'Flash' }],
-        failures: [],
-      }),
+      loadModels: async () => ({ rows: [], failures: [] }),
       loadModelProviders: async () => ({ rows: [provider()], writable: true, failures: [] }),
       saveModelProviderCredential: async () => {},
       saveModelProviderConfiguration: async (_target, configuration) => { saved = configuration },
       unsetModelProviderCredential: async () => {},
       removeModelProvider: async () => {},
-    })
+    }, { columns: 100, rows: 24 })
     try {
       await wait()
       app.stdin.push('/model')
@@ -375,38 +360,171 @@ describe('/model provider credentials', () => {
       await wait()
       app.stdin.push('a')
       await wait()
-      app.stdin.push('\t')
+      app.stdin.push('\r')
       await wait()
-      expect(app.output()).toContain('DeepSeek configuration')
-      app.stdin.push('\t')
+      // key → url → models (the add-by-id row is the first row of an empty list).
+      app.stdin.push('\x1b[B')
+      await wait()
+      app.stdin.push('\x1b[B')
+      await wait()
+      app.stdin.push('flash')
       await wait()
       app.stdin.push(' ')
       await wait()
-      app.stdin.push('\t')
+      expect(app.output()).toContain('[x] flash')
+      // Right cycles none → ctx → out; digits edit the active window.
+      app.stdin.push('\x1b[C')
       await wait()
-      app.stdin.push('1')
+      app.stdin.push('128')
       await wait()
-      app.stdin.push('2')
+      app.stdin.push('\x1b[C')
       await wait()
-      app.stdin.push('8')
-      await wait()
-      app.stdin.push('0')
-      await wait()
-      app.stdin.push('0')
-      await wait()
-      app.stdin.push('\t')
-      await wait()
-      app.stdin.push('8')
-      await wait()
-      app.stdin.push('1')
-      await wait()
-      app.stdin.push('9')
-      await wait()
-      app.stdin.push('2')
+      app.stdin.push('8192')
       await wait()
       app.stdin.push('\r')
       await wait()
-      expect(saved).toEqual({ models: [{ id: 'flash', name: 'Flash', contextWindow: 12800, maxTokens: 8192 }] })
+      expect(saved).toEqual({ models: [{ id: 'flash', contextWindow: 128, maxTokens: 8192 }] })
+    } finally {
+      app.unmount()
+    }
+  })
+
+  it('discovers real endpoint models, adopts a checked subset, and saves them', async () => {
+    let saved: unknown
+    const requests: Array<Record<string, unknown>> = []
+    const app = renderApp({
+      loadModels: async () => ({ rows: [], failures: [] }),
+      loadModelProviders: async () => ({ rows: [provider({ configuration: { baseURL: 'https://gw.example/v1', models: [] } })], writable: true, failures: [] }),
+      saveModelProviderCredential: async () => {},
+      saveModelProviderConfiguration: async (_target, configuration) => { saved = configuration },
+      discoverModelProvider: async (_target, request, signal) => {
+        requests.push({ ...request, signal: signal !== undefined })
+        return [
+          { id: 'glm-5.4', name: 'GLM-5.4' },
+          { id: 'glm-5.4-air' },
+          { id: 'kimi-k4' },
+        ]
+      },
+      unsetModelProviderCredential: async () => {},
+      removeModelProvider: async () => {},
+    }, { columns: 100, rows: 24 })
+    try {
+      await wait()
+      app.stdin.push('/model')
+      await wait()
+      app.stdin.push('\r')
+      await wait()
+      app.stdin.push('a')
+      await wait()
+      app.stdin.push('\r')
+      await wait()
+      // Tab enters the discovery stage; it interrogates immediately with the
+      // page's endpoint draft and a cancellation channel.
+      app.stdin.push('\t')
+      await wait()
+      expect(app.output()).toContain('/model — discover DeepSeek')
+      expect(requests).toEqual([{ baseURL: 'https://gw.example/v1', signal: true }])
+      expect(app.output()).toContain('3 advertised · 3 new · 0 checked')
+
+      // Selective adoption: check two of the three, adopt, leave the third.
+      app.stdin.push(' ')
+      await wait()
+      app.stdin.push('\x1b[B')
+      await wait()
+      app.stdin.push(' ')
+      await wait()
+      expect(app.output()).toContain('2 checked')
+      app.stdin.push('\r')
+      await wait()
+      expect(app.output()).toContain('[x] glm-5.4')
+      expect(app.output()).toContain('[x] glm-5.4-air')
+      expect(app.output()).not.toContain('[x] kimi-k4')
+
+      app.stdin.push('\r')
+      await wait()
+      expect(saved).toEqual({
+        baseURL: 'https://gw.example/v1',
+        models: [
+          { id: 'glm-5.4', name: 'GLM-5.4' },
+          { id: 'glm-5.4-air' },
+        ],
+      })
+    } finally {
+      app.unmount()
+    }
+  })
+
+  it('saves a typed key for a dormant route whose credential facts are absent', async () => {
+    let savedKey = ''
+    let savedConfig: unknown
+    const app = renderApp({
+      loadModels: async () => ({ rows: [], failures: [] }),
+      loadModelProviders: async () => ({
+        rows: [provider({ credentialRef: undefined, credential: undefined, configured: false })],
+        writable: true,
+        failures: [],
+      }),
+      saveModelProviderCredential: async (_target, key) => { savedKey = key },
+      saveModelProviderConfiguration: async (_target, configuration) => { savedConfig = configuration },
+      unsetModelProviderCredential: async () => {},
+      removeModelProvider: async () => {},
+    }, { columns: 100, rows: 24 })
+    try {
+      await wait()
+      app.stdin.push('/model')
+      await wait()
+      app.stdin.push('\r')
+      await wait()
+      app.stdin.push('a')
+      await wait()
+      app.stdin.push('\r')
+      await wait()
+      app.stdin.push('sk-for-dormant-route')
+      await wait()
+      app.stdin.push('\r')
+      await wait()
+      // The key rides the same Enter as the configuration — never dropped.
+      expect(savedKey).toBe('sk-for-dormant-route')
+      expect(savedConfig).toEqual({ models: [] })
+      expect(app.output()).toContain('API key updated')
+    } finally {
+      app.unmount()
+    }
+  })
+
+  it('refuses the whole save when a typed key cannot be written, instead of dropping it silently', async () => {
+    let configs = 0
+    let keys = 0
+    const app = renderApp({
+      loadModels: async () => ({ rows: [], failures: [] }),
+      loadModelProviders: async () => ({
+        rows: [provider({ credential: { kind: 'facts', configured: true, source: 'env', writable: false } })],
+        writable: true,
+        failures: [],
+      }),
+      saveModelProviderCredential: async () => { keys += 1 },
+      saveModelProviderConfiguration: async () => { configs += 1 },
+      unsetModelProviderCredential: async () => {},
+      removeModelProvider: async () => {},
+    }, { columns: 100, rows: 24 })
+    try {
+      await wait()
+      app.stdin.push('/model')
+      await wait()
+      app.stdin.push('\r')
+      await wait()
+      app.stdin.push('a')
+      await wait()
+      app.stdin.push('\r')
+      await wait()
+      app.stdin.push('sk-readonly-env')
+      await wait()
+      app.stdin.push('\r')
+      await wait()
+      expect(app.output()).toContain('cannot be written here')
+      expect(keys).toBe(0)
+      expect(configs).toBe(0)
+      expect(app.output()).toContain('/model — configure DeepSeek')
     } finally {
       app.unmount()
     }
@@ -418,6 +536,7 @@ describe('/model provider credentials', () => {
       loadModels: async () => ({ rows: [], failures: [] }),
       loadModelProviders: async () => ({ rows: [row], writable: true, failures: [] }),
       saveModelProviderCredential: async () => { throw new Error('credential store unavailable') },
+      saveModelProviderConfiguration: async () => {},
       unsetModelProviderCredential: async () => {},
       removeModelProvider: async () => {},
     }, { columns: 64, rows: 14 })
@@ -431,22 +550,45 @@ describe('/model provider credentials', () => {
       await wait()
       app.stdin.push('\r')
       await wait()
-      expect(app.output()).toContain('/model — add API key')
+      // A 14-row terminal cannot fit the three fixed rows; the page degrades
+      // to one bounded line instead of overflowing the terminal.
+      expect(app.output()).toContain('provider setup · terminal too small · esc back')
 
-      app.clearOutput()
-      app.stdin.push('sk-short-terminal-secret')
-      await wait()
-      expect(app.output()).toContain('••••')
-      expect(app.output()).not.toContain('sk-short-terminal-secret')
-      app.stdin.push('\r')
-      await wait()
-      expect(app.output()).toContain('credential store unavailable')
-      expect(app.output()).not.toContain('\x1b[3J')
+      // On a roomy terminal the failure stays inside the panel.
+      app.unmount()
     } finally {
       app.unmount()
     }
+    const roomy = renderApp({
+      loadModels: async () => ({ rows: [], failures: [] }),
+      loadModelProviders: async () => ({ rows: [row], writable: true, failures: [] }),
+      saveModelProviderCredential: async () => { throw new Error('credential store unavailable') },
+      saveModelProviderConfiguration: async () => {},
+      unsetModelProviderCredential: async () => {},
+      removeModelProvider: async () => {},
+    }, { columns: 64, rows: 24 })
+    try {
+      await wait()
+      roomy.stdin.push('/model')
+      await wait()
+      roomy.stdin.push('\r')
+      await wait()
+      roomy.stdin.push('a')
+      await wait()
+      roomy.stdin.push('\r')
+      await wait()
+      roomy.stdin.push('sk-short-terminal-secret')
+      await wait()
+      expect(roomy.output()).toContain('••••')
+      expect(roomy.output()).not.toContain('sk-short-terminal-secret')
+      roomy.stdin.push('\r')
+      await wait()
+      expect(roomy.output()).toContain('credential store unavailable')
+      expect(roomy.output()).not.toContain('\x1b[3J')
+    } finally {
+      roomy.unmount()
+    }
   })
-
   it('confirms key and custom-provider removals while refusing environment-owned keys', async () => {
     let unsets = 0
     let removals = 0
@@ -458,6 +600,7 @@ describe('/model provider credentials', () => {
       loadModels: async () => ({ rows: [], failures: [] }),
       loadModelProviders: async () => ({ rows: [current], writable: true, failures: [] }),
       saveModelProviderCredential: async () => {},
+      saveModelProviderConfiguration: async () => {},
       unsetModelProviderCredential: async () => { unsets += 1 },
       removeModelProvider: async () => { removals += 1 },
     })

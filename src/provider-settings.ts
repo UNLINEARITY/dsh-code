@@ -34,6 +34,21 @@ interface LlmFace {
     readonly settingsPath: readonly string[]
     readonly declared?: boolean
   }[]
+  /**
+   * Registered endpoint model discovery; absent on an older service. The
+   * request is a draft (provider route and/or baseURL, optional one-shot
+   * key); the reply is candidate metadata for adoption, never a write.
+   */
+  discoverModels?(
+    settingsNs: string,
+    request: { readonly provider?: string; readonly baseURL?: string; readonly api?: string; readonly apiKey?: string },
+    signal?: AbortSignal,
+  ): Promise<readonly {
+    readonly id: string
+    readonly name?: string
+    readonly contextWindow?: number
+    readonly maxTokens?: number
+  }[]>
 }
 
 /** One redacted settings descriptor (subset of `SettingsDescriptor`). */
@@ -71,11 +86,19 @@ interface ProviderEventsFace {
   on(event: string, listener: (...args: unknown[]) => void): () => void
 }
 
+/** One resolved credential value; never rendered, never persisted by callers. */
+interface CredentialValueFace {
+  readonly value: string
+  readonly source: string
+}
+
 /** The subset of the `credentials` service this module reads and writes. */
 interface CredentialsFace {
   describe(ref: string): Promise<CredentialFactsFace>
   set(ref: string, value: string): Promise<void>
   unset(ref: string): Promise<void>
+  /** Same-process value resolution; absent on an older service. */
+  resolve?(ref: string): Promise<CredentialValueFace | undefined>
 }
 
 /* ------------------------------------------------------------------ *
@@ -152,6 +175,7 @@ function configurationOf(profile: unknown): ProviderConfiguration {
   })
   return {
     ...(typeof record.baseURL === 'string' && record.baseURL.trim() !== '' ? { baseURL: record.baseURL } : {}),
+    ...(typeof record.api === 'string' && record.api.trim() !== '' ? { api: record.api } : {}),
     models,
   }
 }
@@ -211,7 +235,25 @@ export interface ProviderModelSettings {
 /** The small, portable subset of a provider profile the terminal edits. */
 export interface ProviderConfiguration {
   readonly baseURL?: string
+  /**
+   * Wire protocol the stored profile names (e.g. `openai-responses`), when it
+   * names one. Load-only: the editor never writes it, but endpoint discovery
+   * passes it so the listing speaks the same protocol as real requests.
+   */
+  readonly api?: string
   readonly models: readonly ProviderModelSettings[]
+}
+
+/** One model an endpoint reported about itself (mirrors `LlmDiscoveredModel`). */
+export interface DiscoveredModelView {
+  /** Model id the endpoint accepts. */
+  readonly id: string
+  /** Human-readable name when the endpoint supplies one. */
+  readonly name?: string
+  /** Context window when disclosed; adoption still owes it if absent. */
+  readonly contextWindow?: number
+  /** Output cap when disclosed. */
+  readonly maxTokens?: number
 }
 
 /**
@@ -547,6 +589,95 @@ export async function saveProviderConfiguration(
   try {
     await settings.mutate(target.settingsNs, ops, target.settingsRevision)
   } catch (error) {
+    throw new ProviderSettingsError(singleLine(messageOf(error)))
+  }
+}
+
+/**
+ * Interrogate a provider endpoint for the models it really serves, through
+ * the model-discovery capability the provider's settings namespace
+ * registered — the same pipe the official Web Models page uses. The request
+ * is a draft: a typed key forces direct endpoint interrogation (gateway
+ * truth), while an empty key lets the harness resolve the route's stored
+ * credential; with neither baseURL nor route the adapter answers from its
+ * own knowledge.
+ * @param ctx - context carrying the `llm` service (optional discovery).
+ * @param target - provider row whose settings namespace serves the draft.
+ * @param request - typed key and/or endpoint override for this one probe.
+ * @param signal - caller cancellation (panel navigation aborts the probe).
+ * @returns the advertised models in endpoint order, deduplicated.
+ */
+export async function discoverProviderModels(
+  ctx: Context,
+  target: ProviderTargetView,
+  request: { readonly apiKey?: string; readonly baseURL?: string },
+  signal?: AbortSignal,
+): Promise<readonly DiscoveredModelView[]> {
+  if (target.settingsNs.length === 0) {
+    throw new ProviderSettingsError(`provider "${target.provider}" has no managed settings namespace; its models cannot be discovered here`)
+  }
+  const llm = ctx.get('llm') as LlmFace | undefined
+  if (llm?.discoverModels === undefined) {
+    throw new ProviderSettingsError('model discovery is unavailable in this profile; enter models by hand')
+  }
+  const typedKey = request.apiKey?.trim()
+  const baseURL = request.baseURL?.trim()
+  const hasUrl = baseURL !== undefined && baseURL !== ''
+  let oneShotKey = typedKey
+  // A filled endpoint means the user wants THAT endpoint's real list: sending
+  // the route id alongside would make the adapter short-circuit to its
+  // installed catalog (official providers) and ignore the URL entirely. The
+  // probe therefore goes out as a draft — with the typed key, or with the
+  // stored credential resolved once for this request (never displayed,
+  // never persisted; exactly what provider-mode resolution does internally).
+  if (hasUrl && (oneShotKey === undefined || oneShotKey === '')) {
+    const credentialsService = ctx.get('credentials') as CredentialsFace | undefined
+    const ref = target.credentialRef ?? target.suggestedRef
+    if (credentialsService?.resolve !== undefined && ref !== undefined) {
+      try {
+        // Call resolve AS A METHOD on the service: destructured off it the
+        // call loses `this` and throws on the provider's first field read
+        // (the same lesson loadProviderSettings documents for listProviders).
+        const resolved = await credentialsService.resolve(ref)
+        oneShotKey = resolved?.value
+      } catch {
+        // A failed resolution degrades to an unauthenticated probe; the
+        // endpoint's own 401 names the problem better than we can.
+      }
+    }
+  }
+  const draft = hasUrl
+    ? {
+      ...(oneShotKey !== undefined && oneShotKey !== '' ? { apiKey: oneShotKey } : {}),
+      baseURL: baseURL!,
+      ...target.configuration.api === undefined ? {} : { api: target.configuration.api },
+    }
+    : {
+      // No endpoint override: the route's own knowledge answers (the official
+      // catalog for builtin providers — richer than any listing).
+      provider: target.provider,
+    }
+  try {
+    const discovered = signal === undefined
+      ? await llm.discoverModels(target.settingsNs, draft)
+      : await llm.discoverModels(target.settingsNs, draft, signal)
+    // Defensive dedupe in endpoint order (the service dedupes too; an older
+    // one must not leak duplicate rows into the checkable list).
+    const seen = new Set<string>()
+    const rows: DiscoveredModelView[] = []
+    for (const model of discovered) {
+      if (typeof model.id !== 'string' || model.id.trim() === '' || seen.has(model.id)) continue
+      seen.add(model.id)
+      rows.push({
+        id: model.id,
+        ...model.name === undefined ? {} : { name: model.name },
+        ...model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow },
+        ...model.maxTokens === undefined ? {} : { maxTokens: model.maxTokens },
+      })
+    }
+    return rows
+  } catch (error) {
+    if (signal?.aborted === true) throw error
     throw new ProviderSettingsError(singleLine(messageOf(error)))
   }
 }

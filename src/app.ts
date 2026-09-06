@@ -62,7 +62,7 @@ import {
 import type { ApprovalSnapshot, ApprovalStore } from './approval.ts'
 import { submissionPayload, type CommandsView } from './commands.ts'
 import type { ModelDirectory, ModelRow } from './models.ts'
-import type { ProviderConfiguration, ProviderSettingsDirectory, ProviderTargetView } from './provider-settings.ts'
+import type { DiscoveredModelView, ProviderConfiguration, ProviderModelSettings, ProviderSettingsDirectory, ProviderTargetView } from './provider-settings.ts'
 import type { QuestionSnapshot, QuestionStore } from './questions.ts'
 import type { SkillsView, SkillRow } from './skills.ts'
 import { isPathLikeMentionQuery, type MentionCandidate } from './mentions.ts'
@@ -305,6 +305,16 @@ export interface AppProps {
   removeModelProvider?(target: ProviderTargetView): Promise<void>
   /** Save endpoint and explicit model capacities through the provider profile. */
   saveModelProviderConfiguration?(target: ProviderTargetView, configuration: ProviderConfiguration): Promise<void>
+  /**
+   * Interrogate the provider's real endpoint (typed key wins over the stored
+   * credential) for the models it actually serves — the discovery stage of
+   * the provider setup page.
+   */
+  discoverModelProvider?(
+    target: ProviderTargetView,
+    request: { readonly apiKey?: string; readonly baseURL?: string },
+    signal?: AbortSignal,
+  ): Promise<readonly DiscoveredModelView[]>
   /** Provider authorization flows and value-free stored-record facts. */
   loadProviderAuthorizations?(): Promise<ProviderAuthorizationDirectory>
   subscribeProviderAuthorizations?(listener: () => void): () => void
@@ -1720,12 +1730,11 @@ function providerStateLabel(row: ProviderTargetView): string {
 }
 
 /** The provider-management stage reached from /model with `a`. */
-function ProviderPanel({ directory, error, authorizations, authorizationError, onCredential, onConfigure, onUnset, onRemove, onLogin, onLogout, onRetry, onBack }: {
+function ProviderPanel({ directory, error, authorizations, authorizationError, onConfigure, onUnset, onRemove, onLogin, onLogout, onRetry, onBack }: {
   directory: ProviderSettingsDirectory | undefined
   error: string | undefined
   authorizations: ProviderAuthorizationDirectory | undefined
   authorizationError: string | undefined
-  onCredential(target: ProviderTargetView): void
   onConfigure(target: ProviderTargetView): void
   onUnset(target: ProviderTargetView): void
   onRemove(target: ProviderTargetView): void
@@ -1781,11 +1790,6 @@ function ProviderPanel({ directory, error, authorizations, authorizationError, o
     }
     const target = rows[cursor]
     if (target === undefined) return
-    if (key.tab) {
-      if (target.settingsNs.length === 0) setActionError('this provider is not managed by Harness settings')
-      else onConfigure(target)
-      return
-    }
     if (input === 'd') {
       const facts = target.credential
       if (facts?.kind !== 'facts' || !facts.configured) {
@@ -1818,23 +1822,20 @@ function ProviderPanel({ directory, error, authorizations, authorizationError, o
       else onLogout(target, authorization)
       return
     }
+    // Enter opens the unified setup page (key, endpoint, models, discovery):
+    // the old split — Enter for the key alone, Tab for the deep menu — hid
+    // the configuration surface behind an undiscoverable chord.
     if (key.return) {
       if (target.settingsNs.length === 0) {
         setActionError('this provider is not managed by Harness settings')
-      } else if (target.credential?.kind === 'error') {
-        setActionError('credential status is unavailable; retry before writing')
-      } else if (target.credential?.kind === 'facts' && !target.credential.writable) {
-        setActionError('this API key is supplied read-only by the environment')
-      } else if (target.credentialRef === undefined && directory?.writable !== true) {
-        setActionError('settings are read-only; this provider cannot be activated here')
       } else {
-        onCredential(target)
+        onConfigure(target)
       }
     }
   }, true)
 
   if (viewport.maxHeight === 0 || viewport.compact) {
-    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns('/model providers · enter key · d remove key · esc back', viewport.contentColumns))
+    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns('/model providers · enter configure · d remove key · esc back', viewport.contentColumns))
   }
   const stateRows: ReactElement[] = directory === undefined && error === undefined
     ? [createElement(Text, { key: 'loading', color: inkColor(getPalette().dim), wrap: 'truncate-end' }, '  loading providers…')]
@@ -1886,205 +1887,343 @@ function ProviderPanel({ directory, error, authorizations, authorizationError, o
       )
     }),
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
-    createElement(Text, { color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns('↑↓ move · enter key · l login · o logout · tab configure · d remove key · x remove provider · r retry · esc back', viewport.contentColumns)),
+    createElement(Text, { color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns('↑↓ move · enter configure · l login · o logout · d remove key · x remove provider · r retry · esc back', viewport.contentColumns)),
   )
 }
 
 /** Provider configuration editor: only explicit models are written to settings. */
-function ProviderConfigurationPanel({ target, catalog, save, done, back }: {
+/**
+ * The unified provider setup page: API key, endpoint, and the explicit model
+ * list (with per-model context/output capacities) on ONE screen — the deep
+ * Tab menu and the separate key panel merged into a single discoverable
+ * surface. A saved key rides the same Enter as the endpoint and models; an
+ * empty endpoint keeps the provider's official default. Tab moves to the
+ * discovery page, which interrogates the real endpoint and returns checkable
+ * models for adoption; the last row also accepts hand-typed model ids.
+ */
+function ProviderSetupPanel({ target, save, saveCredential, discover, done, back }: {
   target: ProviderTargetView
-  catalog: readonly ModelRow[]
   save(target: ProviderTargetView, configuration: ProviderConfiguration): Promise<void>
-  done(): void
+  saveCredential: ((target: ProviderTargetView, key: string) => Promise<void>) | undefined
+  discover(target: ProviderTargetView, request: { readonly apiKey?: string; readonly baseURL?: string }, signal?: AbortSignal): Promise<readonly DiscoveredModelView[]>
+  /** Report a successful save so the surface can notice the key rotation. */
+  done(result: { readonly key: boolean }): void
   back(): void
 }): ReactElement {
   const stdout = useStdout().stdout
   const viewport = panelViewport(stdout?.columns ?? 80, stdout?.rows ?? 30)
+  const [page, setPage] = useState<'setup' | 'discover'>('setup')
+  const [keyDraft, setKeyDraft] = useState('')
   const [baseURL, setBaseURL] = useState(target.configuration.baseURL ?? '')
-  const [models, setModels] = useState<readonly ProviderConfiguration['models'][number][]>(target.configuration.models)
+  const [models, setModels] = useState<readonly ProviderModelSettings[]>(target.configuration.models)
   const [cursor, setCursor] = useState(0)
-  const [focus, setFocus] = useState<'url' | 'models' | 'context' | 'output'>('url')
+  const [zone, setZone] = useState<'key' | 'url' | 'models'>('key')
+  const [field, setField] = useState<'none' | 'ctx' | 'out'>('none')
+  const [addDraft, setAddDraft] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | undefined>(undefined)
-  const choices = useMemo(() => {
-    const known = catalog.filter(row => row.provider === target.provider)
-    const ids = new Set(known.map(row => row.model))
-    return [
-      ...known.map(row => ({ id: row.model, name: row.modelName })),
-      ...models.filter(model => !ids.has(model.id)).map(model => ({ id: model.id, name: model.name ?? model.id })),
-    ]
-  }, [catalog, models, target.provider])
-  const selected = choices[cursor]
-  const selectedModel = selected === undefined ? undefined : models.find(model => model.id === selected.id)
-  const updateSelected = (change: Partial<ProviderConfiguration['models'][number]>): void => {
+  const credential = target.credential
+  const keyStatus = saveCredential === undefined
+    ? 'key storage unavailable'
+    : credential?.kind === 'error'
+      ? 'key status unavailable'
+      : credential?.kind === 'facts' && credential.configured
+        ? 'key saved' + (credential.source === undefined ? '' : ' · ' + credential.source)
+        : 'no key set'
+  // A dormant route (no resolved profile yet, so no credential facts) may
+  // still receive a key: the save path materializes the apiKeyEnv reference
+  // itself. Only a known-unwritable or indescribable credential blocks.
+  const keyEditable = saveCredential !== undefined
+    && (credential === undefined || (credential.kind === 'facts' && credential.writable))
+  const onAddRow = cursor >= models.length
+  const selected = onAddRow ? undefined : models[cursor]
+
+  const updateSelected = (change: Partial<ProviderModelSettings>): void => {
     if (selected === undefined) return
-    setModels(current => current.some(model => model.id === selected.id)
-      ? current.map(model => model.id === selected.id ? { ...model, ...change } : model)
-      : [...current, { id: selected.id, name: selected.name, ...change }])
+    setModels(current => current.map((model, index) => index === cursor ? { ...model, ...change } : model))
   }
+
+  const commitAddDraft = (): void => {
+    const id = addDraft.trim()
+    if (id === '') return
+    if (models.some(model => model.id === id)) {
+      setError('model "' + id + '" is already in the list')
+      return
+    }
+    setError(undefined)
+    setModels([...models, { id }])
+    setCursor(models.length)
+    setAddDraft('')
+  }
+
   const submit = (): void => {
     if (busy) return
+    const key = keyDraft.trim()
+    // A typed key must never vanish silently: when it cannot be written here
+    // (read-only env supply, or credential status failed to describe), refuse
+    // the whole save with one actionable line instead of saving the endpoint
+    // and models while dropping the key the user believes was stored.
+    if (key !== '' && !keyEditable) {
+      setError('this API key cannot be written here (read-only or status unavailable); clear the key field to save the endpoint and models alone')
+      return
+    }
     setBusy(true)
     setError(undefined)
-    void Promise.resolve().then(() => save(target, { ...(baseURL.trim() === '' ? {} : { baseURL }), models })).then(done, (reason: unknown) => {
+    const keySave = key !== '' ? saveCredential : undefined
+    void (async () => {
+      if (keySave !== undefined) await keySave(target, key)
+      await save(target, { ...(baseURL.trim() === '' ? {} : { baseURL }), models })
+      return keySave !== undefined
+    })().then(keySaved => done({ key: keySaved }), (reason: unknown) => {
       setBusy(false)
       setError(singleLineText(reason instanceof Error ? reason.message : String(reason)))
     })
   }
+
   useStableInput((input, key) => {
     if (busy) return
     if (key.escape || input === 'q') { back(); return }
-    if (key.tab) {
-      setFocus(current => current === 'url' ? 'models' : current === 'models' ? 'context' : current === 'context' ? 'output' : 'url')
+    if (key.tab) { setPage('discover'); return }
+    if (key.return) { submit(); return }
+    if (zone === 'key') {
+      // Typing stays available even when the key cannot be written here (a
+      // read-only env supply, or a describe failure): the draft is local, and
+      // Enter refuses the save with one actionable line instead of silently
+      // dropping what the user typed.
+      if (key.downArrow) { setZone('url'); return }
+      if (key.backspace || key.delete) { setError(undefined); setKeyDraft(current => [...current].slice(0, -1).join('')); return }
+      if (key.ctrl && input === 'u') { setError(undefined); setKeyDraft(''); return }
+      if (key.ctrl || key.meta || input.length === 0) return
+      const next = keyDraft + stripPasteMarkers(input)
+      if (next.length > 4096) { setError('API key input is too long'); return }
+      setError(undefined)
+      setKeyDraft(next)
       return
     }
-    if (key.return) { submit(); return }
-    if (focus === 'url') {
+    if (zone === 'url') {
+      if (key.upArrow) { setZone('key'); return }
+      if (key.downArrow) { setZone('models'); return }
       if (key.backspace || key.delete) setBaseURL(current => deleteLastGrapheme(current))
       else if (!key.ctrl && !key.meta && input !== '') setBaseURL(current => current + stripPasteMarkers(input))
       return
     }
-    if (key.upArrow && choices.length > 0) { setCursor(current => Math.max(0, current - 1)); return }
-    if (key.downArrow && choices.length > 0) { setCursor(current => Math.min(choices.length - 1, current + 1)); return }
-    if (focus === 'models' && input === ' ') {
-      if (selectedModel === undefined) updateSelected({})
-      else setModels(current => current.filter(model => model.id !== selectedModel.id))
+    // Models zone: the explicit list plus the hand-add row below it.
+    if (key.upArrow) {
+      setError(undefined)
+      if (cursor === 0) setZone('url')
+      else { setCursor(current => current - 1); setField('none') }
       return
     }
-    if ((focus === 'context' || focus === 'output') && selectedModel !== undefined) {
-      const field = focus === 'context' ? 'contextWindow' : 'maxTokens'
-      const current = String(selectedModel[field] ?? '')
+    if (key.downArrow) {
+      setError(undefined)
+      if (!onAddRow) { setCursor(current => current + 1); setField('none') }
+      return
+    }
+    if (key.leftArrow || key.rightArrow) {
+      if (selected === undefined) return
+      const cycle = key.rightArrow
+        ? (current: 'none' | 'ctx' | 'out') => current === 'none' ? 'ctx' : current === 'ctx' ? 'out' : 'none'
+        : (current: 'none' | 'ctx' | 'out') => current === 'none' ? 'out' : current === 'out' ? 'ctx' : 'none'
+      setField(current => cycle(current))
+      return
+    }
+    if (input === ' ') {
+      if (selected === undefined) commitAddDraft()
+      else {
+        setError(undefined)
+        setField('none')
+        setModels(current => current.filter((_model, index) => index !== cursor))
+        setCursor(current => Math.min(current, Math.max(0, models.length - 1)))
+      }
+      return
+    }
+    if (onAddRow) {
+      if (key.backspace || key.delete) { setError(undefined); setAddDraft(current => deleteLastGrapheme(current)); return }
+      if (key.ctrl || key.meta || input.length === 0) return
+      setError(undefined)
+      setAddDraft(current => current + stripPasteMarkers(input))
+      return
+    }
+    if (field !== 'none' && selected !== undefined) {
+      const name = field === 'ctx' ? 'contextWindow' : 'maxTokens'
+      const current = String(selected[name] ?? '')
       if (key.backspace || key.delete) {
         const next = current.slice(0, -1)
-        updateSelected({ [field]: next === '' ? undefined : Number(next) })
+        updateSelected({ [name]: next === '' ? undefined : Number(next) })
       } else {
         // A pasted number arrives as one multi-character chunk; accept the
         // whole digit run instead of the single-character path only.
         const digits = stripPasteMarkers(input)
-        if (/^[0-9]+$/u.test(digits)) {
-          const next = `${current}${digits}`
-          updateSelected({ [field]: Number(next) })
-        }
+        if (/^[0-9]+$/u.test(digits)) updateSelected({ [name]: Number(current + digits) })
       }
     }
-  }, true)
-  if (viewport.maxHeight === 0) {
+  }, page === 'setup')
+  if (viewport.maxHeight === 0 || viewport.bodyRows < 3) {
     // Never hide a live input surface: one visible row keeps the escape
-    // route honest on extremely short terminals.
-    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns('provider configuration · terminal too small · esc back', viewport.contentColumns))
+    // route honest on extremely short terminals (the three fixed rows - key,
+    // url, add-by-id - cannot fit below a three-row body).
+    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns('provider setup · terminal too small · esc back', viewport.contentColumns))
   }
-  const stateRows = error === undefined ? [] : [createElement(Text, { key: 'error', color: inkColor(getPalette().error), wrap: 'truncate-end' }, truncateColumns(`  ${error}`, viewport.contentColumns))]
-  const rowBudget = Math.max(0, viewport.bodyRows - stateRows.length - 1)
-  const first = selectionWindow(cursor, choices.length, rowBudget)
-  const visible = choices.slice(first, first + rowBudget)
+  if (page === 'discover') {
+    return createElement(ProviderDiscoveryPanel, {
+      target,
+      baseURL,
+      apiKey: keyDraft,
+      configured: models.map(model => model.id),
+      discover,
+      onAdopt: adopted => {
+        const existing = new Set(models.map(model => model.id))
+        const fresh = adopted.filter(model => !existing.has(model.id))
+        if (fresh.length > 0) {
+          setModels([...models, ...fresh.map(model => ({
+            id: model.id,
+            ...model.name === undefined ? {} : { name: model.name },
+            ...model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow },
+            ...model.maxTokens === undefined ? {} : { maxTokens: model.maxTokens },
+          }))])
+          setCursor(models.length)
+        }
+        setPage('setup')
+      },
+      back: () => setPage('setup'),
+    })
+  }
+  const stateRows = error === undefined ? [] : [createElement(Text, { key: 'error', color: inkColor(getPalette().error), wrap: 'truncate-end' }, truncateColumns('  ' + error, viewport.contentColumns))]
+  const keyBullets = '•'.repeat(Math.min([...keyDraft].length, Math.max(1, viewport.contentColumns - 14)))
+  const keyRow = createElement(Text, { key: 'key', color: zone === 'key' ? inkColor(getPalette().brandBright) : inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns(('  ' + (zone === 'key' ? '>' : ' ') + ' key   ' + keyBullets + (zone === 'key' && !busy ? '▏' : '') + (keyDraft === '' ? ' (' + keyStatus + ')' : busy ? ' saving…' : '')).replace(/ +$/u, ''), viewport.contentColumns))
+  const urlRow = createElement(Text, { key: 'url', color: zone === 'url' ? inkColor(getPalette().brandBright) : inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns('  ' + (zone === 'url' ? '>' : ' ') + ' url   ' + (baseURL === '' ? '(official default)' : baseURL) + (zone === 'url' ? '▏' : ''), viewport.contentColumns))
+  const rowBudget = Math.max(0, viewport.bodyRows - stateRows.length - 3)
+  const first = selectionWindow(cursor, models.length + 1, rowBudget)
+  const modelRows: ReactElement[] = []
+  for (let index = first; index < first + Math.max(0, Math.min(models.length + 1 - first, rowBudget)); index += 1) {
+    if (index >= models.length) {
+      modelRows.push(createElement(Text, { key: 'add', color: cursor === index ? inkColor(getPalette().brandBright) : inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns('  ' + (cursor === index ? '>' : ' ') + ' + add by id' + (addDraft === '' ? '' : ' ' + addDraft + '▏'), viewport.contentColumns)))
+      continue
+    }
+    const model = models[index]!
+    const active = index === cursor
+    const context = model.contextWindow === undefined ? '-' : String(model.contextWindow)
+    const output = model.maxTokens === undefined ? '-' : String(model.maxTokens)
+    modelRows.push(createElement(Text, { key: model.id, color: active ? inkColor(getPalette().brandBright) : inkColor(getPalette().success), wrap: 'truncate-end' }, truncateColumns('  ' + (active ? '>' : ' ') + ' [x] ' + displayText(model.id) + '  in:' + (active && field === 'ctx' ? '[' + context + ']' : context) + ' out:' + (active && field === 'out' ? '[' + output + ']' : output), viewport.contentColumns)))
+  }
   return createElement(
     Box,
     { flexDirection: 'column', width: viewport.outerColumns, paddingX: 1, borderStyle: 'round', borderColor: inkColor(getPalette().brand) },
-    createElement(Text, { color: inkColor(getPalette().brand), bold: true, wrap: 'truncate-end' }, truncateColumns(`/model - ${target.displayName} configuration`, viewport.contentColumns)),
+    createElement(Text, { color: inkColor(getPalette().brand), bold: true, wrap: 'truncate-end' }, truncateColumns('/model — configure ' + target.displayName, viewport.contentColumns)),
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
-    createElement(Text, { color: focus === 'url' ? inkColor(getPalette().brandBright) : inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns(`  ${focus === 'url' ? '>' : ' '} endpoint: ${baseURL === '' ? '(adapter default)' : baseURL}`, viewport.contentColumns)),
+    keyRow,
+    urlRow,
     ...stateRows,
-    ...visible.map((choice, index) => {
-      const absolute = first + index
-      const model = models.find(item => item.id === choice.id)
-      const selectedMark = model === undefined ? '[ ]' : '[x]'
-      const context = model?.contextWindow === undefined ? '-' : String(model.contextWindow)
-      const output = model?.maxTokens === undefined ? '-' : String(model.maxTokens)
-      const active = absolute === cursor && focus !== 'url'
-      return createElement(Text, { key: choice.id, color: active ? inkColor(getPalette().brandBright) : model === undefined ? inkColor(getPalette().dim) : inkColor(getPalette().success), wrap: 'truncate-end' }, truncateColumns(`${active ? '>' : ' '} ${selectedMark} ${choice.name}  in:${context} out:${output}`, viewport.contentColumns))
-    }),
+    ...modelRows,
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
-    createElement(Text, { color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns('tab endpoint/models/input/output - space select - arrows model - digits set window - enter save - esc back', viewport.contentColumns)),
+    createElement(Text, { color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns('↑↓ key/url/models · ←→ in/out · space remove/add · digits edit · tab discover · enter save · esc back', viewport.contentColumns)),
   )
 }
 
-/** Write-only masked API-key editor; the secret lives only in this mounted component. */
-function ProviderCredentialPanel({ target, save, done, back }: {
+/**
+ * The discovery stage of the provider setup page: interrogates the endpoint
+ * the drafts describe (typed key wins over the stored credential) and offers
+ * the advertised models as a checkable list. Already-configured ids render
+ * verified but untoggleable; Enter adopts every checked model back into the
+ * setup page's list — selective adoption, never a bulk import.
+ */
+function ProviderDiscoveryPanel({ target, baseURL, apiKey, configured, discover, onAdopt, back }: {
   target: ProviderTargetView
-  save(target: ProviderTargetView, key: string): Promise<void>
-  done(): void
+  baseURL: string
+  apiKey: string
+  configured: readonly string[]
+  discover(target: ProviderTargetView, request: { readonly apiKey?: string; readonly baseURL?: string }, signal?: AbortSignal): Promise<readonly DiscoveredModelView[]>
+  onAdopt(models: readonly DiscoveredModelView[]): void
   back(): void
 }): ReactElement {
   const stdout = useStdout().stdout
   const viewport = panelViewport(stdout?.columns ?? 80, stdout?.rows ?? 30)
-  const [draft, setDraft] = useState('')
-  const [busy, setBusy] = useState(false)
+  const [epoch, setEpoch] = useState(0)
+  const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | undefined>(undefined)
-
-  const submit = (): void => {
-    if (busy) return
-    setBusy(true)
+  const [rows, setRows] = useState<readonly DiscoveredModelView[]>([])
+  const [checked, setChecked] = useState<ReadonlySet<string>>(new Set())
+  const [cursor, setCursor] = useState(0)
+  useEffect(() => {
+    // One probe per epoch (mount and explicit 'f'); leaving the page aborts.
+    // The drafts are captured when the page opened — adopting unmounts this
+    // stage, so re-renders must not re-interrogate the endpoint.
+    const controller = new AbortController()
+    setLoading(true)
     setError(undefined)
-    Promise.resolve().then(() => save(target, draft)).then(() => {
-      setDraft('')
-      done()
+    discover(target, {
+      ...(baseURL.trim() === '' ? {} : { baseURL: baseURL.trim() }),
+      ...(apiKey.trim() === '' ? {} : { apiKey: apiKey.trim() }),
+    }, controller.signal).then(discovered => {
+      if (controller.signal.aborted) return
+      setRows(discovered)
+      const alreadyKnown = new Set(configured)
+      const firstNew = discovered.findIndex(model => !alreadyKnown.has(model.id))
+      setCursor(firstNew < 0 ? 0 : firstNew)
+      setLoading(false)
     }, (reason: unknown) => {
+      if (controller.signal.aborted) return
       setError(singleLineText(reason instanceof Error ? reason.message : String(reason)))
-      setBusy(false)
+      setLoading(false)
     })
-  }
-
+    return () => { controller.abort() }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [epoch])
+  const known = new Set(configured)
   useStableInput((input, key) => {
-    if (busy) return
-    if (key.escape) {
-      setDraft('')
-      back()
+    if (key.escape || input === 'q') { back(); return }
+    if (input === 'f') { setChecked(new Set()); setEpoch(current => current + 1); return }
+    if (loading || error !== undefined) return
+    if (rows.length === 0) return
+    if (key.upArrow) { setCursor(current => current > 0 ? current - 1 : rows.length - 1); return }
+    if (key.downArrow) { setCursor(current => current < rows.length - 1 ? current + 1 : 0); return }
+    const row = rows[cursor]
+    if (row === undefined) return
+    if (input === ' ') {
+      if (known.has(row.id)) return
+      setChecked(current => {
+        const next = new Set(current)
+        if (next.has(row.id)) next.delete(row.id)
+        else next.add(row.id)
+        return next
+      })
       return
     }
     if (key.return) {
-      submit()
-      return
+      onAdopt(rows.filter(model => checked.has(model.id)))
     }
-    if (key.backspace || key.delete) {
-      setError(undefined)
-      setDraft(current => [...current].slice(0, -1).join(''))
-      return
-    }
-    if (key.ctrl && input === 'u') {
-      setError(undefined)
-      setDraft('')
-      return
-    }
-    if (key.ctrl || key.meta || input.length === 0) return
-    const next = draft + stripPasteMarkers(input)
-    if (next.length > 4096) {
-      setError('API key input is too long')
-      return
-    }
-    setError(undefined)
-    setDraft(next)
   }, true)
-
-  const keyBudget = Math.max(1, viewport.contentColumns - 4)
-  const bullets = '•'.repeat(Math.min([...draft].length, keyBudget))
-  if (viewport.maxHeight === 0 || viewport.compact) {
-    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(`API key ${bullets}${busy ? ' saving…' : ' ▏'} · esc back`, viewport.contentColumns))
+  if (viewport.maxHeight === 0) {
+    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns('model discovery · terminal too small · esc back', viewport.contentColumns))
   }
-  const identity = target.displayName === target.provider ? target.provider : `${target.displayName} (${target.provider})`
-  const source = target.credential?.kind === 'facts' && target.credential.configured
-    ? `replaces ${singleLineText(target.credential.source ?? 'stored key')}`
-    : 'new key'
-  const providerRow = createElement(Text, { key: 'provider', wrap: 'truncate-end' }, truncateColumns(`  provider  ${displayText(identity)}`, viewport.contentColumns))
-  const referenceRow = createElement(Text, { key: 'reference', color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns(`  reference ${displayText(target.credentialRef ?? target.suggestedRef)} · ${source}`, viewport.contentColumns))
-  const keyRow = createElement(Text, { key: 'key', color: error === undefined ? inkColor(getPalette().brandBright) : inkColor(getPalette().error), wrap: 'truncate-end' }, truncateColumns(`  key       ${bullets}${busy ? ' saving…' : ' ▏'}`, viewport.contentColumns))
-  const errorRow = error === undefined
-    ? undefined
-    : createElement(Text, { key: 'error', color: inkColor(getPalette().error), wrap: 'truncate-end' }, truncateColumns(`  ${error}`, viewport.contentColumns))
-  const detailRows = errorRow === undefined ? [providerRow, referenceRow] : [providerRow, errorRow]
-  const primaryRow = viewport.bodyRows === 1 && errorRow !== undefined ? errorRow : keyRow
-  const detailBudget = Math.max(0, viewport.bodyRows - 1)
-  const bodyRows = [
-    ...(detailBudget === 0 ? [] : detailRows.slice(-detailBudget)),
-    ...(viewport.bodyRows === 0 ? [] : [primaryRow]),
-  ]
+  const stateRows = loading
+    ? [createElement(Text, { key: 'loading', color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns('  discovering models…', viewport.contentColumns))]
+    : error !== undefined
+      ? [createElement(Text, { key: 'error', color: inkColor(getPalette().error), wrap: 'truncate-end' }, truncateColumns('  ' + error, viewport.contentColumns))]
+      : rows.length === 0
+        ? [createElement(Text, { key: 'empty', color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns('  the endpoint advertised no models; add ids by hand on the setup page', viewport.contentColumns))]
+        : [createElement(Text, { key: 'summary', color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns('  ' + rows.length + ' advertised · ' + rows.filter(model => !known.has(model.id)).length + ' new · ' + checked.size + ' checked', viewport.contentColumns))]
+  // One spare row keeps the panel strictly below maxHeight even with the
+  // gap collapsed (the at-equality regime makes Ink rewrite Static).
+  const rowBudget = Math.max(0, viewport.bodyRows - stateRows.length - 1)
+  const first = selectionWindow(cursor, rows.length, rowBudget)
+  const visible = rows.slice(first, first + rowBudget)
   return createElement(
     Box,
     { flexDirection: 'column', width: viewport.outerColumns, paddingX: 1, borderStyle: 'round', borderColor: inkColor(getPalette().brand) },
-    createElement(Text, { color: inkColor(getPalette().brand), bold: true, wrap: 'truncate-end' }, truncateColumns('/model — add API key', viewport.contentColumns)),
+    createElement(Text, { color: inkColor(getPalette().brand), bold: true, wrap: 'truncate-end' }, truncateColumns('/model — discover ' + target.displayName, viewport.contentColumns)),
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
-    ...bodyRows,
+    ...stateRows,
+    ...visible.map((model, index) => {
+      const absolute = first + index
+      const active = absolute === cursor
+      const added = known.has(model.id)
+      const mark = added ? '✓' : checked.has(model.id) ? '☑' : '☐'
+      const label = (active ? '>' : ' ') + ' ' + mark + ' ' + displayText(model.id) + (model.name === undefined || model.name === model.id ? '' : ' · ' + displayText(model.name))
+      return createElement(Text, { key: model.id, color: added ? inkColor(getPalette().dim) : active ? inkColor(getPalette().brandBright) : inkColor(getPalette().text), wrap: 'truncate-end' }, truncateColumns(label, viewport.contentColumns))
+    }),
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
-    createElement(Text, { color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns('type or paste key · enter save · ctrl+u clear · esc back', viewport.contentColumns)),
+    createElement(Text, { color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns('↑↓ move · space check · enter adopt · f refetch · esc back', viewport.contentColumns)),
   )
 }
 
@@ -4112,7 +4251,7 @@ export function App(props: AppProps): ReactElement {
   /** Nested /model stages; only one owns terminal input at a time. */
   const [providerOpen, setProviderOpen] = useState(false)
   const [providerAction, setProviderAction] = useState<
-    | { kind: 'credential' | 'configure' | 'unset' | 'remove'; target: ProviderTargetView }
+    | { kind: 'configure' | 'unset' | 'remove'; target: ProviderTargetView }
     | { kind: 'login' | 'logout'; target: ProviderTargetView; authorization: ProviderAuthorizationRow }
     | undefined
   >(undefined)
@@ -4617,33 +4756,22 @@ export function App(props: AppProps): ReactElement {
         },
         back: () => setProviderAction(undefined),
       })
-    } else if (providerAction?.kind === 'configure' && props.saveModelProviderConfiguration !== undefined) {
-      modelSurface = createElement(ProviderConfigurationPanel, {
-        target: providerAction.target,
-        catalog: directory?.rows ?? [],
-        save: props.saveModelProviderConfiguration,
-        done: () => {
-          const target = providerAction.target
-          setProviderAction(undefined)
-          setProviderOpen(true)
-          reloadModelSurfaces()
-          notify(`provider configuration saved: ${target.displayName}`)
-        },
-        back: () => setProviderAction(undefined),
-      })
-    } else if (providerAction?.kind === 'credential' && props.saveModelProviderCredential !== undefined) {
-      modelSurface = createElement(ProviderCredentialPanel, {
-        target: providerAction.target,
-        save: props.saveModelProviderCredential,
-        done: () => {
-          const target = providerAction.target
-          setProviderAction(undefined)
-          setProviderOpen(false)
-          reloadModelSurfaces()
-          notify(`API key saved for ${target.displayName}; select a model`)
-        },
-        back: () => setProviderAction(undefined),
-      })
+} else if (providerAction?.kind === 'configure' && props.saveModelProviderConfiguration !== undefined) {
+modelSurface = createElement(ProviderSetupPanel, {
+target: providerAction.target,
+save: props.saveModelProviderConfiguration,
+saveCredential: props.saveModelProviderCredential,
+discover: props.discoverModelProvider
+?? (async () => { throw new Error('model discovery is unavailable in this profile; enter models by hand') }),
+done: result => {
+const target = providerAction.target
+setProviderAction(undefined)
+setProviderOpen(true)
+reloadModelSurfaces()
+          notify(`provider configuration saved: ${target.displayName}` + (result.key ? ' · API key updated' : ''))
+},
+back: () => setProviderAction(undefined),
+})
     } else if (providerAction?.kind === 'unset' && props.unsetModelProviderCredential !== undefined) {
       modelSurface = createElement(ProviderConfirmPanel, {
         target: providerAction.target,
@@ -4678,13 +4806,6 @@ export function App(props: AppProps): ReactElement {
         error: providerError,
         authorizations: authorizationDirectory,
         authorizationError,
-        onCredential: (target: ProviderTargetView) => {
-          if (props.saveModelProviderCredential === undefined) {
-            notify('API key storage is unavailable in this profile', 'warning')
-            return
-          }
-          setProviderAction({ kind: 'credential', target })
-        },
         onConfigure: (target: ProviderTargetView) => {
           if (props.saveModelProviderConfiguration === undefined) {
             notify('provider configuration is unavailable in this profile', 'warning')
@@ -4756,7 +4877,7 @@ export function App(props: AppProps): ReactElement {
           const effortId = row.reasoning?.efforts.length === 1 ? row.reasoning.efforts[0]!.id : undefined
           applyModel(row, effortId)
         },
-        ...(props.loadModelProviders === undefined || props.saveModelProviderCredential === undefined
+        ...(props.loadModelProviders === undefined || props.saveModelProviderConfiguration === undefined
           ? {}
           : { onProviders: () => setProviderOpen(true) }),
         onRetry: reloadModelSurfaces,

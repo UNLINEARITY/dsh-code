@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import {
   ProviderSettingsError,
+  discoverProviderModels,
   deriveCredentialRef,
   loadProviderSettings,
   removeProviderSettings,
@@ -254,6 +255,108 @@ describe('loadProviderSettings', () => {
   it('returns an empty directory when the llm service is unavailable', async () => {
     const directory = await loadProviderSettings(fakeCtx({}))
     expect(directory).toEqual({ rows: [], writable: false, failures: [] })
+  })
+})
+
+describe('discoverProviderModels', () => {
+  const targetOf = (overrides: Partial<ProviderTargetView> = {}): ProviderTargetView => ({
+    provider: 'gateway',
+    displayName: 'Gateway',
+    active: true,
+    settingsNs: 'llm-pi-ai',
+    settingsPath: ['providers', 'gateway'],
+    settingsRevision: 4,
+    configured: true,
+    removable: false,
+    credentialRef: 'GATEWAY_API_KEY',
+    suggestedRef: 'GATEWAY_API_KEY',
+    credential: { kind: 'facts', configured: true, source: 'file', writable: true },
+    configuration: { models: [] },
+    ...overrides,
+  })
+
+  it('sends the draft with the typed key and endpoint - never the route id, so a builtin catalog cannot shadow the gateway', async () => {
+    const discover = vi.fn(async (_ns: string, request: Record<string, unknown>) => {
+      expect(request).toEqual({ apiKey: 'sk-typed', baseURL: 'https://gw.example/v1' })
+      expect('provider' in request).toBe(false)
+      return [
+        { id: 'glm-5.4', name: 'GLM-5.4', contextWindow: 1000000 },
+        { id: '' },
+        { id: 'glm-5.4' },
+        { name: 'nameless' } as { id: string },
+      ]
+    })
+    const rows = await discoverProviderModels(
+      fakeCtx({ llm: { discoverModels: discover } }) as never as Context,
+      targetOf(),
+      { apiKey: 'sk-typed', baseURL: 'https://gw.example/v1' },
+    )
+    expect(discover).toHaveBeenCalledWith('llm-pi-ai', expect.anything())
+    expect(rows).toEqual([{ id: 'glm-5.4', name: 'GLM-5.4', contextWindow: 1000000 }])
+  })
+
+  it('resolves the stored credential once for an endpoint probe when no key is typed', async () => {
+    const discover = vi.fn(async () => [])
+    // The mock mirrors the real provider's shape: resolve is a METHOD reading
+    // instance state, so a bridge that destructures it off the service loses
+    // `this`, the lookup throws, and the probe goes out unauthenticated —
+    // exactly the production regression this test pins.
+    const credentials = {
+      store: { GATEWAY_API_KEY: 'sk-stored' } as Record<string, string>,
+      resolve(this: { store: Record<string, string> }, ref: string) {
+        return Promise.resolve(this.store[ref] === undefined
+          ? undefined
+          : { value: this.store[ref], source: 'file' })
+      },
+    }
+    await discoverProviderModels(
+      fakeCtx({ llm: { discoverModels: discover }, credentials }) as never as Context,
+      targetOf({ configuration: { api: 'openai-responses', models: [] } }),
+      { baseURL: 'https://gw.example/v1' },
+    )
+    expect(discover.mock.calls[0]![1]).toEqual({
+      apiKey: 'sk-stored',
+      baseURL: 'https://gw.example/v1',
+      api: 'openai-responses',
+    })
+  })
+
+  it('probes the endpoint unauthenticated when no key exists anywhere', async () => {
+    const discover = vi.fn(async () => [])
+    const resolve = vi.fn(async () => { throw new Error('locked') })
+    await discoverProviderModels(
+      fakeCtx({ llm: { discoverModels: discover }, credentials: { resolve } }) as never as Context,
+      targetOf(),
+      { baseURL: 'https://gw.example/v1' },
+    )
+    expect(discover.mock.calls[0]![1]).toEqual({ baseURL: 'https://gw.example/v1' })
+  })
+
+  it('asks the route itself only when no endpoint override exists', async () => {
+    const discover = vi.fn(async () => [])
+    await discoverProviderModels(
+      fakeCtx({ llm: { discoverModels: discover } }) as never as Context,
+      targetOf(),
+      {},
+    )
+    expect(discover.mock.calls[0]![1]).toEqual({ provider: 'gateway' })
+  })
+
+  it('forwards the cancellation signal verbatim', async () => {
+    const discover = vi.fn(async () => [])
+    const controller = new AbortController()
+    await discoverProviderModels(fakeCtx({ llm: { discoverModels: discover } }) as never as Context, targetOf(), {}, controller.signal)
+    expect(discover).toHaveBeenCalledWith('llm-pi-ai', expect.anything(), controller.signal)
+  })
+
+  it('rejects unmanaged rows, absent capability, and endpoint failures with bounded errors', async () => {
+    await expect(discoverProviderModels(fakeCtx({ llm: {} }), targetOf({ settingsNs: '' }), {}))
+      .rejects.toThrow(ProviderSettingsError)
+    await expect(discoverProviderModels(fakeCtx({}), targetOf(), {}))
+      .rejects.toThrow('model discovery is unavailable')
+    const failing = vi.fn(async () => { throw new Error('gateway answered 401;\ncheck the API key') })
+    await expect(discoverProviderModels(fakeCtx({ llm: { discoverModels: failing } }) as never as Context, targetOf(), {}))
+      .rejects.toThrow('gateway answered 401; check the API key')
   })
 })
 

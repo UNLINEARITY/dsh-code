@@ -38,6 +38,7 @@ import { internals, type TuiMount } from './internals.ts'
 import { syncModelCapabilities } from './model-capabilities.ts'
 import { buildModelSelection, applyModelSelectionToConfig, loadModelDirectory, modelSelectionLabel, resolveEffectiveSelection, type ModelRow } from './models.ts'
 import {
+  discoverProviderModels,
   loadProviderSettings,
   removeProviderSettings,
   saveProviderCredential,
@@ -1605,6 +1606,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       subscribeModelProviders: listener => subscribeProviderSettings(ctx, listener),
       saveModelProviderCredential: (target, key) => saveProviderCredential(ctx, target, key),
       saveModelProviderConfiguration: (target, configuration) => saveProviderConfiguration(ctx, target, configuration),
+      discoverModelProvider: (target, request, signal) => discoverProviderModels(ctx, target, request, signal),
       unsetModelProviderCredential: target => unsetProviderCredential(ctx, target),
       removeModelProvider: target => removeProviderSettings(ctx, target),
       loadProviderAuthorizations: () => loadProviderAuthorizations(ctx),
