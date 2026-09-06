@@ -642,7 +642,7 @@ export function StatuslinePanel({ enabled, change, close }: {
  * instead of a bare failure notice. Enter applies one level; Esc returns to
  * the model list without applying.
  */
-export function EffortPanel({ row, current, select, back }: {
+export function EffortPanel({ row, current, select, back, onExit }: {
   /** The model row whose advertised levels this stage lists. */
   row: ModelRow
   /** Effective effort currently in force ('' when none), for the ● mark. */
@@ -651,6 +651,8 @@ export function EffortPanel({ row, current, select, back }: {
   select(effortId: string): void
   /** Return to the model list without applying. */
   back(): void
+  /** Leave the whole /model flow (Ctrl+C). */
+  onExit(): void
 }): ReactElement {
   const advertised = row.reasoning?.efforts ?? []
   const empty = row.reasoning === undefined || advertised.length === 0
@@ -678,6 +680,7 @@ export function EffortPanel({ row, current, select, back }: {
   }, [rows.length, cursor])
   useInput((input, key) => {
     if (key.escape || input === 'q') return back()
+    if (key.ctrl && input === 'c') return onExit()
     if (empty) return
     if (input === 'g') {
       setCursor(0)
@@ -906,6 +909,7 @@ export function SubagentPanel({ current, load, pick, inherit, close }: {
       current: current === '' ? undefined : current.split('@')[1],
       select: effortId => pick(effortFor, effortId),
       back: () => setEffortFor(undefined),
+      onExit: close,
     })
   }
   return createElement(ListFrame, {

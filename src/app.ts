@@ -1628,8 +1628,13 @@ function ModelPanel({ directory, error, current, onSelect, onProviders, onRetry,
       onRetry()
       return
     }
-    if (input === 'a' && onProviders !== undefined) {
+    if (key.tab && onProviders !== undefined) {
       onProviders()
+      return
+    }
+    // Ctrl+C leaves the whole model configuration flow from any stage.
+    if (key.ctrl && input === 'c') {
+      onClose()
       return
     }
     if (rows.length === 0) return
@@ -1663,7 +1668,7 @@ function ModelPanel({ directory, error, current, onSelect, onProviders, onRetry,
   })
 
   if (viewport.maxHeight === 0 || viewport.compact) {
-    const providers = onProviders === undefined ? '' : ' · a providers'
+    const providers = onProviders === undefined ? '' : ' · tab providers'
     const state = rows.length === 0
       ? directory === undefined && error === undefined
         ? 'loading…'
@@ -1722,7 +1727,7 @@ function ModelPanel({ directory, error, current, onSelect, onProviders, onRetry,
       )
     }),
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
-    createElement(Text, { dimColor: true, wrap: 'truncate-end' }, dim(truncateColumns(`↑↓ move · pgup/pgdn page · enter select${onProviders === undefined ? '' : ' · a providers'} · r retry · esc/q close`, viewport.contentColumns))),
+    createElement(Text, { dimColor: true, wrap: 'truncate-end' }, dim(truncateColumns(`↑↓ move · pgup/pgdn page · enter select${onProviders === undefined ? '' : ' · tab providers'} · r retry · esc/q close`, viewport.contentColumns))),
   )
 }
 
@@ -1740,7 +1745,7 @@ function providerStateLabel(row: ProviderTargetView): string {
 }
 
 /** The provider-management stage reached from /model with `a`. */
-function ProviderPanel({ directory, error, authorizations, authorizationError, onConfigure, onUnset, onRemove, onLogin, onLogout, onRetry, onBack }: {
+function ProviderPanel({ directory, error, authorizations, authorizationError, onConfigure, onUnset, onRemove, onLogin, onLogout, onRetry, onBack, onExit }: {
   directory: ProviderSettingsDirectory | undefined
   error: string | undefined
   authorizations: ProviderAuthorizationDirectory | undefined
@@ -1752,10 +1757,18 @@ function ProviderPanel({ directory, error, authorizations, authorizationError, o
   onLogout(target: ProviderTargetView, authorization: ProviderAuthorizationRow): void
   onRetry(): void
   onBack(): void
+  /** Leave the whole /model flow (Ctrl+C), not just this stage. */
+  onExit(): void
 }): ReactElement {
   const stdout = useStdout().stdout
   const viewport = panelViewport(stdout?.columns ?? 80, stdout?.rows ?? 30)
   const rows = directory?.rows ?? []
+  // Configured providers float to the top so a long dormant tail never buries
+  // the ones in use; a dim separator labels the boundary between groups.
+  const sorted = [...rows].sort((left, right) =>
+    (left.configured ? 0 : 1) - (right.configured ? 0 : 1))
+  const configuredCount = sorted.filter(row => row.configured).length
+  const hasSeparator = configuredCount > 0 && configuredCount < sorted.length
   const [cursor, setCursor] = useState(0)
   const [actionError, setActionError] = useState<string | undefined>(undefined)
 
@@ -1770,6 +1783,10 @@ function ProviderPanel({ directory, error, authorizations, authorizationError, o
   useStableInput((input, key) => {
     if (key.escape || input === 'q') {
       onBack()
+      return
+    }
+    if (key.ctrl && input === 'c') {
+      onExit()
       return
     }
     if (input === 'r') {
@@ -1798,7 +1815,7 @@ function ProviderPanel({ directory, error, authorizations, authorizationError, o
       setCursor(current => Math.min(rows.length - 1, current + Math.max(1, viewport.bodyRows - 1)))
       return
     }
-    const target = rows[cursor]
+    const target = sorted[cursor]
     if (target === undefined) return
     if (input === 'd') {
       const facts = target.credential
@@ -1874,28 +1891,40 @@ function ProviderPanel({ directory, error, authorizations, authorizationError, o
       ]
   const visibleStateRows = stateRows.slice(0, viewport.bodyRows)
   const rowBudget = Math.max(0, viewport.bodyRows - visibleStateRows.length)
-  const first = selectionWindow(cursor, rows.length, rowBudget)
-  const visible = rowBudget === 0 ? [] : rows.slice(first, first + rowBudget)
+  const displayLength = sorted.length + (hasSeparator ? 1 : 0)
+  const displayCursor = cursor + (hasSeparator && cursor >= configuredCount ? 1 : 0)
+  const first = selectionWindow(displayCursor, displayLength, rowBudget)
+  const itemRows: ReactElement[] = []
+  for (let display = first; display < first + rowBudget && display < displayLength; display += 1) {
+    if (hasSeparator && display === configuredCount) {
+      itemRows.push(createElement(Text, { key: 'separator', color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns('  ── not configured ──', viewport.contentColumns)))
+      continue
+    }
+    const index = hasSeparator && display > configuredCount ? display - 1 : display
+    const row = sorted[index]
+    if (row === undefined) continue
+    const identity = row.displayName === row.provider ? row.provider : row.displayName + ' (' + row.provider + ')'
+    const authorization = authorizationForProvider(authorizations, row.provider)
+    const manualKeyConfigured = row.credential?.kind === 'facts' && row.credential.configured
+    const showAuthorization = !manualKeyConfigured || authorization?.record.configured === true || authorization?.inFlight === true
+    const authLabel = showAuthorization ? ' · ' + providerAuthorizationStatus(authorization) : ''
+    const label = identity + ' · ' + providerStateLabel(row) + authLabel + (row.removable ? ' · custom' : '')
+    // Configured rows render in the intermediate brand blue so the in-use
+    // group reads at a glance; the dormant tail keeps the dim caption gray.
+    const idleColor = row.configured ? inkColor(getPalette().brandMid) : inkColor(getPalette().dim)
+    itemRows.push(createElement(
+      Text,
+      { key: row.provider, color: index === cursor ? inkColor(getPalette().brandBright) : idleColor, wrap: 'truncate-end' },
+      truncateColumns((index === cursor ? '❯ ' : '  ') + displayText(label), viewport.contentColumns),
+    ))
+  }
   return createElement(
     Box,
     { flexDirection: 'column', width: viewport.outerColumns, paddingX: 1, borderStyle: 'round', borderColor: inkColor(getPalette().brand) },
     createElement(Text, { color: inkColor(getPalette().brand), bold: true, wrap: 'truncate-end' }, truncateColumns(`/model — providers${rows.length === 0 ? '' : ` · ${cursor + 1}/${rows.length}`}`, viewport.contentColumns)),
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
     ...visibleStateRows,
-    ...visible.map((row) => {
-      const index = rows.indexOf(row)
-      const identity = row.displayName === row.provider ? row.provider : `${row.displayName} (${row.provider})`
-      const authorization = authorizationForProvider(authorizations, row.provider)
-      const manualKeyConfigured = row.credential?.kind === 'facts' && row.credential.configured
-      const showAuthorization = !manualKeyConfigured || authorization?.record.configured === true || authorization?.inFlight === true
-      const authLabel = showAuthorization ? ` · ${providerAuthorizationStatus(authorization)}` : ''
-      const label = `${identity} · ${providerStateLabel(row)}${authLabel}${row.removable ? ' · custom' : ''}`
-      return createElement(
-        Text,
-        { key: row.provider, color: index === cursor ? inkColor(getPalette().brandBright) : inkColor(getPalette().dim), wrap: 'truncate-end' },
-        truncateColumns(`${index === cursor ? '❯ ' : '  '}${displayText(label)}`, viewport.contentColumns),
-      )
-    }),
+    ...itemRows,
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
     createElement(Text, { color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns('↑↓ move · enter configure · l login · o logout · d remove key · x remove provider · r retry · esc back', viewport.contentColumns)),
   )
@@ -1921,7 +1950,7 @@ interface EffortDonor {
   readonly efforts: Record<string, string | null>
 }
 
-function ProviderSetupPanel({ target, save, saveCredential, discover, effortDonors, done, back }: {
+function ProviderSetupPanel({ target, save, saveCredential, discover, effortDonors, done, back, onExit }: {
   target: ProviderTargetView
   /** Models with declared efforts (settings first, catalog-advertised after) a model row can copy from. */
   effortDonors: readonly EffortDonor[]
@@ -1931,6 +1960,8 @@ function ProviderSetupPanel({ target, save, saveCredential, discover, effortDono
   /** Report a successful save so the surface can notice the key rotation. */
   done(result: { readonly key: boolean }): void
   back(): void
+  /** Leave the whole /model flow (Ctrl+C), not just this page. */
+  onExit(): void
 }): ReactElement {
   const stdout = useStdout().stdout
   const viewport = panelViewport(stdout?.columns ?? 80, stdout?.rows ?? 30)
@@ -2034,6 +2065,11 @@ function ProviderSetupPanel({ target, save, saveCredential, discover, effortDono
 
   useStableInput((input, key) => {
     if (busy) return
+    // Ctrl+C leaves the whole model configuration flow from any stage.
+    if (key.ctrl && input === 'c') {
+      onExit()
+      return
+    }
     // Efforts micro-editor: consumes every key while open (space is the
     // pair separator, so the composer-style remove must not fire here).
     if (effEditing) {
@@ -2136,7 +2172,7 @@ function ProviderSetupPanel({ target, save, saveCredential, discover, effortDono
       setEffEditing(true)
       return
     }
-    if ((input === 'c' || input === 'C') && selected !== undefined) {
+    if ((input === 'c' || input === 'C') && !key.ctrl && selected !== undefined) {
       setError(undefined)
       setDonorCursor(0)
       setPage('donor')
@@ -2206,6 +2242,7 @@ function ProviderSetupPanel({ target, save, saveCredential, discover, effortDono
         setPage('setup')
       },
       back: () => setPage('setup'),
+      onExit,
     })
   }
   const stateRows = error === undefined ? [] : [createElement(Text, { key: 'error', color: inkColor(getPalette().error), wrap: 'truncate-end' }, truncateColumns('  ' + error, viewport.contentColumns))]
@@ -2251,7 +2288,7 @@ function ProviderSetupPanel({ target, save, saveCredential, discover, effortDono
  * verified but untoggleable; Enter adopts every checked model back into the
  * setup page's list — selective adoption, never a bulk import.
  */
-function ProviderDiscoveryPanel({ target, baseURL, apiKey, configured, discover, onAdopt, back }: {
+function ProviderDiscoveryPanel({ target, baseURL, apiKey, configured, discover, onAdopt, back, onExit }: {
   target: ProviderTargetView
   baseURL: string
   apiKey: string
@@ -2259,6 +2296,8 @@ function ProviderDiscoveryPanel({ target, baseURL, apiKey, configured, discover,
   discover(target: ProviderTargetView, request: { readonly apiKey?: string; readonly baseURL?: string }, signal?: AbortSignal): Promise<readonly DiscoveredModelView[]>
   onAdopt(models: readonly DiscoveredModelView[]): void
   back(): void
+  /** Leave the whole /model flow (Ctrl+C). */
+  onExit(): void
 }): ReactElement {
   const stdout = useStdout().stdout
   const viewport = panelViewport(stdout?.columns ?? 80, stdout?.rows ?? 30)
@@ -2296,6 +2335,7 @@ function ProviderDiscoveryPanel({ target, baseURL, apiKey, configured, discover,
   const known = new Set(configured)
   useStableInput((input, key) => {
     if (key.escape || input === 'q') { back(); return }
+    if (key.ctrl && input === 'c') { onExit(); return }
     if (input === 'f') { setChecked(new Set()); setEpoch(current => current + 1); return }
     if (loading || error !== undefined) return
     if (rows.length === 0) return
@@ -4924,6 +4964,7 @@ export function App(props: AppProps): ReactElement {
           notify(`provider configuration saved: ${target.displayName}` + (result.key ? ' · API key updated' : ''))
         },
         back: () => setProviderAction(undefined),
+        onExit: closeModelSurface,
       })
     } else if (providerAction?.kind === 'unset' && props.unsetModelProviderCredential !== undefined) {
       modelSurface = createElement(ProviderConfirmPanel, {
@@ -5003,6 +5044,7 @@ export function App(props: AppProps): ReactElement {
         },
         onRetry: reloadModelSurfaces,
         onBack: () => setProviderOpen(false),
+        onExit: closeModelSurface,
       })
     } else if (effortFor !== undefined) {
       modelSurface = createElement(EffortPanel, {
@@ -5013,6 +5055,7 @@ export function App(props: AppProps): ReactElement {
         current: effortLabel,
         select: (effortId: string) => applyModel(effortFor, effortId),
         back: () => setEffortFor(undefined),
+        onExit: closeModelSurface,
       })
     } else {
       modelSurface = createElement(ModelPanel, {

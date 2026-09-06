@@ -78,8 +78,8 @@ DSH-Code 的重点是让 DSH 的 Agent、模型、工具和持久会话可以直
 
 - 每个会话可以选择独立的 Agent Preset，用于组合工具、提示词、技能、上下文压缩、plan mode 和 subagent 能力
 - 使用 `/mode` 选择 `standard`、`code`、`minimal`、`cordis` 或用户自定义 Preset
-- 使用 `/model` 切换模型，管理 provider、API key、OAuth/设备码登录、endpoint、可用模型和上下文窗口
-- 在 `/model` 的 provider 列表中，Enter 进入统一配置页：同页填写 API key 与 endpoint（留空即官方默认）、编辑已添加模型的上下文/输出窗口，`Tab` 进入发现页拉取端点真实可用模型并勾选添加
+- 使用 `/model` 切换模型，管理 provider、API key、OAuth/设备码登录、endpoint、可用模型和上下文窗口；`Tab` 进入 provider 管理（已配置供应商置顶分组），任意阶段 `Ctrl+C` 直接退出整个 /model 流程
+- 在 provider 列表中，Enter 进入统一配置页：同页填写 API key 与 endpoint（留空即官方默认）、编辑已添加模型的上下文/输出窗口，`Tab` 进入发现页拉取端点真实可用模型并勾选添加
 - 在统一配置页的模型行上按 `e` 编辑推理档位声明（格式 `low:low high:high max:max`，`false` 禁用、留空恢复继承），按 `c` 从其他已声明模型逐字复制——例如 GLM 系列按官方三档写 `low:low high:high max:max`，新模型（如 gpt-6）可一键复制 gpt-5.6 的映射
 - 在 provider 列表中 `l` 发起登录，`o` 经确认后退出登录
 - 自动加载 DSH 中可用的命令与技能；使用 `/help` 查看入口，使用 `/plugin` 检查扩展状态
