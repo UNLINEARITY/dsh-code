@@ -6,7 +6,7 @@ import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { createUserSettingsPersistence } from '../src/settings-file.ts'
+import { createUserSettingsPersistence, writeFileAtomically } from '../src/settings-file.ts'
 
 let dir = ''
 
@@ -83,5 +83,12 @@ describe('createUserSettingsPersistence', () => {
     await persistence.flush()
     await queued
     expect(await readFile(path, 'utf8')).toBe('x')
+  })
+
+  it('writes a file atomically through its own export, leaving no temp behind', async () => {
+    const path = join(dir, 'solo', 'atomic.json')
+    await writeFileAtomically(path, '{"ok":true}\n')
+    expect(await readFile(path, 'utf8')).toBe('{"ok":true}\n')
+    expect((await readdir(join(dir, 'solo'))).filter(name => name.endsWith('.tmp'))).toEqual([])
   })
 })

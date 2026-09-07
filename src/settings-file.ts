@@ -42,6 +42,20 @@ async function withTransientRetry(operation: () => Promise<void>, retries = 5): 
   }
 }
 
+/**
+ * Write one file atomically: create the parent directory, write to a
+ * uniquely named temp file, and rename it into place. A crash midway
+ * can never leave a half-written document behind. Unique temp names
+ * keep concurrent writers (two terminals, two chains in one process)
+ * from sharing one temp path.
+ */
+export async function writeFileAtomically(path: string, text: string): Promise<void> {
+  await mkdir(dirname(path), { recursive: true })
+  const temp = `${path}.${process.pid}.${randomUUID()}.tmp`
+  await withTransientRetry(() => writeFile(temp, text, 'utf8'))
+  await withTransientRetry(() => rename(temp, path))
+}
+
 /** The serialized persistence surface; flush() is handed to the quit sequence. */
 export interface UserSettingsPersistence {
   /**
@@ -60,20 +74,9 @@ export interface UserSettingsPersistence {
  */
 export function createUserSettingsPersistence(): UserSettingsPersistence {
   let chain: Promise<void> = Promise.resolve()
-  // Unique temp names per save, across every instance and process: two
-  // terminals saving the same user file (or two chains inside one
-  // process) must never share one temp path — the first rename would
-  // consume the other writer's temp file (ENOENT) or land its content
-  // under the other's save. The pid names the process; the random UUID
-  // names the save, with no shared counter to collide.
   return {
     save(path: string, text: string): Promise<void> {
-      const write = chain.then(async () => {
-        await mkdir(dirname(path), { recursive: true })
-        const temp = `${path}.${process.pid}.${randomUUID()}.tmp`
-        await withTransientRetry(() => writeFile(temp, text, 'utf8'))
-        await withTransientRetry(() => rename(temp, path))
-      })
+      const write = chain.then(() => writeFileAtomically(path, text))
       // A failed write must not break the chain for later saves.
       chain = write.catch(() => {})
       return write

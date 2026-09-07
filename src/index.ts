@@ -12,7 +12,7 @@
 import { randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { mkdir, rm, stat, writeFile as writeFileAsync } from 'node:fs/promises'
+import { appendFile as appendFileAsync, mkdir, rm, stat, writeFile as writeFileAsync } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { createElement } from 'react'
 import type { Context } from '@deepseek-ai/cordis'
@@ -54,7 +54,7 @@ import type {} from '@deepseek-ai/dsh-settings'
 import { createTranscriptStore, type TranscriptStore } from './store.ts'
 import { createSubagentFeed, type SubagentFeedView } from './subagents.ts'
 import { parseStatuslineItems } from './render/status.ts'
-import { HISTORY_MAX_ENTRIES, parseHistoryFile, serializeHistoryList } from './history.ts'
+import { historyLine, HISTORY_MAX_ENTRIES, needsCompaction, parseHistoryFile, serializeHistoryList } from './history.ts'
 import { watchSkills, type SkillsView } from './skills.ts'
 import { toolArgumentsPreview } from './render/tool-preview.ts'
 import { buildExportMarkdown } from './render/export.ts'
@@ -97,7 +97,7 @@ import {
   type SessionQueryService,
   type SessionRow,
 } from './session-directory.ts'
-import { createUserSettingsPersistence } from './settings-file.ts'
+import { createUserSettingsPersistence, writeFileAtomically } from './settings-file.ts'
 
 /** Stable Cordis plugin name. */
 export const name = 'tui-runner'
@@ -704,22 +704,39 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   // recall is a convenience surface, never a gate.
   const historyPath = join(homedir(), '.dsh', 'dsh-code', 'history.jsonl')
   let inputHistory: readonly string[] = []
+  let historyWriteChain: Promise<void> = Promise.resolve()
   try {
-    inputHistory = parseHistoryFile(readFileSync(historyPath, 'utf8'))
+    const rawHistory = readFileSync(historyPath, 'utf8')
+    inputHistory = parseHistoryFile(rawHistory)
+    // Stale lines (adjacent duplicates, dropped garbage, an over-cap tail)
+    // accumulate in an append-only file; rewrite the canonical form once
+    // per boot. The rewrite rides the same chain, so it lands before any
+    // submission the user types next. An entry another terminal appends
+    // inside the read-to-rename window is dropped — a millisecond-scale
+    // gap at boot that recall tolerates by design.
+    if (needsCompaction(rawHistory)) {
+      historyWriteChain = historyWriteChain
+        .then(() => writeFileAtomically(historyPath, serializeHistoryList(inputHistory)))
+        .catch(() => {})
+    }
   } catch {
     inputHistory = []
   }
-  /** Serialized history writes: each submission rewrites the latest in-memory snapshot. */
-  let historyWriteChain: Promise<void> = Promise.resolve()
+  /**
+   * Serialized history writes: each submission appends one JSON line at the
+   * end of the file, so concurrent terminals add entries after each other
+   * instead of overwriting snapshots they read at their own boot. A
+   * multi-line draft still occupies one physical line (JSON escapes the
+   * newline), and a regular-length line reaches the disk as one positioned
+   * write; an oversized paste may interleave mid-line, which the next
+   * parse simply drops.
+   */
   const recordHistory = (text: string): void => {
     if (text === '') return
     inputHistory = [...inputHistory, text].slice(-HISTORY_MAX_ENTRIES)
-    // Write the whole current list, serialized per submission: the file is
-    // never read back on the submit path, so rapid same-process submissions
-    // cannot lose entries to a read-modify-write race.
     historyWriteChain = historyWriteChain
       .then(() => mkdir(dirname(historyPath), { recursive: true }))
-      .then(() => writeFileAsync(historyPath, serializeHistoryList(inputHistory), 'utf8'))
+      .then(() => appendFileAsync(historyPath, historyLine(text), 'utf8'))
       .catch((writeError: unknown) => {
         bridge.notify('history save failed: ' + (writeError instanceof Error ? writeError.message : String(writeError)), 'error')
       })

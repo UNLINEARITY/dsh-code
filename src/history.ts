@@ -42,16 +42,25 @@ export function parseHistoryFile(raw: string, max = HISTORY_MAX_ENTRIES): readon
 }
 
 /**
- * Append one entry to the persistent file content: JSON line, capped to the
- * newest `max` entries with a trailing newline.
- * @param current - existing file content.
- * @param text - submission to persist.
- * @param max - entry cap.
- * @returns the new file content.
+ * The append unit for the persistent file: one JSON line, so a multi-line
+ * draft still occupies exactly one physical line. Each submission appends
+ * this unit at the end of the file, so concurrent terminals add entries
+ * after each other. Node chunks one append at 512 KiB: a pasted entry
+ * beyond that size could interleave mid-line with another writer's
+ * chunks, and the damaged line then drops out at the next parse —
+ * recall tolerates the loss by design.
  */
-export function appendHistoryContent(current: string, text: string, max = HISTORY_MAX_ENTRIES): string {
-  const entries = [...parseHistoryFile(current, max), text].slice(-max)
-  return entries.map(serializeHistoryEntry).join('\n') + '\n'
+export function historyLine(text: string): string {
+  return serializeHistoryEntry(text) + '\n'
+}
+
+/**
+ * Whether the file on disk differs from its canonical form (deduped and
+ * capped). True means stale lines have accumulated and the next boot
+ * should rewrite it once, atomically.
+ */
+export function needsCompaction(raw: string, max = HISTORY_MAX_ENTRIES): boolean {
+  return serializeHistoryList(parseHistoryFile(raw, max)) !== raw
 }
 
 /**
@@ -70,10 +79,10 @@ export function recordLocalEntry(local: readonly string[], text: string, max = H
 }
 
 /**
- * Serialize a capped entry list to the history file format (one JSON line per
- * entry, trailing newline). The runner writes the in-memory list as the whole
- * file, so rapid same-process submissions cannot lose entries to a
- * read-modify-write race (the file is never read back before writing).
+ * Serialize a capped entry list to the history file format (one JSON line
+ * per entry, trailing newline). The boot-time compaction writes this
+ * canonical form once when stale lines have accumulated; submissions
+ * themselves only ever append a single line.
  * @param entries - the entries to persist, oldest first.
  * @returns the file content, '' for an empty list.
  */

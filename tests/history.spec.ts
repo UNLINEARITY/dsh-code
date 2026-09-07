@@ -1,10 +1,15 @@
 /** Global input recall: persistence, dedup, and Codex shell-style navigation. */
 
+import { appendFile, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { writeFileAtomically } from '../src/settings-file.ts'
 import {
-  appendHistoryContent,
   beginRecall,
+  historyLine,
   HISTORY_MAX_ENTRIES,
+  needsCompaction,
   parseHistoryFile,
   recallEntries,
   recallNewer,
@@ -29,10 +34,26 @@ describe('history persistence', () => {
     expect(parseHistoryFile('"a"\n"a"\n"a"\n')).toEqual(['a'])
   })
 
-  it('appends one JSON line and caps the file content', () => {
-    expect(appendHistoryContent('', 'hi')).toBe('"hi"\n')
-    expect(appendHistoryContent('"a"\n', 'b')).toBe('"a"\n"b"\n')
-    expect(appendHistoryContent('"1"\n"2"\n', '3', 2)).toBe('"2"\n"3"\n')
+  it('encodes one submission as one physical line, even for multi-line drafts', () => {
+    expect(historyLine('hi')).toBe('"hi"\n')
+    expect(historyLine('line1\nline2')).toBe('"line1\\nline2"\n')
+    // The encoded form contains no physical newline except the trailing one.
+    expect(historyLine('line1\nline2').slice(0, -1).includes('\n')).toBe(false)
+  })
+
+  it('flags files that drifted from the canonical capped form', () => {
+    expect(needsCompaction('"a"\n"b"\n')).toBe(false)
+    expect(needsCompaction('"a"\n"a"\n')).toBe(true)
+    expect(needsCompaction('"a"\nbogus\n"b"\n')).toBe(true)
+    expect(needsCompaction('"1"\n"2"\n"3"\n', 2)).toBe(true)
+    expect(needsCompaction('"a"\n"b')).toBe(true)
+    expect(needsCompaction('')).toBe(false)
+    expect(needsCompaction('"a"\n"b"\n"a"\n')).toBe(false)
+  })
+
+  it('tolerates a crash-truncated trailing line', () => {
+    expect(parseHistoryFile('"a"\n"b')).toEqual(['a'])
+    expect(parseHistoryFile('"a"\n{"partial')).toEqual(['a'])
   })
 
   it('caps both persistent and local pools at HISTORY_MAX_ENTRIES (100)', () => {
@@ -100,6 +121,7 @@ describe('recall navigation', () => {
     expect(past.state.lastRecalled).toBeNull()
   })
 
+
   it('does not move on an empty recall space or outside browsing', () => {
     const empty = beginRecall([], '')
     expect(recallOlder(empty, '').entry).toBeUndefined()
@@ -107,4 +129,55 @@ describe('recall navigation', () => {
     const fresh = beginRecall(['only'], '')
     expect(recallNewer(fresh).entry).toBeUndefined()
   })
+})
+
+describe('concurrent history writers', () => {
+  it('appends from two independent chains lose no entries and keep every line intact', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'dsh-history-'))
+    try {
+      const path = join(dir, 'history.jsonl')
+      // Two terminals: separate write chains, each appending its own
+      // entries to the same file without ever rewriting it.
+      const chainFor = (own: string[]) => {
+        let chain: Promise<void> = Promise.resolve()
+        for (const entry of own) {
+          chain = chain.then(() => appendFile(path, historyLine(entry), 'utf8'))
+        }
+        return chain
+      }
+      const aEntries = Array.from({ length: 20 }, (_, index) => `a${index}`)
+      const bEntries = Array.from({ length: 20 }, (_, index) => `b${index}`)
+      await Promise.all([chainFor(aEntries), chainFor(bEntries)])
+      const parsed = parseHistoryFile(await readFile(path, 'utf8'))
+      // Every entry from both writers survived; each writer keeps its own
+      // order (each entry is one positioned write at this size).
+      for (const entry of [...aEntries, ...bEntries]) {
+        expect(parsed).toContain(entry)
+      }
+      const aOrder = parsed.filter(entry => entry.startsWith('a'))
+      expect(aOrder).toEqual(aEntries)
+      const bOrder = parsed.filter(entry => entry.startsWith('b'))
+      expect(bOrder).toEqual(bEntries)
+    } finally {
+      await rm(dir, { recursive: true, force: true }).catch(() => {})
+    }
+  }, 30_000)
+
+  it('a compaction rewrite keeps the canonical entries', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'dsh-history2-'))
+    try {
+      const path = join(dir, 'history.jsonl')
+      // Adjacent duplicates and garbage accumulate in an append-only file.
+      await writeFile(path, '"a"\n"a"\nbogus\n"b"\n"c"\n"c"\n', 'utf8')
+      const raw = await readFile(path, 'utf8')
+      expect(needsCompaction(raw)).toBe(true)
+      // The production compaction writes through the shared atomic helper.
+      const canonical = serializeHistoryList(parseHistoryFile(raw))
+      await writeFileAtomically(path, canonical)
+      expect(await readFile(path, 'utf8')).toBe(canonical)
+      expect(parseHistoryFile(await readFile(path, 'utf8'))).toEqual(['a', 'b', 'c'])
+    } finally {
+      await rm(dir, { recursive: true, force: true }).catch(() => {})
+    }
+  }, 30_000)
 })
