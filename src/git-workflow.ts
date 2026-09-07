@@ -1,4 +1,9 @@
-/** Read-only Git inspection used by /diff and /review. */
+/**
+ * Read-only Git inspection used by /diff and /review. Every diff
+ * invocation carries --no-ext-diff and --no-textconv, so configured
+ * external diff drivers and text converters can never execute as a
+ * side effect of reading a diff.
+ */
 
 import { execFile } from 'node:child_process'
 
@@ -36,12 +41,12 @@ export function parseGitDiffFiles(text: string): readonly GitDiffFile[] {
 /** Parse the intentionally small, option-safe /diff argument vocabulary. */
 export function parseGitDiffSpec(argument: string): GitDiffSpec {
   const value = argument.trim()
-  if (value === '') return { label: 'working tree vs HEAD', args: ['diff', '--no-ext-diff', '--unified=3', 'HEAD', '--'] }
+  if (value === '') return { label: 'working tree vs HEAD', args: ['diff', '--no-ext-diff', '--no-textconv', '--unified=3', 'HEAD', '--'] }
   if (value === '--staged' || value === '--cached') {
-    return { label: 'staged changes', args: ['diff', '--no-ext-diff', '--unified=3', '--cached', '--'] }
+    return { label: 'staged changes', args: ['diff', '--no-ext-diff', '--no-textconv', '--unified=3', '--cached', '--'] }
   }
   if (value.startsWith('-') || /\s/u.test(value)) throw new Error('usage: /diff [--staged|git-ref]')
-  return { label: `changes since ${value}`, args: ['diff', '--no-ext-diff', '--unified=3', value, '--'] }
+  return { label: `changes since ${value}`, args: ['diff', '--no-ext-diff', '--no-textconv', '--unified=3', value, '--'] }
 }
 
 function executeGit(cwd: string, args: readonly string[], signal?: AbortSignal): Promise<string> {
@@ -56,8 +61,18 @@ function executeGit(cwd: string, args: readonly string[], signal?: AbortSignal):
   })
 }
 
+/** Arguments for the unstaged-only fallback below. */
+const UNSTAGED_DIFF_ARGS = ['diff', '--no-ext-diff', '--no-textconv', '--unified=3', '--'] as const
+
+/** Whether the repository has at least one commit (a HEAD revision). */
+function hasHeadRevision(cwd: string, signal?: AbortSignal): Promise<boolean> {
+  return executeGit(cwd, ['rev-parse', '--verify', '--quiet', 'HEAD'], signal)
+    .then(() => true)
+    .catch(() => false)
+}
+
 /**
- * Load one complete textual diff without invoking external diff drivers.
+ * Load one complete textual diff without invoking external programs.
  * @param signal - aborted by the caller on session switches/quit, killing the
  * git subprocess instead of letting a stale repository's diff land later.
  */
@@ -67,11 +82,15 @@ export async function loadGitDiff(cwd: string, argument: string, signal?: AbortS
     const text = await executeGit(cwd, spec.args, signal)
     return { title: `git diff - ${spec.label}`, files: parseGitDiffFiles(text) }
   } catch (error: unknown) {
-    // An unborn repository has no HEAD. Preserve useful unstaged output for
-    // the default form while still surfacing all other Git failures.
-    if (argument.trim() !== '') throw error
-    const text = await executeGit(cwd, ['diff', '--no-ext-diff', '--unified=3', '--'], signal)
-    return { title: 'git diff - working tree', files: parseGitDiffFiles(text) }
+    // Only a repository without commits (no HEAD to diff against) may
+    // narrow the default form to the unstaged fallback. Every other
+    // failure — output past the buffer limit, a corrupt index, a missing
+    // repository, or the caller aborting between the two calls — must
+    // surface, not silently shrink what /diff and /review end up seeing
+    // (an aborted probe would otherwise masquerade as an unborn repo).
+    if (argument.trim() !== '' || signal?.aborted === true || (await hasHeadRevision(cwd, signal))) throw error
+    const text = await executeGit(cwd, UNSTAGED_DIFF_ARGS, signal)
+    return { title: 'git diff - working tree (no commits yet)', files: parseGitDiffFiles(text) }
   }
 }
 

@@ -16,8 +16,31 @@
  * @module @deepseek-ai/dsh-code/settings-file
  */
 
+import { randomUUID } from 'node:crypto'
 import { mkdir, rename, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
+
+/**
+ * Run one file operation with a bounded retry: one initial try plus at
+ * most `retries` more. Creating or replacing a file can fail transiently
+ * with EPERM/EACCES while an antivirus scanner or search indexer holds
+ * it — the standard graceful-fs remedy, not a workaround for a
+ * persistent permission problem. A save that still fails leaves its
+ * uniquely named temp file behind, so repeated crashed saves accumulate
+ * distinct leftovers rather than corrupting a shared one.
+ */
+async function withTransientRetry(operation: () => Promise<void>, retries = 5): Promise<void> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await operation()
+      return
+    } catch (error: unknown) {
+      const code = (error as NodeJS.ErrnoException).code
+      if (attempt >= retries || (code !== 'EPERM' && code !== 'EACCES')) throw error
+      await new Promise(resolve => setTimeout(resolve, 30 * (attempt + 1)))
+    }
+  }
+}
 
 /** The serialized persistence surface; flush() is handed to the quit sequence. */
 export interface UserSettingsPersistence {
@@ -37,13 +60,19 @@ export interface UserSettingsPersistence {
  */
 export function createUserSettingsPersistence(): UserSettingsPersistence {
   let chain: Promise<void> = Promise.resolve()
+  // Unique temp names per save, across every instance and process: two
+  // terminals saving the same user file (or two chains inside one
+  // process) must never share one temp path — the first rename would
+  // consume the other writer's temp file (ENOENT) or land its content
+  // under the other's save. The pid names the process; the random UUID
+  // names the save, with no shared counter to collide.
   return {
     save(path: string, text: string): Promise<void> {
       const write = chain.then(async () => {
         await mkdir(dirname(path), { recursive: true })
-        const temp = `${path}.tmp`
-        await writeFile(temp, text, 'utf8')
-        await rename(temp, path)
+        const temp = `${path}.${process.pid}.${randomUUID()}.tmp`
+        await withTransientRetry(() => writeFile(temp, text, 'utf8'))
+        await withTransientRetry(() => rename(temp, path))
       })
       // A failed write must not break the chain for later saves.
       chain = write.catch(() => {})

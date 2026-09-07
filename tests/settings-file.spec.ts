@@ -30,6 +30,30 @@ describe('createUserSettingsPersistence', () => {
     expect(await readFile(path, 'utf8')).toBe('{"items":["b"]}')
   })
 
+  it('keeps concurrent saves from independent instances off one temp file', async () => {
+    const path = join(dir, 'race.json')
+    const a = createUserSettingsPersistence()
+    const b = createUserSettingsPersistence()
+    const snapshotA = JSON.stringify({ who: 'a', pad: 'a'.repeat(64) })
+    const snapshotB = JSON.stringify({ who: 'b', pad: 'b'.repeat(64) })
+    const saves = await Promise.allSettled([
+      a.save(path, snapshotA),
+      b.save(path, snapshotB),
+    ])
+    // Two terminals writing one user file: both saves must settle, and
+    // the file must hold one of the two complete snapshots — never a
+    // consumed temp file (ENOENT) or a mixed document.
+    // Statuses carry rejection reasons so a rare transient failure
+    // reports its errno instead of a bare fulfilled/rejected diff.
+    const statuses = saves.map(result => result.status === 'fulfilled'
+      ? 'fulfilled'
+      : `rejected: ${result.reason instanceof Error ? String(result.reason.code ?? result.reason.message) : String(result.reason)}`)
+    expect(statuses).toEqual(['fulfilled', 'fulfilled'])
+    const content = await readFile(path, 'utf8')
+    expect([snapshotA, snapshotB]).toContain(content)
+    expect((await readdir(dir)).filter(name => name.endsWith('.tmp'))).toEqual([])
+  })
+
   it('creates missing parent directories and leaves no temp file behind', async () => {
     const path = join(dir, 'nested', 'deeper', 'theme.json')
     const persistence = createUserSettingsPersistence()

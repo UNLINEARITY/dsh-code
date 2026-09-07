@@ -1491,11 +1491,13 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   }
 
   const reviewChanges = (argument: string): void => {
+    // Works from a bare launch too: with no session yet the read-only
+    // choice goes to pendingPermission (materialized when the first
+    // session composes) and the review prompt queues behind that
+    // creation exactly like a typed first submission. The identity guard
+    // below still aborts a load that outlives a mid-flight switch —
+    // including one landing on an undefined agent.
     const currentAgent = agent
-    if (currentAgent === undefined) {
-      bridge.notify('no session yet - submit a message to start', 'warning')
-      return
-    }
     // The diff loads from the CALLING session's cwd; capture that
     // workspace and this turn's identity so a switch mid-load can neither
     // flip the new session read-only nor send the old workspace's review
