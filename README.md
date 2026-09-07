@@ -25,21 +25,23 @@ DeepSeek Harness 将模型、工具、存储、策略和界面作为插件，通
 
 ## 二、快速开始
 
-需要 Node `^22.19 || >=24` 和预览版 `dsh` CLI（当前版本线：`@deepseek-ai/dsh@0.1.1-rc.2`）。未配置模型时仍可进入 TUI、查看会话和使用非模型功能；在 `/model` 中按 `a` 可管理 API key、OAuth 与设备码登录。
+需要 Node `^22.19 || >=24` 和预览版 `dsh` CLI（当前版本线：`@deepseek-ai/dsh@0.1.2-rc.1`）。未配置模型时仍可进入 TUI、查看会话和使用非模型功能；在 `/model` 中按 Tab 进入供应商管理，配置 API key、OAuth 与设备码登录。
 
 ### 1. 安装与更新
 
 初次安装和更新使用同一组指令：
 
 ```sh
-npm install -g @deepseek-ai/dsh@0.1.1-rc.2 dsh-code@1.0.3
+npm install -g @deepseek-ai/dsh@0.1.2-rc.1 dsh-code@1.0.5
 npm install -g pnpm
-dsh plugin --profile cli add dsh-code@1.0.3
+dsh plugin --profile cli add dsh-code@1.0.5
 ```
 
-> 提示：pnpm 会忽略发布不足 24 小时的包，因此发布首日请使用精确版本 `dsh-code@1.0.3`；24 小时后可省略版本号。npm 安装不受此限制。
+> 提示：pnpm 会忽略发布不足 24 小时的包，因此发布首日请使用精确版本 `dsh-code@1.0.5`；24 小时后可省略版本号。npm 安装不受此限制。
 >
-> 版本对齐：dsh-code 1.0.3 面向 dsh `0.1.1-rc.2` 构建，全部 Harness 依赖均精确锁定为 `0.1.1-rc.2`。请保持全局 dsh 与 dsh-code 同步，避免宿主与插件混用候选版本。rc.2 已删除旧的 DeepSeek 配置项 `maxRequestImageBytes`。
+> 版本对齐：dsh-code 1.0.5 面向 dsh `0.1.2-rc.1` 构建，全部 Harness 依赖均精确锁定为 `0.1.2-rc.1`。已安装的用户运行 `deepseek update --apply` 即可按同一条版本线一起升级全局宿主与 cli profile 中的插件，本地开发挂载（`link:`）不受影响。
+>
+> 升级说明：上游从本版本起将内置 `code` 预设更名为 `ptc`；旧会话与旧参数中记录的 `code` 会自动映射到 `ptc`，无需手动迁移。
 
 ### 2. 启动指令
 
@@ -121,7 +123,7 @@ DSH-Code 的重点是让 DSH 的 Agent、模型、工具和持久会话可以直
 
 ```sh
 dsh --profile cli                    # 新建 standard 会话
-dsh --profile cli --mode code        # 使用指定 Agent Preset 启动
+dsh --profile cli --mode ptc         # 使用指定 Agent Preset 启动（standard/minimal/cordis/ptc）
 dsh --profile cli --continue         # 恢复当前目录最新会话
 dsh --profile cli --resume abc123    # 按 id 或唯一前缀恢复会话
 dsh --profile cli --session my-id    # 使用指定 id 新建会话
@@ -158,7 +160,7 @@ dsh --profile cli --session my-id    # 使用指定 id 新建会话
 | 命令 | 用途 |
 | --- | --- |
 | `/diff [--staged\|ref]` | 按文件查看工作区、暂存区或指定 ref 的 Git diff |
-| `/review [--staged\|ref]` | 使用只读权限审查 Git 改动 |
+| `/review [--staged\|ref]` | 使用只读权限审查 Git 改动；新会话中可直接使用，审查提示词作为首条消息建立会话 |
 | `/todos` | 查看当前会话的完整 todo 列表 |
 | `/agents` | 查看当前会话创建的 subagent 会话 |
 | `/jobs` | 查看后台任务及其运行状态 |
