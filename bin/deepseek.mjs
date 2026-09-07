@@ -4,7 +4,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { homedir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const packageRequire = createRequire(import.meta.url)
@@ -47,6 +47,81 @@ export function profileHasDshCode(profileDir = cliProfileDir(), fileExists = exi
   } catch {
     return false
   }
+}
+
+/** The dsh-code dependency the cli profile declares (e.g. '1.0.5' or 'link:C:/repo'). */
+export function profileDependencySpec(profileDir = cliProfileDir(), fileExists = existsSync, readFile = readFileSync) {
+  const manifest = join(profileDir, 'package.json')
+  if (!fileExists(manifest)) return undefined
+  try {
+    const raw = JSON.parse(readFile(manifest, 'utf8'))
+    const spec = raw?.dependencies?.['dsh-code']
+    return typeof spec === 'string' ? spec : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** The dsh-code version the cli profile actually resolves and boots. */
+export function profileMountedVersion(profileDir = cliProfileDir(), fileExists = existsSync, readFile = readFileSync) {
+  const manifest = join(profileDir, 'node_modules', 'dsh-code', 'package.json')
+  if (!fileExists(manifest)) return undefined
+  try {
+    return JSON.parse(readFile(manifest, 'utf8'))?.version ?? undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** The harness release line a dsh-code release expects, read from its peers. */
+export function harnessLineFromPeers(peers) {
+  if (typeof peers !== 'object' || peers === null) return undefined
+  const anchor = peers['@deepseek-ai/dsh-session']
+  if (typeof anchor === 'string' && anchor !== '') return anchor
+  for (const [name, spec] of Object.entries(peers)) {
+    if (name.startsWith('@deepseek-ai/dsh-') && typeof spec === 'string' && spec !== '') return spec
+  }
+  return undefined
+}
+
+/**
+ * Decide what `update --apply` installs. The global DSH launcher is pinned
+ * to the harness line the target dsh-code release declares in its peers,
+ * so the launcher can never move ahead of the plugin it must boot. A
+ * profile that mounts a local checkout (link:/file:) keeps its mount.
+ */
+export function updatePlan({ latestCode, peers, profileSpec }) {
+  const line = harnessLineFromPeers(peers)
+  return {
+    dshSpec: line === undefined ? '@deepseek-ai/dsh@latest' : `@deepseek-ai/dsh@${line}`,
+    lineLocked: line !== undefined,
+    codeSpec: `dsh-code@${latestCode}`,
+    profileStep: !(typeof profileSpec === 'string' && /^(link|file):/iu.test(profileSpec)),
+  }
+}
+
+/** Run wrapper-owned child steps in order, stopping at the first failure. */
+export function runSequence(steps, spawnProcess = spawn) {
+  return new Promise(resolve => {
+    const run = index => {
+      const step = steps[index]
+      if (step === undefined) {
+        resolve(0)
+        return
+      }
+      const needsShell = process.platform === 'win32' && /\.(cmd|bat)$/iu.test(step.command)
+      const child = spawnProcess(step.command, step.args, { stdio: 'inherit', ...(needsShell ? { shell: true } : {}) })
+      child.once('error', error => {
+        console.error(`dsh-code: ${step.label} failed: ${error.message}`)
+        resolve(1)
+      })
+      child.once('exit', (code, signal) => {
+        if (code === 0) run(index + 1)
+        else resolve(code ?? 1)
+      })
+    }
+    run(0)
+  })
 }
 
 /** Npm global-prefix roots that may contain DSH when this launcher is globally linked to a checkout. */
@@ -133,6 +208,144 @@ function launchChild(command, args) {
   return child
 }
 
+/**
+ * How to invoke npm. The JavaScript entrypoint is preferred: running it
+ * with this process's node avoids the Windows .cmd shim, whose shell
+ * workaround draws a Node deprecation warning on every call.
+ */
+export function npmInvocation({
+  fileExists = existsSync,
+  roots = globalDshRoots(),
+  resolvePackage = packageRequire.resolve,
+} = {}) {
+  const besideNode = join(dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js')
+  if (fileExists(besideNode)) return { command: process.execPath, args: [besideNode] }
+  for (const root of roots) {
+    try {
+      const cli = resolvePackage('npm/bin/npm-cli.js', { paths: [root] })
+      return { command: process.execPath, args: [cli] }
+    } catch {
+      // The next configured global prefix may own npm instead.
+    }
+  }
+  return { command: process.platform === 'win32' ? 'npm.cmd' : 'npm', args: [] }
+}
+
+/**
+ * Read one `npm view` field as JSON, or undefined when the query fails.
+ * The subject arrives as argument parts: without a shell, a space inside
+ * one argument would reach npm as a single selector and fail.
+ */
+function viewJson(subjectParts, spawnCommand = spawnSync, invocation = npmInvocation()) {
+  const needsShell = process.platform === 'win32' && /\.(cmd|bat)$/iu.test(invocation.command)
+  const result = spawnCommand(invocation.command, [...invocation.args, 'view', ...subjectParts, '--json'], { encoding: 'utf8', windowsHide: true, ...(needsShell ? { shell: true } : {}) })
+  if (result.status !== 0) return undefined
+  try {
+    return JSON.parse(result.stdout)
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * The version of @deepseek-ai/dsh this launcher would boot, when present.
+ * Probes the same surfaces rawDshCommand resolves: the adjacent global
+ * install first, then every configured npm global prefix.
+ */
+function installedDshVersion({
+  platform = process.platform,
+  moduleUrl = import.meta.url,
+  fileExists = existsSync,
+  roots = globalDshRoots(),
+  resolvePackage = packageRequire.resolve,
+} = {}) {
+  const readVersion = path => {
+    try {
+      return JSON.parse(readFileSync(path, 'utf8')).version
+    } catch {
+      return undefined
+    }
+  }
+  if (platform === 'win32') {
+    const adjacent = fileUrlToWindowsPath(new URL('../../@deepseek-ai/dsh/package.json', moduleUrl))
+    if (fileExists(adjacent)) return readVersion(adjacent)
+  } else {
+    try {
+      const adjacent = fileURLToPath(new URL('../../@deepseek-ai/dsh/package.json', moduleUrl))
+      if (fileExists(adjacent)) return readVersion(adjacent)
+    } catch {
+      // A non-file URL or an unreadable sibling falls through to the roots.
+    }
+  }
+  for (const root of roots) {
+    try {
+      return readVersion(resolvePackage('@deepseek-ai/dsh/package.json', { paths: [root] }))
+    } catch {
+      // The next configured global prefix may own DSH instead.
+    }
+  }
+  return undefined
+}
+
+/** Show what is installed, what is latest, and what the cli profile boots. */
+function printUpdateStatus() {
+  const codeLatest = viewJson(['dsh-code', 'version'])
+  const dshLatest = viewJson(['@deepseek-ai/dsh', 'version'])
+  const dshInstalled = installedDshVersion()
+  const spec = profileDependencySpec()
+  const mounted = profileMountedVersion()
+  console.log(`dsh-code: ${packageVersion} (this launcher), latest ${codeLatest ?? 'unknown'}`)
+  console.log(`@deepseek-ai/dsh: ${dshInstalled ?? 'not found'} (global), latest ${dshLatest ?? 'unknown'}`)
+  console.log(`cli profile: ${mounted !== undefined ? `dsh-code ${mounted}` : spec ?? 'not mounted'}`)
+  console.log('Run `deepseek update --apply` to upgrade the global packages and the cli profile together.')
+}
+
+/**
+ * Upgrade the global launcher and the cli profile plugin together. The
+ * global install is pinned to the harness line the new dsh-code release
+ * declares, the profile follows through `dsh plugin add` with the same
+ * pinned spec, and the mounted version is verified at the end.
+ */
+async function applyUpdate({
+  view = viewJson,
+  resolveCommand = rawDshCommand,
+  spawnProcess = spawn,
+} = {}) {
+  const npm = npmInvocation()
+  const latestCode = view(['dsh-code', 'version'], undefined, npm)
+  if (latestCode === undefined) {
+    console.error('dsh-code: could not read the latest dsh-code version from npm')
+    process.exitCode = 1
+    return
+  }
+  const peers = view([`dsh-code@${latestCode}`, 'peerDependencies'], undefined, npm)
+  const plan = updatePlan({ latestCode, peers, profileSpec: profileDependencySpec() })
+  if (!plan.lineLocked) {
+    console.log('dsh-code: could not read the compatible harness line; installing @deepseek-ai/dsh@latest')
+  }
+  const steps = [{ command: npm.command, args: [...npm.args, 'install', '-g', plan.dshSpec, plan.codeSpec], label: 'npm install' }]
+  if (plan.profileStep) {
+    const command = resolveCommand(['plugin', '--profile', 'cli', 'add', plan.codeSpec])
+    if (command === undefined) {
+      console.error('dsh-code: could not resolve the dsh command for the profile update')
+      process.exitCode = 1
+      return
+    }
+    steps.push({ command: command.command, args: command.args, label: 'dsh plugin add' })
+  } else {
+    console.log('cli profile mounts a local checkout; leaving the profile untouched')
+  }
+  const code = await runSequence(steps, spawnProcess)
+  const mounted = profileMountedVersion()
+  if (mounted !== undefined) console.log(`cli profile now mounts dsh-code ${mounted}`)
+  if (code === 0 && plan.profileStep && mounted !== latestCode) {
+    console.error(`dsh-code: the cli profile still mounts ${mounted ?? 'nothing'}; run: dsh plugin --profile cli add ${plan.codeSpec}`)
+    process.exitCode = 1
+    return
+  }
+  process.exitCode = code
+}
+
 /** Run one wrapper-owned operational command. */
 export function launchOperation(args = process.argv.slice(2)) {
   const operation = operationName(args)
@@ -161,17 +374,14 @@ export function launchOperation(args = process.argv.slice(2)) {
     }
     return launchChild(command.command, command.args)
   }
-  if (args.includes('--apply')) {
-    return launchChild(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['install', '-g', '@deepseek-ai/dsh', 'dsh-code'])
+  if (operation === 'update') {
+    if (args.includes('--apply')) {
+      void applyUpdate()
+      return true
+    }
+    printUpdateStatus()
+    return true
   }
-  const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm'
-  const needsShell = process.platform === 'win32' && /\.(cmd|bat)$/iu.test(npm)
-  for (const name of ['@deepseek-ai/dsh', 'dsh-code']) {
-    const result = spawnSync(npm, ['view', name, 'version'], { encoding: 'utf8', windowsHide: true, ...(needsShell ? { shell: true } : {}) })
-    console.log(`${name}: ${result.status === 0 ? String(result.stdout).trim() : 'version check failed'}`)
-  }
-  console.log('Run `deepseek update --apply` to install the latest versions.')
-  return true
 }
 
 /** Launch the installed DSH CLI while preserving its exit status and stdio. */

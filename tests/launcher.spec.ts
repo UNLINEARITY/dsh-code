@@ -1,13 +1,20 @@
 import { EventEmitter } from 'node:events'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
+  harnessLineFromPeers,
+  npmInvocation,
   dshCommand,
   completionScript,
   operationName,
   launchDsh,
   profileArgs,
+  profileDependencySpec,
   profileHasDshCode,
+  profileMountedVersion,
+  runSequence,
   setupBundle,
+  updatePlan,
 } from '../bin/deepseek.mjs'
 
 describe('global launcher aliases', () => {
@@ -137,5 +144,97 @@ describe('cli profile readiness', () => {
       path => path.endsWith('package.json'),
       () => '{not json',
     )).toBe(false)
+  })
+})
+
+describe('npm invocation', () => {
+  it('prefers the JavaScript entrypoint over the Windows .cmd shim', () => {
+    const besideNode = npmInvocation({
+      fileExists: path => path.endsWith('npm-cli.js'),
+      roots: [],
+    })
+    expect(besideNode.command).toBe(process.execPath)
+    expect(besideNode.args[0].endsWith('npm-cli.js')).toBe(true)
+    const fromRoot = npmInvocation({
+      fileExists: () => false,
+      roots: ['C:/npm'],
+      resolvePackage: name => `C:/npm/node_modules/${name}`,
+    })
+    expect(fromRoot.command).toBe(process.execPath)
+    expect(fromRoot.args[0]).toContain('npm/bin/npm-cli.js')
+    const fallback = npmInvocation({ fileExists: () => false, roots: [] })
+    expect(typeof fallback.command).toBe('string')
+    expect(fallback.args).toEqual([])
+  })
+})
+
+describe('update orchestration', () => {
+  it('derives the compatible harness line from the target release peers', () => {
+    expect(harnessLineFromPeers({ '@deepseek-ai/dsh-session': '0.1.2-rc.1', '@deepseek-ai/cordis': '^4.0.1' })).toBe('0.1.2-rc.1')
+    expect(harnessLineFromPeers({ '@deepseek-ai/dsh-llm': '0.1.2-rc.1' })).toBe('0.1.2-rc.1')
+    expect(harnessLineFromPeers({ '@deepseek-ai/cordis': '^4.0.1' })).toBeUndefined()
+    expect(harnessLineFromPeers(undefined)).toBeUndefined()
+  })
+
+  it('pins both installs to one line and skips the profile for checkout mounts', () => {
+    const pinned = updatePlan({ latestCode: '1.0.5', peers: { '@deepseek-ai/dsh-session': '0.1.2-rc.1' }, profileSpec: '^1.0.4' })
+    expect(pinned).toEqual({
+      dshSpec: '@deepseek-ai/dsh@0.1.2-rc.1',
+      lineLocked: true,
+      codeSpec: 'dsh-code@1.0.5',
+      profileStep: true,
+    })
+    const fallback = updatePlan({ latestCode: '1.0.5', peers: undefined, profileSpec: undefined })
+    expect(fallback.dshSpec).toBe('@deepseek-ai/dsh@latest')
+    expect(fallback.lineLocked).toBe(false)
+    const linked = updatePlan({ latestCode: '1.0.5', peers: { '@deepseek-ai/dsh-session': '0.1.2-rc.1' }, profileSpec: 'link:C:/repo/dsh-cli' })
+    expect(linked.profileStep).toBe(false)
+  })
+
+  it('reads the profile dependency spec and the actually mounted version', () => {
+    const manifest = JSON.stringify({ dependencies: { 'dsh-code': '1.0.5', '@deepseek-ai/dsh-base': '0.1.2-rc.1' } })
+    expect(profileDependencySpec(
+      'C:/profiles/cli',
+      path => path.endsWith('package.json'),
+      () => manifest,
+    )).toBe('1.0.5')
+    expect(profileMountedVersion(
+      'C:/profiles/cli',
+      path => path.endsWith(join('node_modules', 'dsh-code', 'package.json')),
+      () => JSON.stringify({ version: '1.0.5' }),
+    )).toBe('1.0.5')
+    expect(profileDependencySpec('C:/profiles/cli', () => false)).toBeUndefined()
+    expect(profileMountedVersion('C:/profiles/cli', () => false)).toBeUndefined()
+  })
+
+  it('runs update steps in order and stops at the first failure', async () => {
+    const children = []
+    const started = []
+    const fakeSpawn = (command, args) => {
+      started.push(`${command} ${args.join(' ')}`)
+      const child = new EventEmitter()
+      children.push(child)
+      return child
+    }
+    const done = runSequence([
+      { command: 'npm.cmd', args: ['install', '-g', 'dsh-code@1.0.5'], label: 'npm install' },
+      { command: 'node', args: ['dsh', 'plugin', 'add', 'dsh-code@1.0.5'], label: 'dsh plugin add' },
+    ], fakeSpawn)
+    await new Promise(resolve => setImmediate(resolve))
+    expect(started).toHaveLength(1)
+    children[0].emit('exit', 0, null)
+    await new Promise(resolve => setImmediate(resolve))
+    expect(started).toHaveLength(2)
+    children[1].emit('exit', 7, null)
+    await expect(done).resolves.toBe(7)
+
+    const aborted = runSequence([
+      { command: 'npm.cmd', args: ['install', '-g', 'x'], label: 'npm install' },
+      { command: 'node', args: ['dsh'], label: 'dsh plugin add' },
+    ], fakeSpawn)
+    await new Promise(resolve => setImmediate(resolve))
+    children[2].emit('exit', 3, null)
+    await expect(aborted).resolves.toBe(3)
+    expect(started).toHaveLength(3)
   })
 })
