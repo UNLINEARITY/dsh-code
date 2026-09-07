@@ -1,12 +1,12 @@
 /**
- * The terminal ask_user_question provider: registers the single UI provider
- * on `ctx.userQuestions` and drives it with a FIFO queue — one question
- * request on screen at a time, everything else waiting — then resolves the
- * collected answers back into the tool's promise. The community TUI proved
- * this exact pipeline shape; here the dialog is an Ink bar instead of a
- * pi-tui inline modal.
+ * The terminal ask_user_question answerer: one `user-questions/request`
+ * waterfall listener that drives a FIFO queue — one question request on
+ * screen at a time, everything else waiting — then resolves the collected
+ * answers back into the waterfall. Mirrors the approval answerer's claim/
+ * defer split: only agents this TUI owns are answered, every other request
+ * falls through to the next answerer.
  *
- * Plan reviews (`exit_plan_mode`) arrive through the same service with an
+ * Plan reviews (`exit_plan_mode`) arrive through the same waterfall with an
  * `intent: { kind: 'plan-review' }` — the renderer highlights the approve
  * option; the answer encoding is identical either way.
  *
@@ -14,6 +14,7 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
+import type { Agent } from '@deepseek-ai/dsh-agent'
 import {
   UserQuestionError,
   type AskUserQuestionAnswer,
@@ -56,13 +57,15 @@ const ABORT_ERROR = new UserQuestionError(
 )
 
 /**
- * Mount the single `ctx.userQuestions` UI provider over a FIFO queue.
- * @param ctx - context carrying the `userQuestions` service (dsh-base).
- * @returns the store the renderer subscribes to; a context without the
- * service yields a permanently empty store.
+ * Mount the `user-questions/request` answerer over a FIFO queue.
+ * @param ctx - plugin context whose event bus carries the waterfall.
+ * @param owns - agents this terminal answers for; every other request is
+ * deferred back into the waterfall (`next()`), so sibling answerers stay
+ * usable. Agent-less asks are claimed: this TUI is the only human surface
+ * in the process.
+ * @returns the store the renderer subscribes to.
  */
-export function mountQuestionProvider(ctx: Context): QuestionStore {
-  const service = ctx.get('userQuestions')
+export function mountQuestionProvider(ctx: Context, owns: (agent: Agent) => boolean): QuestionStore {
   let snapshot: QuestionSnapshot = { pending: undefined }
   let active: PendingQuestion | undefined
   const queue: PendingQuestion[] = []
@@ -79,69 +82,49 @@ export function mountQuestionProvider(ctx: Context): QuestionStore {
     set({ pending: next })
   }
 
-  if (service !== undefined) {
-    // Capability guard against contract drift: the pinned release exposes
-    // registerProvider, but an upstream alignment may replace it with the
-    // 'user-questions/request' waterfall. Degrade to the permanently-empty
-    // store (the no-service path) instead of failing startup with a
-    // TypeError on a missing method.
-    if (typeof (service as unknown as { registerProvider?: unknown }).registerProvider !== 'function') {
-      return {
-        subscribe(listener: () => void): () => void {
-          listeners.add(listener)
-          return () => {
-            listeners.delete(listener)
-          }
-        },
-        getSnapshot(): QuestionSnapshot {
-          return snapshot
-        },
-        submit(): void {},
-        cancel(): void {},
+  ctx.on('user-questions/request', (
+    request: AskUserQuestionRequest,
+    next: () => Promise<AskUserQuestionAnswer>,
+  ): Promise<AskUserQuestionAnswer> => {
+    if (request.agent !== undefined && !owns(request.agent)) return next()
+    return new Promise((resolve, reject) => {
+      // Abort settles through the same channel as an Esc cancel: the
+      // owning tool/step died, so the answer must not linger.
+      const onAbort = (): void => {
+        if (active === pending) {
+          active = undefined
+          set({ pending: undefined })
+          advance()
+        } else {
+          const at = queue.indexOf(pending)
+          if (at >= 0) queue.splice(at, 1)
+        }
+        reject(ABORT_ERROR)
       }
-    }
-    service.registerProvider({
-      ask(request: AskUserQuestionRequest): Promise<AskUserQuestionAnswer> {
-        return new Promise((resolve, reject) => {
-          // Abort settles through the same channel as an Esc cancel: the
-          // owning tool/step died, so the answer must not linger.
-          const onAbort = (): void => {
-            if (active === pending) {
-              active = undefined
-              set({ pending: undefined })
-              advance()
-            } else {
-              const at = queue.indexOf(pending)
-              if (at >= 0) queue.splice(at, 1)
-            }
-            reject(ABORT_ERROR)
-          }
-          // Detach on every settle so an answered/cancelled question never
-          // retains a listener on the owning tool call's signal.
-          const detachAbort = (): void => {
-            if (request.signal !== undefined) request.signal.removeEventListener('abort', onAbort)
-          }
-          const pending: PendingQuestion = {
-            request,
-            resolve,
-            reject,
-            detachAbort,
-          }
-          if (request.signal?.aborted === true) {
-            reject(ABORT_ERROR)
-            return
-          }
-          request.signal?.addEventListener('abort', onAbort, { once: true })
-          if (active === undefined) {
-            active = pending
-            set({ pending })
-          } else {
-            queue.push(pending)
-          }
-        })
-      },
+      // Detach on every settle so an answered/cancelled question never
+      // retains a listener on the owning tool call's signal.
+      const detachAbort = (): void => {
+        if (request.signal !== undefined) request.signal.removeEventListener('abort', onAbort)
+      }
+      const pending: PendingQuestion = {
+        request,
+        resolve,
+        reject,
+        detachAbort,
+      }
+      if (request.signal?.aborted === true) {
+        reject(ABORT_ERROR)
+        return
+      }
+      request.signal?.addEventListener('abort', onAbort, { once: true })
+      if (active === undefined) {
+        active = pending
+        set({ pending })
+      } else {
+        queue.push(pending)
+      }
     })
-  }
+  })
 
   return {
     subscribe(listener: () => void): () => void {

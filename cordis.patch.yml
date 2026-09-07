@@ -40,6 +40,8 @@
   disabled: true
 - id: tool-skill
   disabled: true
+- id: command-goal
+  disabled: true
 - id: tool-goal
   disabled: true
 - id: plan-mode
@@ -68,15 +70,9 @@
   disabled: true
 - id: tool-todo
   disabled: true
-- id: tool-web
-  config:
-    # web_fetch is a core TUI capability, not an opt-in: the fetch provider
-    # (web-fetch-http below) needs no API key. The per-preset tool-web rows
-    # keep `fetch: false` on the agent plane; through the scope-layered tool
-    # registry the preset's web_search shadows the host's same-name tool while
-    # the host's web_fetch stays visible, so every model still sees both.
-    fetch: true
-    searchTimeoutMs: 60000
+# tool-web keeps the 0.1.2-rc.1 base default (web_fetch enabled over the
+# bundled web-fetch-http provider): the host row exposes web_fetch while the
+# per-preset agent-plane rows keep their own fetch stance.
 
 - insert:
     # Code Mode is a core execution capability, not a Web component.
@@ -111,11 +107,13 @@
     - id: cordis-host-runner
       name: '@deepseek-ai/dsh-cordis-host-runner'
 
-    # Anonymous public HTTP(S) fetch provider for web_fetch (no key): the web
-    # service and its search provider stay on the host plane (dsh-base), and
-    # this row is what makes fetching real URLs work out of the box.
-    - id: web-fetch-http
-      name: '@deepseek-ai/dsh-web-fetch-http'
+    # Host-owned opt-in the preset delegation tools sample: standard/ptc's
+    # tool-subagent rows set `modelSelectionSettings: true`, whose start
+    # resolves this service and fails the whole preset mount when absent
+    # ("failed to apply loader entry delegation (cordis:group)"). The upstream
+    # web-app bundle adds this host row in 0.1.2-rc.1; dsh-base does not ship it.
+    - id: subagent-model-selection-settings
+      name: '@deepseek-ai/dsh-tool-subagent/model-selection-settings'
 
     # Interactive provider authorization. The base bundle supplies the
     # credential store; mounting the neutral authorization seam wakes the

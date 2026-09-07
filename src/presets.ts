@@ -21,15 +21,27 @@ export function isBlankSession(events: readonly SessionEvent[]): boolean {
   return !events.some(event => event.type === 'turn/start')
 }
 
+/** Upstream renamed the shipped `code` preset to `ptc` in 0.1.2-rc.1; sessions
+ * and CLI choices recorded before the rename keep resolving through this map. */
+const LEGACY_PRESET_IDS: Readonly<Record<string, string>> = { code: 'ptc' }
+
+/** Translate a preset id recorded before an upstream rename to its current id. */
+export function normalizePresetId(id: string): string
+export function normalizePresetId(id: string | undefined): string | undefined
+export function normalizePresetId(id: string | undefined): string | undefined {
+  return id === undefined ? undefined : LEGACY_PRESET_IDS[id] ?? id
+}
+
 /** Latest logged selection wins; legacy sessions deliberately fall back to standard. */
-export function resolvePreset(session: Pick<Session, 'header' | 'events'>): string {
-  for (let index = session.events.length - 1; index >= 0; index -= 1) {
-    const event = session.events[index] as unknown as { type: string; data?: { agentPreset?: string } }
+export function resolvePreset(session: Pick<Session, 'header' | 'snapshotEvents'>): string {
+  const events = session.snapshotEvents()
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index] as unknown as { type: string; data?: { agentPreset?: string } }
     if (event.type === 'agent-preset/selected' && event.data?.agentPreset !== undefined) {
-      return event.data.agentPreset
+      return normalizePresetId(event.data.agentPreset) as string
     }
   }
-  return session.header.agentPreset ?? 'standard'
+  return normalizePresetId(session.header.agentPreset) ?? 'standard'
 }
 
 /** Resolve a pre-session choice, or recompose an active blank Agent. */
@@ -38,6 +50,7 @@ export async function selectPreset(
   agent: Agent | undefined,
   presetId: string,
 ): Promise<PresetRow> {
+  presetId = normalizePresetId(presetId)
   if (agent !== undefined) return switchPreset(service, agent, presetId)
   const preset = await service.resolve(presetId)
   if (preset.broken !== undefined) throw new Error(preset.broken)
@@ -50,7 +63,7 @@ export async function switchPreset(
   agent: Agent,
   presetId: string,
 ): Promise<PresetRow> {
-  if (!isBlankSession(agent.session.events)) {
+  if (!isBlankSession(agent.session.snapshotEvents())) {
     throw new Error('mode is locked after the first turn; use /new <mode>')
   }
   const preset = await service.recompose(agent.ctx, presetId)

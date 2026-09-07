@@ -48,6 +48,9 @@ import {
 } from './provider-settings.ts'
 import { createMentions, type MentionsApi } from './mentions.ts'
 import { mountQuestionProvider, type QuestionStore } from './questions.ts'
+// Type-only import merges the settings Events declarations ('settings/updated',
+// 'settings/document-updated') into this program's Cordis bus typing.
+import type {} from '@deepseek-ai/dsh-settings'
 import { createTranscriptStore, type TranscriptStore } from './store.ts'
 import { createSubagentFeed, type SubagentFeedView } from './subagents.ts'
 import { parseStatuslineItems } from './render/status.ts'
@@ -70,7 +73,7 @@ import { selectForkSeed } from './fork.ts'
 import { buildReviewPrompt, loadGitDiff } from './git-workflow.ts'
 import type { TuiStartup } from './startup.ts'
 import { SessionSwitchQueue } from './session-switch.ts'
-import { agentPresetsFrom, resolvePreset, selectPreset } from './presets.ts'
+import { agentPresetsFrom, normalizePresetId, resolvePreset, selectPreset } from './presets.ts'
 import {
   applyPendingPermission,
   cyclePermission as cyclePermissionPreset,
@@ -406,7 +409,9 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       ? {}
       : { picked: pendingSelection }
     let mode = next.resume ? next.mode : next.mode ?? pendingMode
-    if (!next.resume) mode = (await presets.resolve(mode)).id
+    // An explicit `--mode` or the settings-layer service default may still name
+    // an id an upstream rename retired (code → ptc); normalize both.
+    if (!next.resume) mode = (await presets.resolve(normalizePresetId(mode ?? presets.defaultId))).id
     const setup = async (agentCtx: Context): Promise<void> => {
       const sessionPreset = next.resume
         ? resolvePreset(agentCtx.agent!.session)
@@ -457,7 +462,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       handle,
       agent: handle.agent,
       session,
-      store: createTranscriptStore(session.events),
+      store: createTranscriptStore(session.snapshotEvents()),
       mentions: createMentions(ctx, handle.agent, session.header.cwd ?? nextCwd),
       mode: mode ?? 'standard',
       selection: selectionState,
@@ -590,10 +595,13 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     return next().then(resolved => applyModelSelectionToConfig(resolved, picked))
   })
 
-  // ask_user_question provider: the single UI provider on the shared service,
-  // one request on screen at a time. Plan reviews (exit_plan_mode) arrive
-  // through this same pipe.
-  const questions: QuestionStore = mountQuestionProvider(ctx)
+  // ask_user_question answerer: one waterfall listener, one request on
+  // screen at a time. Plan reviews (exit_plan_mode) arrive through this same
+  // pipe; sibling answerers stay usable through the claim/defer split.
+  const questions: QuestionStore = mountQuestionProvider(
+    ctx,
+    candidate => agent !== undefined && candidate.id === agent.id,
+  )
 
   // The bridge the React app registers on mount: local notices from the
   // process side (unknown commands, switch confirmations, cancels).
@@ -1529,7 +1537,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       if (text !== '' && (!Number.isSafeInteger(atSeq) || (atSeq ?? -1) < 0)) {
         throw new Error('usage: /fork [event-seq]')
       }
-      const seed = selectForkSeed(session.events, atSeq)
+      const seed = selectForkSeed(session.snapshotEvents(), atSeq)
       const id = `session-${randomUUID()}`
       requestSwitch({
         target: {
@@ -1595,7 +1603,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       branch: gitBranch(sessionCwd),
       sessionId: session === undefined ? '' : session.id.slice(-8),
       resumed: active?.resumed ?? false,
-      mode: active?.mode ?? pendingMode ?? presets.defaultId,
+      mode: active?.mode ?? pendingMode ?? normalizePresetId(presets.defaultId),
       permission,
       dispatch,
       steer,

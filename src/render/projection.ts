@@ -8,7 +8,8 @@
  */
 
 import { boundContextSummary, type ContentBlock, type ImageBlock, type MessageId } from '@deepseek-ai/dsh-llm'
-import type { SessionEvent, TodoItem } from '@deepseek-ai/dsh-session'
+import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import type { TodoItem } from '@deepseek-ai/dsh-tool-todo'
 import { graphemeWidth, splitGraphemes } from './width.ts'
 // Type-only imports merge the plugin-owned SessionEventMap variants
 // (agent/inbox/spliced, command/*, compaction/*, goal/change, llm/retry*,

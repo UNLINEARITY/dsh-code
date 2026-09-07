@@ -1,30 +1,36 @@
-/** The ask_user_question provider: FIFO queue, answer resolution, abort. */
+/** The ask_user_question answerer: FIFO queue, answer resolution, abort. */
 
 import { describe, expect, it } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
+import type { Agent } from '@deepseek-ai/dsh-agent'
 import {
   UserQuestionError,
   type AskUserQuestionAnswer,
   type AskUserQuestionRequest,
-  type UserQuestionProvider,
 } from '@deepseek-ai/dsh-user-questions'
 import { mountQuestionProvider } from '../src/questions.ts'
 
-/** Context double whose `userQuestions` service hands out the provider. */
-function harness(): { ctx: Context; provider: (() => UserQuestionProvider | undefined) } {
-  let registered: UserQuestionProvider | undefined
-  const service = {
-    registerProvider(provider: UserQuestionProvider): () => void {
-      registered = provider
+/** Context double capturing the `user-questions/request` waterfall listener. */
+function harness(): { ctx: Context; ask: (request: AskUserQuestionRequest) => Promise<AskUserQuestionAnswer> } {
+  let listener:
+    | ((request: AskUserQuestionRequest, next: () => Promise<AskUserQuestionAnswer>) => Promise<AskUserQuestionAnswer>)
+    | undefined
+  const ctx = {
+    on(name: string, handler: unknown): () => void {
+      if (name === 'user-questions/request') {
+        listener = handler as typeof listener
+      }
       return () => {
-        registered = undefined
+        listener = undefined
       }
     },
-  }
-  const ctx = { get: (name: string): unknown => (name === 'userQuestions' ? service : undefined) } as unknown as Context
+  } as unknown as Context
   return {
     ctx,
-    provider: () => registered,
+    ask: (request: AskUserQuestionRequest) => {
+      if (listener === undefined) throw new Error('waterfall listener never mounted')
+      return listener(request, () => Promise.reject(new Error('deferred to the next answerer')))
+    },
   }
 }
 
@@ -54,11 +60,11 @@ const settle = (): Promise<void> => new Promise(resolve => setImmediate(resolve)
 
 describe('mountQuestionProvider', () => {
   it('shows one request at a time and resolves the submitted answers', async () => {
-    const { ctx, provider } = harness()
-    const store = mountQuestionProvider(ctx)
-    const asked = provider()?.ask(request([
+    const { ctx, ask } = harness()
+    const store = mountQuestionProvider(ctx, () => true)
+    const asked = ask(request([
       { id: 'q1', question: 'which one?', options: [{ label: 'A' }, { label: 'B' }] },
-    ])) as Promise<AskUserQuestionAnswer>
+    ]))
     await settle()
     expect(store.getSnapshot().pending?.request.questions[0]?.question).toBe('which one?')
 
@@ -71,10 +77,10 @@ describe('mountQuestionProvider', () => {
   })
 
   it('queues a second request until the first settles', async () => {
-    const { ctx, provider } = harness()
-    const store = mountQuestionProvider(ctx)
-    const first = provider()?.ask(request([{ id: 'a', question: 'first', options: [{ label: '1' }] }]))
-    const second = provider()?.ask(request([{ id: 'b', question: 'second', options: [{ label: '2' }] }]))
+    const { ctx, ask } = harness()
+    const store = mountQuestionProvider(ctx, () => true)
+    const first = ask(request([{ id: 'a', question: 'first', options: [{ label: '1' }] }]))
+    const second = ask(request([{ id: 'b', question: 'second', options: [{ label: '2' }] }]))
     const secondFailure = (second as Promise<AskUserQuestionAnswer>).catch((error: unknown) => error)
     await settle()
     const pending = store.getSnapshot().pending!
@@ -90,9 +96,9 @@ describe('mountQuestionProvider', () => {
   })
 
   it('rejects the provider promise with ASK_ABORTED on Esc cancel', async () => {
-    const { ctx, provider } = harness()
-    const store = mountQuestionProvider(ctx)
-    const asked = provider()?.ask(request([{ id: 'q', question: 'why', options: [{ label: 'x' }] }])) as Promise<AskUserQuestionAnswer>
+    const { ctx, ask } = harness()
+    const store = mountQuestionProvider(ctx, () => true)
+    const asked = ask(request([{ id: 'q', question: 'why', options: [{ label: 'x' }] }]))
     await settle()
     let failure: unknown
     void asked.catch(error => { failure = error })
@@ -103,30 +109,33 @@ describe('mountQuestionProvider', () => {
   })
 
   it('settles an already-aborted request without surfacing it', async () => {
-    const { ctx, provider } = harness()
-    const store = mountQuestionProvider(ctx)
+    const { ctx, ask } = harness()
+    const store = mountQuestionProvider(ctx, () => true)
     const controller = new AbortController()
     controller.abort()
-    const asked = provider()?.ask(request([{ id: 'q', question: 'never', options: [{ label: 'x' }] }], controller.signal)) as Promise<AskUserQuestionAnswer>
+    const asked = ask(request([{ id: 'q', question: 'never', options: [{ label: 'x' }] }], controller.signal))
     const failure = asked.catch((error: unknown) => error)
     await settle()
     expect(store.getSnapshot().pending).toBeUndefined()
     expect(await failure).toMatchObject({ code: 'ASK_ABORTED' })
   })
 
-  it('stays permanently empty without a userQuestions service', () => {
-    const ctx = { get: (): undefined => undefined } as unknown as Context
-    const store = mountQuestionProvider(ctx)
+  it('defers requests for agents this terminal does not own', async () => {
+    const { ctx, ask } = harness()
+    const store = mountQuestionProvider(ctx, () => false)
+    const agent = { id: 'other' } as unknown as Agent
+    const asked = ask({ ...request([{ id: 'q', question: 'not mine', options: [{ label: 'x' }] }]), agent })
+    await expect(asked).rejects.toThrow('deferred to the next answerer')
     expect(store.getSnapshot().pending).toBeUndefined()
   })
 
   it('detaches the request abort listener on submit', async () => {
-    const { ctx, provider } = harness()
-    const store = mountQuestionProvider(ctx)
+    const { ctx, ask } = harness()
+    const store = mountQuestionProvider(ctx, () => true)
     const controller = fakeSignal()
-    const asked = provider()?.ask(request([
+    const asked = ask(request([
       { id: 'q', question: 'q', options: [{ label: 'A' }] },
-    ], controller.signal)) as Promise<AskUserQuestionAnswer>
+    ], controller.signal))
     await settle()
     const pending = store.getSnapshot().pending!
     expect(controller.attached()).toBe(true)
@@ -138,12 +147,12 @@ describe('mountQuestionProvider', () => {
   })
 
   it('detaches the request abort listener on cancel', async () => {
-    const { ctx, provider } = harness()
-    const store = mountQuestionProvider(ctx)
+    const { ctx, ask } = harness()
+    const store = mountQuestionProvider(ctx, () => true)
     const controller = fakeSignal()
-    const asked = provider()?.ask(request([
+    const asked = ask(request([
       { id: 'q', question: 'q', options: [{ label: 'A' }] },
-    ], controller.signal)) as Promise<AskUserQuestionAnswer>
+    ], controller.signal))
     await settle()
     const pending = store.getSnapshot().pending!
     expect(controller.attached()).toBe(true)
@@ -154,12 +163,12 @@ describe('mountQuestionProvider', () => {
   })
 
   it('detaches the request abort listener when the abort fires', async () => {
-    const { ctx, provider } = harness()
-    const store = mountQuestionProvider(ctx)
+    const { ctx, ask } = harness()
+    const store = mountQuestionProvider(ctx, () => true)
     const controller = fakeSignal()
-    const asked = provider()?.ask(request([
+    const asked = ask(request([
       { id: 'q', question: 'q', options: [{ label: 'A' }] },
-    ], controller.signal)) as Promise<AskUserQuestionAnswer>
+    ], controller.signal))
     await settle()
     expect(store.getSnapshot().pending).toBeDefined()
     expect(controller.attached()).toBe(true)

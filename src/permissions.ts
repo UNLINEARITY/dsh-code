@@ -24,7 +24,7 @@ export function effectivePermission(
   session: Session | undefined,
   pending: string | undefined,
 ): string {
-  return session === undefined ? pending ?? service.defaultPreset : service.current(session.events)
+  return session === undefined ? pending ?? service.defaultPreset : service.current(session)
 }
 
 /** Validate a preset and write it only when a durable session already exists. */

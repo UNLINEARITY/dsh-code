@@ -21,7 +21,7 @@ import {
 import { Box, Static, Text, useInput, useStdin, useStdout, type Key } from 'ink'
 import type { CommandDescriptor } from '@deepseek-ai/dsh-commands'
 import type { ImageBlock } from '@deepseek-ai/dsh-llm'
-import type { TodoItem } from '@deepseek-ai/dsh-session'
+import type { TodoItem } from '@deepseek-ai/dsh-tool-todo'
 import type { AskUserQuestionAnswerItem, AskUserQuestionItem } from '@deepseek-ai/dsh-user-questions'
 import type { AuthorizationInteraction, AuthorizationStatus } from '@deepseek-ai/dsh-authorization'
 import {

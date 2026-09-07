@@ -6,7 +6,7 @@
  * @module @deepseek-ai/dsh-code/render/export
  */
 
-import { assertNever } from '@deepseek-ai/dsh-llm'
+import { assertNever } from '@deepseek-ai/dsh-util-values'
 import { imageLabels, type TranscriptView } from './projection.ts'
 
 /**
