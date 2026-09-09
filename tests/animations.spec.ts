@@ -10,9 +10,6 @@ import {
   BUSY_CHASE_FRAMES,
   busyChaseFrame,
   caretVisible,
-  IGNITION_CORE_ALPHA,
-  IGNITION_CORE_OVERLAY,
-  ignitionCoreTint,
   crest,
   DEEPSEEK_WAVE_BANDS,
   DEEPSEEK_WAVE_TICK_MS,
@@ -35,6 +32,7 @@ import {
   envelope,
   isOfficialDeepSeekLabel,
   parseAnimationsArgument,
+  PULSE_ALPHA_CAP,
   parseAnimationsPref,
   SPARK_GLYPHS,
   WAVE_SURFACE_ALPHA_CAP,
@@ -447,18 +445,25 @@ describe('deepseekWaveColumnBg', () => {
     expect(bottomLights).toBe(true)
   })
 
-  it('flashes the pulse ring line brighter than the pure hue blend can ever be', () => {
-    // blend(hue, base, α≤1) never exceeds the hue's own channel values (the
-    // dark base is darker in every channel), so any channel above the hue
-    // proves the ice-blue tint overlay still rides the PULSE ring line.
-    let flashed = false
-    for (let tick = 0; tick < 32 && !flashed; tick += 1) {
-      for (let column = 0; column < width; column += 1) {
-        const bg = deepseekWaveColumnBg(tick, column, width, 'flash', 'pulse', flashHues, WAVE_BASE_DARK, 2, 5)
-        if (bg !== null && bg[0]! > flashHues[0]![0]! + 10 && bg[1]! > flashHues[0]![1]! + 10) flashed = true
+  it('keeps the pulse inside the soft alpha cap like the swell and aurora', () => {
+    // The detonation is a notch punchier than the swell but stays in the
+    // same Aurora-grade family: every painted cell within the mixed-hue
+    // spread at the pulse cap — no brightness spikes beyond the palette.
+    const base = WAVE_BASE_DARK
+    for (const tier of ['flash', 'deepseek'] as const) {
+      const hues = tier === 'flash' ? flashHues : deepseekHues
+      for (let tick = 0; tick < 46; tick += 1) {
+        for (let column = 0; column < width; column += 1) {
+          const bg = deepseekWaveColumnBg(tick, column, width, tier, 'pulse', hues, base, 2, 5)
+          if (bg === null) continue
+          for (let channel = 0; channel < 3; channel += 1) {
+            const spread = Math.abs(bg[channel]! - base[channel]!)
+            const widestHue = Math.max(...hues.map(hue => Math.abs(hue[channel]! - base[channel]!)))
+            expect(spread).toBeLessThanOrEqual(Math.ceil(PULSE_ALPHA_CAP * widestHue) + 1)
+          }
+        }
       }
     }
-    expect(flashed).toBe(true)
   })
 
   it('draws the pulse ring symmetric around the band center', () => {
@@ -621,17 +626,21 @@ describe('three ignition styles', () => {
     expect(mixedSeen).toBe(true)
   })
 
-  it('Pulse expands a 2-D ring from the band center with decaying strength', () => {
+  it('Pulse expands a 2-D ring that dissolves through its fade envelope', () => {
     const center = Math.floor(width / 2)
     // Early pulse (tick 4 ≈ 0.108s sampled, flash launch 0.10 travel 0.60):
     // the radius is ≈1 column, so the cells right beside the center paint…
     expect(deepseekWaveColumnBg(4, center - 2, width, 'flash', 'pulse', flashHues, WAVE_BASE_DARK)).not.toBeNull()
     expect(deepseekWaveColumnBg(4, center + 2, width, 'flash', 'pulse', flashHues, WAVE_BASE_DARK)).not.toBeNull()
-    // …tick 6 (≈0.162s, radius ≈7): the ring has opened — the exact center
-    // sits in the hole while the ring band paints farther out.
-    expect(deepseekWaveColumnBg(6, center, width, 'flash', 'pulse', flashHues, WAVE_BASE_DARK)).toBeNull()
+    // …tick 9 (≈0.244s, radius ≈8): the ring and its inner edge have both
+    // cleared the exact center — it sits in the hole while the band paints
+    // farther out.
+    expect(deepseekWaveColumnBg(9, center, width, 'flash', 'pulse', flashHues, WAVE_BASE_DARK)).toBeNull()
     expect(deepseekWaveColumnBg(6, center + 5, width, 'flash', 'pulse', flashHues, WAVE_BASE_DARK)).not.toBeNull()
-    // After the pulse travel (flash 0.10..0.70 → 0.70s ≈ tick 26) nothing paints.
-    expect(deepseekWaveColumnBg(25, center, width, 'flash', 'pulse', flashHues, WAVE_BASE_DARK)).toBeNull()
+    // The envelope keeps the ring alive (still expanding, fading) well past
+    // the old travel end…
+    expect(deepseekWaveColumnBg(25, center + 12, width, 'flash', 'pulse', flashHues, WAVE_BASE_DARK)).not.toBeNull()
+    // …and null only once the base duration closes (flash 0.9s ≈ tick 34).
+    expect(deepseekWaveColumnBg(34, center, width, 'flash', 'pulse', flashHues, WAVE_BASE_DARK)).toBeNull()
   })
 })

@@ -21,9 +21,10 @@
  * (the deepseek tier adds one faster harmonic crossing it), painted with
  * Aurora's recipe: wide soft gradients, mirrored second-hue mixing, and a
  * low alpha cap — no hard core line — while Pulse became true
- * two-dimensional, cell-aspect-corrected rings, each dragging a trailing
- * echo ripple in the next blue of the tier's palette. Aurora keeps Codex's
- * geometry verbatim.
+ * two-dimensional, cell-aspect-corrected detonations: soft wide rings whose
+ * color grades across their width, expanding outward through a symmetric
+ * fade envelope and each trailing an echo ripple in the next blue. Aurora
+ * keeps Codex's geometry verbatim.
  *
  * @module @deepseek-ai/dsh-code/render/animations
  */
@@ -159,46 +160,33 @@ export const WAVE_SURFACE_MIRROR = 0.6
 export const WAVE_SURFACE_ALPHA_GAIN = 0.45
 export const WAVE_SURFACE_ALPHA_CAP = 0.68
 
-/** Peak background alpha at the wave core / pulse ring (skirt keeps Codex's 0.55). */
-export const IGNITION_CORE_ALPHA = 0.85
-
-/** How far the core tint is pulled toward white — kept LOW so the flash stays ice-blue. */
-export const IGNITION_CORE_WHITE_MIX = 0.35
-
-/** Overlay alpha of the white-hot tint at the crest core / pulse ring line. */
-export const IGNITION_CORE_OVERLAY = 0.9
-
 /**
- * The white-hot tint painted over the crest core and pulse ring line. The
- * plain hue blend can never exceed the hue's own brightness; pulling the
- * tint toward white lets the core flash brighter than any single palette
- * color, which is what makes the sweep read as light.
+ * Pulse ring geometry, softened to the Wave standard: a WIDE band
+ * (half-width 5.5) with a moderate peak riding the radius — all inside the
+ * hue blend, no hard white line — and an inner profile one hue over at a
+ * slightly smaller radius, so the ring's color grades continuously across
+ * its width (the radial analog of the water surface's mirrored hues).
  */
-export function ignitionCoreTint(hue: RgbTriple): RgbTriple {
-  return [
-    Math.round(hue[0] + (255 - hue[0]) * IGNITION_CORE_WHITE_MIX),
-    Math.round(hue[1] + (255 - hue[1]) * IGNITION_CORE_WHITE_MIX),
-    Math.round(hue[2] + (255 - hue[2]) * IGNITION_CORE_WHITE_MIX),
-  ]
-}
-
-/**
- * Pulse ring band half-width in columns, with a separate thin core line
- * (`PULSE_CORE_HALF_WIDTH`) riding its radius. Codex used 4.5 for horizontal
- * per-row rings; the 2-D ring is sharper so the wavefront stays readable.
- */
-const PULSE_HALF_WIDTH = 4
-const PULSE_CORE_HALF_WIDTH = 1.2
+const PULSE_HALF_WIDTH = 5.5
+const PULSE_PEAK_HALF_WIDTH = 1.8
+const PULSE_PEAK_GAIN = 0.35
+const PULSE_INNER_OFFSET = 2.5
+const PULSE_INNER_STRENGTH = 0.6
+/** The inner edge of each ring carries the tier's third blue. */
+const PULSE_INNER_HUE = 2
 
 /**
  * The trailing echo ripple: every pulse ring drags a second, weaker ring at
- * a fraction of its radius in the NEXT hue of the tier's blues, launching a
- * little after the primary so the center hole opens first. The concentric
- * offset rings are what give the pulse its interleaved ripple texture.
+ * a fraction of its radius in the NEXT hue of the tier's blues, fading in a
+ * little after the primary so the center hole opens first.
  */
 const PULSE_ECHO_RADIUS = 0.7
 const PULSE_ECHO_STRENGTH = 0.65
 const PULSE_ECHO_DELAY = 0.12
+
+/** Aurora-grade soft alpha for the detonation — a notch above the swell. */
+export const PULSE_ALPHA_GAIN = 0.45
+export const PULSE_ALPHA_CAP = 0.72
 
 /**
  * Terminal cell aspect (row height ÷ column width, ≈2.2 for common fonts).
@@ -365,9 +353,10 @@ interface BandContext {
  * One band's contributions at a column — Codex `band_sample`, redesigned:
  * Wave is a WATER SURFACE — one continuous sine line, mirror-symmetric
  * about the center column, crests flowing outward from the center (band 1
- * of the deepseek tier is a faster harmonic line crossing it). Pulse rings
- * in TWO dimensions and each drags a trailing echo ripple in the next blue.
- * Aurora matches Codex verbatim.
+ * of the deepseek tier is a faster harmonic line crossing it). Pulse
+ * detonates in TWO dimensions: soft rings that keep expanding through a
+ * symmetric fade envelope, color grading across each ring's width, with a
+ * trailing echo ripple. Aurora matches Codex verbatim.
  * @param style - the ignition style.
  * @param band - the band triple (meaning depends on the style).
  * @param elapsed - seconds since the animation started.
@@ -425,26 +414,35 @@ function bandSample(
       return [[Math.trunc(third), crest(Math.abs(column - center) / halfWidth), 0]]
     }
     case 'pulse': {
-      const progress = (elapsed - first) / second
-      if (progress < 0 || progress > 1) return [[0, 0, 0]]
-      const inverse = 1 - progress
-      const radius = (1 - inverse * inverse * inverse) * context.pulseSpan
-      const decay = third * (1 - 0.6 * progress)
+      // Symmetric lifetime: the band table's (launch, travel) becomes the
+      // fade envelope (fade in at launch, full until launch+travel, then
+      // fade to the end) while the radius keeps expanding THROUGH the fade —
+      // a shockwave that never hits a wall, it dissolves mid-flight.
+      const launch = first
+      const travel = second
+      const fadeOut = Math.max(0.05, context.total - (launch + travel))
+      const fade = envelope(elapsed, context.total, launch, fadeOut)
+      if (fade <= 0.01) return [[0, 0, 0]]
+      const progress = (elapsed - launch) / travel
+      const radius = (1 - (1 - progress) ** 3) * context.pulseSpan
+      const decay = third * (1 - 0.35 * Math.min(Math.max(progress, 0), 1))
       const distance = Math.hypot(column - width / 2, context.dy)
       const fromRing = Math.abs(distance - radius)
-      // Each ring carries its OWN hue (band ordinal → hues table), and the
-      // thin core line rides the radius as the bright wavefront of the band.
-      const contributions: [number, number, number][] = [
-        [context.bandIndex, crest(fromRing / PULSE_HALF_WIDTH) * decay, crest(fromRing / PULSE_CORE_HALF_WIDTH) * decay],
+      // Wide soft band with a moderate peak riding the radius — all in the
+      // hue blend, no hard line — and an inner edge one hue over at a
+      // slightly smaller radius: the ring's color grades across its width.
+      const band = crest(fromRing / PULSE_HALF_WIDTH) + PULSE_PEAK_GAIN * crest(fromRing / PULSE_PEAK_HALF_WIDTH)
+      const inner = crest(Math.abs(distance - (radius - PULSE_INNER_OFFSET)) / PULSE_HALF_WIDTH)
+      // Trailing echo ripple in the next blue, fading in after the primary
+      // so the center hole opens first.
+      const echoGate = envelope(elapsed, context.total, launch + PULSE_ECHO_DELAY, fadeOut)
+      const echo = crest(Math.abs(distance - radius * PULSE_ECHO_RADIUS) / PULSE_HALF_WIDTH)
+        * PULSE_ECHO_STRENGTH * echoGate
+      return [
+        [context.bandIndex, fade * band * decay, 0],
+        [PULSE_INNER_HUE, fade * inner * decay * PULSE_INNER_STRENGTH, 0],
+        [context.bandIndex + 1, fade * echo * decay, 0],
       ]
-      // Trailing echo ripple in the next blue, gated until the primary has
-      // clearly launched so the center hole opens before the echo arrives.
-      const echoGate = Math.min(1, Math.max(0, (progress - PULSE_ECHO_DELAY) / 0.1))
-      if (echoGate > 0) {
-        const fromEcho = Math.abs(distance - radius * PULSE_ECHO_RADIUS)
-        contributions.push([context.bandIndex + 1, crest(fromEcho / PULSE_HALF_WIDTH) * decay * PULSE_ECHO_STRENGTH * echoGate, 0])
-      }
-      return contributions
     }
   }
 }
@@ -514,15 +512,17 @@ export function deepseekWaveColumnBg(
   const dy = style === 'pulse' ? (row - (rows - 1) / 2) * PULSE_ROW_ASPECT : 0
   const undulating = rows > 1
   const u = undulating ? (row - (rows - 1) / 2) / ((rows - 1) / 2) : 0
-  const pulseSpan = Math.hypot(width / 2, ((rows - 1) / 2) * PULSE_ROW_ASPECT) + 2 * PULSE_HALF_WIDTH
+  // The span is EXACTLY the band's far corner: the ring front reaches the
+  // edges as the fade envelope closes, so the detonation stays visible for
+  // its whole lifetime instead of rushing off the band mid-flight (the old
+  // +2·half-width margin made the ring's second half invisible).
+  const pulseSpan = Math.hypot(width / 2, ((rows - 1) / 2) * PULSE_ROW_ASPECT)
   const fade = style === 'aurora' ? envelope(elapsed, total, 0.25, 0.40) : 1
   const weights = [0, 0, 0]
-  let core = 0
   let bandIndex = 0
   for (const band of DEEPSEEK_WAVE_BANDS[style][tier]) {
-    for (const [hue, strength, bandCore] of bandSample(style, band, elapsed, column, width, { dy, u, undulating, pulseSpan, bandIndex, total })) {
+    for (const [hue, strength] of bandSample(style, band, elapsed, column, width, { dy, u, undulating, pulseSpan, bandIndex, total })) {
       weights[hue] = style === 'aurora' ? weights[hue]! + strength : Math.max(weights[hue]!, strength)
-      core = Math.max(core, bandCore)
     }
     bandIndex += 1
   }
@@ -541,20 +541,16 @@ export function deepseekWaveColumnBg(
     Math.round(green / weight),
     Math.round(blue / weight),
   ]
-  // Alpha caps: Aurora matches Codex verbatim (≤0.50 with its fade
-  // envelope); Wave rides the same Aurora-style soft gradient (low gain,
-  // no hard core line); Pulse keeps the bright ring + its ice-blue line at
-  // the core cap — the tint overlay below only fires where a core remains.
+  // Alpha caps, all Aurora-grade now: Aurora ≤0.50, the swell ≤0.68, the
+  // detonation a notch above at ≤0.72 — soft gradients everywhere, no hard
+  // lines, the color work done by hue mixing instead of brightness spikes.
   const alpha = style === 'aurora'
     ? Math.min(weight * 0.40, 0.50) * fade
     : style === 'wave'
       ? Math.min(weight * WAVE_SURFACE_ALPHA_GAIN, WAVE_SURFACE_ALPHA_CAP)
-      : IGNITION_CORE_ALPHA * Math.min(weight, 1)
+      : Math.min(weight * PULSE_ALPHA_GAIN, PULSE_ALPHA_CAP)
   if (alpha < 0.02) return null
-  let background = blendRgb(mixed, base, alpha)
-  const overlay = style === 'aurora' ? 0 : core * IGNITION_CORE_OVERLAY
-  if (overlay >= 0.02) background = blendRgb(ignitionCoreTint(mixed), background, overlay)
-  return background
+  return blendRgb(mixed, base, alpha)
 }
 
 /**
