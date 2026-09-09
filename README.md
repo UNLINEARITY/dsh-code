@@ -174,6 +174,7 @@ dsh --profile cli --session my-id    # 使用指定 id 新建会话
 | `/statusline` | 选择状态栏显示的项目 |
 | `/vscode-keys` | 将 Ctrl+R 放行进 VS Code 系终端（幂等写入用户级 keybindings.json） |
 | `/theme` | 切换终端配色主题 |
+| `/animation` | 开关计时动画（shimmer/追逐/闪烁/切换波浪），`/animation [on\|off]` |
 | `/help` | 查看快捷键、内置命令、Harness 命令和用户技能 |
 | `/quit` | 退出 DSH-Code |
 

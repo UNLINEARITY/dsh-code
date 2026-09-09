@@ -42,6 +42,7 @@ import { type MdSegment, visibleColumns } from './render/markdown.ts'
 import {
   busyChaseFrame,
   BUSY_CHASE_TICK_MS,
+  CARET_BLINK_TICK_MS,
   caretVisible,
   DEEP_DIVING_SHIMMER_TICK_MS,
   DEEPSEEK_WAVE_TICK_MS,
@@ -56,6 +57,7 @@ import {
   deepDivingSparkColor,
   effortAboveHigh,
   isOfficialDeepSeekLabel,
+  parseAnimationsArgument,
   type DeepseekWaveStyle,
   type DeepseekWaveTier,
 } from './render/animations.ts'
@@ -196,6 +198,7 @@ import {
   editorRowParts,
   insertText,
   type EditResult,
+  type EditorRowModel,
   killToLineEnd,
   killToLineStart,
   moveCursorBy,
@@ -228,6 +231,7 @@ const LOCAL_COMMANDS = [
   { label: '/jobs', description: 'inspect background jobs' },
   { label: '/statusline', description: 'customize the status line items' },
   { label: '/theme', description: 'switch the color theme' },
+  { label: '/animation', description: 'toggle timed animations (/animation [on|off])' },
   { label: '/history', description: 'search and recall past prompts' },
   { label: '/agents', description: 'inspect subagent sessions of this conversation' },
   { label: '/todos', description: 'inspect the full todo list' },
@@ -377,6 +381,11 @@ export interface AppProps {
   saveStatusline(items: readonly string[]): void
   /** Apply and persist one /theme selection; the runner owns the theme.json file. */
   saveTheme?(name: ThemeName): void
+  /** Whether timed animations run at startup (animations.json; on by default
+   * — like parseAnimationsPref, only an explicit false disables them). */
+  animations?: boolean
+  /** Apply and persist one /animation toggle; the runner owns the file. */
+  saveAnimations?(enabled: boolean): void
   /** Persistent cross-session input history (oldest first); the runner owns the file. */
   history: readonly string[]
   /** Persist one submitted prompt to the global history file. */
@@ -393,12 +402,23 @@ function padColumns(text: string, width: number): string {
   return clipped + ' '.repeat(Math.max(0, width - visibleColumns(clipped)))
 }
 
-/** Interval-driven frame counter for one self-contained animated leaf. */
+/**
+ * Wall-clock frame counter for one self-contained animated leaf. Each fire
+ * derives the tick from elapsed time instead of counting intervals, so a
+ * stretched interval (busy event loop, slow SSH) skips the animation ahead
+ * rather than slowing it down; the tick always tracks real time.
+ */
 function useFrames(intervalMs: number, active = true): number {
   const [tick, setTick] = useState(0)
   useEffect(() => {
     if (!active) return
-    const id = setInterval(() => setTick(current => current + 1), intervalMs)
+    const startedAt = Date.now()
+    setTick(0)
+    const id = setInterval(() => {
+      // Clock setback (NTP resync) must not produce negative ticks — the
+      // blink parity check would flip the caret off for a full period.
+      setTick(Math.max(0, Math.floor((Date.now() - startedAt) / intervalMs)))
+    }, intervalMs)
     return () => {
       clearInterval(id)
     }
@@ -421,15 +441,18 @@ function useStableInput(handler: (input: string, key: Key) => void, active: bool
   useInput(stableHandler, { isActive: active })
 }
 
-/** The original web StateDot chase used by the busy composer marker. */
-function BusyChase(): ReactElement {
-  const tick = useFrames(BUSY_CHASE_TICK_MS)
+/**
+ * The original web StateDot chase used by the busy composer marker. With
+ * animations off it freezes on the first frame (still visibly busy).
+ */
+function BusyChase({ animated = true }: { animated?: boolean }): ReactElement {
+  const tick = useFrames(BUSY_CHASE_TICK_MS, animated)
   return createElement(Text, { color: inkColor(getPalette().brandBright) }, busyChaseFrame(tick) + ' ')
 }
 
-/** Blinking block caret appended to streaming text. */
-function Caret(): ReactElement {
-  const tick = useFrames(530)
+/** Blinking block caret appended to streaming text; solid when frozen. */
+function Caret({ animated = true }: { animated?: boolean }): ReactElement {
+  const tick = useFrames(CARET_BLINK_TICK_MS, animated)
   return createElement(Text, null, caretVisible(tick) ? '▍' : ' ')
 }
 
@@ -440,7 +463,7 @@ function useCursorBlink(active: boolean): { visible: boolean; reset(): void } {
   useEffect(() => {
     setVisible(true)
     if (!active) return
-    const id = setInterval(() => setVisible(current => !current), 530)
+    const id = setInterval(() => setVisible(current => !current), CARET_BLINK_TICK_MS)
     return () => {
       clearInterval(id)
     }
@@ -456,10 +479,12 @@ function useCursorBlink(active: boolean): { visible: boolean; reset(): void } {
  * One bounded line painted with the deep-diving shimmer: a continuously
  * moving blue gradient across graphemes, the `✻` glyph in the breathing
  * spark color. Shared by the busy line and the collapsed thinking marker;
- * always exactly one row (truncate-end) so the live budget stays exact.
+ * always exactly one row (truncate-end) so the live budget stays exact. With
+ * animations off the same spans render in fixed colors — no timer, no
+ * per-frame repaint, the `✻` keeps its highlight.
  */
-function ShimmerLine({ text }: { text: string }): ReactElement {
-  const tick = useFrames(DEEP_DIVING_SHIMMER_TICK_MS)
+function ShimmerLine({ text, animated = true }: { text: string; animated?: boolean }): ReactElement {
+  const tick = useFrames(DEEP_DIVING_SHIMMER_TICK_MS, animated)
   const palette = getPalette()
   const graphemes = splitGraphemes(text)
   return createElement(
@@ -471,7 +496,11 @@ function ShimmerLine({ text }: { text: string }): ReactElement {
         Text,
         {
           key: `${grapheme.start}-${grapheme.end}`,
-          color: inkColor(sparkle ? deepDivingSparkColor(tick, palette.brandDeep, palette.brandBright) : deepDivingGradientColor(index, tick, graphemes.length, palette.brandDeep, palette.brandBright)),
+          color: inkColor(!animated
+            ? (sparkle ? palette.brandBright : palette.brandDeep)
+            : sparkle
+              ? deepDivingSparkColor(tick, palette.brandDeep, palette.brandBright)
+              : deepDivingGradientColor(index, tick, graphemes.length, palette.brandDeep, palette.brandBright)),
           bold: sparkle || undefined,
         },
         grapheme.text,
@@ -486,10 +515,10 @@ function ShimmerLine({ text }: { text: string }): ReactElement {
  * only once the turn has clearly been running (15s) — anchored to `turn/start`
  * so a resumed mid-turn keeps the real time.
  */
-function DeepDivingLine({ since }: { since: number }): ReactElement {
+function DeepDivingLine({ since, animated = true }: { since: number; animated?: boolean }): ReactElement {
   const elapsed = since === 0 ? 0 : Date.now() - since
   const text = elapsed >= 15_000 ? `✻ Deep diving... ${runClock(elapsed)}` : '✻ Deep diving...'
-  return createElement(ShimmerLine, { text })
+  return createElement(ShimmerLine, { text, animated })
 }
 
 /**
@@ -2610,6 +2639,197 @@ function waveRowSpans(cells: readonly ComposerCell[]): ReactElement[] {
   return spans
 }
 
+/** Index of the cell STARTING at a display column, if one does. */
+function cellIndexAtColumn(cells: readonly ComposerCell[], target: number): number | undefined {
+  let column = 0
+  for (let index = 0; index < cells.length; index += 1) {
+    if (column === target) return index
+    column += cells[index]!.width ?? visibleColumns(cells[index]!.char)
+    if (column > target) return undefined
+  }
+  return undefined
+}
+
+/**
+ * Wall-clock wave frames — strictly ONE sweep per MOUNT; the mount-spanning
+ * one-shot latch (surviving modal unmounts) lives in Input as `wavePlayedKey`.
+ * The first gate-off after the sweep has started (it completed, a turn went
+ * busy, image preparation began, animations were toggled off) latches `done`
+ * for this mount, so the same mount can never resume or replay. A trigger
+ * that lands while the gate is already down stays pending until the gate
+ * rises once, then plays.
+ */
+function useWaveFrames(active: boolean, durationMs: number): { tick: number; done: boolean } {
+  const [tick, setTick] = useState(0)
+  const [done, setDone] = useState(false)
+  const startedRef = useRef(false)
+  useEffect(() => {
+    if (done) return
+    if (!active) {
+      // A sweep that already started is cancelled permanently, never resumed.
+      if (startedRef.current) setDone(true)
+      return
+    }
+    startedRef.current = true
+    const startedAt = Date.now()
+    const id = setInterval(() => {
+      const elapsed = Date.now() - startedAt
+      if (elapsed >= durationMs) {
+        clearInterval(id)
+        setDone(true)
+        return
+      }
+      setTick(Math.max(0, Math.floor(elapsed / DEEPSEEK_WAVE_TICK_MS)))
+    }, DEEPSEEK_WAVE_TICK_MS)
+    return () => {
+      clearInterval(id)
+    }
+  }, [active, durationMs, done])
+  return { tick, done }
+}
+
+/** The wave-painted composer band: everything the sweep needs, as data. */
+interface ComposerWaveProps {
+  /** Wave tier of the applied route (flash / deepseek / unknown). */
+  tier: DeepseekWaveTier
+  /** Ignition style App picked for this trigger. */
+  style: DeepseekWaveStyle
+  /** False while busy, preparing images, or animations are off; the fallback
+   * band renders instead (non-wave routes keep it false permanently). */
+  active: boolean
+  /** The static band to render before, after, and instead of the sweep. */
+  fallback: ReactElement
+  /** Composer band width in columns (terminal width minus the last column). */
+  bandWidth: number
+  /** Ink color of the static band background (the transparent-cell base). */
+  bandBg: string
+  /** The editor's visible physical rows (already windowed). */
+  rows: readonly EditorRowModel[]
+  /** Index of `rows[0]` in the full editor model (keying + caret row math). */
+  windowStart: number
+  /** Absolute caret row in the editor model. */
+  caretRow: number
+  /** The authoritative cursor offset. */
+  cursor: number
+  /** Caret blink visibility (shared with the static path). */
+  caretVisible: boolean
+  /** The draft text (placeholder detection on row 0). */
+  value: string
+  /** Tier prompt glyph and accent color (persistent, like Codex's charge). */
+  promptGlyph: string
+  promptColor: string
+  /** Fires EXACTLY ONCE when this sweep ends for any reason — completed,
+   * cancelled by the gate, or unmounted (a modal panel froze the composer) —
+   * so Input's played-key latch survives the leaf's unmount/remount cycle. */
+  onSettled(): void
+}
+
+/**
+ * The self-contained wave leaf: it owns its 33ms tick, so the sweep
+ * re-renders ONLY this component at ~30fps — Input's derived editor state
+ * never re-runs per frame. Graphemes stay atomic and every background sample
+ * advances by terminal display columns, so CJK and emoji cannot move the
+ * caret or wrap the band. The duration gate renders the fallback band on the
+ * frame the sweep completes.
+ */
+function ComposerWave(props: ComposerWaveProps): ReactElement {
+  const { tier, style } = props
+  const durationMs = deepseekWaveDuration(tier, style)
+  const { tick, done } = useWaveFrames(props.active, durationMs)
+  // Report the sweep's end exactly once — completion, gate cancellation, or
+  // unmount (a modal opened and froze the composer) — latching Input's
+  // played-key so this trigger can never replay after a remount.
+  const settledRef = useRef(false)
+  const onSettledRef = useRef(props.onSettled)
+  onSettledRef.current = props.onSettled
+  const settle = (): void => {
+    if (settledRef.current) return
+    settledRef.current = true
+    onSettledRef.current()
+  }
+  useEffect(() => {
+    if (done) settle()
+  }, [done])
+  useEffect(() => () => {
+    settle()
+  }, [])
+  if (!props.active || done || tick * DEEPSEEK_WAVE_TICK_MS >= durationMs) return props.fallback
+  const hues = deepseekWaveHues(tier)
+  const bandRgb = getPalette().composerBand
+  const totalBandRows = props.rows.length + 2
+  const waveBg = (row: number, column: number): string => {
+    const rgb = deepseekWaveColumnBg(tick, column, props.bandWidth, tier, style, hues, bandRgb, row, totalBandRows)
+    return rgb === null ? props.bandBg : inkColor(rgb)
+  }
+  const blankBandRow = (row: number): ReactElement => {
+    const blanks: ComposerCell[] = []
+    for (let column = 0; column < props.bandWidth; column += 1) {
+      blanks.push({ char: ' ', width: 1, backgroundColor: waveBg(row, column) })
+    }
+    return createElement(Text, { key: `blank-${row}` }, ...waveRowSpans(blanks))
+  }
+  const editorWaveRows = props.rows.map((row, visibleIndex) => {
+    const sourceIndex = props.windowStart + visibleIndex
+    const bandRow = visibleIndex + 1
+    const parts = editorRowParts(row, sourceIndex, props.caretRow, props.cursor)
+    const placeholder = sourceIndex === 0 && props.value === ''
+    const cells: ComposerCell[] = []
+    let usedColumns = 0
+    const push = (char: string, extra: Omit<ComposerCell, 'char' | 'width' | 'backgroundColor'> = {}): void => {
+      const width = visibleColumns(char)
+      cells.push({ char, width, backgroundColor: waveBg(bandRow, usedColumns), ...extra })
+      usedColumns += width
+    }
+    if (sourceIndex === 0) {
+      push(props.promptGlyph, { color: props.promptColor, bold: true })
+      push(' ', { color: props.promptColor })
+    } else {
+      push(' ')
+      push(' ')
+    }
+    for (const span of splitGraphemes(parts.before)) push(span.text)
+    if (parts.hasCaret) push(parts.caret, { inverse: props.caretVisible })
+    const tail = placeholder ? COMPOSER_PLACEHOLDER : parts.after
+    for (const span of splitGraphemes(tail)) push(span.text, placeholder ? { dim: true } : {})
+    while (usedColumns < props.bandWidth) push(' ')
+
+    const middleBandRow = Math.floor(totalBandRows / 2)
+    if (bandRow === middleBandRow && deepseekWaveWordVisible(tick, tier, style)) {
+      const word = tier === 'unknown' ? 'Into the Unknown' : 'deepseek'
+      const start = Math.max(2, Math.floor((props.bandWidth - word.length) / 2))
+      const indices = Array.from({ length: word.length }, (_, at) => cellIndexAtColumn(cells, start + at))
+      if (indices.every(index => index !== undefined && (cells[index]!.char === ' ' || cells[index]!.dim === true))) {
+        for (let at = 0; at < word.length; at += 1) {
+          const cell = cells[indices[at]!]!
+          cell.char = word[at]!
+          cell.width = 1
+          cell.color = inkColor(deepseekWaveWordHue(at, hues))
+          cell.bold = true
+          cell.dim = false
+        }
+      }
+    }
+    if (bandRow === middleBandRow && (tier === 'deepseek' || tier === 'unknown') && style === 'wave') {
+      const spark = deepseekWaveSpark(tick)
+      const lastIndex = cellIndexAtColumn(cells, props.bandWidth - 1)
+      if (spark !== null && lastIndex !== undefined && cells[lastIndex]!.char === ' ') {
+        cells[lastIndex]!.char = spark
+        cells[lastIndex]!.color = props.promptColor
+        cells[lastIndex]!.bold = true
+        cells[lastIndex]!.dim = false
+      }
+    }
+    return createElement(Text, { key: `editor-${sourceIndex}`, wrap: 'truncate-end' }, ...waveRowSpans(cells))
+  })
+  return createElement(
+    Box,
+    { flexDirection: 'column', width: props.bandWidth },
+    blankBandRow(0),
+    ...editorWaveRows,
+    blankBandRow(totalBandRows - 1),
+  )
+}
+
 /**
  * The Ctrl+O transcript inspector: one selected durable entry at a time,
  * with independent history selection and content scrolling. The complete
@@ -2929,7 +3149,7 @@ interface DraftImage extends ImagePathInspection {
  * While a modal (approval / question / model panel) owns the keys, the
  * box passes every key through untouched.
  */
-function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openEffort, openHelp, openMode, openPermission, openResume, openPlugin, openJobs, openStatusline, openTheme, openHistory, openAgents, openSubagent, openTodos, openDelete, openDiff, reviewChanges, deleteConfirm, confirmDelete, cancelDelete, createSession, forkSession, cancelSessionSwitch, notify, applyEditorKeys, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, inspectImages, prepareImages, cyclePermission, exportTranscript, renameTitle, copyLastResponse, recallSpace, recordLocal, recordHistory, queued, cancelQueued, historyFill, historyConsumed, waveTier, waveStyle, maxRows, onEditorRows, onMenuRows }: {
+function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openEffort, openHelp, openMode, openPermission, openResume, openPlugin, openJobs, openStatusline, openTheme, openHistory, openAgents, openSubagent, openTodos, openDelete, openDiff, reviewChanges, deleteConfirm, confirmDelete, cancelDelete, createSession, forkSession, cancelSessionSwitch, notify, applyEditorKeys, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, inspectImages, prepareImages, cyclePermission, exportTranscript, renameTitle, copyLastResponse, recallSpace, recordLocal, recordHistory, queued, cancelQueued, historyFill, historyConsumed, animations, applyAnimations, waveTier, waveStyle, maxRows, onEditorRows, onMenuRows }: {
   active: boolean
   frozen: boolean
   busy: boolean
@@ -2999,6 +3219,10 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   historyFill: { text: string; index: number } | undefined
   /** Marks the accepted entry consumed (called after the fill is applied). */
   historyConsumed(): void
+  /** Whether timed animations run (shimmer, chase, blink, wave). */
+  animations: boolean
+  /** Apply and report one /animation toggle (App persists through the runner). */
+  applyAnimations(enabled: boolean): void
   /** DeepSeek easter-egg wave tier of the applied route (null otherwise):
    * official DeepSeek models drive their flash/pro tiers, non-DeepSeek
    * models running an effort above high drive the "Into the Unknown"
@@ -3032,7 +3256,7 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   const [preparingImages, setPreparingImages] = useState(false)
   const prepareAbortRef = useRef<AbortController | undefined>(undefined)
   const prepareEpochRef = useRef(0)
-  const { visible: cursorVisible, reset: resetCursorBlink } = useCursorBlink(active && !frozen && !preparingImages)
+  const { visible: cursorVisible, reset: resetCursorBlink } = useCursorBlink(active && !frozen && !preparingImages && animations)
   useEffect(() => () => {
     prepareEpochRef.current += 1
     prepareAbortRef.current?.abort()
@@ -3733,6 +3957,13 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
         openTheme()
         return
       }
+      if (text === '/animation' || text.startsWith('/animation ')) {
+        const parsed = parseAnimationsArgument(text.slice('/animation'.length))
+        if (parsed === 'toggle') applyAnimations(!animations)
+        else if (parsed === 'usage') notify('usage: /animation [on|off]', 'info')
+        else applyAnimations(parsed.enabled)
+        return
+      }
       if (text === '/history') {
         openHistory()
         return
@@ -3915,41 +4146,31 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
     }
   }, active)
 
-  // The DeepSeek easter-egg wave owns its 33ms tick HERE instead of in App:
-  // the interval re-renders only the composer band at 30fps, never the whole
-  // tree. App drives the tier/style pair on a model switch; this local effect
-  // starts the sweep whenever that pair changes (App picks a NEW random style
-  // for every replay — including effort changes on the same route — so the
-  // pair always differs when a new wave should run) and stops it when the
-  // route leaves every wave tier (tier becomes null).
-  const [waveTick, setWaveTick] = useState<number | null>(null)
-  const wavePrevious = useRef<{ tier: DeepseekWaveTier | null; style: DeepseekWaveStyle | null }>({ tier: null, style: null })
+  // The DeepSeek easter-egg wave renders through the ComposerWave leaf
+  // below, which owns its 33ms tick: the sweep re-renders only that child at
+  // 30fps — this component's editor model, menu, and derived state never
+  // re-run per frame. App drives the tier/style pair on a model switch, and
+  // the child remounts whenever that pair changes (App picks a NEW random
+  // style for every replay, so the pair always differs when a wave should
+  // run), resetting the timeline to frame 0 before the first paint.
+  //
+  // The sweep is strictly one-shot per trigger, and the latch lives HERE —
+  // not in the leaf — because modal panels freeze the composer and UNMOUNT
+  // ComposerWave; a mount-scoped latch would reset on every panel close and
+  // replay a finished sweep. Keying `wavePlayedKey` by the tier:style pair
+  // survives those unmounts: only a NEW trigger (which always changes the
+  // pair) re-arms the sweep. Busy turns, image preparation, /animation
+  // toggles, and panel open/close on an UNCHANGED model+effort pair never
+  // fire it again.
+  const waveKey = waveTier !== null && waveStyle !== null ? `${waveTier}:${waveStyle}` : null
+  const [wavePlayedKey, setWavePlayedKey] = useState<string | null>(null)
   useEffect(() => {
-    const previous = wavePrevious.current
-    wavePrevious.current = { tier: waveTier, style: waveStyle }
-    if (waveTier === null) {
-      setWaveTick(null)
-      return
-    }
-    if (previous.tier !== waveTier || previous.style !== waveStyle) {
-      setWaveTick(0)
-    }
-  }, [waveTier, waveStyle])
-  const waveActive = !preparingImages && waveTick !== null && waveTier !== null && waveStyle !== null
-    && waveTick * DEEPSEEK_WAVE_TICK_MS < deepseekWaveDuration(waveTier, waveStyle)
-  useEffect(() => {
-    if (!waveActive) return
-    const id = setInterval(() => {
-      setWaveTick(current => (current === null ? 0 : current + 1))
-    }, DEEPSEEK_WAVE_TICK_MS)
-    return () => {
-      clearInterval(id)
-    }
-  }, [waveActive])
-  useEffect(() => {
-    if (waveTick !== null && waveTier !== null && waveStyle !== null
-      && waveTick * DEEPSEEK_WAVE_TICK_MS >= deepseekWaveDuration(waveTier, waveStyle)) setWaveTick(null)
-  }, [waveTick, waveTier, waveStyle])
+    // While animations are off, any pending trigger is consumed silently:
+    // re-enabling must never queue or replay a celebration the user opted
+    // out of watching.
+    if (!animations && waveKey !== null && waveKey !== wavePlayedKey) setWavePlayedKey(waveKey)
+  }, [animations, waveKey, wavePlayedKey])
+  const waveArmed = waveKey !== null && waveKey !== wavePlayedKey
 
   // Every exclusive panel keeps the composer as a stable visual anchor, but
   // freezes it to one row: no menu, multiline wrap, or animation.
@@ -4049,7 +4270,7 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
         ? preparingImages
           ? createElement(Text, { color: inkColor(getPalette().warn), bold: true }, '… ')
           : busy
-            ? createElement(BusyChase)
+            ? createElement(BusyChase, { animated: animations })
             : createElement(Text, { color: promptColor, bold: tierActive ? true : undefined }, `${promptGlyph} `)
         : '  ',
       parts.before,
@@ -4064,104 +4285,35 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   }
   const staticEditor = createElement(Box, { flexDirection: 'column' }, ...editorRows)
 
-  // The wave paints the SAME visible rows and caret site as the static path.
-  // Graphemes remain atomic and every background sample advances by terminal
-  // display columns, so CJK and emoji cannot move the caret or wrap the band.
-  const waveRow = (): ReactElement => {
-    const hues = deepseekWaveHues(waveTier!)
-    const style = waveStyle!
-    const bandRgb = getPalette().composerBand
-    const visibleRows = editorViewModel.rows.slice(editorWindowStart, editorWindowStart + editorWindowRows)
-    const totalBandRows = visibleRows.length + 2
-    const waveBg = (row: number, column: number): string => {
-      const rgb = deepseekWaveColumnBg(waveTick!, column, bandWidth, waveTier!, style, hues, bandRgb, row, totalBandRows)
-      return rgb === null ? bandBg : inkColor(rgb)
-    }
-    const blankBandRow = (row: number): ReactElement => {
-      const blanks: ComposerCell[] = []
-      for (let column = 0; column < bandWidth; column += 1) {
-        blanks.push({ char: ' ', width: 1, backgroundColor: waveBg(row, column) })
-      }
-      return createElement(Text, { key: `blank-${row}` }, ...waveRowSpans(blanks))
-    }
-    const cellIndexAtColumn = (cells: readonly ComposerCell[], target: number): number | undefined => {
-      let column = 0
-      for (let index = 0; index < cells.length; index += 1) {
-        if (column === target) return index
-        column += cells[index]!.width ?? visibleColumns(cells[index]!.char)
-        if (column > target) return undefined
-      }
-      return undefined
-    }
-    const editorWaveRows = visibleRows.map((row, visibleIndex) => {
-      const sourceIndex = editorWindowStart + visibleIndex
-      const bandRow = visibleIndex + 1
-      const parts = editorRowParts(row, sourceIndex, caret.row, clampedCursor)
-      const placeholder = sourceIndex === 0 && value === '' && !busy
-      const cells: ComposerCell[] = []
-      let usedColumns = 0
-      const push = (char: string, extra: Omit<ComposerCell, 'char' | 'width' | 'backgroundColor'> = {}): void => {
-        const width = visibleColumns(char)
-        cells.push({ char, width, backgroundColor: waveBg(bandRow, usedColumns), ...extra })
-        usedColumns += width
-      }
-      if (sourceIndex === 0) {
-        push(promptGlyph, { color: promptColor, bold: true })
-        push(' ', { color: promptColor })
-      } else {
-        push(' ')
-        push(' ')
-      }
-      for (const span of splitGraphemes(parts.before)) push(span.text)
-      if (parts.hasCaret) push(parts.caret, { inverse: cursorVisible })
-      const tail = placeholder ? COMPOSER_PLACEHOLDER : parts.after
-      for (const span of splitGraphemes(tail)) push(span.text, placeholder ? { dim: true } : {})
-      while (usedColumns < bandWidth) push(' ')
-
-      const middleBandRow = Math.floor(totalBandRows / 2)
-      if (bandRow === middleBandRow && deepseekWaveWordVisible(waveTick!, waveTier!, style)) {
-        const word = waveTier === 'unknown' ? 'Into the Unknown' : 'deepseek'
-        const start = Math.max(2, Math.floor((bandWidth - word.length) / 2))
-        const indices = Array.from({ length: word.length }, (_, at) => cellIndexAtColumn(cells, start + at))
-        if (indices.every(index => index !== undefined && (cells[index]!.char === ' ' || cells[index]!.dim === true))) {
-          for (let at = 0; at < word.length; at += 1) {
-            const cell = cells[indices[at]!]!
-            cell.char = word[at]!
-            cell.width = 1
-            cell.color = inkColor(deepseekWaveWordHue(at, hues))
-            cell.bold = true
-            cell.dim = false
-          }
-        }
-      }
-      if (bandRow === middleBandRow && (waveTier === 'deepseek' || waveTier === 'unknown') && style === 'wave') {
-        const spark = deepseekWaveSpark(waveTick!)
-        const lastIndex = cellIndexAtColumn(cells, bandWidth - 1)
-        if (spark !== null && lastIndex !== undefined && cells[lastIndex]!.char === ' ') {
-          cells[lastIndex]!.char = spark
-          cells[lastIndex]!.color = promptColor
-          cells[lastIndex]!.bold = true
-          cells[lastIndex]!.dim = false
-        }
-      }
-      return createElement(Text, { key: `editor-${sourceIndex}`, wrap: 'truncate-end' }, ...waveRowSpans(cells))
-    })
-    return createElement(
-      Box,
-      { flexDirection: 'column', width: bandWidth },
-      blankBandRow(0),
-      ...editorWaveRows,
-      blankBandRow(totalBandRows - 1),
-    )
-  }
-
+  // The wave paints the SAME visible rows and caret site as the static path
+  // through the ComposerWave leaf (see its comment). The child remounts on
+  // every tier/style change, so its timeline always starts at frame 0, and
+  // its gate cancels — never freezes — the sweep while busy, preparing
+  // images, or animations are off.
   return createElement(
     Box,
     { flexDirection: 'column' },
     menu,
-    waveTick !== null && waveTier !== null && waveStyle !== null && !busy && !preparingImages
-      ? waveRow()
-      : band(staticEditor),
+    createElement(ComposerWave, {
+      key: waveKey ?? 'static',
+      tier: waveTier ?? 'deepseek',
+      style: waveStyle ?? 'wave',
+      active: waveTier !== null && waveStyle !== null && !busy && !preparingImages && animations && waveArmed,
+      onSettled: () => {
+        if (waveKey !== null) setWavePlayedKey(waveKey)
+      },
+      fallback: band(staticEditor),
+      bandWidth,
+      bandBg,
+      rows: editorViewModel.rows.slice(editorWindowStart, editorWindowStart + editorWindowRows),
+      windowStart: editorWindowStart,
+      caretRow: caret.row,
+      cursor: clampedCursor,
+      caretVisible: cursorVisible,
+      value,
+      promptGlyph,
+      promptColor,
+    }),
   )
 }
 
@@ -4431,12 +4583,21 @@ export function App(props: AppProps): ReactElement {
    * to static while the prompt marker keeps the tier accent. The trigger
    * follows the applied model label (what the status bar actually shows),
    * never the initial paint, and the tier is derived from the label and
-   * cached at the switch. The 33ms tick itself lives inside Input, so the
-   * sweep re-renders only the composer band, not the whole tree, at 30fps;
-   * App owns the rarely-changing tier/style and Input starts the sweep
-   * whenever that pair changes. */
+   * cached at the switch. The 33ms tick itself lives inside the ComposerWave
+   * leaf, so the sweep re-renders only the composer band, not the whole tree,
+   * at 30fps; App owns the rarely-changing tier/style and the leaf plays the
+   * sweep exactly ONCE per pair change — an unchanged model+effort pair
+   * (ordinary turns, image preparation, /animation toggles) never replays. */
   const [waveTier, setWaveTier] = useState<DeepseekWaveTier | null>(null)
   const [waveStyle, setWaveStyle] = useState<DeepseekWaveStyle | null>(null)
+  // /animation toggle: applies immediately, persists through the runner, and
+  // gates every timed leaf (shimmer, chase, blink, wave) for this render.
+  const [animations, setAnimations] = useState(props.animations ?? true)
+  const applyAnimations = (enabled: boolean): void => {
+    setAnimations(enabled)
+    props.saveAnimations?.(enabled)
+    notify(`animations ${enabled ? 'on' : 'off'}`)
+  }
   const previousModel = useRef<string | undefined>(undefined)
   const previousEffort = useRef<string | undefined>(props.effort)
   const previousStyle = useRef<DeepseekWaveStyle | undefined>(undefined)
@@ -5114,7 +5275,7 @@ export function App(props: AppProps): ReactElement {
             // marker falls back to the static dim row — same as Deep diving
             // always yields the live region to streaming content.
             : view.streaming === ''
-              ? createElement(ShimmerLine, { text: '✻ Thinking… (Ctrl/Alt+R to expand)' })
+              ? createElement(ShimmerLine, { text: '✻ Thinking… (Ctrl/Alt+R to expand)', animated: animations })
               : createElement(StreamTail, {
                 text: 'Thinking… (Ctrl/Alt+R to expand)',
                 prefix: '✻ ',
@@ -5129,10 +5290,10 @@ export function App(props: AppProps): ReactElement {
             // The same two-column gutter as settled replies: streamed text
             // lands exactly where the assembled message will render.
             { text: view.streaming, dim: false, maxRows: auditedAnswerRows, prefix: '  ' },
-            busy ? createElement(Caret) : undefined,
+            busy ? createElement(Caret, { animated: animations }) : undefined,
           )
           : undefined,
-        deepDivingVisible ? createElement(DeepDivingLine, { since: view.busySince }) : undefined,
+        deepDivingVisible ? createElement(DeepDivingLine, { since: view.busySince, animated: animations }) : undefined,
       )
       : undefined,
     transcriptVisible ? createElement(TodoPanel, { todos: view.todos }) : undefined,
@@ -5430,6 +5591,8 @@ export function App(props: AppProps): ReactElement {
         cancelQueued: props.cancelQueued,
         historyFill,
         historyConsumed,
+        animations,
+        applyAnimations,
         waveTier,
         waveStyle,
         maxRows: composerEditorCap,

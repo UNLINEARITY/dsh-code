@@ -1828,6 +1828,445 @@ describe('DeepSeek model-switch easter egg', () => {
       randomSpy.mockRestore()
     }
   }, 20_000)
+
+  it('plays the wave exactly once per trigger — busy cycles and /animation toggles never replay it', async () => {
+    const originalChalkLevel = chalk.level
+    chalk.level = 3
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0)
+    const stdin = Object.assign(new PassThrough(), {
+      isTTY: true,
+      isRaw: false,
+      setRawMode(value: boolean) {
+        this.isRaw = value
+        return this
+      },
+      ref() {},
+      unref() {},
+    }) as unknown as NodeJS.ReadStream
+    const stdout = Object.assign(new PassThrough(), {
+      isTTY: true,
+      columns: 100,
+      rows: 24,
+    }) as unknown as NodeJS.WriteStream
+    let output = ''
+    stdout.on('data', chunk => {
+      output += chunk.toString()
+    })
+    const unsubscribe = (): void => {}
+    const noop = (): void => {}
+    const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
+    const store = createTranscriptStore()
+    const models = [
+      ...Array.from({ length: 30 }, (_, index) => ({
+        provider: 'acme',
+        providerName: 'Acme',
+        model: `model-${String(index).padStart(2, '0')}`,
+        modelName: `Model ${String(index).padStart(2, '0')}`,
+      })),
+      { provider: 'deepseek-official', providerName: 'DeepSeek', model: 'deepseek-reasoner', modelName: 'DeepSeek-Reasoner' },
+    ]
+    const instance = render(createElement(App, {
+      store,
+      subagents: { subscribe: () => unsubscribe, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
+      approval: { subscribe: () => unsubscribe, getSnapshot: () => approvalSnapshot },
+      questions: {
+        subscribe: () => unsubscribe,
+        getSnapshot: () => questionSnapshot,
+        submit: noop,
+        cancel: noop,
+      },
+      commands: { descriptors: [], subscribe: () => unsubscribe },
+      skills: { rows: [], subscribe: () => unsubscribe },
+      model: 'acme/model-01',
+      cwd: 'dsh-cli',
+      workspaceRoot: 'C:\\repo\\dsh-cli',
+      branch: 'main',
+      sessionId: '12345678',
+      resumed: false,
+      mode: 'standard',
+      permission: 'workspace-write',
+      dispatch: noop,
+      steer: noop,
+      interrupt: () => false,
+      quit: noop,
+      loadModels: async () => ({ rows: models, failures: [] }),
+      loadMentions: async () => [],
+      selectModel: row => `${row.provider}/${row.model}`,
+      subagentModel: '',
+      setSubagentModel: () => '',
+      clearSubagentModel: noop,
+      deleteSession: async () => '',
+      cyclePermission: () => '',
+      setPermission: id => id,
+      exportTranscript: async () => {},
+      renameTitle: () => '',
+      loadPresets: async () => [],
+      loadPermissions: async () => [],
+      switchMode: async id => id,
+      createSession: noop,
+      loadSessions: async () => [],
+      loadSubagents: async () => [],
+      loadSessionTranscript: async () => '',
+      switchSession: noop,
+      cancelSessionSwitch: () => false,
+      loadPlugins: () => [],
+      loadJobs: () => [],
+      statusline: DEFAULT_STATUSLINE_ITEMS,
+      saveStatusline: noop,
+      history: [],
+      recordHistory: noop,
+      cancelQueued: noop,
+      onBridgeReady: noop,
+    }), {
+      stdin,
+      stdout,
+      stderr: stdout,
+      exitOnCtrlC: false,
+      patchConsole: false,
+    })
+
+    try {
+      await wait()
+      // Switch onto the official DeepSeek route (bottom row) — the sweep
+      // must play exactly once.
+      stdin.write('/model')
+      await wait()
+      stdin.write('\r')
+      await wait()
+      stdin.write('G')
+      await wait()
+      stdin.write('\r')
+      await wait()
+      output = ''
+      await sleep(2600)
+      expect(waveBgCount(output)).toBeGreaterThan(0)
+      expect(output).toContain('✧')
+
+      // A full busy cycle on the UNCHANGED model+effort pair drops and raises
+      // the wave gate — a completed sweep must never restart from it.
+      store.apply({ type: 'turn/start', seq: 1, time: 1, data: { turn: 1 } } as SessionEvent)
+      await sleep(300)
+      store.apply({ type: 'turn/end', seq: 2, time: 2, data: { turn: 1, reason: { kind: 'completed' } } } as SessionEvent)
+      await sleep(300)
+      let mark = output.length
+      await sleep(1200)
+      let delta = output.slice(mark)
+      expect(waveBgCount(delta)).toBe(0)
+      expect(delta).not.toContain('✦')
+
+      // /animation off → on on the unchanged pair replays nothing either.
+      output = ''
+      stdin.write('/animation off')
+      await wait()
+      stdin.write('\r')
+      await wait()
+      expect(output).toContain('animations off')
+      stdin.write('/animation on')
+      await wait()
+      stdin.write('\r')
+      await wait()
+      expect(output).toContain('animations on')
+      mark = output.length
+      await sleep(1200)
+      delta = output.slice(mark)
+      expect(waveBgCount(delta)).toBe(0)
+      expect(delta).not.toContain('✦')
+
+      // Modal panels freeze the composer and UNMOUNT the wave leaf; closing
+      // one must NOT replay the settled sweep (the one-shot latch lives in
+      // Input, surviving the leaf's unmount/remount cycle).
+      output = ''
+      stdin.write('/help')
+      await wait()
+      stdin.write('\r')
+      await wait()
+      stdin.write('\x1b') // esc closes the help panel
+      await wait()
+      mark = output.length
+      await sleep(1200)
+      delta = output.slice(mark)
+      expect(waveBgCount(delta)).toBe(0)
+      expect(delta).not.toContain('✦')
+    } finally {
+      instance.unmount()
+      stdin.destroy()
+      stdout.destroy()
+      chalk.level = originalChalkLevel
+      randomSpy.mockRestore()
+    }
+  }, 25_000)
+
+  it('consumes triggers that land while animations are off — /animation on never queues a wave', async () => {
+    const originalChalkLevel = chalk.level
+    chalk.level = 3
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0)
+    const stdin = Object.assign(new PassThrough(), {
+      isTTY: true,
+      isRaw: false,
+      setRawMode(value: boolean) {
+        this.isRaw = value
+        return this
+      },
+      ref() {},
+      unref() {},
+    }) as unknown as NodeJS.ReadStream
+    const stdout = Object.assign(new PassThrough(), {
+      isTTY: true,
+      columns: 100,
+      rows: 24,
+    }) as unknown as NodeJS.WriteStream
+    let output = ''
+    stdout.on('data', chunk => {
+      output += chunk.toString()
+    })
+    const unsubscribe = (): void => {}
+    const noop = (): void => {}
+    const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
+    const store = createTranscriptStore()
+    const models = [
+      ...Array.from({ length: 30 }, (_, index) => ({
+        provider: 'acme',
+        providerName: 'Acme',
+        model: `model-${String(index).padStart(2, '0')}`,
+        modelName: `Model ${String(index).padStart(2, '0')}`,
+      })),
+      { provider: 'deepseek-official', providerName: 'DeepSeek', model: 'deepseek-reasoner', modelName: 'DeepSeek-Reasoner' },
+    ]
+    const instance = render(createElement(App, {
+      store,
+      subagents: { subscribe: () => unsubscribe, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
+      approval: { subscribe: () => unsubscribe, getSnapshot: () => approvalSnapshot },
+      questions: {
+        subscribe: () => unsubscribe,
+        getSnapshot: () => questionSnapshot,
+        submit: noop,
+        cancel: noop,
+      },
+      commands: { descriptors: [], subscribe: () => unsubscribe },
+      skills: { rows: [], subscribe: () => unsubscribe },
+      model: 'acme/model-01',
+      cwd: 'dsh-cli',
+      workspaceRoot: 'C:\\repo\\dsh-cli',
+      branch: 'main',
+      sessionId: '12345678',
+      resumed: false,
+      mode: 'standard',
+      permission: 'workspace-write',
+      dispatch: noop,
+      steer: noop,
+      interrupt: () => false,
+      quit: noop,
+      loadModels: async () => ({ rows: models, failures: [] }),
+      loadMentions: async () => [],
+      selectModel: row => `${row.provider}/${row.model}`,
+      subagentModel: '',
+      setSubagentModel: () => '',
+      clearSubagentModel: noop,
+      deleteSession: async () => '',
+      cyclePermission: () => '',
+      setPermission: id => id,
+      exportTranscript: async () => {},
+      renameTitle: () => '',
+      loadPresets: async () => [],
+      loadPermissions: async () => [],
+      switchMode: async id => id,
+      createSession: noop,
+      loadSessions: async () => [],
+      loadSubagents: async () => [],
+      loadSessionTranscript: async () => '',
+      switchSession: noop,
+      cancelSessionSwitch: () => false,
+      loadPlugins: () => [],
+      loadJobs: () => [],
+      statusline: DEFAULT_STATUSLINE_ITEMS,
+      saveStatusline: noop,
+      history: [],
+      recordHistory: noop,
+      cancelQueued: noop,
+      onBridgeReady: noop,
+    }), {
+      stdin,
+      stdout,
+      stderr: stdout,
+      exitOnCtrlC: false,
+      patchConsole: false,
+    })
+
+    try {
+      await wait()
+      // Disable animations FIRST, then switch onto the official DeepSeek
+      // route while they are off.
+      stdin.write('/animation off')
+      await wait()
+      stdin.write('\r')
+      await wait()
+      expect(output).toContain('animations off')
+      output = ''
+      stdin.write('/model')
+      await wait()
+      stdin.write('\r')
+      await wait()
+      stdin.write('G')
+      await wait()
+      stdin.write('\r')
+      await wait()
+      // The » tier accent proves the route switch landed (its absence alone
+      // would be a vacuous pass)…
+      expect(output).toContain('»')
+      await sleep(1000)
+      // …and no wave played while animations were off.
+      expect(waveBgCount(output)).toBe(0)
+
+      // Re-enabling must not replay the silently consumed celebration.
+      output = ''
+      stdin.write('/animation on')
+      await wait()
+      stdin.write('\r')
+      await wait()
+      expect(output).toContain('animations on')
+      const after = output.length
+      await sleep(1500)
+      expect(waveBgCount(output.slice(after))).toBe(0)
+    } finally {
+      instance.unmount()
+      stdin.destroy()
+      stdout.destroy()
+      chalk.level = originalChalkLevel
+      randomSpy.mockRestore()
+    }
+  }, 20_000)
+
+  it('freezes the wave and the busy shimmer entirely when animations are off', async () => {
+    const originalChalkLevel = chalk.level
+    chalk.level = 3
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0)
+    const stdin = Object.assign(new PassThrough(), {
+      isTTY: true,
+      isRaw: false,
+      setRawMode(value: boolean) {
+        this.isRaw = value
+        return this
+      },
+      ref() {},
+      unref() {},
+    }) as unknown as NodeJS.ReadStream
+    const stdout = Object.assign(new PassThrough(), {
+      isTTY: true,
+      columns: 100,
+      rows: 24,
+    }) as unknown as NodeJS.WriteStream
+    let output = ''
+    stdout.on('data', chunk => {
+      output += chunk.toString()
+    })
+    const unsubscribe = (): void => {}
+    const noop = (): void => {}
+    const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
+    const store = createTranscriptStore()
+    const models = [
+      ...Array.from({ length: 30 }, (_, index) => ({
+        provider: 'acme',
+        providerName: 'Acme',
+        model: `model-${String(index).padStart(2, '0')}`,
+        modelName: `Model ${String(index).padStart(2, '0')}`,
+      })),
+      { provider: 'deepseek-official', providerName: 'DeepSeek', model: 'deepseek-reasoner', modelName: 'DeepSeek-Reasoner' },
+    ]
+    const instance = render(createElement(App, {
+      store,
+      animations: false,
+      subagents: { subscribe: () => unsubscribe, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
+      approval: { subscribe: () => unsubscribe, getSnapshot: () => approvalSnapshot },
+      questions: {
+        subscribe: () => unsubscribe,
+        getSnapshot: () => questionSnapshot,
+        submit: noop,
+        cancel: noop,
+      },
+      commands: { descriptors: [], subscribe: () => unsubscribe },
+      skills: { rows: [], subscribe: () => unsubscribe },
+      model: 'acme/model-01',
+      cwd: 'dsh-cli',
+      workspaceRoot: 'C:\\repo\\dsh-cli',
+      branch: 'main',
+      sessionId: '12345678',
+      resumed: false,
+      mode: 'standard',
+      permission: 'workspace-write',
+      dispatch: noop,
+      steer: noop,
+      interrupt: () => false,
+      quit: noop,
+      loadModels: async () => ({ rows: models, failures: [] }),
+      loadMentions: async () => [],
+      selectModel: row => `${row.provider}/${row.model}`,
+      subagentModel: '',
+      setSubagentModel: () => '',
+      clearSubagentModel: noop,
+      deleteSession: async () => '',
+      cyclePermission: () => '',
+      setPermission: id => id,
+      exportTranscript: async () => {},
+      renameTitle: () => '',
+      loadPresets: async () => [],
+      loadPermissions: async () => [],
+      switchMode: async id => id,
+      createSession: noop,
+      loadSessions: async () => [],
+      loadSubagents: async () => [],
+      loadSessionTranscript: async () => '',
+      switchSession: noop,
+      cancelSessionSwitch: () => false,
+      loadPlugins: () => [],
+      loadJobs: () => [],
+      statusline: DEFAULT_STATUSLINE_ITEMS,
+      saveStatusline: noop,
+      history: [],
+      recordHistory: noop,
+      cancelQueued: noop,
+      onBridgeReady: noop,
+    }), {
+      stdin,
+      stdout,
+      stderr: stdout,
+      exitOnCtrlC: false,
+      patchConsole: false,
+    })
+
+    try {
+      await wait()
+      // Switch onto the official DeepSeek route with animations off: the »
+      // tier accent proves the switch landed (its absence alone would be a
+      // vacuous pass)…
+      stdin.write('/model')
+      await wait()
+      stdin.write('\r')
+      await wait()
+      stdin.write('G')
+      await wait()
+      stdin.write('\r')
+      await wait()
+      expect(output).toContain('»')
+      await sleep(1000)
+      // …and the sweep never paints a single wave background.
+      expect(waveBgCount(output)).toBe(0)
+
+      // Busy without streaming: the Deep diving line paints once, then never
+      // re-renders — its 33ms shimmer timer stays dormant with animations off.
+      store.apply({ type: 'turn/start', seq: 1, time: 1, data: { turn: 1 } } as SessionEvent)
+      await sleep(500)
+      expect(output).toContain('Deep diving')
+      const painted = output.length
+      await sleep(700)
+      expect(output.slice(painted)).not.toContain('Deep diving')
+    } finally {
+      instance.unmount()
+      stdin.destroy()
+      stdout.destroy()
+      chalk.level = originalChalkLevel
+      randomSpy.mockRestore()
+    }
+  }, 15_000)
 })
 
 describe('bracketed paste safety', () => {

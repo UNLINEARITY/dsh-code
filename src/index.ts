@@ -83,6 +83,7 @@ import {
   selectPermission,
 } from './permissions.ts'
 import { listPluginRows } from './plugin-inventory.ts'
+import { parseAnimationsPref } from './render/animations.ts'
 import { parseThemeName, setTheme, type ThemeName } from './theme.ts'
 import {
   isSubagentSession,
@@ -695,6 +696,29 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     void settingsPersistence.save(themePath, JSON.stringify({ theme: name }, null, 2) + '\n')
       .catch((writeError: unknown) => {
         bridge.notify('theme save failed: ' + (writeError instanceof Error ? writeError.message : String(writeError)), 'error')
+      })
+  }
+
+  // /animation persistence: one user-level JSON file under the DSH home,
+  // mirroring the theme file. A missing file means animations are on; a
+  // corrupt file degrades to on with a surfaced warning. Only an explicit
+  // `false` disables (parseAnimationsPref), so hand-edited or partial files
+  // never silently freeze the UI.
+  const animationsPath = join(homedir(), '.dsh', 'dsh-code', 'animations.json')
+  let animationsEnabled = true
+  let animationsWarning: string | undefined
+  try {
+    // `?? {}` keeps a literal `null` file from surfacing a cryptic TypeError.
+    animationsEnabled = parseAnimationsPref((JSON.parse(readFileSync(animationsPath, 'utf8')) ?? {}).animations)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      animationsWarning = error instanceof Error ? error.message : String(error)
+    }
+  }
+  const saveAnimations = (enabled: boolean): void => {
+    void settingsPersistence.save(animationsPath, JSON.stringify({ animations: enabled }, null, 2) + '\n')
+      .catch((writeError: unknown) => {
+        bridge.notify('animations save failed: ' + (writeError instanceof Error ? writeError.message : String(writeError)), 'error')
       })
   }
 
@@ -1683,6 +1707,8 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       saveStatusline,
       applyEditorKeys,
       saveTheme,
+      animations: animationsEnabled,
+      saveAnimations,
       history: inputHistory,
       recordHistory,
       cancelQueued,
@@ -1731,6 +1757,12 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   if (themeWarning !== undefined) {
     setTimeout(() => {
       bridge.notify('theme config unreadable, using dark: ' + themeWarning, 'warning')
+    }, 50)
+  }
+  // And for a corrupt animations file (on-by-default fallback stays live).
+  if (animationsWarning !== undefined) {
+    setTimeout(() => {
+      bridge.notify('animations config unreadable, animations stay on: ' + animationsWarning, 'warning')
     }, 50)
   }
 

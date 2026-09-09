@@ -166,6 +166,7 @@ The following built-in commands are available inside the TUI. Additional Harness
 | `/statusline` | Select the items displayed in the status bar |
 | `/vscode-keys` | Pass Ctrl+R through VS Code-family terminals (idempotent user-level keybindings.json write) |
 | `/theme` | Switch the terminal color theme |
+| `/animation` | Toggle timed animations (shimmer/chase/blink/switch wave), `/animation [on\|off]` |
 | `/help` | View key bindings, built-in commands, Harness commands, and user skills |
 | `/quit` | Exit DSH-Code |
 

@@ -30,6 +30,8 @@ import {
   effortAboveHigh,
   envelope,
   isOfficialDeepSeekLabel,
+  parseAnimationsArgument,
+  parseAnimationsPref,
   SPARK_GLYPHS,
   WAVE_HALF_WIDTH,
   type DeepseekWaveStyle,
@@ -117,6 +119,38 @@ describe('caretVisible', () => {
     expect(caretVisible(0)).toBe(true)
     expect(caretVisible(1)).toBe(false)
     expect(caretVisible(2)).toBe(true)
+  })
+})
+
+describe('parseAnimationsPref', () => {
+  it('disables animations only on an explicit false', () => {
+    expect(parseAnimationsPref(false)).toBe(false)
+    expect(parseAnimationsPref(true)).toBe(true)
+    expect(parseAnimationsPref(undefined)).toBe(true)
+    expect(parseAnimationsPref(null)).toBe(true)
+    expect(parseAnimationsPref('off')).toBe(true)
+    expect(parseAnimationsPref(0)).toBe(true)
+  })
+})
+
+describe('parseAnimationsArgument', () => {
+  it('toggles on a bare argument and accepts explicit on/off synonyms', () => {
+    expect(parseAnimationsArgument('')).toBe('toggle')
+    expect(parseAnimationsArgument('  ')).toBe('toggle')
+    expect(parseAnimationsArgument('on')).toEqual({ enabled: true })
+    expect(parseAnimationsArgument('ON')).toEqual({ enabled: true })
+    expect(parseAnimationsArgument(' True ')).toEqual({ enabled: true })
+    expect(parseAnimationsArgument('1')).toEqual({ enabled: true })
+    expect(parseAnimationsArgument('off')).toEqual({ enabled: false })
+    expect(parseAnimationsArgument('OFF')).toEqual({ enabled: false })
+    expect(parseAnimationsArgument('false')).toEqual({ enabled: false })
+    expect(parseAnimationsArgument('0')).toEqual({ enabled: false })
+  })
+
+  it('reports usage for anything else', () => {
+    expect(parseAnimationsArgument('banana')).toBe('usage')
+    expect(parseAnimationsArgument('2')).toBe('usage')
+    expect(parseAnimationsArgument('yes please')).toBe('usage')
   })
 })
 
@@ -213,6 +247,20 @@ describe('deepseekWaveTier', () => {
     expect(deepseekWaveTier('deepseek-official/deepseek-chat')).toBe('deepseek')
     expect(deepseekWaveTier('deepseek/deepseek-chat')).toBe('deepseek')
     expect(deepseekWaveTier('deepseek-official/deepseek-v4')).toBe('deepseek')
+  })
+
+  it('matches flash only in the model segment, never the provider name', () => {
+    expect(deepseekWaveTier('flashai/deepseek-chat')).toBe('deepseek')
+    expect(deepseekWaveTier('flashcorp/gpt-x')).toBe('deepseek')
+    expect(deepseekWaveTier('FlashCorp/deepseek-v4')).toBe('deepseek')
+    expect(deepseekWaveTier('deepseek-official/deepseek-v4-flash')).toBe('flash')
+    expect(deepseekWaveTier('deepseek-flash')).toBe('flash')
+  })
+
+  it('splits at the FIRST slash, so aggregator ids keep their model tail', () => {
+    expect(deepseekWaveTier('openrouter/google/gemini-flash-1.5')).toBe('flash')
+    expect(deepseekWaveTier('openrouter/google/gemini-2.5-pro')).toBe('deepseek')
+    expect(deepseekWaveTier('openrouter/deepseek/deepseek-chat')).toBe('deepseek')
   })
 })
 

@@ -78,6 +78,9 @@ export function deepDivingSparkColor(tick: number, base: RgbTriple, highlight: R
   return blendRgb(highlight, base, deepDivingSparkIntensity(tick))
 }
 
+/** Caret blink cadence: one blink step (on or off) per tick. */
+export const CARET_BLINK_TICK_MS = 530
+
 /** Caret visibility: half the ticks on, half off (530ms blink). */
 export function caretVisible(tick: number): boolean {
   return tick % 2 === 0
@@ -205,14 +208,18 @@ export function deepseekWaveStyleRandom(previous: DeepseekWaveStyle | undefined)
 }
 
 /**
- * Tier for a `provider/model` label: a model id containing `flash` runs the
+ * Tier for a `provider/model` label: a MODEL ID containing `flash` runs the
  * single-band flash tier; everything else (pro/reasoner/chat) runs the
- * dual-band deepseek tier. Mirrors Codex's Max→Ultra mapping.
+ * dual-band deepseek tier. Mirrors Codex's Max→Ultra mapping. Only the model
+ * segment (after the `/`) is matched, so a provider whose name contains
+ * `flash` cannot flip an unrelated model onto the flash tier.
  * @param model - the `provider/model` label of the applied model.
  * @returns the wave tier for that model.
  */
 export function deepseekWaveTier(model: string): DeepseekWaveTier {
-  return model.toLowerCase().includes('flash') ? 'flash' : 'deepseek'
+  const slash = model.indexOf('/')
+  const id = slash < 0 ? model : model.slice(slash + 1)
+  return id.toLowerCase().includes('flash') ? 'flash' : 'deepseek'
 }
 
 /**
@@ -464,4 +471,32 @@ export function effortAboveHigh(effort: string | undefined): boolean {
   if (effort === undefined || effort === '') return false
   const rank = EFFORT_RANK[effort.trim().toLowerCase()]
   return rank !== undefined && rank > 3
+}
+
+/**
+ * Parse a persisted animations preference (`animations.json`): timed
+ * animations are on by default and only an explicit `false` disables them —
+ * a missing key, corrupt value, or absent file all mean enabled, so the
+ * /animation toggle degrades exactly like every other user preference.
+ * @param value - the raw parsed JSON value (expected boolean).
+ * @returns whether timed animations should run.
+ */
+export function parseAnimationsPref(value: unknown): boolean {
+  return value !== false
+}
+
+/**
+ * One parsed `/animation` argument: '' toggles, `on|true|1` enables,
+ * `off|false|0` disables (case-insensitive, surrounding whitespace ignored),
+ * and anything else is a usage error the caller surfaces. Kept pure so the
+ * command's entire decision table is unit-testable.
+ * @param argument - the raw text after `/animation`.
+ * @returns `{ enabled }`, `'toggle'`, or `'usage'`.
+ */
+export function parseAnimationsArgument(argument: string): { enabled: boolean } | 'toggle' | 'usage' {
+  const normalized = argument.trim().toLowerCase()
+  if (normalized === '') return 'toggle'
+  if (normalized === 'on' || normalized === 'true' || normalized === '1') return { enabled: true }
+  if (normalized === 'off' || normalized === 'false' || normalized === '0') return { enabled: false }
+  return 'usage'
 }
