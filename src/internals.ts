@@ -44,46 +44,67 @@ export const internals: {
     // the keyboard protocol on terminals that can safely own those key events.
     const keyboardEnhanced = shouldEnableKeyboardEnhancement()
     const focusReporting = isVsCodeTerminalEnv()
-    process.stdout.write(
-      (keyboardEnhanced ? KEYBOARD_ENHANCE_ENABLE : '')
-      + BRACKETED_PASTE_ENABLE
-      + (focusReporting ? TERMINAL_FOCUS_REPORT_ENABLE : ''),
-    )
-    // App owns Ctrl+C's deliberate three-state contract (interrupt, clear
-    // draft, quit). Ink's default `exitOnCtrlC: true` would intercept the
-    // normalized control byte first, unmount only its renderer, and leave the
-    // Harness runner plus the pushed keyboard protocol alive.
-    // stdin travels through the keypress splitter: Ink parses one chunk as
-    // one keypress, so a coalesced space-then-enter would drop both keys.
-    const tuiStdin = createSplitStdin(process.stdin)
-    // Ink only touches isTTY/setRawMode/ref/read on stdin; the object-mode
-    // proxy satisfies that contract without the full ReadStream surface.
-    const instance = render(element, {
-      exitOnCtrlC: false,
-      stdin: tuiStdin.stdin as unknown as NodeJS.ReadStream,
-      stdout: process.stdout,
-    })
-    return {
-      rerender(element: ReactElement): void {
-        instance.rerender(element)
-      },
-      unmount(): void {
-        // The cleanup below must run even when Ink's unmount throws (a
-        // render-teardown failure): a stdin tap or pushed terminal-protocol
-        // stack outliving the app wedges the terminal for whatever runs
-        // next, and a stray exception here must not skip the exit sequence.
-        try {
-          instance.unmount()
-        } finally {
-          tuiStdin.dispose()
-          // Pop only a stack this mount pushed, then disable bracketed paste.
-          process.stdout.write(
-            (keyboardEnhanced ? KEYBOARD_ENHANCE_DISABLE : '')
-            + BRACKETED_PASTE_DISABLE
-            + (focusReporting ? TERMINAL_FOCUS_REPORT_DISABLE : ''),
-          )
-        }
-      },
+    // Enter raw mode BEFORE pushing any protocol: xterm.js answers `?1004h`
+    // with an immediate focus report (ESC[I), and while the tty still carries
+    // the shell's cooked+ECHO settings that report is echoed to the screen as
+    // a literal `^[[I`. Ink only takes raw mode after its first commit, so
+    // this mount owns the window; the call is idempotent with Ink's later one.
+    if (process.stdin.isTTY === true) process.stdin.setRawMode?.(true)
+    try {
+      process.stdout.write(
+        (keyboardEnhanced ? KEYBOARD_ENHANCE_ENABLE : '')
+        + BRACKETED_PASTE_ENABLE
+        + (focusReporting ? TERMINAL_FOCUS_REPORT_ENABLE : ''),
+      )
+      // App owns Ctrl+C's deliberate three-state contract (interrupt, clear
+      // draft, quit). Ink's default `exitOnCtrlC: true` would intercept the
+      // normalized control byte first, unmount only its renderer, and leave the
+      // Harness runner plus the pushed keyboard protocol alive.
+      // stdin travels through the keypress splitter: Ink parses one chunk as
+      // one keypress, so a coalesced space-then-enter would drop both keys.
+      const tuiStdin = createSplitStdin(process.stdin)
+      // Ink only touches isTTY/setRawMode/ref/read on stdin; the object-mode
+      // proxy satisfies that contract without the full ReadStream surface.
+      const instance = render(element, {
+        exitOnCtrlC: false,
+        stdin: tuiStdin.stdin as unknown as NodeJS.ReadStream,
+        stdout: process.stdout,
+      })
+      return {
+        rerender(element: ReactElement): void {
+          instance.rerender(element)
+        },
+        unmount(): void {
+          // The cleanup below must run even when Ink's unmount throws (a
+          // render-teardown failure): a stdin tap or pushed terminal-protocol
+          // stack outliving the app wedges the terminal for whatever runs
+          // next, and a stray exception here must not skip the exit sequence.
+          // Pop the stack while raw mode still hides echo — xterm.js keeps
+          // reporting focus changes until `?1004l` lands, and one arriving
+          // after Ink restores the cooked tty would print as `^[[I`.
+          try {
+            process.stdout.write(
+              (keyboardEnhanced ? KEYBOARD_ENHANCE_DISABLE : '')
+              + BRACKETED_PASTE_DISABLE
+              + (focusReporting ? TERMINAL_FOCUS_REPORT_DISABLE : ''),
+            )
+          } finally {
+            try {
+              instance.unmount()
+            } finally {
+              tuiStdin.dispose()
+              // Belt and braces: give the tty back its cooked mode even when
+              // Ink never took raw mode over (idempotent at the termios level).
+              if (process.stdin.isTTY === true) process.stdin.setRawMode?.(false)
+            }
+          }
+        },
+      }
+    } catch (error) {
+      // The synchronous mount path failed before Ink could own the terminal:
+      // undo the raw mode entered above so the shell keeps its echo.
+      if (process.stdin.isTTY === true) process.stdin.setRawMode?.(false)
+      throw error
     }
   },
   stderr: process.stderr,
