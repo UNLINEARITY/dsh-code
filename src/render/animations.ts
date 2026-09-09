@@ -13,6 +13,18 @@
  * marker keeps the tier accent afterwards (persistent, like Codex's prompt
  * charge). Pure functions only — the Ink layer owns timers and colors.
  *
+ * Wave and Pulse deliberately extend the Codex port after in-terminal
+ * testing: the per-row phase cascade was removed (Codex tints each column
+ * across the whole band), Wave became a WATER SURFACE — one continuous sine
+ * swell spanning the band, mirror-symmetric about the center column, its
+ * crests flowing outward from the center with a symmetric fade envelope
+ * (the deepseek tier adds one faster harmonic crossing it), painted with
+ * Aurora's recipe: wide soft gradients, mirrored second-hue mixing, and a
+ * low alpha cap — no hard core line — while Pulse became true
+ * two-dimensional, cell-aspect-corrected rings, each dragging a trailing
+ * echo ripple in the next blue of the tier's palette. Aurora keeps Codex's
+ * geometry verbatim.
+ *
  * @module @deepseek-ai/dsh-code/render/animations
  */
 
@@ -121,11 +133,79 @@ export type DeepseekWaveStyle = 'wave' | 'aurora' | 'pulse'
 /** All styles in canonical order, for random selection. */
 const DEEPSEEK_WAVE_STYLES: readonly DeepseekWaveStyle[] = ['wave', 'aurora', 'pulse']
 
-/** Wave half-width in columns — Codex WAVE_HALF_WIDTH (9). */
-export const WAVE_HALF_WIDTH = 9
+/**
+ * The water surface: ONE continuous sine line spanning the whole band,
+ * mirror-symmetric about the center column, its crests flowing OUTWARD from
+ * the center (phase k·|x − center| − ω·t). No sweep window, no return trip —
+ * the surface fades in, flows, and fades out, symmetric in both space and
+ * time. The deepseek tier adds one faster, finer HARMONIC line whose crests
+ * cross the fundamental's: interleaved richness with both lines still
+ * symmetric and still only ever flowing outward.
+ */
+export const WAVE_SURFACE_AMPLITUDE = 0.8
+export const WAVE_SURFACE_HARMONIC = 0.45
+export const WAVE_SURFACE_WAVELENGTH = 40
+export const WAVE_SURFACE_OMEGA = 9
+/** Vertical thickness in lane units — Aurora-wide: soft gradients, no hard edges. */
+export const WAVE_SURFACE_THICKNESS = 1.2
+/**
+ * The mirrored second-hue profile: the space BELOW the surface carries a
+ * second blue at this strength, so color (not just brightness) varies
+ * continuously across the wave — Aurora-style hue mixing instead of a
+ * single flat tint.
+ */
+export const WAVE_SURFACE_MIRROR = 0.6
+/** Aurora-style soft alpha: low gain, capped well under the pulse ring's. */
+export const WAVE_SURFACE_ALPHA_GAIN = 0.45
+export const WAVE_SURFACE_ALPHA_CAP = 0.68
 
-/** Pulse ring half-width in columns — Codex PULSE_HALF_WIDTH (4.5). */
-const PULSE_HALF_WIDTH = 4.5
+/** Peak background alpha at the wave core / pulse ring (skirt keeps Codex's 0.55). */
+export const IGNITION_CORE_ALPHA = 0.85
+
+/** How far the core tint is pulled toward white — kept LOW so the flash stays ice-blue. */
+export const IGNITION_CORE_WHITE_MIX = 0.35
+
+/** Overlay alpha of the white-hot tint at the crest core / pulse ring line. */
+export const IGNITION_CORE_OVERLAY = 0.9
+
+/**
+ * The white-hot tint painted over the crest core and pulse ring line. The
+ * plain hue blend can never exceed the hue's own brightness; pulling the
+ * tint toward white lets the core flash brighter than any single palette
+ * color, which is what makes the sweep read as light.
+ */
+export function ignitionCoreTint(hue: RgbTriple): RgbTriple {
+  return [
+    Math.round(hue[0] + (255 - hue[0]) * IGNITION_CORE_WHITE_MIX),
+    Math.round(hue[1] + (255 - hue[1]) * IGNITION_CORE_WHITE_MIX),
+    Math.round(hue[2] + (255 - hue[2]) * IGNITION_CORE_WHITE_MIX),
+  ]
+}
+
+/**
+ * Pulse ring band half-width in columns, with a separate thin core line
+ * (`PULSE_CORE_HALF_WIDTH`) riding its radius. Codex used 4.5 for horizontal
+ * per-row rings; the 2-D ring is sharper so the wavefront stays readable.
+ */
+const PULSE_HALF_WIDTH = 4
+const PULSE_CORE_HALF_WIDTH = 1.2
+
+/**
+ * The trailing echo ripple: every pulse ring drags a second, weaker ring at
+ * a fraction of its radius in the NEXT hue of the tier's blues, launching a
+ * little after the primary so the center hole opens first. The concentric
+ * offset rings are what give the pulse its interleaved ripple texture.
+ */
+const PULSE_ECHO_RADIUS = 0.7
+const PULSE_ECHO_STRENGTH = 0.65
+const PULSE_ECHO_DELAY = 0.12
+
+/**
+ * Terminal cell aspect (row height ÷ column width, ≈2.2 for common fonts).
+ * A ring computed in raw cell units looks vertically squashed; weighting row
+ * distance by the aspect makes the Pulse ring appear circular on screen.
+ */
+const PULSE_ROW_ASPECT = 2.2
 
 /** Sparkle start and frame cadence — Codex SPARK_START / SPARK_FRAME. */
 const SPARK_START_MS = 900
@@ -264,17 +344,37 @@ export function envelope(elapsed: number, total: number, fadeIn: number, fadeOut
   return Math.min(Math.max(Math.min(rise, fall), 0), 1)
 }
 
+/** Per-band sampling context: everything geometry needs beyond the timeline. */
+interface BandContext {
+  /** Aspect-weighted row offset from the band's center row (Pulse 2-D ring). */
+  dy: number
+  /** Normalized vertical position: -1 = top row, +1 = bottom row, 0 = middle
+   * (or a single-row band, where the undulation cannot render). */
+  u: number
+  /** Whether the band has more than one row to undulate across. */
+  undulating: boolean
+  /** The pulse ring radius that covers the band's far corner. */
+  pulseSpan: number
+  /** Band ordinal: pulse rings and the wave harmonic key off it. */
+  bandIndex: number
+  /** The style's base duration in seconds (envelope timelines). */
+  total: number
+}
+
 /**
- * One band's contribution at a column — Codex `band_sample`, all three
- * branches: Wave sweeps an eased crest across the row; Aurora drifts a
- * sinusoidal center carrying a hue index; Pulse expands a ring from the row
- * center with cubic ease and decaying strength.
+ * One band's contributions at a column — Codex `band_sample`, redesigned:
+ * Wave is a WATER SURFACE — one continuous sine line, mirror-symmetric
+ * about the center column, crests flowing outward from the center (band 1
+ * of the deepseek tier is a faster harmonic line crossing it). Pulse rings
+ * in TWO dimensions and each drags a trailing echo ripple in the next blue.
+ * Aurora matches Codex verbatim.
  * @param style - the ignition style.
  * @param band - the band triple (meaning depends on the style).
  * @param elapsed - seconds since the animation started.
  * @param column - column index in the content row (0..width-1).
  * @param width - content-row width in columns.
- * @returns `[hueIndex, strength]`.
+ * @param context - band geometry (row position, undulation flag, pulse span).
+ * @returns one or two `[hueIndex, strength, core]` contributions.
  */
 function bandSample(
   style: DeepseekWaveStyle,
@@ -282,27 +382,69 @@ function bandSample(
   elapsed: number,
   column: number,
   width: number,
-): [number, number] {
+  context: BandContext,
+): [number, number, number][] {
   const [first, second, third] = band
   switch (style) {
     case 'wave': {
-      const progress = (elapsed - first) / second
-      if (progress < 0 || progress > 1) return [0, 0]
-      const center = easeInOut(progress) * (width + 2 * WAVE_HALF_WIDTH) - WAVE_HALF_WIDTH
-      return [0, crest(Math.abs(column - center) / WAVE_HALF_WIDTH)]
+      // The water surface: one continuous sine line across the whole band,
+      // mirror-symmetric about the center column (distance d = |x − center|
+      // drives the phase), crests flowing OUTWARD from the center — one
+      // direction, never a return trip. The band table's (launch, travel)
+      // becomes the line's fade envelope: fade in at `launch`, full until
+      // `launch + travel`, then fade out to the end — symmetric in time.
+      const fadeIn = first
+      const fadeOut = Math.max(0.05, context.total - (first + second))
+      const fade = envelope(elapsed, context.total, fadeIn, fadeOut)
+      if (fade <= 0.01) return [[0, 0, 0]]
+      // Band 0 is the fundamental swell; band 1 (deepseek tier) is a faster,
+      // finer harmonic crossing the fundamental's crests — two continuous
+      // symmetric lines interleaving instead of one shuttling back and forth.
+      const harmonic = context.bandIndex % 2 === 1
+      const wavelength = harmonic ? WAVE_SURFACE_WAVELENGTH / 1.5 : WAVE_SURFACE_WAVELENGTH
+      const omega = (harmonic ? 1.5 : 1) * WAVE_SURFACE_OMEGA
+      const amplitude = (harmonic ? WAVE_SURFACE_HARMONIC : 1) * WAVE_SURFACE_AMPLITUDE
+      const d = Math.abs(column - (width - 1) / 2)
+      const surface = amplitude * Math.sin(Math.PI * 2 * d / wavelength - omega * elapsed + (harmonic ? Math.PI / 2 : 0))
+      const fromSurface = Math.abs(context.u - surface)
+      const vertical = context.undulating ? crest(fromSurface / WAVE_SURFACE_THICKNESS) : 1
+      // Aurora-style hue mixing: the MIRRORED profile below the surface
+      // carries a second blue (the harmonic band carries the third), so the
+      // color distribution flows continuously with the wave instead of one
+      // flat tint broken by a hard core line.
+      const mirrorHue = harmonic ? 1 : 2
+      const below = context.undulating ? crest(Math.abs(context.u + surface) / WAVE_SURFACE_THICKNESS) : vertical
+      return [
+        [0, fade * vertical, 0],
+        [mirrorHue, fade * below * WAVE_SURFACE_MIRROR, 0],
+      ]
     }
     case 'aurora': {
       const center = (0.5 + 0.38 * Math.sin(Math.PI * 2 * (first * elapsed + second))) * width
       const halfWidth = Math.max(width * 0.22, 4)
-      return [Math.trunc(third), crest(Math.abs(column - center) / halfWidth)]
+      return [[Math.trunc(third), crest(Math.abs(column - center) / halfWidth), 0]]
     }
     case 'pulse': {
       const progress = (elapsed - first) / second
-      if (progress < 0 || progress > 1) return [0, 0]
+      if (progress < 0 || progress > 1) return [[0, 0, 0]]
       const inverse = 1 - progress
-      const radius = (1 - inverse * inverse * inverse) * (width / 2 + 2 * PULSE_HALF_WIDTH)
-      const distance = Math.abs(column - width / 2)
-      return [0, crest(Math.abs(distance - radius) / PULSE_HALF_WIDTH) * third * (1 - 0.6 * progress)]
+      const radius = (1 - inverse * inverse * inverse) * context.pulseSpan
+      const decay = third * (1 - 0.6 * progress)
+      const distance = Math.hypot(column - width / 2, context.dy)
+      const fromRing = Math.abs(distance - radius)
+      // Each ring carries its OWN hue (band ordinal → hues table), and the
+      // thin core line rides the radius as the bright wavefront of the band.
+      const contributions: [number, number, number][] = [
+        [context.bandIndex, crest(fromRing / PULSE_HALF_WIDTH) * decay, crest(fromRing / PULSE_CORE_HALF_WIDTH) * decay],
+      ]
+      // Trailing echo ripple in the next blue, gated until the primary has
+      // clearly launched so the center hole opens before the echo arrives.
+      const echoGate = Math.min(1, Math.max(0, (progress - PULSE_ECHO_DELAY) / 0.1))
+      if (echoGate > 0) {
+        const fromEcho = Math.abs(distance - radius * PULSE_ECHO_RADIUS)
+        contributions.push([context.bandIndex + 1, crest(fromEcho / PULSE_HALF_WIDTH) * decay * PULSE_ECHO_STRENGTH * echoGate, 0])
+      }
+      return contributions
     }
   }
 }
@@ -317,9 +459,10 @@ function blendRgb(fg: RgbTriple, bg: RgbTriple, alpha: number): RgbTriple {
 }
 
 /**
- * Per-row phase share of the duration: the crest reaches the top row first
- * and the bottom row last, sweeping down the band. 0.12 keeps the bottom
- * row's lag inside the 200ms duration extension.
+ * Aurora-only per-row phase share of the duration: its drifting bands reach
+ * the top row first and the bottom row last, sweeping down the band. 0.12
+ * keeps the bottom row's lag inside the 200ms duration extension. Wave and
+ * Pulse deliberately share one timeline (see `deepseekWaveColumnBg`).
  */
 const DEEPSEEK_WAVE_ROW_PHASE = 0.12
 
@@ -331,9 +474,13 @@ const DEEPSEEK_WAVE_ROW_PHASE = 0.12
  * blends the mixed hue toward the blank-cell base at the style's alpha cap,
  * and Aurora applies its own fade envelope. Returns `null` when the column
  * should stay transparent, so the row returns to no `backgroundColor` on
- * both ends. With `rows > 1` each row samples the same timeline shifted by a
- * per-row phase offset, so the crest cascades down the band instead of
- * painting every row identically.
+ * both ends. With `rows > 1`: Wave is a water surface — every column
+ * lights the row nearest the surface's current height, so the light reads
+ * as ONE continuous wavy line spanning the band, symmetric about the center
+ * column and flowing outward (a single-row band falls back to a flat glow);
+ * Pulse rings in two dimensions around the band's center cell with trailing
+ * echo ripples; only Aurora samples the timeline shifted by a per-row phase
+ * offset.
  * @param tick - wave frame (0, 1, … at DEEPSEEK_WAVE_TICK_MS).
  * @param column - column index in the content row (0..width-1).
  * @param width - content-row width in columns.
@@ -357,13 +504,27 @@ export function deepseekWaveColumnBg(
   rows = 1,
 ): RgbTriple | null {
   const total = deepseekWaveBaseDuration(tier, style) / 1000
+  // Only Aurora keeps the per-row phase cascade (its drifting bands stagger
+  // nicely). Wave and Pulse sample ONE shared timeline — Codex paints each
+  // column across the whole band height (`tint_column`), and the cascade we
+  // added on top of the port tore Pulse into misaligned per-row rings and
+  // smeared Wave's crest into a diagonal.
   const elapsed = deepseekWaveSampleElapsedMs(tick, tier, style) / 1000
-    - (row - (rows - 1) / 2) * total * DEEPSEEK_WAVE_ROW_PHASE
+    - (style === 'aurora' ? (row - (rows - 1) / 2) * total * DEEPSEEK_WAVE_ROW_PHASE : 0)
+  const dy = style === 'pulse' ? (row - (rows - 1) / 2) * PULSE_ROW_ASPECT : 0
+  const undulating = rows > 1
+  const u = undulating ? (row - (rows - 1) / 2) / ((rows - 1) / 2) : 0
+  const pulseSpan = Math.hypot(width / 2, ((rows - 1) / 2) * PULSE_ROW_ASPECT) + 2 * PULSE_HALF_WIDTH
   const fade = style === 'aurora' ? envelope(elapsed, total, 0.25, 0.40) : 1
   const weights = [0, 0, 0]
+  let core = 0
+  let bandIndex = 0
   for (const band of DEEPSEEK_WAVE_BANDS[style][tier]) {
-    const [hue, strength] = bandSample(style, band, elapsed, column, width)
-    weights[hue] = style === 'aurora' ? weights[hue]! + strength : Math.max(weights[hue]!, strength)
+    for (const [hue, strength, bandCore] of bandSample(style, band, elapsed, column, width, { dy, u, undulating, pulseSpan, bandIndex, total })) {
+      weights[hue] = style === 'aurora' ? weights[hue]! + strength : Math.max(weights[hue]!, strength)
+      core = Math.max(core, bandCore)
+    }
+    bandIndex += 1
   }
   const weight = weights[0]! + weights[1]! + weights[2]!
   if (weight <= 0.01) return null
@@ -380,9 +541,20 @@ export function deepseekWaveColumnBg(
     Math.round(green / weight),
     Math.round(blue / weight),
   ]
-  const alpha = style === 'aurora' ? Math.min(weight * 0.40, 0.50) * fade : weight * 0.55
+  // Alpha caps: Aurora matches Codex verbatim (≤0.50 with its fade
+  // envelope); Wave rides the same Aurora-style soft gradient (low gain,
+  // no hard core line); Pulse keeps the bright ring + its ice-blue line at
+  // the core cap — the tint overlay below only fires where a core remains.
+  const alpha = style === 'aurora'
+    ? Math.min(weight * 0.40, 0.50) * fade
+    : style === 'wave'
+      ? Math.min(weight * WAVE_SURFACE_ALPHA_GAIN, WAVE_SURFACE_ALPHA_CAP)
+      : IGNITION_CORE_ALPHA * Math.min(weight, 1)
   if (alpha < 0.02) return null
-  return blendRgb(mixed, base, alpha)
+  let background = blendRgb(mixed, base, alpha)
+  const overlay = style === 'aurora' ? 0 : core * IGNITION_CORE_OVERLAY
+  if (overlay >= 0.02) background = blendRgb(ignitionCoreTint(mixed), background, overlay)
+  return background
 }
 
 /**

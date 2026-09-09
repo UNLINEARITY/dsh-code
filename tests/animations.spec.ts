@@ -1,7 +1,8 @@
 /** Terminal animation helpers (Codex shimmer + braille StateDot chase), caret blink, and
  * the Codex effort-ignition "Wave" port for the DeepSeek model-switch easter
  * egg: tier mapping, crest/ease/envelope shapes, per-column band sampling,
- * the sparkle frame window, and the ≤0.55 background tint cap. */
+ * the sparkle frame window, the 0.55 skirt / 0.85 core tint caps, and the
+ * Wave/Pulse deviations (mirror-symmetric water surface, true 2-D rings with echoes). */
 
 import { describe, expect, it } from 'vitest'
 import { DARK_PALETTE, PALETTES, type RgbTriple } from '../src/theme.ts'
@@ -9,6 +10,9 @@ import {
   BUSY_CHASE_FRAMES,
   busyChaseFrame,
   caretVisible,
+  IGNITION_CORE_ALPHA,
+  IGNITION_CORE_OVERLAY,
+  ignitionCoreTint,
   crest,
   DEEPSEEK_WAVE_BANDS,
   DEEPSEEK_WAVE_TICK_MS,
@@ -33,7 +37,10 @@ import {
   parseAnimationsArgument,
   parseAnimationsPref,
   SPARK_GLYPHS,
-  WAVE_HALF_WIDTH,
+  WAVE_SURFACE_ALPHA_CAP,
+  WAVE_SURFACE_AMPLITUDE,
+  WAVE_SURFACE_OMEGA,
+  WAVE_SURFACE_WAVELENGTH,
   type DeepseekWaveStyle,
   type DeepseekWaveTier,
 } from '../src/render/animations.ts'
@@ -279,8 +286,10 @@ describe('deepseekWaveDuration', () => {
     expect(DEEPSEEK_WAVE_BANDS.wave.deepseek).toEqual([[0.10, 0.70, 1.0], [0.35, 0.55, 1.0]])
   })
 
-  it('uses the Codex WAVE_HALF_WIDTH of 9 columns', () => {
-    expect(WAVE_HALF_WIDTH).toBe(9)
+  it('uses the water-surface geometry: full-band wavelength, outward phase speed', () => {
+    expect(WAVE_SURFACE_WAVELENGTH).toBe(40)
+    expect(WAVE_SURFACE_OMEGA).toBe(9)
+    expect(WAVE_SURFACE_AMPLITUDE).toBe(0.8)
   })
 })
 
@@ -325,71 +334,158 @@ describe('envelope', () => {
 describe('deepseekWaveColumnBg', () => {
   const width = 40
 
-  it('returns null before the launch and after the travel (start and end transparent)', () => {
-    // tick 0: before the first band launches.
+  it('returns null outside the symmetric fade envelope (start and end transparent)', () => {
+    // tick 0: the envelope is closed.
     expect(deepseekWaveColumnBg(0, 10, width, 'flash', 'wave', flashHues, WAVE_BASE_DARK)).toBeNull()
     expect(deepseekWaveColumnBg(0, 10, width, 'deepseek', 'wave', deepseekHues, WAVE_BASE_DARK)).toBeNull()
-    // The original 0.85s/0.90s travel ends at about 1.02s/1.04s after stretching.
-    expect(deepseekWaveColumnBg(31, 10, width, 'flash', 'wave', flashHues, WAVE_BASE_DARK)).toBeNull()
-    expect(deepseekWaveColumnBg(32, 10, width, 'deepseek', 'wave', deepseekHues, WAVE_BASE_DARK)).toBeNull()
-    // Well past both extended durations the row stays transparent too.
+    // Late in the fade the surface is still alive (flash sampled 0.853s of
+    // 1.0s, deepseek 0.915s of 1.3s)…
+    expect(deepseekWaveColumnBg(31, 10, width, 'flash', 'wave', flashHues, WAVE_BASE_DARK)).not.toBeNull()
+    expect(deepseekWaveColumnBg(32, 10, width, 'deepseek', 'wave', deepseekHues, WAVE_BASE_DARK)).not.toBeNull()
+    // …and null only past each base duration (flash ≥ tick 37, deepseek ≥ 46).
+    expect(deepseekWaveColumnBg(37, 10, width, 'flash', 'wave', flashHues, WAVE_BASE_DARK)).toBeNull()
+    expect(deepseekWaveColumnBg(46, 10, width, 'deepseek', 'wave', deepseekHues, WAVE_BASE_DARK)).toBeNull()
     expect(deepseekWaveColumnBg(50, 10, width, 'flash', 'wave', flashHues, WAVE_BASE_DARK)).toBeNull()
     expect(deepseekWaveColumnBg(50, 10, width, 'deepseek', 'wave', deepseekHues, WAVE_BASE_DARK)).toBeNull()
   })
 
-  it('sweeps one eased crest across the row: paints near the center, not the far edge', () => {
-    // tick 14 (0.462s rendered, 0.385s sampled): the flash crest sits near the left.
-    expect(deepseekWaveColumnBg(14, 5, width, 'flash', 'wave', flashHues, WAVE_BASE_DARK)).not.toBeNull()
-    expect(deepseekWaveColumnBg(14, 0, width, 'flash', 'wave', flashHues, WAVE_BASE_DARK)).not.toBeNull()
-    expect(deepseekWaveColumnBg(14, 39, width, 'flash', 'wave', flashHues, WAVE_BASE_DARK)).toBeNull()
+  it('spans the full band width from the first plateau frame', () => {
+    // tick 14 (0.462s rendered, 0.385s sampled): the fade envelope is at its
+    // plateau and the surface line runs edge to edge — every column paints.
+    for (const column of [0, 5, 20, 35, 39]) {
+      expect(deepseekWaveColumnBg(14, column, width, 'flash', 'wave', flashHues, WAVE_BASE_DARK)).not.toBeNull()
+    }
   })
 
-  it('deepseek stacks the offset second band: it paints the row tail flash already left', () => {
-    // tick 20 (0.660s rendered): flash samples 0.550s while deepseek samples
-    // 0.572s. The offset second DeepSeek band still holds a far-left crest.
-    expect(deepseekWaveColumnBg(20, 2, width, 'flash', 'wave', flashHues, WAVE_BASE_DARK)).toBeNull()
-    expect(deepseekWaveColumnBg(20, 2, width, 'deepseek', 'wave', deepseekHues, WAVE_BASE_DARK)).not.toBeNull()
-    // The first DeepSeek band overlaps the right half at the same frame.
-    expect(deepseekWaveColumnBg(20, 40, width, 'deepseek', 'wave', deepseekHues, WAVE_BASE_DARK)).not.toBeNull()
+  it('weaves the second deepseek band against the first: it covers cells the single flash band does not', () => {
+    // The second DeepSeek band sweeps RIGHT-TO-LEFT while the flash band
+    // eases left-to-right, so mid-flight the counter-sweeping band lights
+    // cells the flash timeline cannot reach yet — the weave's crossing.
+    let woven = false
+    for (let tick = 0; tick < 40 && !woven; tick += 1) {
+      for (let column = 0; column < width; column += 1) {
+        const flash = deepseekWaveColumnBg(tick, column, width, 'flash', 'wave', flashHues, WAVE_BASE_DARK)
+        const deepseek = deepseekWaveColumnBg(tick, column, width, 'deepseek', 'wave', deepseekHues, WAVE_BASE_DARK)
+        if (deepseek !== null && flash === null) woven = true
+      }
+    }
+    expect(woven).toBe(true)
   })
 
-  it('blends hue 0 (the tier accent) toward the blank-cell base, never above the 55% cap', () => {
-    const hue = flashHues[0]!
+  it('blends the mixed hues toward the blank-cell base inside the soft alpha cap', () => {
     const base = WAVE_BASE_DARK
     for (const tier of ['flash', 'deepseek'] as const) {
       const hues = tier === 'flash' ? flashHues : deepseekHues
       for (let tick = 0; tick < 45; tick += 1) {
         for (let column = 0; column < width; column += 1) {
-          const bg = deepseekWaveColumnBg(tick, column, width, tier, 'wave', hues, base)
-          if (bg === null) continue
-          for (let channel = 0; channel < 3; channel += 1) {
-            const spread = Math.abs(bg[channel]! - base[channel]!)
-            const hueSpread = Math.abs(hue[channel]! - base[channel]!)
-            // alpha = weight * 0.55 ≤ 0.55; +1 covers the rounding of blendRgb.
-            expect(spread).toBeLessThanOrEqual(Math.ceil(hueSpread * 0.55) + 1)
+          for (const row of [0, 1, 2]) {
+            const bg = deepseekWaveColumnBg(tick, column, width, tier, 'wave', hues, base, row, 3)
+            if (bg === null) continue
+            for (let channel = 0; channel < 3; channel += 1) {
+              const spread = Math.abs(bg[channel]! - base[channel]!)
+              const widestHue = Math.max(...hues.map(hue => Math.abs(hue[channel]! - base[channel]!)))
+              expect(spread).toBeLessThanOrEqual(Math.ceil(WAVE_SURFACE_ALPHA_CAP * widestHue) + 1)
+            }
           }
         }
       }
     }
   })
 
-  it('mixes hue 0 only (Codex Wave bands carry no hue index)', () => {
-    // tick 20 column 2 on the stretched deepseek timeline samples the original
-    // motion at 0.572s. The color must still use hues[0] only.
-    const tick = 20
-    const sampledElapsed = tick * DEEPSEEK_WAVE_TICK_MS * 1300 / 1500 / 1000
-    const strength = crest(Math.abs(2 - (easeInOut((sampledElapsed - 0.35) / 0.55) * (width + 2 * WAVE_HALF_WIDTH) - WAVE_HALF_WIDTH)) / WAVE_HALF_WIDTH)
-    const alpha = strength * 0.55
-    expect(strength).toBeGreaterThan(0.5)
-    const bg = deepseekWaveColumnBg(tick, 2, width, 'deepseek', 'wave', deepseekHues, WAVE_BASE_DARK)
-    expect(bg).not.toBeNull()
-    const expected: RgbTriple = [
-      Math.round(flashHues[0]![0] * alpha + WAVE_BASE_DARK[0] * (1 - alpha)),
-      Math.round(flashHues[0]![1] * alpha + WAVE_BASE_DARK[1] * (1 - alpha)),
-      Math.round(flashHues[0]![2] * alpha + WAVE_BASE_DARK[2] * (1 - alpha)),
-    ]
-    expect(channelDelta(bg!, expected)).toBe(0)
+  it('keeps the wave color distribution smooth: adjacent columns shift gently', () => {
+    // The anti-fragmentation contract: with the hard core line gone and
+    // Aurora-wide thickness, neighboring columns (and rows) may only drift
+    // a little per step — no sharp brightness cliffs anywhere on the surface.
+    for (let tick = 2; tick < 36; tick += 3) {
+      for (const row of [0, 1, 2]) {
+        let previous = deepseekWaveColumnBg(tick, 0, width, 'deepseek', 'wave', deepseekHues, WAVE_BASE_DARK, row, 3)
+        for (let column = 1; column < width; column += 1) {
+          const bg = deepseekWaveColumnBg(tick, column, width, 'deepseek', 'wave', deepseekHues, WAVE_BASE_DARK, row, 3)
+          if (previous !== null && bg !== null) {
+            for (let channel = 0; channel < 3; channel += 1) {
+              expect(Math.abs(bg[channel]! - previous[channel]!)).toBeLessThanOrEqual(18)
+            }
+          }
+          previous = bg
+        }
+      }
+    }
   })
+
+  it('is mirror-symmetric about the center column on every row', () => {
+    // d = |x − 19.5| drives the phase, so columns 19−j and 20+j sample the
+    // exact same surface point — the center symmetry the design promises.
+    for (let tick = 2; tick < 40; tick += 3) {
+      for (let j = 0; j < 20; j += 1) {
+        for (const row of [0, 1, 2]) {
+          const left = deepseekWaveColumnBg(tick, 19 - j, width, 'deepseek', 'wave', deepseekHues, WAVE_BASE_DARK, row, 3)
+          const right = deepseekWaveColumnBg(tick, 20 + j, width, 'deepseek', 'wave', deepseekHues, WAVE_BASE_DARK, row, 3)
+          expect(left).toEqual(right)
+        }
+      }
+    }
+  })
+
+  it('undulates the wave: band rows diverge as the snake weaves across them', () => {
+    let rowsDiverge = false
+    let topLights = false
+    let bottomLights = false
+    for (let tick = 0; tick < 45; tick += 1) {
+      for (let column = 0; column < width; column += 1) {
+        const top = deepseekWaveColumnBg(tick, column, width, 'deepseek', 'wave', deepseekHues, WAVE_BASE_DARK, 0, 3)
+        const middle = deepseekWaveColumnBg(tick, column, width, 'deepseek', 'wave', deepseekHues, WAVE_BASE_DARK, 1, 3)
+        const bottom = deepseekWaveColumnBg(tick, column, width, 'deepseek', 'wave', deepseekHues, WAVE_BASE_DARK, 2, 3)
+        if (top !== null && middle === null) rowsDiverge = true
+        if (middle !== null && top === null) rowsDiverge = true
+        if (bottom !== null && middle === null) rowsDiverge = true
+        if (top !== null) topLights = true
+        if (bottom !== null) bottomLights = true
+      }
+    }
+    expect(rowsDiverge).toBe(true)
+    expect(topLights).toBe(true)
+    expect(bottomLights).toBe(true)
+  })
+
+  it('flashes the pulse ring line brighter than the pure hue blend can ever be', () => {
+    // blend(hue, base, α≤1) never exceeds the hue's own channel values (the
+    // dark base is darker in every channel), so any channel above the hue
+    // proves the ice-blue tint overlay still rides the PULSE ring line.
+    let flashed = false
+    for (let tick = 0; tick < 32 && !flashed; tick += 1) {
+      for (let column = 0; column < width; column += 1) {
+        const bg = deepseekWaveColumnBg(tick, column, width, 'flash', 'pulse', flashHues, WAVE_BASE_DARK, 2, 5)
+        if (bg !== null && bg[0]! > flashHues[0]![0]! + 10 && bg[1]! > flashHues[0]![1]! + 10) flashed = true
+      }
+    }
+    expect(flashed).toBe(true)
+  })
+
+  it('draws the pulse ring symmetric around the band center', () => {
+    for (let tick = 4; tick < 30; tick += 2) {
+      for (let offset = 1; offset <= 10; offset += 1) {
+        const left = deepseekWaveColumnBg(tick, 20 - offset, width, 'flash', 'pulse', flashHues, WAVE_BASE_DARK, 2, 5)
+        const right = deepseekWaveColumnBg(tick, 20 + offset, width, 'flash', 'pulse', flashHues, WAVE_BASE_DARK, 2, 5)
+        expect(left).toEqual(right)
+      }
+    }
+  })
+
+  it('curves the pulse ring: the hole opens at the center row first', () => {
+    // On a 5-row band (rows=5), the ring around the band's center cell leaves
+    // the exact center column unpainted while the outer rows — whose distance
+    // from the ring's origin includes the row offset — still paint it. That
+    // curvature is what makes the ring read as a circle instead of bars.
+    let holeFirstAtCenter = false
+    for (let tick = 3; tick < 32; tick += 1) {
+      const atCenterRow = deepseekWaveColumnBg(tick, 20, width, 'flash', 'pulse', flashHues, WAVE_BASE_DARK, 2, 5)
+      const atOuterRow = deepseekWaveColumnBg(tick, 20, width, 'flash', 'pulse', flashHues, WAVE_BASE_DARK, 0, 5)
+      if (atCenterRow === null && atOuterRow !== null) holeFirstAtCenter = true
+    }
+    expect(holeFirstAtCenter).toBe(true)
+  })
+
+
 
   it('keeps the light-theme base near-white', () => {
     const bg = deepseekWaveColumnBg(12, 5, width, 'flash', 'wave', flashHues, WAVE_BASE_LIGHT)
@@ -417,32 +513,38 @@ describe('deepseekWaveSpark', () => {
   })
 })
 
-describe('deepseekWaveColumnBg three-row band phase', () => {
+describe('deepseekWaveColumnBg three-row band geometry', () => {
   const width = 40
 
-  it('keeps the middle row of three identical to the legacy single-row sample', () => {
-    for (const style of ['wave', 'aurora', 'pulse'] as const) {
-      for (const column of [0, 5, 12, 20, 30, 39]) {
-        expect(deepseekWaveColumnBg(20, column, width, 'deepseek', style, deepseekHues, WAVE_BASE_DARK, 1, 3))
-          .toEqual(deepseekWaveColumnBg(20, column, width, 'deepseek', style, deepseekHues, WAVE_BASE_DARK))
-      }
+  it('keeps the middle row of three on the shared timeline (aurora)', () => {
+    for (const column of [0, 5, 12, 20, 30, 39]) {
+      expect(deepseekWaveColumnBg(20, column, width, 'deepseek', 'aurora', deepseekHues, WAVE_BASE_DARK, 1, 3))
+        .toEqual(deepseekWaveColumnBg(20, column, width, 'deepseek', 'aurora', deepseekHues, WAVE_BASE_DARK))
     }
   })
 
-  it('sweeps the crest down the band: cells light the top row before the bottom, and later the bottom after the top', () => {
-    const frames = Math.ceil(deepseekWaveDuration('flash', 'wave') / DEEPSEEK_WAVE_TICK_MS) + 8
-    let topLeads = 0
-    let bottomLags = 0
-    for (let tick = 0; tick < frames; tick += 1) {
-      for (let column = 0; column < width; column += 1) {
-        const top = deepseekWaveColumnBg(tick, column, width, 'flash', 'wave', flashHues, WAVE_BASE_DARK, 0, 3)
-        const bottom = deepseekWaveColumnBg(tick, column, width, 'flash', 'wave', flashHues, WAVE_BASE_DARK, 2, 3)
-        if (top !== null && bottom === null) topLeads += 1
-        if (top === null && bottom !== null) bottomLags += 1
+  it('scales the pulse span with the band diagonal, so taller bands ring farther', () => {
+    let spanDiffers = false
+    for (let tick = 0; tick < 30 && !spanDiffers; tick += 1) {
+      for (const column of [4, 10, 20, 30, 36]) {
+        const singleRow = deepseekWaveColumnBg(tick, column, width, 'deepseek', 'pulse', deepseekHues, WAVE_BASE_DARK)
+        const centerOfThree = deepseekWaveColumnBg(tick, column, width, 'deepseek', 'pulse', deepseekHues, WAVE_BASE_DARK, 1, 3)
+        if (singleRow !== centerOfThree) spanDiffers = true
       }
     }
-    expect(topLeads).toBeGreaterThan(0)
-    expect(bottomLags).toBeGreaterThan(0)
+    expect(spanDiffers).toBe(true)
+  })
+
+  it('aurora alone cascades down the band', () => {
+    let auroraDiffers = false
+    for (let tick = 0; tick < 40 && !auroraDiffers; tick += 1) {
+      for (let column = 0; column < width; column += 1) {
+        const top = deepseekWaveColumnBg(tick, column, width, 'deepseek', 'aurora', deepseekHues, WAVE_BASE_DARK, 0, 3)
+        const bottom = deepseekWaveColumnBg(tick, column, width, 'deepseek', 'aurora', deepseekHues, WAVE_BASE_DARK, 2, 3)
+        if (top !== bottom) auroraDiffers = true
+      }
+    }
+    expect(auroraDiffers).toBe(true)
   })
 })
 
@@ -519,14 +621,17 @@ describe('three ignition styles', () => {
     expect(mixedSeen).toBe(true)
   })
 
-  it('Pulse expands a ring from the row center with decaying strength', () => {
-    // Early pulse (tick 4 = 0.132s, flash launch 0.10 travel 0.60): the ring
-    // radius ≈ 4.4 columns, so the cells around center ± radius paint while
-    // the exact center (distance 0) stays inside the ring's hole.
+  it('Pulse expands a 2-D ring from the band center with decaying strength', () => {
     const center = Math.floor(width / 2)
-    expect(deepseekWaveColumnBg(4, center - 4, width, 'flash', 'pulse', flashHues, WAVE_BASE_DARK)).not.toBeNull()
-    expect(deepseekWaveColumnBg(4, center + 4, width, 'flash', 'pulse', flashHues, WAVE_BASE_DARK)).not.toBeNull()
-    // After the pulse travel (flash 0.10..0.70 → 0.70s ≈ tick 22) nothing paints.
+    // Early pulse (tick 4 ≈ 0.108s sampled, flash launch 0.10 travel 0.60):
+    // the radius is ≈1 column, so the cells right beside the center paint…
+    expect(deepseekWaveColumnBg(4, center - 2, width, 'flash', 'pulse', flashHues, WAVE_BASE_DARK)).not.toBeNull()
+    expect(deepseekWaveColumnBg(4, center + 2, width, 'flash', 'pulse', flashHues, WAVE_BASE_DARK)).not.toBeNull()
+    // …tick 6 (≈0.162s, radius ≈7): the ring has opened — the exact center
+    // sits in the hole while the ring band paints farther out.
+    expect(deepseekWaveColumnBg(6, center, width, 'flash', 'pulse', flashHues, WAVE_BASE_DARK)).toBeNull()
+    expect(deepseekWaveColumnBg(6, center + 5, width, 'flash', 'pulse', flashHues, WAVE_BASE_DARK)).not.toBeNull()
+    // After the pulse travel (flash 0.10..0.70 → 0.70s ≈ tick 26) nothing paints.
     expect(deepseekWaveColumnBg(25, center, width, 'flash', 'pulse', flashHues, WAVE_BASE_DARK)).toBeNull()
   })
 })
