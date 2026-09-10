@@ -127,6 +127,8 @@ function appProps(overrides: Partial<AppProps> = {}): AppProps {
     loadMentions: async () => [],
     inspectImages: async () => [],
     prepareImages: async () => [],
+    inspectFiles: async () => [],
+    prepareFiles: async () => [],
     selectModel: () => 'test/model',
       subagentModel: '',
       setSubagentModel: () => '',
@@ -327,6 +329,46 @@ describe('composer image attachments', () => {
     }
   })
 
+  it('turns a dropped mixed image/file list into durable image and file blocks', async () => {
+    const harness = createTty(120, 24)
+    const dispatch = vi.fn()
+    const inspectImages = vi.fn(async (paths: readonly string[]) => paths.map((path) => ({
+      path,
+      name: path.split(/[\\/]/u).at(-1) ?? 'shot.png',
+      mediaType: 'image/png' as const,
+      bytes: 8,
+    })))
+    const prepareImages = vi.fn(async (paths: readonly string[]) => paths.map((path, index) => ({
+      type: 'image' as const,
+      attachment: { attachmentId: `img-${index}`, mediaType: 'image/png' as const, bytes: 8, width: 1, height: 1, name: path.split(/[\\/]/u).at(-1) },
+    })))
+    const inspectFiles = vi.fn(async (paths: readonly string[]) => paths.map((path) => ({
+      path, name: path.split(/[\\/]/u).at(-1) ?? 'notes.txt', bytes: 10,
+    })))
+    const prepareFiles = vi.fn(async (paths: readonly string[]) => paths.map((path, index) => ({
+      type: 'file' as const,
+      attachment: { attachmentId: `file-${index}`, name: path.split(/[\\/]/u).at(-1), bytes: 10 },
+    })))
+    const instance = renderApp(harness, appProps({ dispatch, inspectImages, prepareImages, inspectFiles, prepareFiles }))
+    try {
+      await wait()
+      // One paste carrying an image and a document: both register markers.
+      harness.stdin.write('"C:\\repo\\shot.png" "C:\\repo\\report.pdf"')
+      await wait(180)
+      expect(harness.output.text).toContain('[image: shot.png]')
+      expect(harness.output.text).toContain('[file: report.pdf]')
+      harness.stdin.write('\r')
+      await wait(180)
+      expect(prepareFiles).toHaveBeenCalledWith(['C:\\repo\\report.pdf'], expect.anything())
+      expect(dispatch).toHaveBeenLastCalledWith('[image: shot.png] [file: report.pdf]', expect.arrayContaining([
+        expect.objectContaining({ type: 'image' }),
+        expect.objectContaining({ type: 'file', attachment: expect.objectContaining({ name: 'report.pdf' }) }),
+      ]))
+    } finally {
+      instance.unmount()
+    }
+  })
+
   it('warns but allows a text-only model when the session contains image history', async () => {
     const harness = createTty(110, 24)
     const store = createTranscriptStore()
@@ -452,7 +494,7 @@ describe('composer image attachments', () => {
       harness.output.text = ''
       harness.stdin.write('\r')
       await wait()
-      expect(harness.output.text).toContain('processing 1 image')
+      expect(harness.output.text).toContain('processing 1 attachment')
       expect(harness.output.text).not.toContain('\x1b[7m')
       const signal = prepareImages.mock.calls[0]?.[1]
       expect(signal?.aborted).toBe(false)

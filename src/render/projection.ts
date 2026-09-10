@@ -7,7 +7,8 @@
  * @module @deepseek-ai/dsh-tui/render/projection
  */
 
-import { assistantStreamFirstTokenTime, boundContextSummary, isTokenDelta, type ContentBlock, type ImageBlock, type MessageId, type StreamChunk } from '@deepseek-ai/dsh-llm'
+import { assistantStreamFirstTokenTime, boundContextSummary, isTokenDelta, type ContentBlock, type FileBlock, type ImageBlock, type MessageId, type StreamChunk } from '@deepseek-ai/dsh-llm'
+import type { FileAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type { TodoItem } from '@deepseek-ai/dsh-tool-todo'
 import { graphemeWidth, splitGraphemes } from './width.ts'
@@ -24,6 +25,9 @@ import type {} from '@deepseek-ai/dsh-plan-mode'
 import type {} from '@deepseek-ai/dsh-permission-presets'
 import type {} from '@deepseek-ai/dsh-sandbox-policy'
 import type {} from '@deepseek-ai/dsh-session-title'
+// The subagent package's durable catalog event joins the union the same way
+// (parent-owned facts; the fold itself lives with the live feed).
+import type {} from '@deepseek-ai/dsh-subagent'
 import { toolArgumentsPreview, toolPromptPreview } from './tool-preview.ts'
 import { toolResultDetail, type ToolDetail } from './tool-detail.ts'
 
@@ -56,6 +60,8 @@ export interface UserEntry {
   notice: boolean
   /** Durable image references carried by this prompt. */
   images?: readonly ImageBlock['attachment'][]
+  /** Durable file references carried by this prompt (0.1.5 file blocks). */
+  files?: readonly FileAttachmentRef[]
 }
 
 /** One user message waiting in the agent inbox (the web's queued-message row). */
@@ -69,6 +75,8 @@ export interface PendingEntry {
   text: string
   /** Durable image references queued with this prompt. */
   images?: readonly ImageBlock['attachment'][]
+  /** Durable file references queued with this prompt (0.1.5 file blocks). */
+  files?: readonly FileAttachmentRef[]
 }
 
 /** One authoritative assembled assistant reply. */
@@ -379,6 +387,11 @@ function imagesOf(content: readonly ContentBlock[]): readonly ImageBlock['attach
   return content.filter((block): block is ImageBlock => block.type === 'image').map(block => block.attachment)
 }
 
+/** Durable file references in their model-visible order. */
+function filesOf(content: readonly ContentBlock[]): readonly FileAttachmentRef[] {
+  return content.filter((block): block is FileBlock => block.type === 'file').map(block => block.attachment)
+}
+
 /** Human-readable bounded image labels for transcript, inspector, and export surfaces. */
 export function imageLabels(images: readonly ImageBlock['attachment'][] | undefined): string {
   if (images === undefined || images.length === 0) return ''
@@ -393,9 +406,21 @@ export function imageLabels(images: readonly ImageBlock['attachment'][] | undefi
   }).join('\n')
 }
 
-/** Prompt text with its durable image labels, without exposing local paths or bytes. */
-export function promptDisplayText(entry: Pick<UserEntry | PendingEntry, 'text' | 'images'>): string {
-  const labels = imageLabels(entry.images)
+/** Human-readable bounded file labels for the same surfaces (0.1.5 file blocks). */
+export function fileLabels(files: readonly FileAttachmentRef[] | undefined): string {
+  if (files === undefined || files.length === 0) return ''
+  return files.map((file, index) => {
+    const rawName = file.name?.trim() || `file ${index + 1}`
+    const name = rawName.length <= 80 ? rawName : `${rawName.slice(0, 79)}…`
+    return `[file: ${name} · ${file.bytes} B]`
+  }).join('\n')
+}
+
+/** Prompt text with its durable image and file labels, without exposing local paths or bytes. */
+export function promptDisplayText(entry: Pick<UserEntry | PendingEntry, 'text' | 'images' | 'files'>): string {
+  const imageText = imageLabels(entry.images)
+  const fileText = fileLabels(entry.files)
+  const labels = imageText === '' ? fileText : fileText === '' ? imageText : `${imageText}\n${fileText}`
   return entry.text === '' ? labels : labels === '' ? entry.text : `${entry.text}\n${labels}`
 }
 
@@ -480,11 +505,12 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
       // elsewhere in the product; only direct human prompts render in full.
       const text = textOf(message.content)
       const images = imagesOf(message.content)
+      const files = filesOf(message.content)
       if (message.source.kind === 'user') {
         return {
           ...view,
           pending,
-          entries: [...entries, { kind: 'user', text, notice: false, ...(images.length === 0 ? {} : { images }) }],
+          entries: [...entries, { kind: 'user', text, notice: false, ...(images.length === 0 ? {} : { images }), ...(files.length === 0 ? {} : { files }) }],
           stats: {
             ...view.stats,
             contextSegments: {
@@ -542,6 +568,7 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
           target,
           text: pendingText(message.content),
           ...imagesOf(message.content).length === 0 ? {} : { images: imagesOf(message.content) },
+          ...filesOf(message.content).length === 0 ? {} : { files: filesOf(message.content) },
         }]
       }
       return { ...view, entries, pending: { ...view.pending, [target]: nextIds } }
@@ -1202,8 +1229,9 @@ export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent):
       }
       const text = textOf(message.content)
       const images = imagesOf(message.content)
+      const files = filesOf(message.content)
       if (message.source.kind === 'user') {
-        appendReplayEntry(acc, { kind: 'user', text, notice: false, ...(images.length === 0 ? {} : { images }) })
+        appendReplayEntry(acc, { kind: 'user', text, notice: false, ...(images.length === 0 ? {} : { images }), ...(files.length === 0 ? {} : { files }) })
         acc.stats = {
           ...acc.stats,
           contextSegments: {
@@ -1251,7 +1279,8 @@ export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent):
       ids.splice(start, 0, ...inserted.map(message => message.id))
       for (const message of inserted) {
         const images = imagesOf(message.content)
-        appendReplayEntry(acc, { kind: 'pending', messageId: message.id, target, text: pendingText(message.content), ...(images.length === 0 ? {} : { images }) })
+        const files = filesOf(message.content)
+        appendReplayEntry(acc, { kind: 'pending', messageId: message.id, target, text: pendingText(message.content), ...(images.length === 0 ? {} : { images }), ...(files.length === 0 ? {} : { files }) })
         indexList(acc.pendingIndex, message.id).push(acc.entries.length - 1)
         acc.ops += 1
       }

@@ -7,7 +7,7 @@
  */
 
 import { assertNever } from '@deepseek-ai/dsh-util-values'
-import { imageLabels, type TranscriptView } from './projection.ts'
+import { fileLabels, imageLabels, type TranscriptView } from './projection.ts'
 
 /**
  * Render the transcript as a standalone markdown document.
@@ -15,6 +15,10 @@ import { imageLabels, type TranscriptView } from './projection.ts'
  * @param sessionId - the full session identity for the header.
  * @returns the complete markdown text.
  */
+/** Both user and queued rows export the same attachment label block. */
+const attachmentLabels = (entry: { images?: readonly unknown[]; files?: readonly unknown[] }): string =>
+  [imageLabels(entry.images as never), fileLabels(entry.files as never)].filter(label => label !== '').join('\n')
+
 export function buildExportMarkdown(view: TranscriptView, sessionId: string): string {
   const out: string[] = [
     view.title === ''
@@ -34,7 +38,8 @@ export function buildExportMarkdown(view: TranscriptView, sessionId: string): st
         if (entry.notice) {
           out.push(`> ⤷ context: ${entry.text}`, '')
         } else {
-          out.push('## user', '', entry.text, ...(imageLabels(entry.images) === '' ? [] : [imageLabels(entry.images)]), '')
+          const attachments = attachmentLabels(entry)
+          out.push('## user', '', entry.text, ...(attachments === '' ? [] : [attachments]), '')
         }
         break
       case 'assistant':
@@ -73,7 +78,7 @@ export function buildExportMarkdown(view: TranscriptView, sessionId: string): st
         break
       case 'pending':
         // Codex PendingSteer: queued prompts export like ordinary user rows.
-        out.push('## user', '', entry.text, ...(imageLabels(entry.images) === '' ? [] : [imageLabels(entry.images)]), '')
+        out.push('## user', '', entry.text, ...(attachmentLabels(entry) === '' ? [] : [attachmentLabels(entry)]), '')
         break
       default:
         assertNever(entry, 'transcript entry kind')

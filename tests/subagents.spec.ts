@@ -21,6 +21,25 @@ describe('foldSubagentRow', () => {
     expect(row.activity).toBe('working…')
   })
 
+  it('adopts the durable catalog label and mode as an idle row', () => {
+    // 0.1.5 parent-owned discovery fact: a continuable child carries an
+    // authored label; a one-shot child may carry none.
+    const continuable = foldSubagentRow(undefined, 's1', event('subagent/catalog', {
+      version: 0, childId: 's1', childCreatedAt: 1, mode: 'continuable', label: 'research helper',
+    }, 2))
+    expect(continuable.label).toBe('research helper')
+    expect(continuable.state).toBe('idle')
+    expect(continuable.activity).toBe('catalog · continuable · research helper')
+    const oneShot = foldSubagentRow(undefined, 's2', event('subagent/catalog', {
+      version: 0, childId: 's2', childCreatedAt: 1, mode: 'one-shot',
+    }, 3))
+    expect(oneShot.label).toBe('agent s2')
+    expect(oneShot.activity).toBe('catalog · one-shot')
+    // A later observed title still wins the label; the row stays idle.
+    const titled = foldSubagentRow(continuable, 's1', event('session/title', { title: 'explorer' }, 4))
+    expect(titled.label).toBe('explorer')
+  })
+
   it('folds tool calls and assistant messages into bounded activity text', () => {
     let row = foldSubagentRow(undefined, 's1', event('tool/call', { name: 'read_file' }, 2))
     expect(row.activity).toBe('tool read_file')

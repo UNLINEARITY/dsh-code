@@ -22,6 +22,9 @@
  */
 
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
+// Type-only import merges the subagent package's SessionEventMap variant
+// ('subagent/catalog') into the union this fold switches on.
+import type {} from '@deepseek-ai/dsh-subagent'
 
 /** Hard row cap: overflow evicts the oldest settled row; a fully busy feed waits. */
 export const MAX_SUBAGENT_ROWS = 8
@@ -112,6 +115,16 @@ export function foldSubagentRow(previous: SubagentRow | undefined, sessionId: st
       // landing without a surface message means the model is retrying or
       // recovered from a stream error, so the child stays running.
       return { ...base, state: 'running', activity: 'thinking…', updatedAt: event.time }
+    case 'subagent/catalog': {
+      // Parent-owned durable discovery fact (0.1.5): the catalog names the
+      // child's mode (one-shot vs continuable) and its authored label — the
+      // most semantic label the row can carry. Delivered to the feed through
+      // the root-session listener; idle until the child actually runs.
+      const mode = event.data.mode === 'continuable' ? 'continuable' : 'one-shot'
+      const label = event.data.label !== undefined && event.data.label.trim() !== '' ? bound(event.data.label) : undefined
+      const activity = label === undefined ? `catalog · ${mode}` : `catalog · ${mode} · ${label}`
+      return label === undefined || label === base.label ? { ...base, state: 'idle', activity, updatedAt: event.time } : { ...base, state: 'idle', label, activity, updatedAt: event.time }
+    }
     case 'assistant/message':
       return { ...base, state: 'idle', activity: messagePreview(data['message'] === undefined ? undefined : (data['message'] as { content?: unknown }).content), updatedAt: event.time }
     case 'tool/call': {

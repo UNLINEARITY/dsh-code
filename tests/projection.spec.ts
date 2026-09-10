@@ -16,6 +16,7 @@ import {
   finishReplay,
   projectEvent,
   projectEvents,
+  promptDisplayText,
   replayProjectEvent,
   settledEntryCount,
   snapshotReplayView,
@@ -160,6 +161,22 @@ describe('transcript projection', () => {
       kind: 'user', text: 'inspect', images: [{ name: 'diagram.png', width: 20, height: 10, bytes: 128, originalDimensions: { width: 80, height: 40 } }],
     })
     expect(JSON.stringify(sequential)).not.toContain('base64')
+  })
+
+  it('projects durable file blocks alongside images without exposing paths', () => {
+    const file = { attachmentId: 'sha-f1', name: 'report.pdf', bytes: 2_048 }
+    const event = {
+      type: 'user/message', seq: 1, time: 0,
+      data: createUserMessage({
+        content: [{ type: 'text', text: 'summarize' }, { type: 'file', attachment: file }],
+        source: { kind: 'user' },
+      }),
+    } as unknown as SessionEvent
+    const sequential = projectEvent(createTranscriptView(), event)
+    const replay = projectEvents([event])
+    expect(sequential).toEqual(replay)
+    expect(sequential.entries[0]).toMatchObject({ kind: 'user', text: 'summarize', files: [{ name: 'report.pdf', bytes: 2_048 }] })
+    expect(promptDisplayText(sequential.entries[0] as never)).toContain('[file: report.pdf · 2048 B]')
   })
 
   it('collapses injected plugin context to a bounded notice row', () => {

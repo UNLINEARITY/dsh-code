@@ -1,10 +1,10 @@
-/** Terminal image-file adapter over the Harness durable attachment service. */
+/** Terminal image- and file-attachment adapter over the Harness durable attachment service. */
 
 import { open, readFile, stat } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { basename, extname, isAbsolute, resolve } from 'node:path'
-import type { AttachmentStore, ImageMediaType, SaveImageAttachment } from '@deepseek-ai/dsh-attachment'
-import type { ImageBlock } from '@deepseek-ai/dsh-llm'
+import type { AttachmentStore, ImageMediaType, SaveFileAttachment, SaveImageAttachment } from '@deepseek-ai/dsh-attachment'
+import type { FileBlock, ImageBlock } from '@deepseek-ai/dsh-llm'
 
 /** A validated path retained in the editor until submission persists it. */
 export interface ImagePathInspection {
@@ -13,6 +13,22 @@ export interface ImagePathInspection {
   readonly mediaType: ImageMediaType
   readonly bytes: number
 }
+
+/** A validated non-image file path retained the same way (0.1.5 file blocks). */
+export interface FilePathInspection {
+  readonly path: string
+  readonly name: string
+  readonly bytes: number
+}
+
+/**
+ * Terminal-side file admission bounds. Upstream exposes image limits through
+ * the attachment service but no file limits (files ride verbatim storage);
+ * these keep a dragged file from silently ingesting a disk-sized blob and
+ * bound one message the way the image batch is bounded.
+ */
+export const MAX_FILE_BYTES = 8 * 1024 * 1024
+export const MAX_FILES_PER_MESSAGE = 8
 
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif'])
 
@@ -36,11 +52,27 @@ export function looksLikeImagePath(path: string): boolean {
   return IMAGE_EXTENSIONS.has(extname(path).toLowerCase())
 }
 
-/** Parse a terminal paste/drop containing only one or more image paths. */
-export function parsePastedImagePaths(input: string): readonly string[] {
+/**
+ * Parse a paste/drop into its image and file paths: image-suffixed tokens
+ * stay images, other path-shaped tokens ride as file attachments (0.1.5
+ * file blocks), and anything that is neither leaves both empty — the caller
+ * then treats the paste as plain text.
+ *
+ * File tokens are held to an absolute-path-with-shape bar (drive/backslash
+ * or a dot-suffixed leaf after a separator): a dropped terminal path always
+ * carries one of those, while prose, slash commands, and option flags never
+ * do. A POSIX absolute path without any dot-suffixed leaf falls through as
+ * text — the @ mention route still attaches such files deliberately.
+ */
+export function parsePastedAttachmentPaths(input: string): { readonly images: readonly string[]; readonly files: readonly string[] } {
   const text = input.trim()
-  if (text === '') return []
-  const tokens: string[] = []
+  if (text === '') return { images: [], files: [] }
+  const images: string[] = []
+  const files: string[] = []
+  const looksLikeDroppedFile = (path: string): boolean =>
+    /^[A-Za-z]:[\\/]/u.test(path)
+    || /^\\\\/u.test(path)
+    || (/^\/|^\.\.?\//u.test(path) && /\.[A-Za-z0-9]{1,16}$/u.test(path))
   const matcher = /"([^"]+)"|'([^']+)'|(\S+)/gu
   for (const match of text.matchAll(matcher)) {
     const token = match[1] ?? match[2] ?? match[3]
@@ -50,13 +82,20 @@ export function parsePastedImagePaths(input: string): readonly string[] {
       try {
         path = fileURLToPath(path)
       } catch {
-        return []
+        return { images: [], files: [] }
       }
+      if (looksLikeImagePath(path)) images.push(path)
+      else files.push(path)
+      continue
     }
-    if (!looksLikeImagePath(path)) return []
-    tokens.push(path)
+    if (looksLikeImagePath(path)) {
+      images.push(path)
+      continue
+    }
+    if (!looksLikeDroppedFile(path)) return { images: [], files: [] }
+    files.push(path)
   }
-  return tokens
+  return { images, files }
 }
 
 /** Validate path, byte size and encoded signature without writing an attachment object. */
@@ -132,4 +171,64 @@ export async function saveImagePaths(
   const refs = await attachments.saveImages(inputs)
   checkCancelled()
   return refs.map(attachment => ({ type: 'image', attachment }))
+}
+
+/** Validate path and byte size for non-image file attachments without writing. */
+export async function inspectFilePaths(
+  paths: readonly string[],
+  attachments: AttachmentStore | undefined,
+  cwd = process.cwd(),
+): Promise<readonly FilePathInspection[]> {
+  if (paths.length === 0) return []
+  if (attachments === undefined) throw new Error('file attachments are unavailable in this profile')
+  if (paths.length > MAX_FILES_PER_MESSAGE) {
+    throw new Error(`too many files (${paths.length}; limit ${MAX_FILES_PER_MESSAGE})`)
+  }
+  const inspected: FilePathInspection[] = []
+  for (const raw of paths) {
+    const path = isAbsolute(raw) ? resolve(raw) : resolve(cwd, raw)
+    let facts: Awaited<ReturnType<typeof stat>>
+    try {
+      facts = await stat(path)
+    } catch (error: unknown) {
+      throw new Error(`cannot read file "${raw}": ${error instanceof Error ? error.message : String(error)}`)
+    }
+    if (!facts.isFile()) throw new Error(`file path is not a file: "${raw}"`)
+    if (facts.size > MAX_FILE_BYTES) {
+      throw new Error(`file "${basename(path)}" is ${facts.size} bytes; limit ${MAX_FILE_BYTES}`)
+    }
+    inspected.push({ path, name: basename(path), bytes: facts.size })
+  }
+  return inspected
+}
+
+/** Read and persist an ordered non-image file path list as model file blocks. */
+export async function saveFilePaths(
+  paths: readonly string[],
+  attachments: AttachmentStore | undefined,
+  signal?: AbortSignal,
+): Promise<readonly FileBlock[]> {
+  if (paths.length === 0) return []
+  if (attachments === undefined) throw new Error('file attachments are unavailable in this profile')
+  // The bounds are re-checked here so a draft inspected earlier still guards
+  // the actual read at submission time.
+  await inspectFilePaths(paths, attachments)
+  const checkCancelled = (): void => {
+    if (signal?.aborted === true) throw new Error('file submission cancelled')
+  }
+  const inputs: SaveFileAttachment[] = []
+  for (const path of paths) {
+    checkCancelled()
+    let data: Uint8Array
+    try {
+      data = await readFile(path)
+    } catch (error: unknown) {
+      throw new Error(`cannot read file "${path}": ${error instanceof Error ? error.message : String(error)}`)
+    }
+    inputs.push({ data, name: basename(path) })
+  }
+  checkCancelled()
+  const refs = await Promise.all(inputs.map(input => attachments.saveFile(input)))
+  checkCancelled()
+  return refs.map(attachment => ({ type: 'file', attachment }))
 }

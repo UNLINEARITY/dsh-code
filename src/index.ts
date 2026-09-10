@@ -21,7 +21,7 @@ import { installModelSelection } from '@deepseek-ai/dsh-agent'
 import type { Agent, AgentHandle, ModelSelection, ModelSelectionRef } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
 import type {} from '@deepseek-ai/dsh-attachment'
-import { createUserMessage, MessageId, type ContentBlock, type ImageBlock } from '@deepseek-ai/dsh-llm'
+import { createUserMessage, MessageId, type ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { JobSnapshot } from '@deepseek-ai/dsh-jobs'
 import { SessionId, type Session, type SessionEvent, type SessionHeader, type UserMessage } from '@deepseek-ai/dsh-session'
 import type { SessionPersistence } from '@deepseek-ai/dsh-session-persistence'
@@ -58,7 +58,7 @@ import { historyLine, HISTORY_MAX_ENTRIES, needsCompaction, parseHistoryFile, se
 import { watchSkills, type SkillsView } from './skills.ts'
 import { toolArgumentsPreview } from './render/tool-preview.ts'
 import { buildExportMarkdown } from './render/export.ts'
-import { inspectImagePaths, saveImagePaths } from './attachments.ts'
+import { inspectFilePaths, inspectImagePaths, saveFilePaths, saveImagePaths } from './attachments.ts'
 import { copyText, latestAssistantText } from './editor.ts'
 import { applyCtrlRPassthrough, resolveEditorKeysStartupHint, type EditorKeysEnv } from './editor-keys.ts'
 import {
@@ -254,7 +254,7 @@ export async function runQuitSequence(
 export interface QueuedSubmission {
   readonly text: string
   readonly mode: 'followup' | 'steer'
-  readonly images: readonly ImageBlock[]
+  readonly images: readonly ContentBlock[]
 }
 
 /**
@@ -546,6 +546,9 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     if (session === undefined) return
     if (subject.id === session.id) {
       store.apply(event)
+      // The parent-owned subagent catalog rides the ROOT log (0.1.5); each
+      // fact describes one child, so it feeds that child's live row.
+      if (event.type === 'subagent/catalog' && event.data.childId !== '') subagents.apply(event.data.childId, event)
       return
     }
     // Child sessions (subagent conversations this root spawned) fold into
@@ -896,7 +899,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   let deliveryChain: { epoch: number; tail: Promise<void> } = { epoch: 0, tail: Promise.resolve() }
 
   /** Deliver one trimmed line to the live session, expanding mentions first. */
-  const deliverLine = (line: string, mode: 'followup' | 'steer', images: readonly ImageBlock[] = []): void => {
+  const deliverLine = (line: string, mode: 'followup' | 'steer', images: readonly ContentBlock[] = []): void => {
     const currentAgent = agent!
     const currentMentions = mentions!
     // The command registry is a closed namespace: slash lines run out of
@@ -972,7 +975,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   // arrives during creation is delivered in order afterwards. A creation
   // failure reports and clears the queue, leaving the transient state ready
   // for the next attempt.
-  const pendingInputs: Array<{ text: string; mode: 'followup' | 'steer'; images: readonly ImageBlock[] }> = []
+  const pendingInputs: Array<{ text: string; mode: 'followup' | 'steer'; images: readonly ContentBlock[] }> = []
   // A creation is queued/running: further submissions must not mint more
   // fresh sessions (their lines queue into pendingInputs instead).
   let creating = false
@@ -1055,7 +1058,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   }
 
   /** Deliver one readable line to the agent, expanding session mentions first. */
-  const sendNow = (text: string, mode: 'followup' | 'steer', images: readonly ImageBlock[] = []): void => {
+  const sendNow = (text: string, mode: 'followup' | 'steer', images: readonly ContentBlock[] = []): void => {
     // Blank check on the trimmed form; the payload itself keeps the draft's
     // exact whitespace unless the line is a syntactic slash command.
     const line = submissionPayload(text)
@@ -1087,12 +1090,12 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   // Startup serialization: input submitted while the startup prompt/images
   // are still preparing queues behind the initial request.
   const inputGate = new StartupInputGate(({ text, mode, images }) => sendNow(text, mode, images))
-  const send = (text: string, mode: 'followup' | 'steer', images: readonly ImageBlock[] = []): void => {
+  const send = (text: string, mode: 'followup' | 'steer', images: readonly ContentBlock[] = []): void => {
     inputGate.submit({ text, mode, images })
   }
 
   /** Dispatch one submitted line: slash commands to the registry, other text to the agent. */
-  const dispatch = (text: string, images: readonly ImageBlock[] = []): void => {
+  const dispatch = (text: string, images: readonly ContentBlock[] = []): void => {
     send(text, 'followup', images)
   }
 
@@ -1101,7 +1104,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
    * boundary (the inbox delivers between steps); an idle driver just starts
    * a turn, so this doubles as the busy-state submit path.
    */
-  const steer = (text: string, images: readonly ImageBlock[] = []): void => {
+  const steer = (text: string, images: readonly ContentBlock[] = []): void => {
     send(text, 'steer', images)
   }
 
@@ -1701,6 +1704,8 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       loadMentions: (query: string, signal?: AbortSignal) => mentions.candidates(query, signal),
       inspectImages: paths => inspectImagePaths(paths, ctx.get('attachments'), session?.header.cwd ?? cwd),
       prepareImages: (paths, signal) => saveImagePaths(paths, ctx.get('attachments'), signal),
+      inspectFiles: paths => inspectFilePaths(paths, ctx.get('attachments'), session?.header.cwd ?? cwd),
+      prepareFiles: (paths, signal) => saveFilePaths(paths, ctx.get('attachments'), signal),
       cyclePermission,
       setPermission: setPermissionAction,
       selectModel,

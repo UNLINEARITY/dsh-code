@@ -4,9 +4,11 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import {
   detectImageMediaType,
+  inspectFilePaths,
   inspectImagePaths,
   looksLikeImagePath,
-  parsePastedImagePaths,
+  parsePastedAttachmentPaths,
+  saveFilePaths,
   saveImagePaths,
 } from '../src/attachments.ts'
 
@@ -25,9 +27,9 @@ describe('terminal image attachments', () => {
 
   it('parses quoted multi-image terminal drops without treating prose as paths', () => {
     expect(looksLikeImagePath('diagram.PNG')).toBe(true)
-    expect(parsePastedImagePaths('"C:\\work files\\a.png" "D:\\b.webp"'))
-      .toEqual(['C:\\work files\\a.png', 'D:\\b.webp'])
-    expect(parsePastedImagePaths('please inspect C:\\a.png')).toEqual([])
+    expect(parsePastedAttachmentPaths('"C:\\work files\\a.png" "D:\\b.webp"'))
+      .toEqual({ images: ['C:\\work files\\a.png', 'D:\\b.webp'], files: [] })
+    expect(parsePastedAttachmentPaths('please inspect C:\\a.png')).toEqual({ images: [], files: [] })
   })
 
   it('validates signature and limits before submission without persisting', async () => {
@@ -89,6 +91,72 @@ describe('terminal image attachments', () => {
       await expect(saveImagePaths([path], { saveImages } as never, controller.signal))
         .rejects.toThrow('image submission cancelled')
       expect(saveImages).not.toHaveBeenCalled()
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('terminal file attachments', () => {
+  it('splits a dropped path list into images and files without eating commands', () => {
+    expect(parsePastedAttachmentPaths('C:\\repo\\a.png C:\\repo\\notes.txt'))
+      .toEqual({ images: ['C:\\repo\\a.png'], files: ['C:\\repo\\notes.txt'] })
+    // file:// URLs decode to a local path on either platform.
+    const decoded = parsePastedAttachmentPaths('file:///C:/repo/notes.txt')
+    expect(decoded.images).toEqual([])
+    expect(decoded.files).toHaveLength(1)
+    expect(decoded.files[0]).not.toContain('file://')
+    // Prose, slash commands, and bare words are text, never attachments.
+    expect(parsePastedAttachmentPaths('/permission')).toEqual({ images: [], files: [] })
+    expect(parsePastedAttachmentPaths('run the tests now')).toEqual({ images: [], files: [] })
+    expect(parsePastedAttachmentPaths('notes')).toEqual({ images: [], files: [] })
+    // A dot-suffixed leaf after a POSIX/relative separator is a real drop.
+    expect(parsePastedAttachmentPaths('./report.pdf')).toEqual({ images: [], files: ['./report.pdf'] })
+  })
+
+  it('validates path and byte bounds before persisting a file', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'dsh-file-inspect-'))
+    const path = join(directory, 'notes.txt')
+    const attachments = {}
+    try {
+      await writeFile(path, 'hello')
+      await expect(inspectFilePaths([path], attachments as never)).resolves.toEqual([{ path, name: 'notes.txt', bytes: 5 }])
+      await expect(inspectFilePaths([join(directory, 'missing.txt')], attachments as never)).rejects.toThrow(/cannot read file/)
+      await expect(inspectFilePaths([], undefined)).resolves.toEqual([])
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
+  it('reads file bytes and returns durable file blocks', async () => {
+    const saveFile = vi.fn(async (input: { data: Uint8Array; name?: string }) => ({
+      attachmentId: `sha-${input.name}`,
+      name: input.name ?? 'file',
+      bytes: input.data.byteLength,
+    }))
+    const directory = await mkdtemp(join(tmpdir(), 'dsh-file-'))
+    const path = join(directory, 'notes.txt')
+    try {
+      await writeFile(path, 'hello file')
+      const blocks = await saveFilePaths([path], { saveFile } as never)
+      expect(saveFile).toHaveBeenCalledOnce()
+      expect(blocks).toEqual([{ type: 'file', attachment: { attachmentId: 'sha-notes.txt', name: 'notes.txt', bytes: 10 } }])
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
+  it('stops before persistence when file submission is cancelled', async () => {
+    const saveFile = vi.fn(async () => ({ attachmentId: 'x', name: 'x', bytes: 1 }))
+    const directory = await mkdtemp(join(tmpdir(), 'dsh-file-cancel-'))
+    const path = join(directory, 'notes.txt')
+    const controller = new AbortController()
+    try {
+      await writeFile(path, 'hello')
+      controller.abort()
+      await expect(saveFilePaths([path], { saveFile } as never, controller.signal))
+        .rejects.toThrow('file submission cancelled')
+      expect(saveFile).not.toHaveBeenCalled()
     } finally {
       await rm(directory, { recursive: true, force: true })
     }

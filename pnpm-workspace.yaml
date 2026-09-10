@@ -63,3 +63,6 @@ minimumReleaseAgeExclude:
   - '@deepseek-ai/dsh-tool-todo@0.1.5-rc.1'
   - '@deepseek-ai/dsh-util-crypto@0.1.5-rc.1'
   - '@deepseek-ai/dsh-util-values@0.1.5-rc.1'
+  - '@deepseek-ai/dsh-chunked-list@0.1.5-rc.1'
+  - '@deepseek-ai/dsh-subagent@0.1.5-rc.1'
+  - '@deepseek-ai/dsh-util-time@0.1.5-rc.1'

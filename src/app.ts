@@ -20,7 +20,7 @@ import {
 } from 'react'
 import { Box, Static, Text, useInput, useStdin, useStdout, type Key } from 'ink'
 import type { CommandDescriptor } from '@deepseek-ai/dsh-commands'
-import type { ImageBlock } from '@deepseek-ai/dsh-llm'
+import type { ContentBlock, FileBlock, ImageBlock } from '@deepseek-ai/dsh-llm'
 import type { TodoItem } from '@deepseek-ai/dsh-tool-todo'
 import type { AskUserQuestionAnswerItem, AskUserQuestionItem } from '@deepseek-ai/dsh-user-questions'
 import type { AuthorizationInteraction, AuthorizationStatus } from '@deepseek-ai/dsh-authorization'
@@ -62,7 +62,7 @@ import {
   type DeepseekWaveTier,
 } from './render/animations.ts'
 import type { ApprovalSnapshot, ApprovalStore } from './approval.ts'
-import { submissionPayload, type CommandsView } from './commands.ts'
+import { isSlashLine, submissionPayload, type CommandsView } from './commands.ts'
 import type { ModelDirectory, ModelRow } from './models.ts'
 import {
   isDeclaredReasoningEfforts,
@@ -102,7 +102,8 @@ import {
 import { ProviderAuthorizationLogoutPanel, ProviderAuthorizationPanel } from './authorization-panel.ts'
 import {
   looksLikeImagePath,
-  parsePastedImagePaths,
+  parsePastedAttachmentPaths,
+  type FilePathInspection,
   type ImagePathInspection,
 } from './attachments.ts'
 
@@ -282,9 +283,9 @@ export interface AppProps {
   /** Permission preset selected for the current or pending first session. */
   permission: string
   /** Submit one line: slash commands to the registry, other text to the agent. */
-  dispatch(text: string, images?: readonly ImageBlock[]): void
+  dispatch(text: string, attachments?: readonly ContentBlock[]): void
   /** Submit steering: consumed at the running turn's next step boundary. */
-  steer(text: string, images?: readonly ImageBlock[]): void
+  steer(text: string, attachments?: readonly ContentBlock[]): void
   /** Interrupt the running turn (Esc); true when a turn was cancelled. */
   interrupt(): boolean
   /** Quit: unmount, flush, and request process exit. */
@@ -297,6 +298,10 @@ export interface AppProps {
   inspectImages(paths: readonly string[]): Promise<readonly ImagePathInspection[]>
   /** Validate, normalize and persist images immediately before submission. */
   prepareImages(paths: readonly string[], signal?: AbortSignal): Promise<readonly ImageBlock[]>
+  /** Validate draft non-image file paths without committing attachment objects. */
+  inspectFiles(paths: readonly string[]): Promise<readonly FilePathInspection[]>
+  /** Persist non-image files immediately before submission as durable file blocks. */
+  prepareFiles(paths: readonly string[], signal?: AbortSignal): Promise<readonly FileBlock[]>
   /** Apply one /model selection (with an advertised reasoning effort, when picked); returns the display label. */
   selectModel(row: ModelRow, effortId?: string): string
   /** The /subagent override label, '' when delegated agents follow the current model. */
@@ -3153,20 +3158,26 @@ interface DraftImage extends ImagePathInspection {
   readonly marker: string
 }
 
+/** One attached non-image file held in the editor until submission persists it. */
+interface DraftFile extends FilePathInspection {
+  /** Visible draft token; deleting it also detaches the hidden path. */
+  readonly marker: string
+}
+
 /**
  * The prompt box: TUI-local slash commands handled locally, other lines
  * dispatched; input editing keeps a cursor with history and completion.
  * While a modal (approval / question / model panel) owns the keys, the
  * box passes every key through untouched.
  */
-function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openEffort, openHelp, openMode, openPermission, openResume, openPlugin, openJobs, openStatusline, openTheme, openHistory, openAgents, openSubagent, openTodos, openDelete, openDiff, reviewChanges, deleteConfirm, confirmDelete, cancelDelete, createSession, forkSession, cancelSessionSwitch, notify, applyEditorKeys, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, inspectImages, prepareImages, cyclePermission, exportTranscript, renameTitle, copyLastResponse, recallSpace, recordLocal, recordHistory, queued, cancelQueued, historyFill, historyConsumed, animations, applyAnimations, waveTier, waveStyle, maxRows, onEditorRows, onMenuRows }: {
+function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openEffort, openHelp, openMode, openPermission, openResume, openPlugin, openJobs, openStatusline, openTheme, openHistory, openAgents, openSubagent, openTodos, openDelete, openDiff, reviewChanges, deleteConfirm, confirmDelete, cancelDelete, createSession, forkSession, cancelSessionSwitch, notify, applyEditorKeys, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, inspectImages, prepareImages, inspectFiles, prepareFiles, cyclePermission, exportTranscript, renameTitle, copyLastResponse, recallSpace, recordLocal, recordHistory, queued, cancelQueued, historyFill, historyConsumed, animations, applyAnimations, waveTier, waveStyle, maxRows, onEditorRows, onMenuRows }: {
   active: boolean
   frozen: boolean
   busy: boolean
   descriptors: readonly CommandDescriptor[]
   skills: readonly SkillRow[]
-  dispatch(text: string, images?: readonly ImageBlock[]): void
-  steer(text: string, images?: readonly ImageBlock[]): void
+  dispatch(text: string, attachments?: readonly ContentBlock[]): void
+  steer(text: string, attachments?: readonly ContentBlock[]): void
   interrupt(): boolean
   quit(): void
   openModel(): void
@@ -3211,6 +3222,8 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   loadMentions(query: string, signal?: AbortSignal): Promise<readonly MentionCandidate[]>
   inspectImages(paths: readonly string[]): Promise<readonly ImagePathInspection[]>
   prepareImages(paths: readonly string[], signal?: AbortSignal): Promise<readonly ImageBlock[]>
+  inspectFiles(paths: readonly string[]): Promise<readonly FilePathInspection[]>
+  prepareFiles(paths: readonly string[], signal?: AbortSignal): Promise<readonly FileBlock[]>
   cyclePermission(): string
   exportTranscript(argument: string): Promise<void>
   renameTitle(argument: string): string
@@ -3263,6 +3276,9 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   const [draftImages, setDraftImages] = useState<readonly DraftImage[]>([])
   const draftImagesRef = useRef(draftImages)
   draftImagesRef.current = draftImages
+  const [draftFiles, setDraftFiles] = useState<readonly DraftFile[]>([])
+  const draftFilesRef = useRef(draftFiles)
+  draftFilesRef.current = draftFiles
   const [preparingImages, setPreparingImages] = useState(false)
   const prepareAbortRef = useRef<AbortController | undefined>(undefined)
   const prepareEpochRef = useRef(0)
@@ -3300,6 +3316,8 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
     const safe = sanitizeDraftText(historyFill.text)
     draftImagesRef.current = []
     setDraftImages([])
+    draftFilesRef.current = []
+    setDraftFiles([])
     valueRef.current = safe
     cursorRef.current = safe.length
     setValue(safe)
@@ -3320,6 +3338,11 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
     setDraftImages((current) => {
       const next = current.filter(image => value.includes(image.marker))
       draftImagesRef.current = next
+      return next.length === current.length ? current : next
+    })
+    setDraftFiles((current) => {
+      const next = current.filter(file => value.includes(file.marker))
+      draftFilesRef.current = next
       return next.length === current.length ? current : next
     })
   }, [value])
@@ -3384,13 +3407,19 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
     process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right
   )
 
-  const uniqueImageMarker = (name: string, source: 'mention' | 'drop', reserved: readonly string[] = []): string => {
+  const uniqueImageMarker = (name: string, source: 'mention' | 'drop', reserved: readonly string[] = [], kind: 'image' | 'file' = 'image'): string => {
     const safeName = singleLineText(sanitizeDraftText(name))
-    const base = source === 'mention' ? `@${safeName}` : `[image: ${safeName}]`
+    const label = kind === 'file' ? 'file' : 'image'
+    const base = source === 'mention' ? `@${safeName}` : `[${label}: ${safeName}]`
     let marker = base
     let suffix = 2
-    while (valueRef.current.includes(marker) || draftImagesRef.current.some(image => image.marker === marker) || reserved.includes(marker)) {
-      marker = source === 'mention' ? `@${safeName} (${suffix})` : `[image: ${safeName} ${suffix}]`
+    const taken = (candidate: string): boolean =>
+      valueRef.current.includes(candidate)
+      || draftImagesRef.current.some(image => image.marker === candidate)
+      || draftFilesRef.current.some(file => file.marker === candidate)
+      || reserved.includes(candidate)
+    while (taken(marker)) {
+      marker = source === 'mention' ? `@${safeName} (${suffix})` : `[${label}: ${safeName} ${suffix}]`
       suffix += 1
     }
     return marker
@@ -3407,27 +3436,44 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
     return true
   }
 
-  const insertDroppedImages = (paths: readonly string[]): void => {
+  /**
+   * Attach a paste/drop split into image and non-image paths: images ride the
+   * durable image blocks, files ride the 0.1.5 file blocks, and both register
+   * visible draft markers anchored at the drop point.
+   */
+  const insertDroppedAttachments = (imagePaths: readonly string[], filePaths: readonly string[]): void => {
     const originalValue = valueRef.current
     const originalCursor = cursorRef.current
-    notify(`checking ${paths.length} image${paths.length === 1 ? '' : 's'}…`)
-    void inspectImages(paths).then((inspected) => {
-      const additions: DraftImage[] = []
+    const total = imagePaths.length + filePaths.length
+    if (total === 0) return
+    notify(`checking ${total} attachment${total === 1 ? '' : 's'}…`)
+    void Promise.all([
+      imagePaths.length === 0 ? Promise.resolve([]) : inspectImages(imagePaths),
+      filePaths.length === 0 ? Promise.resolve([]) : inspectFiles(filePaths),
+    ]).then(([inspectedImages, inspectedFiles]) => {
+      const imageAdditions: DraftImage[] = []
+      const fileAdditions: DraftFile[] = []
       const markers: string[] = []
-      for (const inspection of inspected) {
-        if ([...draftImagesRef.current, ...additions].some(image => sameImagePath(image.path, inspection.path))) continue
+      for (const inspection of inspectedImages) {
+        if ([...draftImagesRef.current, ...imageAdditions].some(image => sameImagePath(image.path, inspection.path))) continue
         const marker = uniqueImageMarker(inspection.name, 'drop', markers)
-        additions.push({ ...inspection, marker })
+        imageAdditions.push({ ...inspection, marker })
         markers.push(marker)
       }
-      if (additions.length === 0) {
-        notify('those images are already attached', 'warning')
+      for (const inspection of inspectedFiles) {
+        if ([...draftFilesRef.current, ...fileAdditions].some(file => sameImagePath(file.path, inspection.path))) continue
+        const marker = uniqueImageMarker(inspection.name, 'drop', markers, 'file')
+        fileAdditions.push({ ...inspection, marker })
+        markers.push(marker)
+      }
+      if (imageAdditions.length === 0 && fileAdditions.length === 0) {
+        notify('those attachments are already attached', 'warning')
         return
       }
       const current = valueRef.current
       const anchor = remapStableRange(originalValue, current, { start: originalCursor, end: originalCursor })
       if (anchor === undefined) {
-        notify('draft changed at the image drop point; drop the images again', 'warning')
+        notify('draft changed at the attachment drop point; drop the files again', 'warning')
         return
       }
       const at = anchor.start
@@ -3441,12 +3487,16 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
       setValue(edit.value)
       setCursor(nextCursor)
       resetCursorBlink()
-      const nextImages = [...draftImagesRef.current, ...additions]
+      const nextImages = [...draftImagesRef.current, ...imageAdditions]
       draftImagesRef.current = nextImages
       setDraftImages(nextImages)
-      notify(`${additions.length} image${additions.length === 1 ? '' : 's'} ready for the next message`)
+      const nextFiles = [...draftFilesRef.current, ...fileAdditions]
+      draftFilesRef.current = nextFiles
+      setDraftFiles(nextFiles)
+      const count = imageAdditions.length + fileAdditions.length
+      notify(`${count} attachment${count === 1 ? '' : 's'} ready for the next message`)
     }, (reason: unknown) => {
-      notify(`image attachment failed: ${reason instanceof Error ? reason.message : String(reason)}`, 'error')
+      notify(`attachment failed: ${reason instanceof Error ? reason.message : String(reason)}`, 'error')
     })
   }
 
@@ -3744,6 +3794,8 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
         resetCursorBlink()
         draftImagesRef.current = []
         setDraftImages([])
+        draftFilesRef.current = []
+        setDraftFiles([])
         setCompletionIndex(0)
         setDismissedMenuValue(undefined)
       } else {
@@ -3812,15 +3864,24 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
       // completion-inserted trailing space still routes `/quit ` correctly.
       const trimmed = liveValue.trim()
       const text = submissionPayload(liveValue)
-      if (draftImagesRef.current.length > 0) {
+      if (draftImagesRef.current.length > 0 || draftFilesRef.current.length > 0) {
+        // Slash semantics with attachments are unchanged: commands cannot
+        // carry attachments, so the line goes to the model as a prompt —
+        // warn instead of surprising the user with a literal "/export".
+        if (isSlashLine(text)) notify('commands cannot carry attachments; the line will be sent to the model as a prompt', 'warning')
         const controller = new AbortController()
         const epoch = prepareEpochRef.current + 1
         prepareEpochRef.current = epoch
         prepareAbortRef.current = controller
         setPreparingImages(true)
-        notify(`processing ${draftImagesRef.current.length} image${draftImagesRef.current.length === 1 ? '' : 's'}…`)
-        const snapshot = draftImagesRef.current
-        void prepareImages(snapshot.map(image => image.path), controller.signal).then((images) => {
+        const imageSnapshot = draftImagesRef.current
+        const fileSnapshot = draftFilesRef.current
+        const total = imageSnapshot.length + fileSnapshot.length
+        notify(`processing ${total} attachment${total === 1 ? '' : 's'}…`)
+        void Promise.all([
+          imageSnapshot.length === 0 ? Promise.resolve([]) : prepareImages(imageSnapshot.map(image => image.path), controller.signal),
+          fileSnapshot.length === 0 ? Promise.resolve([]) : prepareFiles(fileSnapshot.map(file => file.path), controller.signal),
+        ]).then(([images, files]) => {
           if (controller.signal.aborted || prepareEpochRef.current !== epoch) return
           prepareAbortRef.current = undefined
           setPreparingImages(false)
@@ -3830,6 +3891,8 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
           setCursor(0)
           draftImagesRef.current = []
           setDraftImages([])
+          draftFilesRef.current = []
+          setDraftFiles([])
           setCompletionIndex(0)
           setDismissedMenuValue(undefined)
           dismissNotice()
@@ -3838,13 +3901,14 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
             recordHistory(text)
           }
           recall.current = beginRecall(recallSpace, '')
-          if (busy) steer(text, images)
-          else dispatch(text, images)
+          const blocks: readonly ContentBlock[] = [...images, ...files]
+          if (busy) steer(text, blocks)
+          else dispatch(text, blocks)
         }, (reason: unknown) => {
           if (controller.signal.aborted || prepareEpochRef.current !== epoch) return
           prepareAbortRef.current = undefined
           setPreparingImages(false)
-          notify(`image submission failed: ${reason instanceof Error ? reason.message : String(reason)}`, 'error')
+          notify(`attachment submission failed: ${reason instanceof Error ? reason.message : String(reason)}`, 'error')
         })
         return
       }
@@ -4147,10 +4211,14 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
         text = text.replaceAll(PASTE_END_MARKER, '')
       }
       if (text === '') return
-      const droppedPaths = text.length > 1 ? parsePastedImagePaths(text) : []
-      if (droppedPaths.length > 0) {
-        insertDroppedImages(droppedPaths)
-        return
+      if (text.length > 1) {
+        // A path-list paste splits into images and files; prose falls through
+        // as ordinary text (the splitter returns empty groups for non-paths).
+        const dropped = parsePastedAttachmentPaths(text)
+        if (dropped.images.length > 0 || dropped.files.length > 0) {
+          insertDroppedAttachments(dropped.images, dropped.files)
+          return
+        }
       }
       applyEdit(insertText(valueRef.current, cursorRef.current, text))
     }
@@ -5590,6 +5658,8 @@ export function App(props: AppProps): ReactElement {
         loadMentions: props.loadMentions,
         inspectImages: props.inspectImages,
         prepareImages: props.prepareImages,
+        inspectFiles: props.inspectFiles,
+        prepareFiles: props.prepareFiles,
         cyclePermission: props.cyclePermission,
         exportTranscript: props.exportTranscript,
         renameTitle: props.renameTitle,
