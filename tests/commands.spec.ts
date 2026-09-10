@@ -56,7 +56,9 @@ function harness(descriptors: readonly CommandDescriptor[]): {
 } {
   const listeners = new Set<() => void>()
   const registry = {
-    list: (_agent: Agent): readonly CommandDescriptor[] => descriptors,
+    // The real registry allocates a fresh array per call (mirrored here): the
+    // watcher's identity gate is what keeps React out of update loops.
+    list: (_agent: Agent): readonly CommandDescriptor[] => [...descriptors],
   }
   const ctx = {
     get: (name: string): unknown => (name === 'commands' ? registry : undefined),
@@ -87,7 +89,7 @@ describe('watchCommands', () => {
     expect(view.descriptors).toEqual(descriptors)
   })
 
-  it('refreshes the list on registry change', () => {
+  it('refreshes the list on registry change', async () => {
     const descriptors: CommandDescriptor[] = [{ name: 'compact', description: 'shrink history' }]
     const { ctx, fireChange } = harness(descriptors)
     const view = watchCommands(ctx)
@@ -96,8 +98,38 @@ describe('watchCommands', () => {
     view.subscribe(() => seen.push(view.descriptors.length))
     descriptors.push({ name: 'goal', description: 'manage the goal' })
     fireChange()
+    // Notification is frame-coalesced (setImmediate): same-tick event storms
+    // collapse into one repaint.
+    await new Promise<void>(resolve => setImmediate(resolve))
     expect(view.descriptors).toHaveLength(2)
     expect(seen).toEqual([2])
+  })
+
+  it('keeps the array identity and stays silent when the catalog is unchanged', async () => {
+    // The host registry returns a FRESH array per list() call and 0.1.5 emits
+    // commands/change per scoped register AND dispose; an identity churn per
+    // event chained nested React updates past its depth limit. An unchanged
+    // catalog must notify nobody.
+    const descriptors: CommandDescriptor[] = [{ name: 'compact', description: 'shrink history' }]
+    const { ctx, fireChange } = harness(descriptors)
+    const view = watchCommands(ctx)
+    view.setAgent({ id: 'a' } as unknown as Agent)
+    await new Promise<void>(resolve => setImmediate(resolve))
+    const before = view.descriptors
+    let notified = 0
+    view.subscribe(() => { notified += 1 })
+    fireChange()
+    fireChange()
+    fireChange()
+    await new Promise<void>(resolve => setImmediate(resolve))
+    expect(notified).toBe(0)
+    expect(view.descriptors).toBe(before)
+    // A real content change still swaps the identity and notifies once.
+    descriptors.push({ name: 'goal', description: 'manage the goal' })
+    fireChange()
+    await new Promise<void>(resolve => setImmediate(resolve))
+    expect(notified).toBe(1)
+    expect(view.descriptors).not.toBe(before)
   })
 
   it('stays empty without a registry service', () => {

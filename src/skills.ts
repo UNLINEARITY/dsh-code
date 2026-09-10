@@ -101,9 +101,14 @@ export function watchSkills(ctx: Context, fallbackCwd?: string): SkillsWatch {
       // next skills/change notification is the retry surface, mirroring the
       // web directory); an agent that never loaded starts from empty rows —
       // stale rows from a previous workspace must not keep completing here.
+      // The rows array keeps its identity unless the failure text itself
+      // changed: a repeated identical error on the 0.1.5 event storm must not
+      // churn fresh identities into React's update chain.
+      const nextError = cause instanceof Error ? cause.message : String(cause)
       if (loadedFor !== target) rows = []
-      else rows = [...rows]
-      error = cause instanceof Error ? cause.message : String(cause)
+      const errorChanged = nextError !== error
+      error = nextError
+      if (!errorChanged) return
       for (const listener of listeners) listener()
     })
   }

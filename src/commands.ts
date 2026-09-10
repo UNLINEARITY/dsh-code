@@ -43,20 +43,50 @@ export function watchCommands(ctx: Context): CommandsView {
   // another session's commands completable here.
   let loadedFor: Agent | undefined
   const listeners = new Set<() => void>()
+  // Content gate: the host registry allocates a fresh array on every list()
+  // call and 0.1.5 emits commands/change for every scoped register AND
+  // dispose (a startup registration wave lands inside React's commit
+  // windows). A fresh identity per event chains nested passive updates past
+  // React's 50-deep limit ("Maximum update depth exceeded"), so an unchanged
+  // catalog keeps the previous array identity and notifies nobody — the same
+  // discipline the skills gate and the store's frame throttle established.
+  const descriptorFingerprint = (list: readonly CommandDescriptor[]): string =>
+    JSON.stringify(list.map(descriptor => [descriptor.name, descriptor.description, descriptor.input?.hint ?? '', descriptor.input?.attachments === true]))
+  let lastFingerprint = '[]'
+  let lastNotifiedError: string | undefined
+  const changed = (next: readonly CommandDescriptor[], nextError: string | undefined): boolean =>
+    descriptorFingerprint(next) !== lastFingerprint || nextError !== lastNotifiedError
+  // Frame throttle: coalesce a same-tick event storm into one notification
+  // (the transcript store's NOTIFY_FRAME_MS contract).
+  let notifyScheduled = false
+  const notify = (): void => {
+    if (notifyScheduled) return
+    notifyScheduled = true
+    setImmediate(() => {
+      notifyScheduled = false
+      for (const listener of listeners) listener()
+    })
+  }
   const refresh = (): void => {
     if (commands === undefined || agent === undefined) return
+    let next: readonly CommandDescriptor[]
+    let nextError: string | undefined
     try {
-      descriptors = commands.list(agent)
+      next = commands.list(agent)
       loadedFor = agent
-      error = undefined
     } catch (cause: unknown) {
       // Keep the last good catalog for the SAME agent, but change its identity
       // so subscribers can render the recoverable failure in /help; an agent
       // that never loaded starts from empty.
-      descriptors = loadedFor === agent ? [...descriptors] : []
-      error = cause instanceof Error ? cause.message : String(cause)
+      next = loadedFor === agent ? [...descriptors] : []
+      nextError = cause instanceof Error ? cause.message : String(cause)
     }
-    for (const listener of listeners) listener()
+    if (!changed(next, nextError)) return
+    descriptors = next
+    error = nextError
+    lastFingerprint = descriptorFingerprint(next)
+    lastNotifiedError = nextError
+    notify()
   }
   if (commands !== undefined) {
     ctx.on('commands/change', () => refresh())

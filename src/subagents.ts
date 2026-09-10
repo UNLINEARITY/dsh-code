@@ -120,12 +120,16 @@ export function foldSubagentRow(previous: SubagentRow | undefined, sessionId: st
       // child's mode (one-shot vs continuable) and its authored label — the
       // most semantic label the row can carry. It is a discovery fact, not a
       // lifecycle signal: a fresh row starts idle, but a late delivery never
-      // regresses a row that already ran or finished.
+      // regresses a row that already ran or finished. An unchanged fact keeps
+      // the row's identity (the no-op discipline of the default branch), so
+      // repeated deliveries never churn the snapshot array.
       const mode = event.data.mode === 'continuable' ? 'continuable' : 'one-shot'
       const label = event.data.label !== undefined && event.data.label.trim() !== '' ? bound(event.data.label) : undefined
+      const nextLabel = label === undefined ? base.label : label
       const activity = label === undefined ? `catalog · ${mode}` : `catalog · ${mode} · ${label}`
       const state = previous === undefined ? 'idle' : base.state
-      return label === undefined || label === base.label ? { ...base, state, activity, updatedAt: event.time } : { ...base, state, label, activity, updatedAt: event.time }
+      if (nextLabel === base.label && state === base.state && activity === base.activity) return base
+      return { ...base, state, label: nextLabel, activity, updatedAt: event.time }
     }
     case 'assistant/message':
       return { ...base, state: 'idle', activity: messagePreview(data['message'] === undefined ? undefined : (data['message'] as { content?: unknown }).content), updatedAt: event.time }
