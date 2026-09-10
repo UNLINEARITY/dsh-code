@@ -33,6 +33,8 @@ interface LlmFace {
     readonly settingsNs: string
     readonly settingsPath: readonly string[]
     readonly declared?: boolean
+    /** Configuration diagnostic for repair; unaffected models may remain serviceable. */
+    readonly error?: string
   }[]
   /**
    * Registered endpoint model discovery; absent on an older service. The
@@ -362,6 +364,12 @@ export interface ProviderTargetView {
   readonly configuration: ProviderConfiguration
   /** The owning adapter reports this route as hand-declared (absent when it draws no distinction). */
   readonly declared?: boolean
+  /**
+   * Configuration diagnostic the adapter reported for this route (catalog or
+   * profile damage): the row stays listed and repairable instead of the whole
+   * provider vanishing; absent when the route reads clean.
+   */
+  readonly diagnostic?: string
 }
 
 /** The resolved provider/settings/credential join. */
@@ -431,6 +439,7 @@ export async function loadProviderSettings(ctx: Context): Promise<ProviderSettin
     settingsNs: string
     settingsPath: readonly string[]
     declared?: boolean
+    error?: string
   }> = []
   if (llm.listConfigurableProviders !== undefined) {
     try {
@@ -462,6 +471,7 @@ export async function loadProviderSettings(ctx: Context): Promise<ProviderSettin
     settingsNs: string
     settingsPath: readonly string[]
     declared?: boolean
+    error?: string
   }> = [
     ...directoryEntries.map(entry => ({
       provider: entry.provider,
@@ -470,6 +480,7 @@ export async function loadProviderSettings(ctx: Context): Promise<ProviderSettin
       settingsNs: entry.settingsNs,
       settingsPath: entry.settingsPath,
       ...entry.declared === undefined ? {} : { declared: entry.declared },
+      ...entry.error === undefined ? {} : { error: singleLine(entry.error) },
     })),
     ...registered
       .filter(provider => !declared.has(provider.id))
@@ -508,6 +519,7 @@ export async function loadProviderSettings(ctx: Context): Promise<ProviderSettin
       ...credentialRef === undefined ? {} : { credentialRef },
       suggestedRef: deriveCredentialRef(base.provider),
       ...base.declared === undefined ? {} : { declared: base.declared },
+      ...base.error === undefined ? {} : { diagnostic: base.error },
     }
   })
   const refs = [...new Set(rows.flatMap(row => row.credentialRef === undefined ? [] : [row.credentialRef]))]

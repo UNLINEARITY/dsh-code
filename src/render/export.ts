@@ -23,6 +23,11 @@ export function buildExportMarkdown(view: TranscriptView, sessionId: string): st
     `> session ${sessionId}`,
     '',
   ]
+  // The effective system prompt (v3 surface nodes) heads the export in a
+  // collapsed block: visible when audited, out of the way when scrolled.
+  if (view.systemPrompt !== '') {
+    out.push('<details><summary>system prompt</summary>', '', view.systemPrompt, '', '</details>', '')
+  }
   for (const entry of view.entries) {
     switch (entry.kind) {
       case 'user':

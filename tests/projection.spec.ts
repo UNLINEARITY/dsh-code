@@ -10,6 +10,7 @@ import {
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type { ToolEntry } from '../src/render/projection.ts'
 import {
+  applyAssistantStreamChunk,
   createReplayAccumulator,
   createTranscriptView,
   finishReplay,
@@ -17,8 +18,6 @@ import {
   projectEvents,
   replayProjectEvent,
   settledEntryCount,
-  applyAssistantStreamChunk,
-  createReplayAccumulator,
   snapshotReplayView,
 } from '../src/render/projection.ts'
 
@@ -104,7 +103,7 @@ describe('replay equivalence (property)', () => {
       data: { turn: 1, step: 1, stream: [{ type: 'text-chunks', time0: 0, index: 0, dt: [1], texts: [text] }] },
     } as SessionEvent)
     const systemEvent = (text: string, seq: number): SessionEvent => ({
-      type: 'system/message', seq, time: 0, surfaceOp: { op: 'append' },
+      type: 'system/message', seq, time: 0, surfaceOp: 'append',
       data: { turn: 1, step: 1, message: { role: 'system', id: 's' + seq, content: text === '' ? [] : [{ type: 'text', text }], source: { kind: 'plugin', plugin: 'system-prompt' } } },
     } as unknown as SessionEvent)
     const builders = [userEvent, attemptEvent, assistantEvent, systemEvent]
@@ -995,11 +994,11 @@ describe('context segment estimates', () => {
     // Session-log v3 removed `request/header.system`; the effective system
     // prompt lives in `system/message` surface events (an empty content
     // records "no system prompt").
-    const systemMessage = (text: string | undefined, seq: number) => ({
+    const systemMessage = (text: string | undefined, seq: number, surfaceOp: 'append' | { op: 'replace'; startSeq: number; endSeq: number } = 'append') => ({
       type: 'system/message',
       seq,
       time: 0,
-      surfaceOp: { op: 'append' },
+      surfaceOp,
       data: {
         turn: 1,
         step: 1,
@@ -1012,9 +1011,47 @@ describe('context segment estimates', () => {
       },
     }) as unknown as SessionEvent
     let view = projectEvent(createTranscriptView(), systemMessage('you are helpful', 1))
+    expect(view.systemPrompt).toBe('you are helpful')
     expect(view.stats.contextSegments.system).toBe(4)
+    // An EMPTY append records an empty later node — it does not erase the
+    // head (only a replacement covering the head's seq can).
     view = projectEvent(view, systemMessage(undefined, 2))
+    expect(view.systemPrompt).toBe('you are helpful')
+    expect(view.stats.contextSegments.system).toBe(4)
+    // A replacement covering every node with empty content clears it all.
+    view = projectEvent(view, systemMessage(undefined, 3, { op: 'replace', startSeq: 1, endSeq: 2 }))
+    expect(view.systemPrompt).toBe('')
     expect(view.stats.contextSegments.system).toBe(0)
+  })
+
+  it('keeps the surviving head when a replacement only clears a later system node', () => {
+    // The in-history route appends later nodes and may later normalize them
+    // away with a replace carrying empty content — the head node survives and
+    // the estimate must not drop to zero.
+    const systemMessage = (text: string | undefined, seq: number, surfaceOp: 'append' | { op: 'replace'; startSeq: number; endSeq: number }) => ({
+      type: 'system/message',
+      seq,
+      time: 0,
+      surfaceOp,
+      data: {
+        turn: 1,
+        step: 1,
+        message: {
+          role: 'system',
+          id: 'sys-' + seq,
+          content: text === undefined ? [] : [{ type: 'text', text }],
+          source: { kind: 'plugin', plugin: 'system-prompt' },
+        },
+      },
+    }) as unknown as SessionEvent
+    let view = projectEvents([
+      systemMessage('you are helpful', 1, 'append'),
+      systemMessage('extra context', 2, 'append'),
+    ] as const)
+    expect(view.systemPrompt).toBe('you are helpful\n\nextra context')
+    view = projectEvent(view, systemMessage(undefined, 3, { op: 'replace', startSeq: 2, endSeq: 2 }))
+    expect(view.systemPrompt).toBe('you are helpful')
+    expect(view.stats.contextSegments.system).toBe(4)
   })
 
   it('does not estimate queued rows until their durable user message lands', () => {

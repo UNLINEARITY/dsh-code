@@ -300,6 +300,13 @@ export interface TranscriptView {
   permission: string
   /** Latest session title folded from the last `session/title` event, empty before one. */
   title: string
+  /**
+   * Effective system prompt assembled from `system/message` surface nodes
+   * (v3): the head node's text joined with every later non-empty node, blank
+   * lines between. Empty before the first system node or when every node is
+   * empty ("no system prompt").
+   */
+  systemPrompt: string
   /** Sandbox-mode override folded from the last `sandbox/mode` event, empty when never switched. */
   sandbox: string
   /** Current long-running goal folded from the last `goal/change`, undefined when cleared. */
@@ -327,7 +334,19 @@ export interface TranscriptView {
     turnFiles: Map<number, Set<string>>
     turnSteps: Map<number, string>
     turnTools: Map<number, Set<string>>
+    /** Live `system/message` surface nodes by event seq (empty string = an empty node). */
+    systemNodes: Map<number, string>
   }
+}
+
+/** Assemble the effective system prompt from surface nodes: head text plus every later non-empty node. */
+function assembleSystemPrompt(nodes: ReadonlyMap<number, string>): string {
+  if (nodes.size === 0) return ''
+  const ordered = [...nodes.entries()].sort((left, right) => left[0] - right[0])
+  const texts = ordered
+    .map(([, text]) => text)
+    .filter(text => text !== '')
+  return texts.join('\n\n')
 }
 
 /** Join the text blocks of a content list; non-text blocks contribute nothing. */
@@ -351,6 +370,7 @@ function cloneViewAnchors(anchors: TranscriptView['anchors']): TranscriptView['a
     turnFiles: new Map([...anchors.turnFiles].map(([turn, files]) => [turn, new Set(files)])),
     turnSteps: new Map(anchors.turnSteps),
     turnTools: new Map([...anchors.turnTools].map(([turn, tools]) => [turn, new Set(tools)])),
+    systemNodes: new Map(anchors.systemNodes),
   }
 }
 
@@ -416,11 +436,12 @@ export function createTranscriptView(): TranscriptView {
     plan: false,
     permission: '',
     title: '',
+    systemPrompt: '',
     sandbox: '',
     goal: undefined,
     pending: { 'next-turn': [], 'next-step': [] },
     stats: { turns: 0, steps: 0, llmMs: 0, toolMs: 0, usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 }, lastPromptTokens: 0, contextWindow: 0, contextSegments: { system: 0, prompt: 0, assistant: 0, thinking: 0, tools: 0 }, ttftMs: 0, ttftSteps: 0, decodeMs: 0, decodeTokens: 0, reasoningEffort: '' },
-    anchors: { stepStart: new Map(), toolStart: new Map(), firstChunkAt: new Map(), compactionTokens: new Map(), lastPruneTokens: 0, turnFiles: new Map(), turnSteps: new Map(), turnTools: new Map() },
+    anchors: { stepStart: new Map(), toolStart: new Map(), firstChunkAt: new Map(), compactionTokens: new Map(), lastPruneTokens: 0, turnFiles: new Map(), turnSteps: new Map(), turnTools: new Map(), systemNodes: new Map() },
   }
 }
 
@@ -526,17 +547,31 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
       return { ...view, entries, pending: { ...view.pending, [target]: nextIds } }
     }
     case 'system/message': {
-      // Session-log v3 carries the effective system prompt as a surface
-      // message (the `request/header.system` field is gone): maintain the
-      // system context-segment estimate from it. An empty content records
-      // "no system prompt" and clears the estimate.
+      // Session-log v3 carries the system prompt as surface nodes (the
+      // `request/header.system` field is gone): append adds one node;
+      // replace(startSeq, endSeq) retires the covered nodes and this event's
+      // node takes their place. The effective prompt is the head text joined
+      // with every later non-empty node (kernel in-history assembly), and
+      // the context estimate prices that assembly — a tail-clearing
+      // replacement never zeroes a surviving head.
+      const text = textOf(event.data.message.content)
+      const nodes = view.anchors.systemNodes
+      const op = event.surfaceOp
+      if (op !== 'append') {
+        for (const seq of nodes.keys()) {
+          if (seq >= op.startSeq && seq <= op.endSeq) nodes.delete(seq)
+        }
+      }
+      nodes.set(event.seq, text)
+      const systemPrompt = assembleSystemPrompt(nodes)
       return {
         ...view,
+        systemPrompt,
         stats: {
           ...view.stats,
           contextSegments: {
             ...view.stats.contextSegments,
-            system: estimateTokens(textOf(event.data.message.content)),
+            system: estimateTokens(systemPrompt),
           },
         },
       }
@@ -1000,6 +1035,7 @@ export interface ReplayAccumulator {
   plan: boolean
   permission: string
   title: string
+  systemPrompt: string
   sandbox: string
   goal: GoalFold | undefined
   stats: TranscriptStats
@@ -1011,6 +1047,8 @@ export interface ReplayAccumulator {
   turnFiles: Map<number, Set<string>>
   turnSteps: Map<number, string>
   turnTools: Map<number, Set<string>>
+  /** Live `system/message` surface nodes by event seq (empty string = an empty node). */
+  systemNodes: Map<number, string>
   /** Entry-level container operations performed so far (test instrumentation). */
   ops: number
 }
@@ -1036,6 +1074,7 @@ export function createReplayAccumulator(): ReplayAccumulator {
     plan: false,
     permission: '',
     title: '',
+    systemPrompt: '',
     sandbox: '',
     goal: undefined,
     stats: { turns: 0, steps: 0, llmMs: 0, toolMs: 0, usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 }, lastPromptTokens: 0, contextWindow: 0, contextSegments: { system: 0, prompt: 0, assistant: 0, thinking: 0, tools: 0 }, ttftMs: 0, ttftSteps: 0, decodeMs: 0, decodeTokens: 0, reasoningEffort: '' },
@@ -1047,6 +1086,7 @@ export function createReplayAccumulator(): ReplayAccumulator {
     turnFiles: new Map(),
     turnSteps: new Map(),
     turnTools: new Map(),
+    systemNodes: new Map(),
     ops: 0,
   }
 }
@@ -1218,11 +1258,22 @@ export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent):
       return true
     }
     case 'system/message': {
+      // Mirrors the reducer's per-node fold: append adds, replace retires the
+      // covered seq range, and the estimate prices the assembled prompt.
+      const text = textOf(event.data.message.content)
+      const op = event.surfaceOp
+      if (op !== 'append') {
+        for (const seq of acc.systemNodes.keys()) {
+          if (seq >= op.startSeq && seq <= op.endSeq) acc.systemNodes.delete(seq)
+        }
+      }
+      acc.systemNodes.set(event.seq, text)
+      acc.systemPrompt = assembleSystemPrompt(acc.systemNodes)
       acc.stats = {
         ...acc.stats,
         contextSegments: {
           ...acc.stats.contextSegments,
-          system: estimateTokens(textOf(event.data.message.content)),
+          system: estimateTokens(acc.systemPrompt),
         },
       }
       return true
@@ -1597,6 +1648,7 @@ function materializeReplayView(acc: ReplayAccumulator, copy: boolean): Transcrip
     plan: acc.plan,
     permission: acc.permission,
     title: acc.title,
+    systemPrompt: acc.systemPrompt,
     sandbox: acc.sandbox,
     goal: acc.goal,
     pending: { 'next-turn': [...acc.pendingTurn], 'next-step': [...acc.pendingStep] },
@@ -1612,6 +1664,7 @@ function materializeReplayView(acc: ReplayAccumulator, copy: boolean): Transcrip
       turnFiles: new Map([...acc.turnFiles].map(([turn, files]) => [turn, new Set(files)])),
       turnSteps: new Map(acc.turnSteps),
       turnTools: new Map([...acc.turnTools].map(([turn, tools]) => [turn, new Set(tools)])),
+      systemNodes: new Map(acc.systemNodes),
     },
   }
 }

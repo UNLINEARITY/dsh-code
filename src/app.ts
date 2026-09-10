@@ -1937,7 +1937,10 @@ function ProviderPanel({ directory, error, authorizations, authorizationError, o
     const manualKeyConfigured = row.credential?.kind === 'facts' && row.credential.configured
     const showAuthorization = !manualKeyConfigured || authorization?.record.configured === true || authorization?.inFlight === true
     const authLabel = showAuthorization ? ' · ' + providerAuthorizationStatus(authorization) : ''
-    const label = identity + ' · ' + providerStateLabel(row) + authLabel + (row.removable ? ' · custom' : '')
+    // The adapter's configuration diagnostic rides the row (the provider
+    // stays listed and repairable — this is why it did not vanish).
+    const diagnostic = row.diagnostic === undefined ? '' : ' · ! ' + singleLineText(row.diagnostic)
+    const label = identity + ' · ' + providerStateLabel(row) + authLabel + (row.removable ? ' · custom' : '') + diagnostic
     // Configured rows render in the intermediate brand blue so the in-use
     // group reads at a glance; the dormant tail keeps the dim caption gray.
     const idleColor = row.configured ? inkColor(getPalette().brandMid) : inkColor(getPalette().dim)
@@ -2300,6 +2303,13 @@ function ProviderSetupPanel({ target, save, saveCredential, discover, effortDono
     Box,
     { flexDirection: 'column', width: viewport.outerColumns, paddingX: 1, borderStyle: 'round', borderColor: inkColor(getPalette().brand) },
     createElement(Text, { color: inkColor(getPalette().brand), bold: true, wrap: 'truncate-end' }, truncateColumns('/model — configure ' + target.displayName, viewport.contentColumns)),
+    // The adapter's configuration diagnostic heads the editor: the provider
+    // is here precisely because it stayed listed for repair.
+    ...(target.diagnostic === undefined ? [] : [createElement(
+      Text,
+      { key: 'diagnostic', color: inkColor(getPalette().warn), wrap: 'truncate-end' },
+      truncateColumns('! ' + displayText(singleLineText(target.diagnostic)), viewport.contentColumns),
+    )]),
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
     keyRow,
     urlRow,

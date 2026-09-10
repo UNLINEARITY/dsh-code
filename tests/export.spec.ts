@@ -12,6 +12,21 @@ describe('buildExportMarkdown', () => {
     expect(markdown).toContain('- turns: 0 · steps: 0')
   })
 
+  it('heads the export with the effective system prompt in a collapsed block', () => {
+    const view = {
+      ...createTranscriptView(),
+      systemPrompt: 'You are a coding agent.',
+      entries: [{ kind: 'user', text: 'fix it', notice: false }] as const,
+    }
+    const markdown = buildExportMarkdown(view, 'session-x')
+    // The block sits between the session header and the first entry.
+    expect(markdown.indexOf('> session session-x')).toBeLessThan(markdown.indexOf('<details><summary>system prompt</summary>'))
+    expect(markdown.indexOf('<details><summary>system prompt</summary>')).toBeLessThan(markdown.indexOf('## user'))
+    expect(markdown).toContain('You are a coding agent.')
+    // An empty prompt never grows the block.
+    expect(buildExportMarkdown(createTranscriptView(), 'session-x')).not.toContain('system prompt</summary>')
+  })
+
   it('renders user, assistant, tool, and marker entries in order', () => {
     const view = createTranscriptView()
     const composed = {

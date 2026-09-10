@@ -158,6 +158,29 @@ describe('loadProviderSettings', () => {
     expect(credentials.describe).not.toHaveBeenCalled()
   })
 
+  it('carries the adapter’s configuration diagnostic onto the row instead of dropping it', async () => {
+    // 0.1.5: a damaged catalog keeps the provider listed for repair; the
+    // diagnostic rides the row so the panel can show what to fix.
+    const settings = {
+      writable: true,
+      describe: vi.fn(() => [dormantDescriptor]),
+      mutate: vi.fn(async () => undefined),
+    }
+    const credentials = {
+      describe: vi.fn(async () => ({ configured: false, writable: true })),
+      set: vi.fn(async () => undefined),
+      unset: vi.fn(async () => undefined),
+    }
+    const broken = { ...piAiEntry, error: 'model "glm-9" declares an unknown\nprotocol' }
+    const llm = llmWith([], [broken])
+    const directory = await loadProviderSettings(fakeCtx({ llm, settings, credentials }))
+    expect(directory.failures).toEqual([])
+    expect(directory.rows[0]!.diagnostic).toBe('model "glm-9" declares an unknown protocol')
+    // A clean entry never grows the field.
+    const clean = await loadProviderSettings(fakeCtx({ llm: llmWith([], [piAiEntry]), settings, credentials }))
+    expect(clean.rows[0]!.diagnostic).toBeUndefined()
+  })
+
   it('surfaces an active provider outside the directory as a read-only unmanaged row', async () => {
     const settings = { writable: true, describe: vi.fn(() => []), mutate: vi.fn(async () => undefined) }
     const credentials = {
