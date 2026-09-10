@@ -1041,6 +1041,36 @@ describe('context segment estimates', () => {
     expect(view.stats.contextSegments.system).toBe(0)
   })
 
+  it('retires system nodes shadowed by ANY surface replace, not only system/message', () => {
+    // A compaction summary lands as a user/message replace whose range may
+    // cover later system nodes (only node 0 is compaction-protected); the
+    // fold must drop them from the assembled prompt and the estimate.
+    const systemMessage = (text: string, seq: number, surfaceOp: 'append' | { op: 'replace'; startSeq: number; endSeq: number }) => ({
+      type: 'system/message', seq, time: 0, surfaceOp,
+      data: { turn: 1, step: 1, message: { role: 'system', id: 'sys-' + seq, content: text === '' ? [] : [{ type: 'text', text }], source: { kind: 'plugin', plugin: 'system-prompt' } } },
+    } as unknown as SessionEvent)
+    const compactionSummary = (seq: number, startSeq: number, endSeq: number) => ({
+      type: 'user/message', seq, time: 0, surfaceOp: { op: 'replace' as const, startSeq, endSeq },
+      data: createUserMessage({
+        content: [{ type: 'text', text: 'compacted context summary' }],
+        source: { kind: 'plugin', plugin: 'compaction', form: 'notice', summary: 'compacted' },
+      }),
+    } as unknown as SessionEvent)
+    let view = projectEvents([
+      systemMessage('head persona', 1, 'append'),
+      systemMessage('pinned addendum', 2, 'append'),
+    ] as const)
+    expect(view.systemPrompt).toBe('head persona\n\npinned addendum')
+    // The compaction replace covers seq 2 (and its own summary node); only
+    // the protected head survives. The segment estimate prices the surviving
+    // head (12 ASCII chars → 3) plus the compaction notice row itself (9
+    // chars → 3; plugin context joins the system segment).
+    view = projectEvent(view, compactionSummary(3, 2, 2))
+    expect(view.systemPrompt).toBe('head persona')
+    expect(view.stats.contextSegments.system).toBe(6)
+    expect(view.entries.some(entry => entry.kind === 'user' && entry.text.includes('compacted'))).toBe(true)
+  })
+
   it('keeps the surviving head when a replacement only clears a later system node', () => {
     // The in-history route appends later nodes and may later normalize them
     // away with a replace carrying empty content — the head node survives and

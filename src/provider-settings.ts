@@ -258,18 +258,6 @@ export interface DiscoveredModelView {
   readonly maxTokens?: number
 }
 
-/** One model an endpoint reported about itself (mirrors LlmDiscoveredModel). */
-export interface DiscoveredModelView {
-  /** Model id the endpoint accepts. */
-  readonly id: string
-  /** Human-readable name when the endpoint supplies one. */
-  readonly name?: string
-  /** Context window when disclosed; adoption still owes it if absent. */
-  readonly contextWindow?: number
-  /** Output cap when disclosed. */
-  readonly maxTokens?: number
-}
-
 /**
  * The seven canonical reasoning levels a reasoningEfforts key may name -
  * pi-ai's THINKING_LEVELS. A pi-ai upgrade that adds or removes one fails

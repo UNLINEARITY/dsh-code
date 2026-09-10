@@ -2,7 +2,9 @@ import { EventEmitter } from 'node:events'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
+  compareHarnessLines,
   harnessLineFromPeers,
+  installedGlobalDshVersion,
   npmInvocation,
   dshCommand,
   completionScript,
@@ -180,15 +182,48 @@ describe('update orchestration', () => {
     const pinned = updatePlan({ latestCode: '1.0.5', peers: { '@deepseek-ai/dsh-session': '0.1.2-rc.1' }, profileSpec: '^1.0.4' })
     expect(pinned).toEqual({
       dshSpec: '@deepseek-ai/dsh@0.1.2-rc.1',
+      line: '0.1.2-rc.1',
       lineLocked: true,
       codeSpec: 'dsh-code@1.0.5',
       profileStep: true,
     })
     const fallback = updatePlan({ latestCode: '1.0.5', peers: undefined, profileSpec: undefined })
     expect(fallback.dshSpec).toBe('@deepseek-ai/dsh@latest')
+    expect(fallback.line).toBeUndefined()
     expect(fallback.lineLocked).toBe(false)
     const linked = updatePlan({ latestCode: '1.0.5', peers: { '@deepseek-ai/dsh-session': '0.1.2-rc.1' }, profileSpec: 'link:C:/repo/dsh-cli' })
     expect(linked.profileStep).toBe(false)
+  })
+
+  it('orders harness lines so a downgrade plan is detectable', () => {
+    expect(compareHarnessLines('0.1.5-rc.1', '0.1.2-rc.1')).toBeGreaterThan(0)
+    expect(compareHarnessLines('0.1.2-rc.1', '0.1.5-rc.1')).toBeLessThan(0)
+    expect(compareHarnessLines('0.1.5-rc.1', '0.1.5-rc.1')).toBe(0)
+    // Final beats its own prereleases; alpha sorts below rc.
+    expect(compareHarnessLines('0.1.5', '0.1.5-rc.9')).toBeGreaterThan(0)
+    expect(compareHarnessLines('0.1.5-rc.1', '0.1.5-alpha.9')).toBeGreaterThan(0)
+    // Unparseable values never block (compare as equal).
+    expect(compareHarnessLines('weird', '0.1.5-rc.1')).toBe(0)
+  })
+
+  it('reads the globally installed host version across npm roots', () => {
+    const manifestAt = (version: string) => JSON.stringify({ version })
+    // node:path joins with the host separator; the probes below match the
+    // second root's manifest regardless of slash direction.
+    const isManifest = (path: string) => path.endsWith(join('@deepseek-ai', 'dsh', 'package.json'))
+    const inSecondRoot = (path: string) => path.split(/[\\/]/u).includes('npm-b')
+    expect(installedGlobalDshVersion(
+      ['C:/npm-a', 'C:/npm-b'],
+      path => isManifest(path) && inSecondRoot(path),
+      () => manifestAt('0.1.5-rc.1'),
+    )).toBe('0.1.5-rc.1')
+    expect(installedGlobalDshVersion(['C:/npm-a'], () => false)).toBeUndefined()
+    // A root with an unreadable manifest falls through to the next root.
+    expect(installedGlobalDshVersion(
+      ['C:/npm-a', 'C:/npm-b'],
+      isManifest,
+      path => inSecondRoot(path) ? manifestAt('0.1.2-rc.1') : 'not json',
+    )).toBe('0.1.2-rc.1')
   })
 
   it('reads the profile dependency spec and the actually mounted version', () => {

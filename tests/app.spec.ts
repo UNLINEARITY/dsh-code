@@ -116,6 +116,7 @@ function appProps(overrides: Partial<AppProps> = {}): AppProps {
     workspaceRoot: 'C:\\repo\\dsh-cli',
     branch: 'main',
     sessionId: '12345678',
+    sessionKey: 'session-12345678',
     resumed: false,
     mode: 'standard',
     permission: 'workspace-write',
@@ -311,7 +312,7 @@ describe('composer image attachments', () => {
       harness.stdin.write('\r')
       await wait(180)
       expect(prepareImages).toHaveBeenCalledWith(['C:\\repo\\docs\\pic.png'], expect.anything())
-      expect(dispatch).toHaveBeenCalledWith('@pic.png', [expect.objectContaining({ type: 'image' })])
+      expect(dispatch).toHaveBeenCalledWith('@pic.png', [expect.objectContaining({ type: 'image' })], 'session-12345678')
 
       harness.stdin.write('"C:\\outside\\a.png" "D:\\b.webp"')
       await wait(180)
@@ -323,7 +324,7 @@ describe('composer image attachments', () => {
       expect(dispatch).toHaveBeenLastCalledWith('[image: a.png] [image: b.webp]', expect.arrayContaining([
         expect.objectContaining({ type: 'image' }),
         expect.objectContaining({ type: 'image' }),
-      ]))
+      ]), 'session-12345678')
     } finally {
       instance.unmount()
     }
@@ -363,7 +364,7 @@ describe('composer image attachments', () => {
       expect(dispatch).toHaveBeenLastCalledWith('[image: shot.png] [file: report.pdf]', expect.arrayContaining([
         expect.objectContaining({ type: 'image' }),
         expect.objectContaining({ type: 'file', attachment: expect.objectContaining({ name: 'report.pdf' }) }),
-      ]))
+      ]), 'session-12345678')
     } finally {
       instance.unmount()
     }
@@ -435,7 +436,7 @@ describe('composer image attachments', () => {
       await wait()
       harness.stdin.write('\r')
       await wait()
-      expect(dispatch).toHaveBeenCalledWith('@pic.png laterX', [])
+      expect(dispatch).toHaveBeenCalledWith('@pic.png laterX', [], 'session-12345678')
     } finally {
       instance.unmount()
       harness.stdin.destroy()
@@ -467,9 +468,44 @@ describe('composer image attachments', () => {
       await wait()
       harness.stdin.write('\r')
       await wait()
-      expect(dispatch).toHaveBeenCalledWith('A [image: a.png] BX', [])
+      expect(dispatch).toHaveBeenCalledWith('A [image: a.png] BX', [], 'session-12345678')
     } finally {
       instance.unmount()
+      harness.stdin.destroy()
+      harness.stdout.destroy()
+    }
+  })
+
+  it('tags an attachment delivery with the composing session for the runner-side stale guard', async () => {
+    // Ink unmounts asynchronously, so a prepare resolving after the app went
+    // away still reaches dispatch on the microtask timeline — the delivery
+    // must carry the composing session's key (the runner drops it when the
+    // active session moved on; see submissionBelongsToSession).
+    const harness = createTty(120, 24)
+    const dispatch = vi.fn()
+    let resolvePreparation!: (value: readonly ImageBlock[]) => void
+    const prepareImages = vi.fn((_paths: readonly string[], _signal?: AbortSignal) => new Promise<readonly ImageBlock[]>(resolve => {
+      resolvePreparation = resolve
+    }))
+    const instance = renderApp(harness, appProps({
+      dispatch,
+      inspectImages: async paths => paths.map(path => ({ path, name: 'a.png', mediaType: 'image/png', bytes: 8 })),
+      prepareImages,
+    }))
+    try {
+      await wait()
+      harness.stdin.write('"C:\\slow\\a.png"')
+      await wait(150)
+      harness.stdin.write('\r')
+      await wait()
+      expect(prepareImages).toHaveBeenCalledOnce()
+      // The composer goes away mid-prepare (the real trigger is a queued
+      // session switch remounting by session id).
+      instance.unmount()
+      resolvePreparation([])
+      await wait(80)
+      expect(dispatch).toHaveBeenCalledWith('[image: a.png]', [], 'session-12345678')
+    } finally {
       harness.stdin.destroy()
       harness.stdout.destroy()
     }

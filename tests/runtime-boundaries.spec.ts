@@ -8,6 +8,7 @@ import {
   resolveTarget,
   runQuitSequence,
   StartupInputGate,
+  submissionBelongsToSession,
   type QueuedSubmission,
   type QuitCleanupStep,
 } from '../src/index.ts'
@@ -22,6 +23,21 @@ function persistenceWith(headers: readonly SessionHeader[]): SessionPersistence 
 }
 
 const CWD = 'C:/repo'
+
+describe('submissionBelongsToSession (stale-delivery guard)', () => {
+  it('drops deliveries composed for a session the app has since left', () => {
+    // A queued switch remounts the app asynchronously while an attachment
+    // prepare resolves on the microtask timeline: the tag names the composing
+    // session and the runner compares it against the live one.
+    expect(submissionBelongsToSession('session-old', 'session-new')).toBe(false)
+    expect(submissionBelongsToSession('session-old', undefined)).toBe(false)
+    // The composing session is still on screen.
+    expect(submissionBelongsToSession('session-same', 'session-same')).toBe(true)
+    // Untagged synchronous submissions and the pending first session pass.
+    expect(submissionBelongsToSession(undefined, 'session-same')).toBe(true)
+    expect(submissionBelongsToSession('', 'session-same')).toBe(true)
+  })
+})
 
 describe('resolveTarget (CLI session policy)', () => {
   it('resumes a persisted root session by exact id or unique prefix', async () => {

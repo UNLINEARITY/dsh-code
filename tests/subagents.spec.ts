@@ -38,6 +38,28 @@ describe('foldSubagentRow', () => {
     // A later observed title still wins the label; the row stays idle.
     const titled = foldSubagentRow(continuable, 's1', event('session/title', { title: 'explorer' }, 4))
     expect(titled.label).toBe('explorer')
+    // A LATE catalog delivery is a discovery fact, not a lifecycle signal:
+    // it must never regress a row that already finished.
+    const finished = foldSubagentRow({ ...titled, state: 'done', activity: 'finished' }, 's1', event('subagent/catalog', {
+      version: 0, childId: 's1', childCreatedAt: 1, mode: 'continuable', label: 'research helper',
+    }, 5))
+    expect(finished.state).toBe('done')
+  })
+
+  it('evicts idle rows too when the feed is full and a new child arrives', async () => {
+    // Idle catalog rows are settled rows: a full feed admits a new child by
+    // evicting the oldest non-running one instead of waiting forever.
+    const feed = createSubagentFeed()
+    for (let index = 0; index < MAX_SUBAGENT_ROWS; index += 1) {
+      feed.apply(`child-${index}`, event('subagent/catalog', { version: 0, childId: `child-${index}`, childCreatedAt: index, mode: 'one-shot' }, index + 1))
+    }
+    await new Promise<void>(resolve => setTimeout(resolve, 25))
+    expect(feed.getSnapshot().every(row => row.state === 'idle')).toBe(true)
+    feed.apply('child-new', event('request/header', {}, 50))
+    await new Promise<void>(resolve => setTimeout(resolve, 25))
+    const rows = feed.getSnapshot()
+    expect(rows.map(row => row.id)).toContain('child-new')
+    expect(rows.map(row => row.id)).not.toContain('child-0')
   })
 
   it('folds tool calls and assistant messages into bounded activity text', () => {

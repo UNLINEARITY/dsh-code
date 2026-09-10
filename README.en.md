@@ -7,7 +7,7 @@ English | [中文](README.md)
 <p align="center"><img alt="Typing SVG" src="https://readme-typing-svg.herokuapp.com?font=JetBrains+Mono&amp;weight=500&amp;size=22&amp;duration=4000&amp;pause=700&amp;color=4176E6&amp;center=true&amp;vCenter=true&amp;width=680&amp;lines=DeepSeek+Harness+Code;Terminal+Coding+Interface+for+the+DSH+Core"></p>
 <p align="center">
   <a href="https://github.com/deepseek-ai/deepseek-harness"><img alt="DeepSeek Harness" src="https://img.shields.io/badge/DeepSeek-Harness-4176E6?style=for-the-badge&amp;logo=deepseek&amp;logoColor=white&amp;labelColor=1c1917"></a>
-  <a href="https://www.npmjs.com/package/@deepseek-ai/dsh"><img alt="dsh version" src="https://img.shields.io/badge/dsh-0.1.1--rc.2-4176E6?style=for-the-badge&amp;logo=deepseek&amp;logoColor=white&amp;labelColor=1c1917"></a>
+  <a href="https://www.npmjs.com/package/@deepseek-ai/dsh"><img alt="dsh version" src="https://img.shields.io/badge/dsh-0.1.5--rc.1-4176E6?style=for-the-badge&amp;logo=deepseek&amp;logoColor=white&amp;labelColor=1c1917"></a>
   <a href="https://github.com/UNLINEARITY/dsh-code/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/UNLINEARITY/dsh-code?label=Stars&amp;style=for-the-badge&amp;logo=github&amp;logoColor=white&amp;color=4176E6&amp;labelColor=1c1917"></a>
   <a href="https://www.npmjs.com/package/dsh-code"><img alt="npm version" src="https://img.shields.io/npm/v/dsh-code?label=npm&amp;style=for-the-badge&amp;logo=npm&amp;color=cb3837&amp;labelColor=1c1917"></a>
   <a href="https://github.com/UNLINEARITY/dsh-code/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/github/license/UNLINEARITY/dsh-code?label=License&amp;style=for-the-badge&amp;logo=opensourceinitiative&amp;color=4176E6&amp;labelColor=1c1917"></a>
@@ -23,21 +23,21 @@ DeepSeek Harness registers models, tools, storage, policies, and interfaces as p
 
 ## 2. Quick start
 
-Requires Node `^22.19 || >=24` and the preview `dsh` CLI (current release line: `@deepseek-ai/dsh@0.1.1-rc.2`). You can still enter the TUI, browse sessions, and use non-model features without configuring a model; press `a` in `/model` to manage API keys, OAuth, and device-code sign-in.
+Requires Node `^22.19 || >=24` and the preview `dsh` CLI (current release line: `@deepseek-ai/dsh@0.1.5-rc.1`). You can still enter the TUI, browse sessions, and use non-model features without configuring a model; press `Tab` in `/model` to manage API keys, OAuth, device-code sign-in, endpoints, and models.
 
 ### 1. Install and update
 
 Use the same commands for the initial installation and subsequent updates:
 
 ```sh
-npm install -g @deepseek-ai/dsh@0.1.1-rc.2 dsh-code@1.0.3
+npm install -g @deepseek-ai/dsh@0.1.5-rc.1 dsh-code@1.0.6
 npm install -g pnpm
-dsh plugin --profile cli add dsh-code@1.0.3
+dsh plugin --profile cli add dsh-code@1.0.6
 ```
 
-> Note: pnpm ignores packages published less than 24 hours ago, so use the exact version `dsh-code@1.0.3` on release day; the version may be omitted after 24 hours. npm installation is not affected.
+> Note: pnpm ignores packages published less than 24 hours ago, so use the exact version `dsh-code@1.0.6` on release day; the version may be omitted after 24 hours. npm installation is not affected.
 >
-> Version alignment: dsh-code 1.0.3 targets dsh `0.1.1-rc.2`, with every Harness dependency pinned exactly to `0.1.1-rc.2`. Keep the global dsh CLI and dsh-code aligned instead of mixing release candidates. rc.2 removes the old DeepSeek setting `maxRequestImageBytes`.
+> Version alignment: dsh-code targets dsh `0.1.5-rc.1`, with every Harness dependency pinned exactly to `0.1.5-rc.1`. Keep the global dsh CLI and dsh-code aligned instead of mixing release candidates; the legacy `code` preset id maps to its renamed `ptc` automatically.
 
 ### 2. Launch commands
 
@@ -75,7 +75,7 @@ DSH-Code brings DSH Agents, models, tools, and durable sessions directly into th
 ### 2. Agents, models, and extensions
 
 - Select an independent Agent Preset for each session to compose tools, prompt sections, skills, context compaction, plan mode, and subagent capabilities
-- Use `/mode` to select `standard`, `code`, `minimal`, `cordis`, or a user-defined Preset
+- Use `/mode` to select `standard`, `ptc`, `minimal`, `cordis`, or a user-defined Preset (the legacy `code` id maps to `ptc`)
 - Use `/model` to switch models and manage providers, API keys, OAuth/device-code sign-in, endpoints, available models, and context windows
 - In the `/model` provider list, Enter manages a manual API key, `l` starts sign-in, and `o` logs out after confirmation
 - Automatically load commands and skills available in DSH; use `/help` to find them and `/plugin` to inspect extension status
@@ -209,8 +209,8 @@ DSH-Code reads the live Harness registries instead of maintaining a separate loc
 The Host owns the shared infrastructure—registries, persistence, session queries, permissions, and sandbox policies—while each session receives an isolated Agent scope composed by an **Agent Preset**:
 
 - `standard` — a full-featured general-purpose coding Agent
-- `code` — multi-operation workflows designed for Code Mode / PTC
-- `minimal` — only a persistent shell and `str_replace_editor`
+- `ptc` — multi-operation workflows designed for PTC (formerly Code Mode); the legacy `code` id still works
+- `minimal` — a single-tool composition keeping only the persistent shell
 - `cordis` — the full Agent plus runtime inspection and Preset-authoring guidance
 - user Presets — custom tools, prompt sections, skills, context compaction, plan mode, and subagent behavior
 

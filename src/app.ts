@@ -282,10 +282,20 @@ export interface AppProps {
   mode: string
   /** Permission preset selected for the current or pending first session. */
   permission: string
-  /** Submit one line: slash commands to the registry, other text to the agent. */
-  dispatch(text: string, attachments?: readonly ContentBlock[]): void
-  /** Submit steering: consumed at the running turn's next step boundary. */
-  steer(text: string, attachments?: readonly ContentBlock[]): void
+  /**
+   * Submit one line: slash commands to the registry, other text to the agent.
+   * The optional origin names the session the submission was composed for —
+   * an attachment prepare resolves after the app remounted onto another
+   * session, and the runner drops the stale delivery then.
+   */
+  dispatch(text: string, attachments?: readonly ContentBlock[], origin?: string): void
+  /** Submit steering, with the same stale-delivery guard as {@link dispatch}. */
+  steer(text: string, attachments?: readonly ContentBlock[], origin?: string): void
+  /**
+   * The FULL current session identity ('' while the first session is pending)
+   * — the stale-delivery origin above. Distinct from the short display id.
+   */
+  sessionKey: string
   /** Interrupt the running turn (Esc); true when a turn was cancelled. */
   interrupt(): boolean
   /** Quit: unmount, flush, and request process exit. */
@@ -2286,7 +2296,9 @@ function ProviderSetupPanel({ target, save, saveCredential, discover, effortDono
   const keyBullets = '•'.repeat(Math.min([...keyDraft].length, Math.max(1, viewport.contentColumns - 14)))
   const keyRow = createElement(Text, { key: 'key', color: zone === 'key' ? inkColor(getPalette().brandBright) : inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns(('  ' + (zone === 'key' ? '>' : ' ') + ' key   ' + keyBullets + (zone === 'key' && !busy ? '▏' : '') + (keyDraft === '' ? ' (' + keyStatus + ')' : busy ? ' saving…' : '')).replace(/ +$/u, ''), viewport.contentColumns))
   const urlRow = createElement(Text, { key: 'url', color: zone === 'url' ? inkColor(getPalette().brandBright) : inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns('  ' + (zone === 'url' ? '>' : ' ') + ' url   ' + (baseURL === '' ? '(official default)' : baseURL) + (zone === 'url' ? '▏' : ''), viewport.contentColumns))
-  const rowBudget = Math.max(0, viewport.bodyRows - stateRows.length - 3)
+  // The fixed diagnostic row (present only with an adapter error) joins the
+  // same height budget as the state rows — it must never overflow the panel.
+  const rowBudget = Math.max(0, viewport.bodyRows - stateRows.length - (target.diagnostic === undefined ? 0 : 1) - 3)
   const first = selectionWindow(cursor, models.length + 1, rowBudget)
   const modelRows: ReactElement[] = []
   for (let index = first; index < first + Math.max(0, Math.min(models.length + 1 - first, rowBudget)); index += 1) {
@@ -3170,14 +3182,16 @@ interface DraftFile extends FilePathInspection {
  * While a modal (approval / question / model panel) owns the keys, the
  * box passes every key through untouched.
  */
-function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openEffort, openHelp, openMode, openPermission, openResume, openPlugin, openJobs, openStatusline, openTheme, openHistory, openAgents, openSubagent, openTodos, openDelete, openDiff, reviewChanges, deleteConfirm, confirmDelete, cancelDelete, createSession, forkSession, cancelSessionSwitch, notify, applyEditorKeys, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, inspectImages, prepareImages, inspectFiles, prepareFiles, cyclePermission, exportTranscript, renameTitle, copyLastResponse, recallSpace, recordLocal, recordHistory, queued, cancelQueued, historyFill, historyConsumed, animations, applyAnimations, waveTier, waveStyle, maxRows, onEditorRows, onMenuRows }: {
+function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openEffort, openHelp, openMode, openPermission, openResume, openPlugin, openJobs, openStatusline, openTheme, openHistory, openAgents, openSubagent, openTodos, openDelete, openDiff, reviewChanges, deleteConfirm, confirmDelete, cancelDelete, createSession, forkSession, cancelSessionSwitch, notify, applyEditorKeys, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, inspectImages, prepareImages, inspectFiles, prepareFiles, cyclePermission, exportTranscript, renameTitle, copyLastResponse, recallSpace, recordLocal, recordHistory, queued, cancelQueued, historyFill, historyConsumed, animations, applyAnimations, waveTier, waveStyle, maxRows, onEditorRows, onMenuRows, sessionKey }: {
   active: boolean
   frozen: boolean
   busy: boolean
   descriptors: readonly CommandDescriptor[]
   skills: readonly SkillRow[]
-  dispatch(text: string, attachments?: readonly ContentBlock[]): void
-  steer(text: string, attachments?: readonly ContentBlock[]): void
+  dispatch(text: string, attachments?: readonly ContentBlock[], origin?: string): void
+  steer(text: string, attachments?: readonly ContentBlock[], origin?: string): void
+  /** The full current session identity ('' while pending); the delivery origin. */
+  sessionKey: string
   interrupt(): boolean
   quit(): void
   openModel(): void
@@ -3869,6 +3883,11 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
         // carry attachments, so the line goes to the model as a prompt —
         // warn instead of surprising the user with a literal "/export".
         if (isSlashLine(text)) notify('commands cannot carry attachments; the line will be sent to the model as a prompt', 'warning')
+        // Attachment prepares resolve asynchronously; the app remounts onto
+        // another session in the meantime, and this (old) instance's unmount
+        // cleanup runs too late on the microtask timeline. Tag the delivery
+        // with the composing session so the runner can drop the stale one.
+        const originSession = sessionKey
         const controller = new AbortController()
         const epoch = prepareEpochRef.current + 1
         prepareEpochRef.current = epoch
@@ -3902,8 +3921,8 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
           }
           recall.current = beginRecall(recallSpace, '')
           const blocks: readonly ContentBlock[] = [...images, ...files]
-          if (busy) steer(text, blocks)
-          else dispatch(text, blocks)
+          if (busy) steer(text, blocks, originSession)
+          else dispatch(text, blocks, originSession)
         }, (reason: unknown) => {
           if (controller.signal.aborted || prepareEpochRef.current !== epoch) return
           prepareAbortRef.current = undefined
@@ -5660,6 +5679,7 @@ export function App(props: AppProps): ReactElement {
         prepareImages: props.prepareImages,
         inspectFiles: props.inspectFiles,
         prepareFiles: props.prepareFiles,
+        sessionKey: props.sessionKey,
         cyclePermission: props.cyclePermission,
         exportTranscript: props.exportTranscript,
         renameTitle: props.renameTitle,

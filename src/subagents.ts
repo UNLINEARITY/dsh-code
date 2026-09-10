@@ -118,12 +118,14 @@ export function foldSubagentRow(previous: SubagentRow | undefined, sessionId: st
     case 'subagent/catalog': {
       // Parent-owned durable discovery fact (0.1.5): the catalog names the
       // child's mode (one-shot vs continuable) and its authored label — the
-      // most semantic label the row can carry. Delivered to the feed through
-      // the root-session listener; idle until the child actually runs.
+      // most semantic label the row can carry. It is a discovery fact, not a
+      // lifecycle signal: a fresh row starts idle, but a late delivery never
+      // regresses a row that already ran or finished.
       const mode = event.data.mode === 'continuable' ? 'continuable' : 'one-shot'
       const label = event.data.label !== undefined && event.data.label.trim() !== '' ? bound(event.data.label) : undefined
       const activity = label === undefined ? `catalog · ${mode}` : `catalog · ${mode} · ${label}`
-      return label === undefined || label === base.label ? { ...base, state: 'idle', activity, updatedAt: event.time } : { ...base, state: 'idle', label, activity, updatedAt: event.time }
+      const state = previous === undefined ? 'idle' : base.state
+      return label === undefined || label === base.label ? { ...base, state, activity, updatedAt: event.time } : { ...base, state, label, activity, updatedAt: event.time }
     }
     case 'assistant/message':
       return { ...base, state: 'idle', activity: messagePreview(data['message'] === undefined ? undefined : (data['message'] as { content?: unknown }).content), updatedAt: event.time }
@@ -185,11 +187,12 @@ export function createSubagentFeed(): SubagentFeedView & {
       }
       // A child this feed has not shown yet: the honest total grows even
       // when every row is busy; admission then prefers evicting the OLDEST
-      // settled row so a new running agent never waits on one that finished.
+      // settled row (idle or done — both are non-running) so a new running
+      // agent never waits on one that already settled.
       const counted = !seen.has(sessionId)
       if (counted) seen.add(sessionId)
       if (rows.length >= MAX_SUBAGENT_ROWS) {
-        const evict = rows.findIndex(row => row.state === 'done')
+        const evict = rows.findIndex(row => row.state !== 'running')
         if (evict === -1) {
           if (counted) notify()
           return

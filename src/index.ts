@@ -23,7 +23,7 @@ import type {} from '@deepseek-ai/dsh-agent-default-model'
 import type {} from '@deepseek-ai/dsh-attachment'
 import { createUserMessage, MessageId, type ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { JobSnapshot } from '@deepseek-ai/dsh-jobs'
-import { SessionId, type Session, type SessionEvent, type SessionHeader, type UserMessage } from '@deepseek-ai/dsh-session'
+import { SessionId, SessionLogOffset, type Session, type SessionEvent, type SessionHeader, type UserMessage } from '@deepseek-ai/dsh-session'
 import type { SessionPersistence } from '@deepseek-ai/dsh-session-persistence'
 // Type-only: carries the ctx.sessionTitle service merge for /title.
 import type {} from '@deepseek-ai/dsh-session-title'
@@ -258,6 +258,18 @@ export interface QueuedSubmission {
 }
 
 /**
+ * Whether a tagged submission still belongs to the active session. Attachment
+ * prepares resolve on the microtask timeline, while a queued session switch
+ * remounts the app asynchronously — the composing instance's unmount cleanup
+ * runs too late to abort, so the delivery itself carries the composing
+ * session's full id and the runner drops it here when the world moved on.
+ * An untagged (synchronous) or pending-session ('') submission always passes.
+ */
+export function submissionBelongsToSession(origin: string | undefined, activeSessionId: string | undefined): boolean {
+  return origin === undefined || origin === '' || origin === activeSessionId
+}
+
+/**
  * Order-preserving gate for composer input while the startup prompt/images
  * are still preparing. Anything submitted before the startup delivery settles
  * queues and flushes afterwards in submit order, so the initial request can
@@ -453,8 +465,12 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
           cwd: nextCwd,
           agentPreset: mode,
           ...(next.parentSession === undefined ? {} : { parentSession: next.parentSession }),
-          ...(next.seedLength === undefined ? {} : { seedLength: next.seedLength }),
+          // 0.1.5 fork lineage: the seed marker lives on the metadata and the
+          // inherited prefix length on the top-level option (the v0 header's
+          // numeric `seedLength` field is gone from the create contract).
+          ...(next.seedLength === undefined ? {} : { isSeeded: true }),
         },
+        ...(next.seedLength === undefined ? {} : { inheritedEventCount: SessionLogOffset(next.seedLength) }),
         ...(next.seed === undefined ? {} : { seed: next.seed }),
         agentOptions: seedOptions,
         signal: quitAbort.signal,
@@ -1095,7 +1111,11 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   }
 
   /** Dispatch one submitted line: slash commands to the registry, other text to the agent. */
-  const dispatch = (text: string, images: readonly ContentBlock[] = []): void => {
+  const dispatch = (text: string, images: readonly ContentBlock[] = [], origin?: string): void => {
+    // An attachment prepare resolved after the app remounted onto another
+    // session (queued switch): the composing session is gone, so the stale
+    // delivery is dropped instead of landing in the new session's inbox.
+    if (!submissionBelongsToSession(origin, session?.id)) return
     send(text, 'followup', images)
   }
 
@@ -1104,7 +1124,8 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
    * boundary (the inbox delivers between steps); an idle driver just starts
    * a turn, so this doubles as the busy-state submit path.
    */
-  const steer = (text: string, images: readonly ContentBlock[] = []): void => {
+  const steer = (text: string, images: readonly ContentBlock[] = [], origin?: string): void => {
+    if (!submissionBelongsToSession(origin, session?.id)) return
     send(text, 'steer', images)
   }
 
@@ -1356,8 +1377,9 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       try {
         // Remove every canonical generation artifact this build knows; other
         // sibling files are never ours to delete, and the directory itself is
-        // only removed once empty.
-        const entries = await readdir(dir, { withFileTypes: true }).catch(() => [] as { name: string; isFile(): boolean }[])
+        // only removed once empty. An unreadable directory counts as a
+        // failure (not a silent success) so the outcome line stays honest.
+        const entries = await readdir(dir, { withFileTypes: true })
         for (const entry of entries) {
           if (entry.isFile() && isSessionArtifactName(entry.name)) {
             await rm(join(dir, entry.name), { force: true })
@@ -1665,6 +1687,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       : effectivePermission(permissionPresets, session, pendingPermission)
     return createElement(App, {
       key: session?.id ?? 'pending',
+      sessionKey: session?.id ?? '',
       store,
       approval,
       questions,

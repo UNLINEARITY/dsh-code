@@ -32,7 +32,9 @@ touching the committed files.
   log — a hard crash before settlement loses the in-flight stream.
 - **System prompt as a surface node** (`v2→v3`): the first `system/message`
   event is surface node 0; `request/header.data.header.system` is removed.
-  Compaction never covers the system node.
+  Compaction never covers system node 0; later nodes may fall inside a
+  compaction range, and the terminal's fold retires them through any surface
+  replace, not only `system/message` ones.
 - **PTC durable vocabulary** (`v2→v3`): `tool/code-dispatch(-start)` became
   `tool/ptc-dispatch(-start)`; the plugin signature `tools-code-mode` became
   `tools-ptc` in `user/message` source slots; preset id `code` became `ptc`
@@ -42,7 +44,11 @@ touching the committed files.
   `assistant/message` forbids `sourceEventSeqs`.
 - **New known events**: `assistant/attempt`, `system/message`,
   `tool/ptc-dispatch(-start)`, `subagent/catalog`, `deliverables/presented`,
-  `feedback/message-put`, `feedback/message-delete`.
+  `feedback/message-put`, `feedback/message-delete`. The `present` tool ships
+  MOUNTED in the standard and ptc presets, so `deliverables/presented`
+  arrives in the terminal too — the terminal keeps folding it as a known
+  no-op because the presenting tool's own result card already shows the
+  presented paths, not because the tool is absent.
 - **Immutable generations on disk**: one session directory may hold
   `session.jsonl` (v0) alongside `session.v1.jsonl`/`session.v2.jsonl`/
   `session.v3.jsonl` (each optionally zstd-compressed); readers take the
@@ -118,9 +124,24 @@ patch now overrides `personaPrefix`.
   resume a paused goal.
 - dsh-code consumes the stream frames for live typing and folds
   `assistant/attempt` as durable diagnostics; catalog/steer/activation
-  surfaces are deferred follow-ups.
+  surfaces land later: the durable catalog feeds the /agents live rows (an
+  idle row carrying the authored label and mode; late deliveries never
+  regress a row that already ran), while steer delivery and the armed
+  indicator remain follow-ups.
 
-## What dsh-code adopted in this alignment
+## What dsh-code adopted in this alignment (stages 1–3)
+
+Stage 2 added the provider configuration diagnostics (the adapter's `error`
+rides the provider row into the /model list and the setup page) and the
+system-prompt data layer (per-node fold, `TranscriptView.systemPrompt`,
+/export collapsed block). Stage 3 added terminal file attachments (paste/drop
+split into image and file blocks, terminal-side bounds of 8 MiB and 8 files,
+composer drafts, projection/export labels) and the subagent catalog rows.
+The launcher refuses to downgrade an installed host to the line an older
+published dsh-code pins, and `/fork` records lineage through the 0.1.5
+contract (`meta.isSeeded` plus the top-level `inheritedEventCount` — the
+`meta.seedLength` spelling belongs to a later upstream draft and the released
+kernel rejects it).
 
 - All `@deepseek-ai/dsh-*` pins moved to `0.1.5-rc.1` (dependencies, peers,
   dev dependencies, the launcher's harness-line anchor, and the two specs

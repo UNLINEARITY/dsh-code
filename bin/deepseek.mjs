@@ -94,10 +94,57 @@ export function updatePlan({ latestCode, peers, profileSpec }) {
   const line = harnessLineFromPeers(peers)
   return {
     dshSpec: line === undefined ? '@deepseek-ai/dsh@latest' : `@deepseek-ai/dsh@${line}`,
+    line: line === undefined ? undefined : line,
     lineLocked: line !== undefined,
     codeSpec: `dsh-code@${latestCode}`,
     profileStep: !(typeof profileSpec === 'string' && /^(link|file):/iu.test(profileSpec)),
   }
+}
+
+/**
+ * Compare two @deepseek-ai/dsh release-line versions (`0.1.x`, `0.1.x-rc.N`,
+ * `0.1.x-alpha.N`). Positive when `left` is newer, negative when older, and 0
+ * on equality or an unparseable value (an unreadable version never blocks an
+ * update — release semantics follow semver prerelease ordering: final > rc >
+ * beta > alpha).
+ */
+export function compareHarnessLines(left, right) {
+  const parse = (value) => {
+    const match = /^(\d+)\.(\d+)\.(\d+)(?:-(alpha|beta|rc)\.(\d+))?$/.exec(String(value))
+    if (match === null) return undefined
+    return {
+      core: [Number(match[1]), Number(match[2]), Number(match[3])],
+      tag: match[4] === undefined ? 3 : { alpha: 0, beta: 1, rc: 2 }[match[4]],
+      num: match[5] === undefined ? 0 : Number(match[5]),
+    }
+  }
+  const a = parse(left)
+  const b = parse(right)
+  if (a === undefined || b === undefined) return 0
+  for (let index = 0; index < 3; index += 1) {
+    if (a.core[index] !== b.core[index]) return a.core[index] - b.core[index]
+  }
+  if (a.tag !== b.tag) return a.tag - b.tag
+  return a.num - b.num
+}
+
+/**
+ * The globally installed @deepseek-ai/dsh version, when one exists across the
+ * npm global roots this launcher may boot from. An update whose plan targets a
+ * line OLDER than this would silently downgrade the booted host.
+ */
+export function installedGlobalDshVersion(roots = globalDshRoots(), fileExists = existsSync, readFile = readFileSync) {
+  for (const root of roots) {
+    const manifest = join(root, 'node_modules', '@deepseek-ai', 'dsh', 'package.json')
+    if (!fileExists(manifest)) continue
+    try {
+      const version = JSON.parse(readFile(manifest, 'utf8'))?.version
+      if (typeof version === 'string' && version !== '') return version
+    } catch {
+      // Unreadable manifest: try the next root.
+    }
+  }
+  return undefined
 }
 
 /** Run wrapper-owned child steps in order, stopping at the first failure. */
@@ -322,6 +369,18 @@ async function applyUpdate({
   const plan = updatePlan({ latestCode, peers, profileSpec: profileDependencySpec() })
   if (!plan.lineLocked) {
     console.log('dsh-code: could not read the compatible harness line; installing @deepseek-ai/dsh@latest')
+  }
+  // Downgrade guard: the latest published dsh-code may still pin an older
+  // harness line than the host already installed globally (a release-ordering
+  // window). Installing would silently downgrade every existing session's
+  // booted host, and a link-mounted profile would end up on a mismatched pair
+  // with no warning — refuse instead and name the manual command.
+  const installed = installedGlobalDshVersion()
+  if (plan.line !== undefined && installed !== undefined && compareHarnessLines(plan.line, installed) < 0) {
+    console.error(`dsh-code: dsh-code@${latestCode} needs @deepseek-ai/dsh@${plan.line}, but ${installed} is already installed globally`)
+    console.error(`dsh-code: refusing to downgrade the host; to proceed anyway run: npm install -g @deepseek-ai/dsh@${plan.line} dsh-code@${latestCode}`)
+    process.exitCode = 1
+    return
   }
   const steps = [{ command: npm.command, args: [...npm.args, 'install', '-g', plan.dshSpec, plan.codeSpec], label: 'npm install' }]
   if (plan.profileStep) {

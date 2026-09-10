@@ -41,7 +41,7 @@ dsh plugin --profile cli add dsh-code@1.0.6
 >
 > 版本对齐：dsh-code 面向 dsh `0.1.5-rc.1` 构建，全部 Harness 依赖均精确锁定为 `0.1.5-rc.1`。已安装的用户运行 `deepseek update --apply` 即可按同一条版本线一起升级全局宿主与 cli profile 中的插件，本地开发挂载（`link:`）不受影响。
 >
-> 升级说明：上游从本版本起将内置 `code` 预设更名为 `ptc`；旧会话与旧参数中记录的 `code` 会自动映射到 `ptc`，无需手动迁移。会话日志读取端随上游升级到格式 v3：旧格式日志在读取时由内核自动迁移，磁盘上的原始文件保持不变。
+> 升级说明：旧会话与旧参数中记录的 `code` 预设会自动映射到上游已改名的 `ptc`，无需手动迁移。会话日志读取端随上游升级到格式 v3：旧格式日志在读取时由内核自动迁移，磁盘上的原始文件保持不变。
 
 ### 2. 启动指令
 
@@ -79,7 +79,7 @@ DSH-Code 的重点是让 DSH 的 Agent、模型、工具和持久会话可以直
 ### 2. Agent、模型与扩展
 
 - 每个会话可以选择独立的 Agent Preset，用于组合工具、提示词、技能、上下文压缩、plan mode 和 subagent 能力
-- 使用 `/mode` 选择 `standard`、`code`、`minimal`、`cordis` 或用户自定义 Preset
+- 使用 `/mode` 选择 `standard`、`ptc`、`minimal`、`cordis` 或用户自定义 Preset（旧名称 `code` 自动映射到 `ptc`）
 - 使用 `/model` 切换模型，管理 provider、API key、OAuth/设备码登录、endpoint、可用模型和上下文窗口；`Tab` 进入 provider 管理（已配置供应商置顶分组），任意阶段 `Ctrl+C` 直接退出整个 /model 流程
 - 在 provider 列表中，Enter 进入统一配置页：同页填写 API key 与 endpoint（留空即官方默认）、编辑已添加模型的上下文/输出窗口，`Tab` 进入发现页拉取端点真实可用模型并勾选添加
 - 在统一配置页的模型行上按 `e` 编辑推理档位声明（格式 `low:low high:high max:max`，`false` 禁用、留空恢复继承），按 `c` 从其他已声明模型逐字复制——例如 GLM 系列按官方三档写 `low:low high:high max:max`，新模型（如 gpt-6）可一键复制 gpt-5.6 的映射
@@ -217,8 +217,8 @@ DSH-Code 读取 Harness 的实时注册表，不在本地维护另一套副本�
 Host 持有共享基础设施——注册表、持久化、会话查询、权限和 sandbox 策略；每个会话则获得一个隔离的 Agent scope，并由 **Agent Preset** 进行组合：
 
 - `standard`——功能完整的通用编码 Agent
-- `code`——面向 Code Mode / PTC 的多操作工作流
-- `minimal`——只保留持久 shell 和 `str_replace_editor`
+- `ptc`——面向 PTC（原 Code Mode）的多操作工作流；旧名称 `code` 仍可使用
+- `minimal`——仅保留持久 shell 的单工具精简组合
 - `cordis`——完整 Agent，加上运行时检查与 Preset 编写指导
 - 用户预设——自行定义工具、提示词段落、技能、上下文压缩、plan mode 与 subagent 行为
 
@@ -226,7 +226,7 @@ Host 持有共享基础设施——注册表、持久化、会话查询、权限
 
 ### 3. 会话记录与恢复
 
-提示词、流式 chunk、工具调用与结果、模型选择、plan 状态、权限、标题和 preset 选择都由持久 Session 事件投影得到。会话恢复、导出、历史检查、上下文统计和终端重放使用同一份记录。
+提示词、工具调用与结果、模型选择、plan 状态、权限、标题和 preset 选择都由持久 Session 事件投影得到；会话恢复、导出、历史检查、上下文统计和终端重放使用同一份记录。实时流式文本经进程内流帧呈现，落盘日志只保留装配完成的回复（内嵌计时流），两者在重放时得到同一视图。
 
 React state 只保存输入草稿、光标、当前面板、选中项和滚动位置等临时界面状态。
 

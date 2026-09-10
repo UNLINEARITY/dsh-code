@@ -2,7 +2,7 @@
 
 import { basename, dirname, resolve } from 'node:path'
 import { realpathSync } from 'node:fs'
-import type { SessionEvent, SessionHeader } from '@deepseek-ai/dsh-session'
+import { SESSION_FORMAT_VERSION, type SessionEvent, type SessionHeader } from '@deepseek-ai/dsh-session'
 
 export interface SessionRecord {
   readonly header: SessionHeader
@@ -240,18 +240,17 @@ export function sessionDirectoryFor(root: string, cwd: string | undefined, id: s
  * The canonical session-log artifact filenames the JSONL backend may create:
  * format v0 writes the bare `session.jsonl` name; v1+ write
  * `session.vN.jsonl`, each generation optionally zstd-compressed. Multiple
- * immutable generations may coexist in one session directory (0.1.5).
+ * immutable generations may coexist in one session directory (0.1.5). The
+ * range follows the installed session package's `SESSION_FORMAT_VERSION`, so
+ * a future generation joins the enumeration with the dependency bump.
  */
 export function sessionArtifactNames(): readonly string[] {
   const names: string[] = ['session.jsonl', 'session.jsonl.zstd']
-  for (let version = 1; version <= SESSION_FORMAT_GENERATIONS; version += 1) {
+  for (let version = 1; version <= SESSION_FORMAT_VERSION; version += 1) {
     names.push(`session.v${version}.jsonl`, `session.v${version}.jsonl.zstd`)
   }
   return names
 }
-
-/** Highest session-log format generation this build enumerates (v3 in 0.1.5-rc.1). */
-export const SESSION_FORMAT_GENERATIONS = 3
 
 /** Canonical generation-log filenames as a lookup set (bare v0 or `vN`-suffixed, ± zstd). */
 const SESSION_ARTIFACT_NAME_SET: ReadonlySet<string> = new Set(sessionArtifactNames())

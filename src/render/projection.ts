@@ -357,6 +357,33 @@ function assembleSystemPrompt(nodes: ReadonlyMap<number, string>): string {
   return texts.join('\n\n')
 }
 
+/**
+ * Apply one surface event's replace to the live system nodes. Any surface
+ * event may shadow system nodes — the kernel's compaction summary lands as a
+ * `user/message` replace whose range can cover later system nodes (only node
+ * 0 is compaction-protected upstream) — so every surface fold retires covered
+ * nodes, not just `system/message` itself.
+ * @param nodes - the live system-node map (mutated when the event replaces).
+ * @param surfaceOp - the surface operation the event carries, when it is a
+ * surface event (log-only events have none and change nothing).
+ * @returns the reassembled prompt when nodes were retired, `changed: false`
+ * when the event shadows nothing.
+ */
+function retireShadowedSystemNodes(
+  nodes: Map<number, string>,
+  surfaceOp: 'append' | { readonly op: 'replace'; readonly startSeq: number; readonly endSeq: number } | undefined,
+): { readonly prompt: string; readonly changed: boolean } {
+  if (surfaceOp === undefined || surfaceOp === 'append') return { prompt: '', changed: false }
+  let changed = false
+  for (const seq of nodes.keys()) {
+    if (seq >= surfaceOp.startSeq && seq <= surfaceOp.endSeq) {
+      nodes.delete(seq)
+      changed = true
+    }
+  }
+  return changed ? { prompt: assembleSystemPrompt(nodes), changed } : { prompt: '', changed: false }
+}
+
 /** Join the text blocks of a content list; non-text blocks contribute nothing. */
 function textOf(content: readonly ContentBlock[]): string {
   return content.filter(block => block.type === 'text').map(block => block.text).join('')
@@ -486,6 +513,17 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
   // "the input view is never mutated" — even for the in-place anchor sweeps
   // below; without this, every handed-out view shared live Maps.
   view = { ...view, anchors: cloneViewAnchors(view.anchors) }
+  // Any surface event's replace may shadow system nodes (a compaction
+  // summary lands as a user/message replace whose range can cover later
+  // system nodes); the switch below folds against the shadowed view.
+  const shadow = retireShadowedSystemNodes(view.anchors.systemNodes, event.surfaceOp)
+  if (shadow.changed) {
+    view = {
+      ...view,
+      systemPrompt: shadow.prompt,
+      stats: { ...view.stats, contextSegments: { ...view.stats.contextSegments, system: estimateTokens(shadow.prompt) } },
+    }
+  }
   switch (event.type) {
     case 'user/message': {
       // A queued row retires when its durable user message lands (the agent
@@ -583,12 +621,7 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
       // replacement never zeroes a surviving head.
       const text = textOf(event.data.message.content)
       const nodes = view.anchors.systemNodes
-      const op = event.surfaceOp
-      if (op !== 'append') {
-        for (const seq of nodes.keys()) {
-          if (seq >= op.startSeq && seq <= op.endSeq) nodes.delete(seq)
-        }
-      }
+      retireShadowedSystemNodes(nodes, event.surfaceOp)
       nodes.set(event.seq, text)
       const systemPrompt = assembleSystemPrompt(nodes)
       return {
@@ -1209,6 +1242,13 @@ function retireReplayEntry(acc: ReplayAccumulator, index: number): void {
  * like the copy-on-write reducer returning its input view unchanged.
  */
 export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent): boolean {
+  // Mirror of the reducer's entry shadow: any surface replace retires the
+  // system nodes it covers before the per-event fold runs.
+  const shadow = retireShadowedSystemNodes(acc.systemNodes, event.surfaceOp)
+  if (shadow.changed) {
+    acc.systemPrompt = shadow.prompt
+    acc.stats = { ...acc.stats, contextSegments: { ...acc.stats.contextSegments, system: estimateTokens(shadow.prompt) } }
+  }
   switch (event.type) {
     case 'user/message': {
       const message = event.data
@@ -1290,12 +1330,7 @@ export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent):
       // Mirrors the reducer's per-node fold: append adds, replace retires the
       // covered seq range, and the estimate prices the assembled prompt.
       const text = textOf(event.data.message.content)
-      const op = event.surfaceOp
-      if (op !== 'append') {
-        for (const seq of acc.systemNodes.keys()) {
-          if (seq >= op.startSeq && seq <= op.endSeq) acc.systemNodes.delete(seq)
-        }
-      }
+      retireShadowedSystemNodes(acc.systemNodes, event.surfaceOp)
       acc.systemNodes.set(event.seq, text)
       acc.systemPrompt = assembleSystemPrompt(acc.systemNodes)
       acc.stats = {
