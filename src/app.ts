@@ -63,6 +63,7 @@ import {
 } from './render/animations.ts'
 import type { ApprovalSnapshot, ApprovalStore } from './approval.ts'
 import { isSlashLine, submissionPayload, type CommandsView } from './commands.ts'
+import { rankByName } from './render/fuzzy.ts'
 import type { ModelDirectory, ModelRow } from './models.ts'
 import {
   isDeclaredReasoningEfforts,
@@ -3068,8 +3069,12 @@ export function completionCandidates(
     seen.add(name)
     all.push(candidate)
   }
-  if (prefix === '') return all
-  return all.filter(candidate => candidate.label.slice(1).startsWith(prefix))
+  // Fuzzy ranking (the web menu's discovery feel): the query must be a
+  // case-insensitive ordered subsequence of a name; prefix hits first, then
+  // alignment score, then this composition order. An empty query keeps the
+  // full list.
+  return rankByName(all.map(candidate => ({ name: candidate.label.slice(1), candidate })), prefix)
+    .map(entry => entry.candidate)
 }
 
 /**
@@ -3551,8 +3556,21 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   const visibleMentionRows = mentionToken !== undefined && isPathLikeMentionQuery(mentionToken.query)
     ? mentionRows.filter(row => row.kind !== 'session')
     : mentionRows
+  // Fuzzy ordering over the upstream candidates (≤20 per page, cheaper than
+  // the slash menu): rows whose name contains the typed query as an ordered
+  // subsequence rise to the top by alignment, and every other upstream row
+  // keeps its place after them — the upstream matcher has its own relevance
+  // semantics (path segments), so ranking reorders but never drops rows. A
+  // path-like query keeps the upstream order entirely.
+  let rankedMentionRows = visibleMentionRows
+  if (mentionToken !== undefined && !isPathLikeMentionQuery(mentionToken.query) && mentionToken.query !== '') {
+    const hits = rankByName(visibleMentionRows.map(row => ({ name: row.label.replace(/^@/u, ''), row })), mentionToken.query)
+      .map(entry => entry.row)
+    const hitSet = new Set(hits)
+    rankedMentionRows = [...hits, ...visibleMentionRows.filter(row => !hitSet.has(row))]
+  }
   const menuRows: readonly CompletionCandidate[] = mentionActive
-    ? visibleMentionRows.map(row => ({
+    ? rankedMentionRows.map(row => ({
       label: row.label.startsWith('@')
         ? row.label
         : `@${row.label}${row.kind === 'directory' ? '/' : ''}`,
@@ -3568,8 +3586,8 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   /** Accept the highlighted completion-menu candidate into the draft. */
   const acceptMenuCandidate = (): void => {
     if (mentionActive && mentionToken !== undefined) {
-      if (visibleMentionRows.length === 0) return
-      const row = visibleMentionRows[completionIndex % visibleMentionRows.length]
+      if (rankedMentionRows.length === 0) return
+      const row = rankedMentionRows[completionIndex % rankedMentionRows.length]
       if (row !== undefined) {
         if (row.kind === 'file' && row.path !== undefined && looksLikeImagePath(row.path)) {
           const tokenText = value.slice(mentionToken.start, cursor)

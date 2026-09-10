@@ -38,7 +38,27 @@ describe('completionCandidates', () => {
     const descriptors: readonly CommandDescriptor[] = [{ name: 'compact', description: 'shrink history' }]
     const skills: readonly SkillRow[] = [skill('review'), skill('model-check')]
     const rows = completionCandidates('/mo', descriptors, skills)
-    expect(rows.map(row => row.label)).toEqual(['/model', '/mode', '/model-check'])
+    // Prefix hits first in source order (model, mode, then the
+    // model-check skill), gapped subsequence matches after (animation,
+    // permission).
+    expect(rows.slice(0, 3).map(row => row.label)).toEqual(['/model', '/mode', '/model-check'])
+    expect(rows.map(row => row.label)).toContain('/animation')
+  })
+
+  it('matches ordered subsequences and ranks prefix hits first', () => {
+    // Prefix hits lead (model, mode); the gapped subsequence matches follow
+    // in source order (animation's m…o, permission's m…o).
+    const mo = completionCandidates('/mo', [], []).map(row => row.label)
+    expect(mo.slice(0, 2)).toEqual(['/model', '/mode'])
+    expect(mo).toContain('/animation')
+    expect(mo).toContain('/permission')
+    // `md` is a gapped subsequence of the model family only.
+    expect(completionCandidates('/md', [], []).map(row => row.label)).toContain('/mode')
+    expect(completionCandidates('/md', [], []).map(row => row.label)).not.toContain('/animation')
+    // `dmo` is no one's ordered subsequence and matches nothing.
+    expect(completionCandidates('/dmo', [], [])).toEqual([])
+    // Matching is case-insensitive on both sides.
+    expect(completionCandidates('/MD', [], []).map(row => row.label)).toContain('/mode')
   })
 
   it('keeps every local command reachable with an empty prefix', () => {

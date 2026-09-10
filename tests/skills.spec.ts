@@ -136,17 +136,46 @@ describe('watchSkills', () => {
     const agentB = { session: { header: { cwd: 'C:/b' } } } as unknown as Agent
     view.setAgent(agentA)
     view.setAgent(agentB)
-    // Let both reloads reach the registry: deferred[0] is agent A's load,
-    // deferred[1] is agent B's.
+    // Let the reloads reach the registry: deferred[0] is the constructor's
+    // global-layer read (no agent yet), deferred[1] agent A's, deferred[2]
+    // agent B's.
     await new Promise(resolve => setImmediate(resolve))
-    expect(deferred).toHaveLength(2)
+    expect(deferred).toHaveLength(3)
     // The newer agent's catalog lands first, then the older one's — the stale
     // result must be dropped.
-    deferred[1]?.resolve([summary('beta', true, true)])
+    deferred[2]?.resolve([summary('beta', true, true)])
     await new Promise(resolve => setImmediate(resolve))
     expect(view.rows.map(row => row.name)).toEqual(['beta'])
-    deferred[0]?.resolve([summary('alpha', true, true)])
+    deferred[1]?.resolve([summary('alpha', true, true)])
     await new Promise(resolve => setImmediate(resolve))
     expect(view.rows.map(row => row.name)).toEqual(['beta'])
+  })
+
+  it('reads the global layer for the working directory before any agent exists', async () => {
+    // A bare launch keeps the agent unset until the first message; the
+    // upstream contract makes `scope` optional (omitted reads the global
+    // layer alone), so the menu offers skills from the start.
+    const calls: Array<Record<string, unknown>> = []
+    const registry = {
+      list: (options: Record<string, unknown>): Promise<readonly SkillSummary[]> => {
+        calls.push(options)
+        return Promise.resolve([summary('global-skill', true, true)])
+      },
+    }
+    const ctx = {
+      get: (name: string): unknown => (name === 'skills' ? registry : undefined),
+      on: (): (() => void) => () => {},
+    } as unknown as Context
+    const view = watchSkills(ctx, 'C:/fallback')
+    await new Promise(resolve => setImmediate(resolve))
+    await new Promise(resolve => setImmediate(resolve))
+    expect(calls).toEqual([{ cwd: 'C:/fallback' }])
+    expect(view.rows.map(row => row.name)).toEqual(['global-skill'])
+    // Binding an agent upgrades to the scoped read.
+    const agent = { session: { header: { cwd: 'C:/session' } } } as unknown as Agent
+    view.setAgent(agent)
+    await new Promise(resolve => setImmediate(resolve))
+    await new Promise(resolve => setImmediate(resolve))
+    expect(calls[1]).toEqual({ cwd: 'C:/session', scope: agent })
   })
 })

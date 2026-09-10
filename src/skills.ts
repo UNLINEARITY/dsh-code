@@ -74,11 +74,17 @@ export function watchSkills(ctx: Context, fallbackCwd?: string): SkillsWatch {
 
   const reload = (): void => {
     const target = agent
-    if (skills === undefined || target === undefined) return
-    Promise.resolve().then(() => skills.list({
-      cwd: target.session.header.cwd ?? fallbackCwd,
-      scope: target,
-    })).then((summaries: readonly SkillSummary[]) => {
+    if (skills === undefined) return
+    Promise.resolve().then(() => skills.list(target === undefined
+      // No session exists yet (a bare launch keeps the agent unset until the
+      // first message): read the global skill layer for the working directory.
+      // The upstream contract makes `scope` optional — omitted reads the
+      // global layer alone — so the menu offers skills before a session does.
+      ? { cwd: fallbackCwd }
+      : {
+        cwd: target.session.header.cwd ?? fallbackCwd,
+        scope: target,
+      })).then((summaries: readonly SkillSummary[]) => {
       // A retarget landed while this catalog was loading: the rows belong to
       // another agent's workspace and must never overwrite the current view.
       if (agent !== target) return
@@ -97,9 +103,9 @@ export function watchSkills(ctx: Context, fallbackCwd?: string): SkillsWatch {
       for (const listener of listeners) listener()
     }).catch((cause: unknown) => {
       if (agent !== target) return
-      // Discovery failure keeps the last good rows for the SAME agent (the
+      // Discovery failure keeps the last good rows for the SAME target (the
       // next skills/change notification is the retry surface, mirroring the
-      // web directory); an agent that never loaded starts from empty rows —
+      // web directory); a target that never loaded starts from empty rows —
       // stale rows from a previous workspace must not keep completing here.
       // The rows array keeps its identity unless the failure text itself
       // changed: a repeated identical error on the 0.1.5 event storm must not
@@ -115,6 +121,9 @@ export function watchSkills(ctx: Context, fallbackCwd?: string): SkillsWatch {
 
   if (skills !== undefined) {
     ctx.on('skills/change', reload)
+    // Read the global layer immediately: a bare launch has no agent yet, and
+    // waiting for the first skills/change would leave the menu empty.
+    reload()
   }
 
   const view: SkillsWatch = {
