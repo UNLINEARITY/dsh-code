@@ -73,6 +73,37 @@ export function profileMountedVersion(profileDir = cliProfileDir(), fileExists =
   }
 }
 
+/**
+ * Profile-installed harness plugins that a line upgrade must carry along:
+ * every `@deepseek-ai/dsh-*` dependency except the dsh-code target itself
+ * and local checkouts (`link:`/`file:` stay untouched). Users install these
+ * through `dsh plugin add` once; without this pass `update --apply` would
+ * move the host and dsh-code forward and silently leave every other plugin
+ * pinned to the old line.
+ * @param profileDir - the cli profile root.
+ * @returns dependency entries as `{ name, spec }` in manifest order.
+ */
+export function profilePluginDependencies(profileDir = cliProfileDir(), fileExists = existsSync, readFile = readFileSync) {
+  const manifest = join(profileDir, 'package.json')
+  if (!fileExists(manifest)) return []
+  let dependencies
+  try {
+    dependencies = JSON.parse(readFile(manifest, 'utf8'))?.dependencies
+  } catch {
+    return []
+  }
+  if (typeof dependencies !== 'object' || dependencies === null) return []
+  const plugins = []
+  for (const [name, spec] of Object.entries(dependencies)) {
+    if (typeof spec !== 'string') continue
+    if (!name.startsWith('@deepseek-ai/dsh-')) continue
+    if (name === 'dsh-code' || name === '@deepseek-ai/dsh-base') continue
+    if (/^(link|file):/iu.test(spec)) continue
+    plugins.push({ name, spec })
+  }
+  return plugins
+}
+
 /** The harness release line a dsh-code release expects, read from its peers. */
 export function harnessLineFromPeers(peers) {
   if (typeof peers !== 'object' || peers === null) return undefined
@@ -90,14 +121,20 @@ export function harnessLineFromPeers(peers) {
  * so the launcher can never move ahead of the plugin it must boot. A
  * profile that mounts a local checkout (link:/file:) keeps its mount.
  */
-export function updatePlan({ latestCode, peers, profileSpec }) {
+export function updatePlan({ latestCode, peers, profileSpec, profilePlugins = [] }) {
   const line = harnessLineFromPeers(peers)
+  const profileStep = !(typeof profileSpec === 'string' && /^(link|file):/iu.test(profileSpec))
   return {
     dshSpec: line === undefined ? '@deepseek-ai/dsh@latest' : `@deepseek-ai/dsh@${line}`,
     line: line === undefined ? undefined : line,
     lineLocked: line !== undefined,
     codeSpec: `dsh-code@${latestCode}`,
-    profileStep: !(typeof profileSpec === 'string' && /^(link|file):/iu.test(profileSpec)),
+    profileStep,
+    // Companion plugins the profile installed through `dsh plugin add`:
+    // carried to the same line so one command moves the whole profile.
+    pluginSpecs: line === undefined || !profileStep ? [] : profilePlugins
+      .filter(plugin => plugin.spec !== line)
+      .map(plugin => `${plugin.name}@${line}`),
   }
 }
 
@@ -366,7 +403,12 @@ async function applyUpdate({
     return
   }
   const peers = view([`dsh-code@${latestCode}`, 'peerDependencies'], undefined, npm)
-  const plan = updatePlan({ latestCode, peers, profileSpec: profileDependencySpec() })
+  const plan = updatePlan({
+    latestCode,
+    peers,
+    profileSpec: profileDependencySpec(),
+    profilePlugins: profilePluginDependencies(),
+  })
   if (!plan.lineLocked) {
     console.log('dsh-code: could not read the compatible harness line; installing @deepseek-ai/dsh@latest')
   }
@@ -391,6 +433,20 @@ async function applyUpdate({
       return
     }
     steps.push({ command: command.command, args: command.args, label: 'dsh plugin add' })
+    // Companion plugins ride the same line: without this, `dsh plugin add`-ed
+    // extras stay pinned to the old harness line after an upgrade.
+    for (const pluginSpec of plan.pluginSpecs) {
+      const pluginCommand = resolveCommand(['plugin', '--profile', 'cli', 'add', pluginSpec])
+      if (pluginCommand === undefined) {
+        console.error(`dsh-code: could not resolve the dsh command for ${pluginSpec}`)
+        process.exitCode = 1
+        return
+      }
+      steps.push({ command: pluginCommand.command, args: pluginCommand.args, label: `dsh plugin add ${pluginSpec}` })
+    }
+    if (plan.pluginSpecs.length > 0) {
+      console.log(`carrying ${plan.pluginSpecs.length} profile plugin${plan.pluginSpecs.length === 1 ? '' : 's'} to the same line: ${plan.pluginSpecs.join(', ')}`)
+    }
   } else {
     console.log('cli profile mounts a local checkout; leaving the profile untouched')
   }

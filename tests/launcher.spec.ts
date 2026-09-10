@@ -14,6 +14,7 @@ import {
   profileDependencySpec,
   profileHasDshCode,
   profileMountedVersion,
+  profilePluginDependencies,
   runSequence,
   setupBundle,
   updatePlan,
@@ -186,6 +187,7 @@ describe('update orchestration', () => {
       lineLocked: true,
       codeSpec: 'dsh-code@1.0.5',
       profileStep: true,
+      pluginSpecs: [],
     })
     const fallback = updatePlan({ latestCode: '1.0.5', peers: undefined, profileSpec: undefined })
     expect(fallback.dshSpec).toBe('@deepseek-ai/dsh@latest')
@@ -193,6 +195,47 @@ describe('update orchestration', () => {
     expect(fallback.lineLocked).toBe(false)
     const linked = updatePlan({ latestCode: '1.0.5', peers: { '@deepseek-ai/dsh-session': '0.1.2-rc.1' }, profileSpec: 'link:C:/repo/dsh-cli' })
     expect(linked.profileStep).toBe(false)
+  })
+
+  it('carries profile companion plugins to the target line in one update', () => {
+    const plugins = [
+      { name: '@deepseek-ai/dsh-web-search-exa', spec: '0.1.2-rc.1' },
+      { name: '@deepseek-ai/dsh-web-search-perplexity', spec: '0.1.5-rc.1' },
+    ]
+    const plan = updatePlan({
+      latestCode: '1.0.6',
+      peers: { '@deepseek-ai/dsh-session': '0.1.5-rc.1' },
+      profileSpec: '^1.0.5',
+      profilePlugins: plugins,
+    })
+    // Only the plugin still pinned off the line rides along.
+    expect(plan.pluginSpecs).toEqual(['@deepseek-ai/dsh-web-search-exa@0.1.5-rc.1'])
+    // No locked line or a checkout mount never touches companion plugins.
+    expect(updatePlan({ latestCode: '1.0.6', peers: undefined, profileSpec: '^1.0.5', profilePlugins: plugins }).pluginSpecs).toEqual([])
+    expect(updatePlan({ latestCode: '1.0.6', peers: { '@deepseek-ai/dsh-session': '0.1.5-rc.1' }, profileSpec: 'link:C:/repo', profilePlugins: plugins }).pluginSpecs).toEqual([])
+  })
+
+  it('collects only harness companion plugins from the profile manifest', () => {
+    const manifest = JSON.stringify({
+      dependencies: {
+        '@deepseek-ai/dsh-web-search-exa': '0.1.2-rc.1',
+        '@deepseek-ai/dsh-web-search-perplexity': '0.1.2-rc.1',
+        'dsh-code': 'link:C:/repo/dsh-cli',
+        '@deepseek-ai/dsh-base': '0.1.2-rc.1',
+        '@openguardrails/dsh-tui': '^0.1.2',
+        '@deepseek-ai/dsh-local-dev-mount': 'link:C:/dev/plugin',
+      },
+    })
+    expect(profilePluginDependencies(
+      'C:/profiles/cli',
+      path => path.endsWith('package.json'),
+      () => manifest,
+    )).toEqual([
+      { name: '@deepseek-ai/dsh-web-search-exa', spec: '0.1.2-rc.1' },
+      { name: '@deepseek-ai/dsh-web-search-perplexity', spec: '0.1.2-rc.1' },
+    ])
+    expect(profilePluginDependencies('C:/profiles/cli', () => false)).toEqual([])
+    expect(profilePluginDependencies('C:/profiles/cli', () => true, () => 'not json')).toEqual([])
   })
 
   it('orders harness lines so a downgrade plan is detectable', () => {
