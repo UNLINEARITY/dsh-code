@@ -13,7 +13,35 @@ import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type { TodoItem } from '@deepseek-ai/dsh-session'
 import { App, computeSettledRows, type AppProps } from '../src/app.ts'
 import { createSplitStdin } from '../src/input-split.ts'
-import { createTranscriptStore } from '../src/store.ts'
+import { createTranscriptStore, type TranscriptStore } from '../src/store.ts'
+
+/**
+ * Drive one live assistant attempt through the store exactly the runner does
+ * (session-log v2+: durable logs are settlement-only; live typing rides the
+ * process-local assistant-stream frames).
+ */
+function applyStreamDeltas(
+  store: TranscriptStore,
+  turn: number,
+  step: number,
+  deltas: ReadonlyArray<{ kind: 'text' | 'reasoning'; text: string; time?: number }>,
+): void {
+  const attemptId = `attempt-${turn}-${step}` as never
+  store.applyStreamFrame({ type: 'start', attemptId, revision: 1, turn, step })
+  let index = 0
+  for (const delta of deltas) {
+    store.applyStreamFrame({
+      type: 'chunk',
+      attemptId,
+      revision: 1,
+      index: index++,
+      time: delta.time ?? 0,
+      chunk: delta.kind === 'text'
+        ? { type: 'text-delta', index: 0, text: delta.text }
+        : { type: 'reasoning-delta', index: 0, text: delta.text },
+    } as never)
+  }
+}
 import type { TranscriptEntry } from '../src/render/projection.ts'
 import { DEFAULT_STATUSLINE_ITEMS } from '../src/render/status.ts'
 import { DARK_PALETTE, setTheme } from '../src/theme.ts'
@@ -1084,17 +1112,8 @@ describe('keyboard protocol and transcript alignment', () => {
         time: 3,
         data: { turn: 1, step: 1 },
       } as SessionEvent,
-      {
-        type: 'assistant/chunk',
-        seq: 4,
-        time: 4,
-        data: {
-          turn: 1,
-          step: 1,
-          chunk: { type: 'reasoning-delta', index: 0, text: 'the hidden reasoning trace' },
-        },
-      } as SessionEvent,
     ])
+    applyStreamDeltas(store, 1, 1, [{ kind: 'reasoning', text: 'the hidden reasoning trace', time: 4 }])
     const instance = renderApp(harness, appProps({ store, interrupt }))
     try {
       await wait()
@@ -1350,12 +1369,7 @@ describe('Ctrl+O history details', () => {
 
       store.apply({ type: 'turn/start', seq: 1, time: 1, data: { turn: 1 } } as SessionEvent)
       output = ''
-      store.apply({
-        type: 'assistant/chunk',
-        seq: 2,
-        time: 2,
-        data: { turn: 1, step: 1, chunk: { type: 'reasoning-delta', index: 0, text: 'thinking\n'.repeat(1_000) } },
-      } as SessionEvent)
+      applyStreamDeltas(store, 1, 1, [{ kind: 'reasoning', text: 'thinking\n'.repeat(1_000), time: 2 }])
       await wait()
       expect(output).not.toContain('\x1b[2J')
       expect(output.split('\n').length).toBeLessThan(stdout.rows)
@@ -2478,10 +2492,7 @@ describe('Ctrl+R reasoning fold', () => {
         type: 'user/message', seq: 4, time: 4,
         data: createUserMessage({ content: [{ type: 'text', text: 'go' }], source: { kind: 'user' } }),
       } as SessionEvent)
-      store.apply({
-        type: 'assistant/chunk', seq: 5, time: 5,
-        data: { turn: 1, step: 1, chunk: { type: 'reasoning-delta', text: 'the streaming thought' } },
-      } as unknown as SessionEvent)
+      applyStreamDeltas(store, 1, 1, [{ kind: 'reasoning', text: 'the streaming thought', time: 5 }])
       await wait()
       const plain = harness.output.text.replace(/\x1b\[[0-9;?]*[A-Za-z]/gu, '')
       expect(plain).toContain('✻ Thinking… (Ctrl/Alt+R to expand)')
@@ -2491,10 +2502,7 @@ describe('Ctrl+R reasoning fold', () => {
       // tick cadence must not race the answer paint) while staying visible;
       // the streaming text itself keeps painting.
       harness.output.text = ''
-      store.apply({
-        type: 'assistant/chunk', seq: 6, time: 6,
-        data: { turn: 1, step: 1, chunk: { type: 'text-delta', text: 'the answer token' } },
-      } as unknown as SessionEvent)
+      applyStreamDeltas(store, 1, 1, [{ kind: 'text', text: 'the answer token', time: 6 }])
       await wait()
       const answering = harness.output.text.replace(/\x1b\[[0-9;?]*[A-Za-z]/gu, '')
       expect(answering).toContain('the answer token')
@@ -2551,10 +2559,7 @@ describe('Ctrl+R reasoning fold', () => {
       harness.output.text = ''
       store.apply({ type: 'turn/start', seq: 4, time: 4, data: { turn: 2 } } as SessionEvent)
       store.apply({ type: 'step/start', seq: 5, time: 5, data: { turn: 2, step: 1 } } as SessionEvent)
-      store.apply({
-        type: 'assistant/chunk', seq: 6, time: 6,
-        data: { turn: 2, step: 1, chunk: { type: 'text-delta', text: 'live answer' } },
-      } as unknown as SessionEvent)
+      applyStreamDeltas(store, 2, 1, [{ kind: 'text', text: 'live answer', time: 6 }])
       await wait()
       harness.stdin.write('\x12')
       await wait()
@@ -2935,12 +2940,9 @@ describe('Ctrl+R reasoning fold', () => {
       // Start a fresh reasoning stream over the settled history.
       store.apply({ type: 'turn/start', seq: 3, time: 3, data: { turn: 2 } } as SessionEvent)
       store.apply({ type: 'step/start', seq: 4, time: 4, data: { turn: 2, step: 1 } } as SessionEvent)
-      for (let index = 0; index < 10; index += 1) {
-        store.apply({
-          type: 'assistant/chunk', seq: 5 + index, time: 5 + index,
-          data: { turn: 2, step: 1, chunk: { type: 'reasoning-delta', text: `stream-${index} ` } },
-        } as unknown as SessionEvent)
-      }
+      applyStreamDeltas(store, 2, 1, Array.from({ length: 10 }, (_, index) => ({
+        kind: 'reasoning' as const, text: `stream-${index} `, time: 5 + index,
+      })))
       await wait()
       let plain = output.text.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '')
       expect(plain).toContain('Thinking')
@@ -3058,19 +3060,13 @@ describe('Ctrl+R reasoning fold', () => {
       // A fresh reasoning stream.
       store.apply({ type: 'turn/start', seq: 1, time: 1, data: { turn: 1 } } as SessionEvent)
       store.apply({ type: 'step/start', seq: 2, time: 2, data: { turn: 1, step: 1 } } as SessionEvent)
-      for (let index = 0; index < 10; index += 1) {
-        store.apply({
-          type: 'assistant/chunk', seq: 3 + index, time: 3 + index,
-          data: { turn: 1, step: 1, chunk: { type: 'reasoning-delta', text: `stream-${index} ` } },
-        } as unknown as SessionEvent)
-      }
+      applyStreamDeltas(store, 1, 1, Array.from({ length: 10 }, (_, index) => ({
+        kind: 'reasoning' as const, text: `stream-${index} `, time: 3 + index,
+      })))
       await wait()
       // The first text delta keeps reasoning and answer together in the live
       // region. Nothing is promoted into Static before assistant/message.
-      store.apply({
-        type: 'assistant/chunk', seq: 13, time: 13,
-        data: { turn: 1, step: 1, chunk: { type: 'text-delta', text: 'the visible answer' } },
-      } as unknown as SessionEvent)
+      applyStreamDeltas(store, 1, 1, [{ kind: 'text', text: 'the visible answer', time: 13 }])
       await wait()
       const plain = output.text.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')
       expect(store.getView().entries).toEqual([])

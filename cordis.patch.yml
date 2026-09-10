@@ -7,9 +7,12 @@
 # dispatches slash commands through the shared registry, and folds submitted
 # prompts back into the same durable session until the user quits.
 
+# 0.1.5 split the deployment persona into a prefix and a suffix template
+# around the first-party guidance sections; this terminal keeps its identity
+# line as the prefix ({{variable}} interpolation stays strict upstream).
 - id: system-prompt
   config:
-    persona: >-
+    personaPrefix: >-
       You are a coding agent powered by the {{model}} model. Your working directory is {{cwd}}.
 
 # The shared module-reload HMR row stays off; the launcher's watch-only
@@ -33,8 +36,6 @@
 - id: tool-fs
   disabled: true
 - id: tool-fs-search
-  disabled: true
-- id: tool-str-replace-editor
   disabled: true
 - id: skill-filesystem
   disabled: true
@@ -70,9 +71,11 @@
   disabled: true
 - id: tool-todo
   disabled: true
-# tool-web keeps the 0.1.2-rc.1 base default (web_fetch enabled over the
+# tool-web keeps the 0.1.5-rc.1 base default (web_fetch enabled over the
 # bundled web-fetch-http provider): the host row exposes web_fetch while the
-# per-preset agent-plane rows keep their own fetch stance.
+# per-preset agent-plane rows keep their own fetch stance. The upstream base
+# bundle dropped tool-str-replace-editor entirely in 0.1.5 (the minimal
+# preset became a single-tool composition), so this patch no longer lists it.
 
 - insert:
     # Code Mode is a core execution capability, not a Web component.
@@ -111,7 +114,8 @@
     # tool-subagent rows set `modelSelectionSettings: true`, whose start
     # resolves this service and fails the whole preset mount when absent
     # ("failed to apply loader entry delegation (cordis:group)"). The upstream
-    # web-app bundle adds this host row in 0.1.2-rc.1; dsh-base does not ship it.
+    # web-app bundle carries this host row in 0.1.5-rc.1; dsh-base still does
+    # not ship it.
     - id: subagent-model-selection-settings
       name: '@deepseek-ai/dsh-tool-subagent/model-selection-settings'
 

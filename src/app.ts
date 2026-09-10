@@ -4829,7 +4829,7 @@ export function App(props: AppProps): ReactElement {
   // contract that lets arbitrarily long conversations scroll instead of
   // freezing when the live tree exceeds the terminal height. The dynamic
   // region below stays small: the streaming tail, modals, composer, and its
-  // status footer. `assistant/chunk` preserves `entries` identity.
+  // status footer. Live stream frames preserve `entries` identity.
   //
   // `computeSettledRows` extends the cached row set incrementally: the
   // settled prefix is permanently final, so a grown boundary builds ONLY the

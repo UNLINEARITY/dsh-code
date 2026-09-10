@@ -107,7 +107,10 @@ export function foldSubagentRow(previous: SubagentRow | undefined, sessionId: st
       return { ...base, state: 'running', activity: 'working…', updatedAt: event.time }
     case 'user/message':
       return { ...base, state: 'running', activity: 'prompted', updatedAt: event.time }
-    case 'assistant/chunk':
+    case 'assistant/attempt':
+      // Durable logs are settlement-only since session-log v2; an attempt
+      // landing without a surface message means the model is retrying or
+      // recovered from a stream error, so the child stays running.
       return { ...base, state: 'running', activity: 'thinking…', updatedAt: event.time }
     case 'assistant/message':
       return { ...base, state: 'idle', activity: messagePreview(data['message'] === undefined ? undefined : (data['message'] as { content?: unknown }).content), updatedAt: event.time }

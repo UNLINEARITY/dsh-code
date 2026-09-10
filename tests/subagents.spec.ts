@@ -76,8 +76,10 @@ describe('createSubagentFeed', () => {
       notified += 1
     })
     feed.apply('a', event('request/header', {}, 1))
-    feed.apply('a', event('assistant/chunk', { chunk: { type: 'text-delta', text: 'x' } }, 2))
-    feed.apply('a', event('assistant/chunk', { chunk: { type: 'text-delta', text: 'y' } }, 3))
+    // Durable logs are settlement-only since session-log v2; a child's
+    // in-flight generation surfaces through its settled attempt records.
+    feed.apply('a', event('assistant/attempt', { stream: [] }, 2))
+    feed.apply('a', event('assistant/attempt', { stream: [] }, 3))
     expect(notified).toBe(0)
     await new Promise<void>(resolve => setTimeout(resolve, 25))
     expect(notified).toBe(1)

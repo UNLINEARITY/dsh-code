@@ -30,8 +30,16 @@
  * @module @deepseek-ai/dsh-tui/store
  */
 
+import type { AssistantStreamFrame } from '@deepseek-ai/dsh-agent'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
-import { createReplayAccumulator, replayProjectEvent, snapshotReplayView, type TranscriptView } from './render/projection.ts'
+import {
+  applyAssistantStreamChunk,
+  clearAssistantStream,
+  createReplayAccumulator,
+  replayProjectEvent,
+  snapshotReplayView,
+  type TranscriptView,
+} from './render/projection.ts'
 
 /** Render frame budget: the notification cadence's upper bound. */
 const NOTIFY_FRAME_MS = 16
@@ -44,6 +52,8 @@ export interface TranscriptStore {
   subscribe(listener: () => void): () => void
   /** Fold one session event; ignored events change nothing and notify nobody. */
   apply(event: SessionEvent): void
+  /** Fold one live assistant-stream frame; frames without visible deltas stay silent. */
+  applyStreamFrame(frame: AssistantStreamFrame): void
   /** Drop the folded view entirely (/clear): the next event starts a fresh one. */
   reset(): void
 }
@@ -66,6 +76,11 @@ export function createTranscriptStore(replay?: readonly SessionEvent[]): Transcr
   const listeners = new Set<() => void>()
   let scheduled = false
   let lastNotifyAt = 0
+  // Live attempt → `turn:step` key: chunk frames name only their attempt, so
+  // the start frame's turn/step anchor is remembered until the end frame
+  // retires the attempt. A replacement attempt (new start frame) overwrites
+  // the entry; committed settlements already cleared the tails it replaces.
+  const attemptKeys = new Map<string, string>()
   const notify = (): void => {
     if (scheduled) return
     scheduled = true
@@ -101,8 +116,31 @@ export function createTranscriptStore(replay?: readonly SessionEvent[]): Transcr
       dirty = true
       notify()
     },
+    applyStreamFrame(frame: AssistantStreamFrame): void {
+      if (frame.type === 'start') {
+        attemptKeys.set(frame.attemptId, `${frame.turn}:${frame.step}`)
+        return
+      }
+      if (frame.type === 'chunk') {
+        const key = attemptKeys.get(frame.attemptId)
+        if (key === undefined) return
+        if (!applyAssistantStreamChunk(acc, key, frame.time, frame.chunk)) return
+        dirty = true
+        notify()
+        return
+      }
+      // End frame: committed settlements arrive as durable events before
+      // their end frame and already cleared the tails; an abandoned attempt
+      // has no settlement, so its partial tail is dropped here.
+      attemptKeys.delete(frame.attemptId)
+      if (frame.outcome.kind === 'abandoned' && clearAssistantStream(acc)) {
+        dirty = true
+        notify()
+      }
+    },
     reset(): void {
       acc = createReplayAccumulator()
+      attemptKeys.clear()
       dirty = true
       notify()
     },

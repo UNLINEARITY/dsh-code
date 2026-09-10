@@ -12,7 +12,7 @@
 import { randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { appendFile as appendFileAsync, mkdir, rm, stat, writeFile as writeFileAsync } from 'node:fs/promises'
+import { appendFile as appendFileAsync, mkdir, readdir, rm, stat, writeFile as writeFileAsync } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { createElement } from 'react'
 import type { Context } from '@deepseek-ai/cordis'
@@ -90,10 +90,12 @@ import {
   matchSessionId,
   mergeSessionTitles,
   newestRootForCwd,
+  isSessionArtifactName,
+  jsonlSessionRoot,
   planSessionDeletion,
   projectSessionRows,
-  SESSION_ARTIFACT_NAMES,
   sessionArtifactDirectory,
+  sessionDirectoryFor,
   type SessionDirectoryOptions,
   type SessionQueryService,
   type SessionRow,
@@ -305,7 +307,7 @@ export async function resolveTarget(startup: TuiStartup, persistence: SessionPer
     // backend can tell us (a live collision is still caught by the session
     // store at create time).
     if (persistence !== undefined) {
-      const headers: readonly SessionHeader[] = await persistence.list()
+      const headers: readonly SessionHeader[] = (await persistence.list()).map(snapshot => snapshot.header)
       if (headers.some(header => header.id === startup.sessionId)) {
         throw new Error(`session "${startup.sessionId}" already exists; use --resume to continue it`)
       }
@@ -315,7 +317,7 @@ export async function resolveTarget(startup: TuiStartup, persistence: SessionPer
   if (persistence === undefined) {
     throw new Error('cannot resolve the requested session: session persistence is not configured')
   }
-  const headers: readonly SessionHeader[] = await persistence.list()
+  const headers: readonly SessionHeader[] = (await persistence.list()).map(snapshot => snapshot.header)
   if (startup.kind === 'resume') {
     const matched = matchSessionId(headers, startup.sessionId)
     // Subagent conversations are read-only everywhere else; the CLI must not
@@ -413,15 +415,18 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     // An explicit `--mode` or the settings-layer service default may still name
     // an id an upstream rename retired (code → ptc); normalize both.
     if (!next.resume) mode = (await presets.resolve(normalizePresetId(mode ?? presets.defaultId))).id
-    const setup = async (agentCtx: Context): Promise<void> => {
+    // 0.1.5 AgentSetup passes the composed agent as its second argument (the
+    // former `ctx.agent` accessor is gone); the preset mount still needs the
+    // agent-scoped context.
+    const setup = async (agentCtx: Context, agent: Agent): Promise<void> => {
       const sessionPreset = next.resume
-        ? resolvePreset(agentCtx.agent!.session)
+        ? resolvePreset(agent.session)
         : mode
       const mounted = await presets.mount(agentCtx, sessionPreset)
       mode = mounted.id
       const selection: ModelSelectionRef = {
         get current(): ModelSelection | undefined {
-          return resolveEffectiveSelection(selectionState.picked, agentCtx.agent?.session.requestHeader()?.config, currentDefaults())
+          return resolveEffectiveSelection(selectionState.picked, agent.session.requestHeader()?.config, currentDefaults())
         },
         set current(value: ModelSelection | undefined) { selectionState.picked = value },
         assembled: undefined,
@@ -549,6 +554,16 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     // visible. Lineage comes from the child header, same field the session
     // directory uses to tag `↳` rows.
     if (subject.header.parentSession === session.id && subject.header.origin === 'subagent') subagents.apply(subject.id, event)
+  })
+
+  // Live assistant typing (session-log v2+): durable logs are settlement-only,
+  // so the streaming tails ride the process-local `agent/assistant-stream`
+  // frames of the current root agent. Settlement events clear the tails when
+  // they land (always before a committed end frame); an abandoned attempt's
+  // partial tail is dropped by the store on its end frame.
+  ctx.on('agent/assistant-stream', ({ agent: source, frame }) => {
+    if (agent === undefined || source.id !== agent.id) return
+    store.applyStreamFrame(frame)
   })
 
   const commands: CommandsView = watchCommands(ctx)
@@ -848,9 +863,10 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     const finish = (): void => {
       pendingControllers.delete(controller)
     }
-    // rc.8 registry.execute gained an `images` admission parameter; the TUI
-    // composer never attaches images to a slash line, so every invocation is
-    // the empty batch (commands declaring input.images still run image-free).
+    // 0.1.5 registry.execute's third parameter admits submitted attachments
+    // (images and file receipts); the TUI composer never attaches images to a
+    // slash line, so every invocation is the empty batch (commands declaring
+    // input.attachments still run attachment-free).
     void Promise.resolve().then(() => registry.execute(currentAgent, line, [], controller.signal)).then((execution) => {
       finish()
       // A switch/quit landed while the command ran: its fall-through must not
@@ -1254,18 +1270,27 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     if (sessionQuery === undefined) throw new Error('session query is unavailable in this profile')
     const records = await sessionQuery.listSessions(signal)
     // Last-activity timestamps for sorting (codex UpdatedAt default): the
-    // JSONL artifact's mtime via locate()+stat — the upstream api-proxy's own
-    // cold-probe pattern. O(1) per session; backends without a location (or
-    // vanished files) fall back to createdAt inside the projection.
+    // newest generation artifact's mtime under the JSONL layout. 0.1.5 dropped
+    // the persistence `locate()` query, so paths are derived from the
+    // backend's public config root. Backends without a JSONL config (or
+    // vanished directories) fall back to createdAt inside the projection.
+    const root = jsonlSessionRoot(persistence)
     const updated = new Map<string, number>()
-    for (const record of records) {
-      const location = persistence?.locate(record.header)
-      if (location === undefined) continue
-      try {
-        updated.set(record.header.id, (await stat(location.path)).mtimeMs)
-      } catch {
-        // Artifact gone or unreadable: the projection falls back to createdAt.
-      }
+    if (root !== undefined) {
+      await Promise.all(records.map(async record => {
+        try {
+          const dir = sessionDirectoryFor(root, record.header.cwd, record.header.id)
+          const entries = await readdir(dir, { withFileTypes: true })
+          const stats = await Promise.all(
+            entries.filter(entry => entry.isFile() && isSessionArtifactName(entry.name))
+              .map(entry => stat(join(dir, entry.name))),
+          )
+          const newest = Math.max(...stats.map(info => info.mtimeMs))
+          if (Number.isFinite(newest)) updated.set(record.header.id, newest)
+        } catch {
+          // Artifact gone or unreadable: the projection falls back to createdAt.
+        }
+      }))
     }
     const projected = projectSessionRows(records, options, updated)
     // Titles are the expensive fold. Fetch only the first bounded picker page;
@@ -1286,11 +1311,11 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
    * 1. `planSessionDeletion` collects the subtree and refuses when the root
    *    or ANY member is live (a live child would outlive its deleted
    *    parent), ordering the plan children-first.
-   * 2. Every plan node must locate to a guarded artifact directory
-   *    (`encodeSegment(id)`/`session.jsonl` layout). Backends without a
-   *    locatable artifact (SQLite) refuse the WHOLE deletion here — no
-   *    file has been touched yet, so a backend or layout surprise can
-   *    never strand a half-deleted subtree.
+   * 2. Every plan node must derive to a guarded artifact directory
+   *    (`encodeSegment(id)` layout beneath the backend's config root).
+   *    Backends without a derivable artifact (non-JSONL) refuse the WHOLE
+   *    deletion here — no file has been touched yet, so a backend or layout
+   *    surprise can never strand a half-deleted subtree.
    * 3. Artifacts are removed children-first: only an I/O error mid-delete
    *    can stop it short (reported with removed/total counts), leaving the
    *    shallowest lineage intact.
@@ -1304,21 +1329,21 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     const records = await sessionQuery.listSessions()
     const plan = planSessionDeletion(records, id)
     if (!plan.ok) return plan.reason
-    // Phase 2 completes the plan before the first rm: locate and
+    // Phase 2 completes the plan before the first rm: derive and
     // layout-check every node up front, so a refusal never leaves a
     // partially removed subtree behind.
+    const root = jsonlSessionRoot(persistence)
+    if (root === undefined) {
+      return 'session backend exposes no deletable artifact (deletion is unsupported on this backend)'
+    }
     const byId = new Map<string, (typeof records)[number]>(records.map(record => [record.header.id, record]))
     const dirs = new Map<string, string>()
     for (const node of plan.nodes) {
       const record = byId.get(node.id)
       if (record === undefined) return `no persisted session matches "${node.id}"`
-      const location = persistence?.locate(record.header)
-      if (location === undefined) {
-        return `session backend exposes no deletable artifact for ${node.id.slice(-12)} (deletion is unsupported on this backend)`
-      }
-      const dir = sessionArtifactDirectory(location.path, node.id)
+      const dir = sessionArtifactDirectory(sessionDirectoryFor(root, record.header.cwd, node.id), node.id)
       if (dir === undefined) {
-        return `refusing to delete: unexpected artifact layout at ${location.path}`
+        return `refusing to delete: unexpected artifact layout for ${node.id.slice(-12)}`
       }
       dirs.set(node.id, dir)
     }
@@ -1326,11 +1351,15 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     for (const node of plan.nodes) {
       const dir = dirs.get(node.id)!
       try {
-        for (const name of SESSION_ARTIFACT_NAMES) {
-          await rm(join(dir, name), { force: true })
+        // Remove every canonical generation artifact this build knows; other
+        // sibling files are never ours to delete, and the directory itself is
+        // only removed once empty.
+        const entries = await readdir(dir, { withFileTypes: true }).catch(() => [] as { name: string; isFile(): boolean }[])
+        for (const entry of entries) {
+          if (entry.isFile() && isSessionArtifactName(entry.name)) {
+            await rm(join(dir, entry.name), { force: true })
+          }
         }
-        // Remove the now-empty session directory; a non-empty one stays (an
-        // unexpected sibling file is never ours to delete).
         await rm(dir, { force: true, recursive: false }).catch(() => {})
         removed += 1
       } catch (error: unknown) {

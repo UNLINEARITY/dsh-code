@@ -17,6 +17,9 @@ import {
   projectEvents,
   replayProjectEvent,
   settledEntryCount,
+  applyAssistantStreamChunk,
+  createReplayAccumulator,
+  snapshotReplayView,
 } from '../src/render/projection.ts'
 
 const callId = { current: 'c1' as CallId }
@@ -30,22 +33,19 @@ function userEvent(text: string, seq: number): SessionEvent {
   } as SessionEvent
 }
 
-function chunkEvent(text: string, seq: number): SessionEvent {
-  return {
-    type: 'assistant/chunk',
-    seq,
-    time: 0,
-    data: { turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text } },
-  } as SessionEvent
+// Session-log v2+ keeps durable logs settlement-only: the live typing buffers
+// ride the process-local assistant-stream frames, folded through the replay
+// accumulator exactly like the store does. These helpers drive that path.
+function liveAcc(): ReturnType<typeof createReplayAccumulator> {
+  return createReplayAccumulator()
 }
 
-function reasoningChunkEvent(text: string, seq: number): SessionEvent {
-  return {
-    type: 'assistant/chunk',
-    seq,
-    time: 0,
-    data: { turn: 1, step: 1, chunk: { type: 'reasoning-delta', index: 0, text } },
-  } as SessionEvent
+function streamText(acc: ReturnType<typeof createReplayAccumulator>, text: string, time = 0): void {
+  applyAssistantStreamChunk(acc, '1:1', time, { type: 'text-delta', index: 0, text })
+}
+
+function streamReasoning(acc: ReturnType<typeof createReplayAccumulator>, text: string, time = 0): void {
+  applyAssistantStreamChunk(acc, '1:1', time, { type: 'reasoning-delta', index: 0, text })
 }
 
 function assistantEvent(text: string, seq: number): SessionEvent {
@@ -56,6 +56,7 @@ function assistantEvent(text: string, seq: number): SessionEvent {
     data: {
       turn: 1,
       step: 1,
+      stream: [],
       message: createAssistantMessage({
         content: [{ type: 'text', text }],
         source: { provider: 'p', model: 'm' },
@@ -98,7 +99,15 @@ describe('replay equivalence (property)', () => {
       seed = (seed * 1_664_525 + 1_013_904_223) >>> 0
       return seed / 0x1_0000_0000
     }
-    const builders = [userEvent, chunkEvent, reasoningChunkEvent, assistantEvent]
+    const attemptEvent = (text: string, seq: number): SessionEvent => ({
+      type: 'assistant/attempt', seq, time: 0,
+      data: { turn: 1, step: 1, stream: [{ type: 'text-chunks', time0: 0, index: 0, dt: [1], texts: [text] }] },
+    } as SessionEvent)
+    const systemEvent = (text: string, seq: number): SessionEvent => ({
+      type: 'system/message', seq, time: 0, surfaceOp: { op: 'append' },
+      data: { turn: 1, step: 1, message: { role: 'system', id: 's' + seq, content: text === '' ? [] : [{ type: 'text', text }], source: { kind: 'plugin', plugin: 'system-prompt' } } },
+    } as unknown as SessionEvent)
+    const builders = [userEvent, attemptEvent, assistantEvent, systemEvent]
     for (let trial = 0; trial < 150; trial += 1) {
       const length = Math.floor(rand() * 28)
       const events: SessionEvent[] = []
@@ -114,10 +123,13 @@ describe('replay equivalence (property)', () => {
   })
 
   it('projectEvents is deterministic for repeated folds of the same log', () => {
+    const attemptEvent = (text: string, seq: number): SessionEvent => ({
+      type: 'assistant/attempt', seq, time: 0,
+      data: { turn: 1, step: 1, stream: [{ type: 'text-chunks', time0: 0, index: 0, dt: [1], texts: [text] }] },
+    } as SessionEvent)
     const events = [
       userEvent('one', 1),
-      chunkEvent('partial ', 2),
-      reasoningChunkEvent('thinking ', 3),
+      attemptEvent('partial ', 2),
       assistantEvent('done', 4),
     ]
     expect(projectEvents(events)).toStrictEqual(projectEvents(events))
@@ -165,10 +177,14 @@ describe('transcript projection', () => {
     expect(view.entries).toEqual([{ kind: 'user', text: 'files changed', notice: true }])
   })
 
-  it('accumulates text deltas into the streaming buffer and flushes on assembly', () => {
-    let view = projectEvents([userEvent('hi', 1), chunkEvent('Deep', 2), chunkEvent('Seek', 3)])
-    expect(view.streaming).toBe('DeepSeek')
-    view = projectEvent(view, assistantEvent('DeepSeek harness', 4))
+  it('accumulates live stream deltas into the buffer and flushes on settlement', () => {
+    const acc = liveAcc()
+    replayProjectEvent(acc, userEvent('hi', 1))
+    streamText(acc, 'Deep', 2)
+    streamText(acc, 'Seek', 3)
+    expect(snapshotReplayView(acc).streaming).toBe('DeepSeek')
+    replayProjectEvent(acc, assistantEvent('DeepSeek harness', 4))
+    const view = snapshotReplayView(acc)
     expect(view.streaming).toBe('')
     expect(view.entries).toEqual([
       { kind: 'user', text: 'hi', notice: false },
@@ -177,15 +193,18 @@ describe('transcript projection', () => {
   })
 
   it('settles reasoning and answer as one authoritative assistant entry', () => {
-    let view = projectEvents([reasoningChunkEvent('let me', 1), reasoningChunkEvent(' think', 2)])
-    expect(view.streamingReasoning).toBe('let me think')
-    view = projectEvent(view, {
+    const acc = liveAcc()
+    streamReasoning(acc, 'let me', 1)
+    streamReasoning(acc, ' think', 2)
+    expect(snapshotReplayView(acc).streamingReasoning).toBe('let me think')
+    replayProjectEvent(acc, {
       type: 'assistant/message',
       seq: 3,
       time: 3,
       data: {
         turn: 1,
         step: 1,
+        stream: [],
         message: createAssistantMessage({
           content: [
             { type: 'reasoning', text: 'let me think' },
@@ -194,6 +213,7 @@ describe('transcript projection', () => {
         }),
       },
     } as unknown as SessionEvent)
+    const view = snapshotReplayView(acc)
     expect(view.streamingReasoning).toBe('')
     expect(view.entries).toEqual([{
       kind: 'assistant',
@@ -203,50 +223,47 @@ describe('transcript projection', () => {
   })
 
   it('bounds the in-flight reasoning duplicate while keeping the newest tail', () => {
-    const prefix = 'old-'.repeat(20_000)
-    const suffix = 'newest reasoning'
-    const view = projectEvents([
-      {
-        type: 'assistant/chunk', seq: 1, time: 1,
-        data: { turn: 1, step: 1, chunk: { type: 'reasoning-delta', index: 0, text: prefix } },
-      },
-      {
-        type: 'assistant/chunk', seq: 2, time: 2,
-        data: { turn: 1, step: 1, chunk: { type: 'reasoning-delta', index: 0, text: suffix } },
-      },
-    ] as unknown as readonly SessionEvent[])
-    expect(view.streamingReasoning.length).toBeLessThanOrEqual(65_536)
-    expect(view.streamingReasoning.endsWith(suffix)).toBe(true)
+    const acc = liveAcc()
+    streamReasoning(acc, 'old-'.repeat(20_000), 1)
+    streamReasoning(acc, 'newest reasoning', 2)
+    const { streamingReasoning } = snapshotReplayView(acc)
+    expect(streamingReasoning.length).toBeLessThanOrEqual(65_536)
+    expect(streamingReasoning.endsWith('newest reasoning')).toBe(true)
   })
 
   it('resets both preview channels when a new step supersedes the old one', () => {
-    const view = projectEvents([
-      { type: 'step/start', seq: 1, time: 1, data: { turn: 1, step: 1 } } as SessionEvent,
-      reasoningChunkEvent('old reasoning', 2),
-      chunkEvent('old answer', 3),
-      { type: 'step/start', seq: 4, time: 4, data: { turn: 1, step: 2 } } as SessionEvent,
-    ])
+    const acc = liveAcc()
+    replayProjectEvent(acc, { type: 'step/start', seq: 1, time: 1, data: { turn: 1, step: 1 } } as SessionEvent)
+    streamReasoning(acc, 'old reasoning', 2)
+    streamText(acc, 'old answer', 3)
+    replayProjectEvent(acc, { type: 'step/start', seq: 4, time: 4, data: { turn: 1, step: 2 } } as SessionEvent)
+    const view = snapshotReplayView(acc)
     expect(view.streamingReasoning).toBe('')
     expect(view.streaming).toBe('')
   })
 
   it('keeps reasoning live through the thinking-to-answer handoff', () => {
-    let view = projectEvents([reasoningChunkEvent('think ', 1), reasoningChunkEvent('hard', 2), chunkEvent('the answer', 3)])
+    const acc = liveAcc()
+    streamReasoning(acc, 'think ', 1)
+    streamReasoning(acc, 'hard', 2)
+    streamText(acc, 'the answer', 3)
     // The first text delta is only a presentation handoff; neither preview is
     // durable until the assembled assistant message arrives.
+    let view = snapshotReplayView(acc)
     expect(view.entries).toEqual([])
     expect(view.streamingReasoning).toBe('think hard')
     expect(view.streaming).toBe('the answer')
-    // Later deltas keep the entries identity (no duplicate flush).
-    const entriesBefore = view.entries
-    view = projectEvent(view, chunkEvent(' continues', 4))
-    expect(view.entries).toBe(entriesBefore)
+    // Later deltas keep the entries empty (no premature flush).
+    streamText(acc, ' continues', 4)
+    view = snapshotReplayView(acc)
+    expect(view.entries).toStrictEqual([])
     // Settlement appends one assistant entry from the assembled message.
-    view = projectEvent(view, {
+    replayProjectEvent(acc, {
       type: 'assistant/message', seq: 5, time: 0,
       data: {
         turn: 1,
         step: 1,
+        stream: [],
         message: createAssistantMessage({
           content: [
             { type: 'reasoning', text: 'think harder' },
@@ -256,6 +273,7 @@ describe('transcript projection', () => {
         }),
       },
     } as SessionEvent)
+    view = snapshotReplayView(acc)
     expect(view.entries).toEqual([{
       kind: 'assistant',
       text: 'the answer continues',
@@ -264,34 +282,37 @@ describe('transcript projection', () => {
   })
 
   it('does not manufacture a reasoning entry before a tool call', () => {
-    const view = projectEvents([reasoningChunkEvent('plan the edit', 1), toolCallEvent('edit', callId.current, 2)])
+    const acc = liveAcc()
+    streamReasoning(acc, 'plan the edit', 1)
+    replayProjectEvent(acc, toolCallEvent('edit', callId.current, 2))
+    const view = snapshotReplayView(acc)
     expect(view.entries.map(entry => entry.kind)).toEqual(['tool'])
     expect(view.streamingReasoning).toBe('plan the edit')
   })
 
   it('joins interleaved assembled reasoning blocks into the assistant entry', () => {
-    const view = projectEvents([
-      reasoningChunkEvent('first segment', 1),
-      chunkEvent('partial', 2),
-      reasoningChunkEvent('second segment', 3),
-      {
-        type: 'assistant/message',
-        seq: 4,
-        time: 0,
-        data: {
-          turn: 1,
-          step: 1,
-          message: createAssistantMessage({
-            content: [
-              { type: 'reasoning', text: 'first segment' },
-              { type: 'text', text: 'partial' },
-              { type: 'reasoning', text: 'second segment' },
-            ],
-          }),
-        },
-      } as unknown as SessionEvent,
-    ])
-    expect(view.entries).toEqual([{
+    const acc = liveAcc()
+    streamReasoning(acc, 'first segment', 1)
+    streamText(acc, 'partial', 2)
+    streamReasoning(acc, 'second segment', 3)
+    replayProjectEvent(acc, {
+      type: 'assistant/message',
+      seq: 4,
+      time: 0,
+      data: {
+        turn: 1,
+        step: 1,
+        stream: [],
+        message: createAssistantMessage({
+          content: [
+            { type: 'reasoning', text: 'first segment' },
+            { type: 'text', text: 'partial' },
+            { type: 'reasoning', text: 'second segment' },
+          ],
+        }),
+      },
+    } as unknown as SessionEvent)
+    expect(snapshotReplayView(acc).entries).toEqual([{
       kind: 'assistant',
       text: 'partial',
       reasoning: 'first segmentsecond segment',
@@ -300,41 +321,111 @@ describe('transcript projection', () => {
 
   it('bounds only the live preview and keeps the full assembled reasoning', () => {
     const huge = 'x'.repeat(70_000)
-    let view = projectEvents([reasoningChunkEvent(huge, 1), chunkEvent('answer', 2)])
-    expect(view.streamingReasoning.length).toBeLessThanOrEqual(65_536)
-    view = projectEvent(view, {
+    const acc = liveAcc()
+    streamReasoning(acc, huge, 1)
+    streamText(acc, 'answer', 2)
+    expect(snapshotReplayView(acc).streamingReasoning.length).toBeLessThanOrEqual(65_536)
+    replayProjectEvent(acc, {
       type: 'assistant/message', seq: 3, time: 0,
       data: {
         turn: 1,
         step: 1,
+        stream: [],
         message: createAssistantMessage({
           content: [{ type: 'reasoning', text: huge }, { type: 'text', text: 'answer' }],
           source: { provider: 'p', model: 'm' },
         }),
       },
     } as SessionEvent)
-    expect(view.entries[0]).toEqual({ kind: 'assistant', text: 'answer', reasoning: huge })
+    expect(snapshotReplayView(acc).entries[0]).toEqual({ kind: 'assistant', text: 'answer', reasoning: huge })
   })
 
   it('clears an unassembled reasoning preview when the turn aborts', () => {
-    const view = projectEvents([
-      reasoningChunkEvent('half a thought', 1),
-      { type: 'turn/end', seq: 2, time: 0, data: { turn: 1, reason: { kind: 'aborted', reason: { kind: 'user' } } } } as SessionEvent,
-    ])
+    const acc = liveAcc()
+    streamReasoning(acc, 'half a thought', 1)
+    replayProjectEvent(acc, { type: 'turn/end', seq: 2, time: 0, data: { turn: 1, reason: { kind: 'aborted', reason: { kind: 'user' } } } } as SessionEvent)
+    const view = snapshotReplayView(acc)
     expect(view.entries).toEqual([{ kind: 'turn-marker', text: 'turn cancelled by the user' }])
+    expect(view.streamingReasoning).toBe('')
+  })
+
+  it('times one step identically across an in-step retry on the live and replay paths', () => {
+    // Kernel session-stats semantics: the step start spans in-step retries
+    // (llmMs reaches back to step/start) and the FIRST attempt owns the
+    // first-token anchor (a retry never re-times the step). The live path
+    // accrues through stream frames; a resumed session replays only the
+    // settlements — both must land on the same figures.
+    const attemptStream = (t0: number): [{ type: 'text-chunks'; time0: number; index: number; dt: readonly number[]; texts: readonly string[] }] =>
+      [{ type: 'text-chunks', time0: t0, index: 0, dt: [0], texts: ['x'] }]
+    // Live: step/start → attempt 1 frames → failed attempt settles → retry
+    // frames (no re-anchor) → message settles.
+    const live = liveAcc()
+    replayProjectEvent(live, { type: 'step/start', seq: 1, time: 1_000, data: { turn: 1, step: 1 } } as SessionEvent)
+    streamText(live, 'first', 1_100)
+    replayProjectEvent(live, { type: 'assistant/attempt', seq: 2, time: 1_200, data: { turn: 1, step: 1, stream: attemptStream(1_100) } } as SessionEvent)
+    streamText(live, 'retry', 1_300)
+    replayProjectEvent(live, {
+      type: 'assistant/message', seq: 3, time: 2_000,
+      data: { turn: 1, step: 1, stream: attemptStream(1_300), message: createAssistantMessage({ content: [{ type: 'text', text: 'ok' }], source: { provider: 'p', model: 'm' } }) },
+    } as unknown as SessionEvent)
+    // Replay: the same durable log through the pure settlement path.
+    const replayed = projectEvents([
+      { type: 'step/start', seq: 1, time: 1_000, data: { turn: 1, step: 1 } } as SessionEvent,
+      { type: 'assistant/attempt', seq: 2, time: 1_200, data: { turn: 1, step: 1, stream: attemptStream(1_100) } } as SessionEvent,
+      {
+        type: 'assistant/message', seq: 3, time: 2_000,
+        data: { turn: 1, step: 1, stream: attemptStream(1_300), message: createAssistantMessage({ content: [{ type: 'text', text: 'ok' }], source: { provider: 'p', model: 'm' } }) },
+      } as unknown as SessionEvent,
+    ])
+    expect(snapshotReplayView(live).stats.ttftMs).toBe(replayed.stats.ttftMs)
+    expect(snapshotReplayView(live).stats.ttftSteps).toBe(replayed.stats.ttftSteps)
+    expect(snapshotReplayView(live).stats.llmMs).toBe(replayed.stats.llmMs)
+    // And the figures match the kernel's own reading of this sequence.
+    expect(replayed.stats.ttftMs).toBe(100)
+    expect(replayed.stats.ttftSteps).toBe(1)
+    expect(replayed.stats.llmMs).toBe(1_000)
+  })
+
+  it('sweeps a live first-token anchor when the turn ends mid-attempt', () => {
+    // Frames strictly precede their attempt's settle/end in production, so
+    // this is the real order: the anchor exists when turn/end folds.
+    const acc = liveAcc()
+    replayProjectEvent(acc, { type: 'turn/start', seq: 1, time: 0, data: { turn: 1 } } as SessionEvent)
+    replayProjectEvent(acc, { type: 'step/start', seq: 2, time: 100, data: { turn: 1, step: 1 } } as SessionEvent)
+    streamText(acc, 'thinking', 200)
+    expect(acc.firstChunkAt.size).toBe(1)
+    replayProjectEvent(acc, { type: 'turn/end', seq: 4, time: 500, data: { turn: 1, reason: { kind: 'aborted', reason: { kind: 'user' } } } } as SessionEvent)
+    const view = snapshotReplayView(acc)
+    expect(view.anchors.stepStart.size).toBe(0)
+    expect(view.anchors.firstChunkAt.size).toBe(0)
+    expect(view.anchors.turnSteps.size).toBe(0)
+  })
+
+  it('drops an abandoned attempt’s partial tail without a surface entry', () => {
+    // Session-log v2+: a failed or abandoned attempt folds into a durable
+    // `assistant/attempt` (or is dropped by an abandoned stream end frame)
+    // and never manufactures an assistant row.
+    const acc = liveAcc()
+    streamReasoning(acc, 'half a thought', 1)
+    streamText(acc, 'partial answer', 2)
+    replayProjectEvent(acc, {
+      type: 'assistant/attempt', seq: 3, time: 3,
+      data: { turn: 1, step: 1, stream: [] },
+    } as SessionEvent)
+    const view = snapshotReplayView(acc)
+    expect(view.entries).toEqual([])
+    expect(view.streaming).toBe('')
     expect(view.streamingReasoning).toBe('')
   })
 
   it('replays authoritative assistant reasoning identically from the durable event log', () => {
     const events: readonly SessionEvent[] = [
-      reasoningChunkEvent('trace ', 1),
-      reasoningChunkEvent('body', 2),
-      chunkEvent('answer', 3),
       {
         type: 'assistant/message', seq: 4, time: 0,
         data: {
           turn: 1,
           step: 1,
+          stream: [{ type: 'text-chunks', time0: 1_000, index: 0, dt: [50], texts: ['answer'] }],
           message: createAssistantMessage({
             content: [
               { type: 'reasoning', text: 'trace body (assembled)' },
@@ -556,14 +647,40 @@ describe('transcript projection', () => {
     expect(view.stats.contextWindow).toBe(64_000)
   })
 
-  it('folds first-token latency and decode throughput', () => {
+  it('folds first-token latency and decode throughput from live stream frames', () => {
+    const acc = liveAcc()
+    replayProjectEvent(acc, { type: 'turn/start', seq: 1, time: 0, data: { turn: 1 } } as SessionEvent)
+    replayProjectEvent(acc, { type: 'step/start', seq: 2, time: 1_000, data: { turn: 1, step: 1 } } as SessionEvent)
+    streamText(acc, 'He', 1_450)
+    streamText(acc, 'llo', 1_800)
+    replayProjectEvent(acc, {
+      ...assistantEvent('Hello', 5), time: 2_100,
+      data: { ...assistantEvent('Hello', 5).data, usage: { inputTokens: 10, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0 } },
+    } as SessionEvent)
+    const stats = snapshotReplayView(acc).stats
+    expect(stats.ttftSteps).toBe(1)
+    expect(stats.ttftMs).toBe(450)
+    expect(stats.decodeMs).toBe(650)
+    expect(stats.decodeTokens).toBe(2)
+  })
+
+  it('restores first-token latency from the embedded stream on replay', () => {
+    // A replayed settlement has no live frames; the embedded AssistantStreamRecord
+    // timings restore the same first-token anchor (time0 + dt[0]).
     const view = projectEvents([
-      { type: 'turn/start', seq: 1, time: 0, data: { turn: 1 } },
-      { type: 'step/start', seq: 2, time: 1_000, data: { turn: 1, step: 1 } },
-      { ...chunkEvent('He', 3), time: 1_450 },
-      { ...chunkEvent('llo', 4), time: 1_800 },
-      { ...assistantEvent('Hello', 5), time: 2_100, data: { ...assistantEvent('Hello', 5).data, usage: { inputTokens: 10, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0 } } },
-    ] as SessionEvent[])
+      { type: 'turn/start', seq: 1, time: 0, data: { turn: 1 } } as SessionEvent,
+      { type: 'step/start', seq: 2, time: 1_000, data: { turn: 1, step: 1 } } as SessionEvent,
+      {
+        type: 'assistant/message', seq: 5, time: 2_100,
+        data: {
+          turn: 1,
+          step: 1,
+          stream: [{ type: 'text-chunks', time0: 1_450, index: 0, dt: [0, 350], texts: ['He', 'llo'] }],
+          message: createAssistantMessage({ content: [{ type: 'text', text: 'Hello' }], source: { provider: 'p', model: 'm' } }),
+          usage: { inputTokens: 10, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0 },
+        },
+      } as unknown as SessionEvent,
+    ])
     expect(view.stats.ttftSteps).toBe(1)
     expect(view.stats.ttftMs).toBe(450)
     expect(view.stats.decodeMs).toBe(650)
@@ -635,8 +752,10 @@ describe('transcript projection', () => {
   })
 
   it('folds the llm retry pair from scheduled to started', () => {
-    let view = projectEvents([reasoningChunkEvent('failed reasoning', 1), chunkEvent('failed answer', 2)])
-    view = projectEvent(view, {
+    const acc = liveAcc()
+    streamReasoning(acc, 'failed reasoning', 1)
+    streamText(acc, 'failed answer', 2)
+    replayProjectEvent(acc, {
       type: 'llm/retry', seq: 3, time: 0,
       data: {
         retryId: 'r1' as never, turn: 1, step: 1, provider: 'p', mode: 'normal',
@@ -644,15 +763,17 @@ describe('transcript projection', () => {
         failure: { code: 'SERVER', message: 'down' },
       },
     } as unknown as SessionEvent)
+    let view = snapshotReplayView(acc)
     expect(view.entries).toEqual([{
       kind: 'retry', retryId: 'r1', mode: 'normal', attempt: 2, max: 4, code: 'SERVER', delayMs: 1_500, state: 'running',
     }])
     expect(view.streamingReasoning).toBe('')
     expect(view.streaming).toBe('')
-    view = projectEvent(view, {
+    replayProjectEvent(acc, {
       type: 'llm/retry-started', seq: 4, time: 1_600,
       data: { retryId: 'r1' as never, turn: 1, step: 1, retry: 2 },
     } as unknown as SessionEvent)
+    view = snapshotReplayView(acc)
     expect(view.entries[0]).toMatchObject({ kind: 'retry', state: 'done' })
   })
 
@@ -836,6 +957,7 @@ describe('context segment estimates', () => {
       data: {
         turn: 1,
         step: 1,
+        stream: [],
         message: createAssistantMessage({
           content: [
             { type: 'reasoning', text: 'let me think' },
@@ -869,22 +991,29 @@ describe('context segment estimates', () => {
     expect(view.stats.contextSegments.system).toBe(4)
   })
 
-  it('replaces the system segment from the latest request header system prompt', () => {
-    const header = (system: string | undefined, seq: number) => ({
-      type: 'request/header',
+  it('replaces the system segment from the latest system/message surface node', () => {
+    // Session-log v3 removed `request/header.system`; the effective system
+    // prompt lives in `system/message` surface events (an empty content
+    // records "no system prompt").
+    const systemMessage = (text: string | undefined, seq: number) => ({
+      type: 'system/message',
       seq,
       time: 0,
+      surfaceOp: { op: 'append' },
       data: {
-        header: {
-          config: { provider: 'p', model: 'm' },
-          ...(system === undefined ? {} : { system }),
+        turn: 1,
+        step: 1,
+        message: {
+          role: 'system',
+          id: 'sys-' + seq,
+          content: text === undefined ? [] : [{ type: 'text', text }],
+          source: { kind: 'plugin', plugin: 'system-prompt' },
         },
-        reason: 'change',
       },
     }) as unknown as SessionEvent
-    let view = projectEvent(createTranscriptView(), header('you are helpful', 1))
+    let view = projectEvent(createTranscriptView(), systemMessage('you are helpful', 1))
     expect(view.stats.contextSegments.system).toBe(4)
-    view = projectEvent(view, header(undefined, 2))
+    view = projectEvent(view, systemMessage(undefined, 2))
     expect(view.stats.contextSegments.system).toBe(0)
   })
 
@@ -1167,9 +1296,8 @@ describe('replay accumulator', () => {
       const steps = 1 + Math.floor(rand() * 3)
       for (let step = 1; step <= steps; step += 1) {
         push('step/start', { turn: current, step })
-        const chunks = Math.floor(rand() * 3)
-        for (let c = 0; c < chunks; c += 1) {
-          push('assistant/chunk', { turn: current, step, chunk: { type: rand() < 0.4 ? 'reasoning-delta' : 'text-delta', index: 0, text: rand() < 0.1 ? '' : `chunk ${current}.${step}.${c} ` } })
+        if (rand() < 0.5) {
+          push('assistant/attempt', { turn: current, step, stream: [{ type: 'text-chunks', time0: 0, index: 0, dt: [1], texts: ['attempt ' + current + '.' + step] }] })
         }
         const toolCount = Math.floor(rand() * 3)
         const stepCalls: CallId[] = []
@@ -1399,14 +1527,17 @@ describe('replay accumulator', () => {
 
 describe('anchor cleanup at derivable boundaries', () => {
   it('sweeps an interrupted step at turn end', () => {
-    const view = projectEvents([
+    const acc = liveAcc()
+    for (const event of [
       { type: 'turn/start', seq: 1, time: 0, data: { turn: 1 } },
       { type: 'step/start', seq: 2, time: 100, data: { turn: 1, step: 1 } },
-      { ...chunkEvent('thinking', 3), time: 200 },
       { type: 'turn/end', seq: 4, time: 500, data: { turn: 1, reason: { kind: 'aborted', reason: { kind: 'user' } } } },
-    ] as unknown as readonly SessionEvent[])
+    ] as const) replayProjectEvent(acc, event as unknown as SessionEvent)
+    streamText(acc, 'thinking', 200)
+    // The frame arrived after the sweep folded the turn end; the anchors it
+    // touched were already reclaimed, and no later boundary re-creates them.
+    const view = snapshotReplayView(acc)
     expect(view.anchors.stepStart.size).toBe(0)
-    expect(view.anchors.firstChunkAt.size).toBe(0)
     expect(view.anchors.turnSteps.size).toBe(0)
   })
 
@@ -1430,14 +1561,18 @@ describe('anchor cleanup at derivable boundaries', () => {
   })
 
   it('a superseding step start reclaims the interrupted step anchors', () => {
-    const view = projectEvents([
+    const acc = liveAcc()
+    for (const event of [
       { type: 'turn/start', seq: 1, time: 0, data: { turn: 1 } },
       { type: 'step/start', seq: 2, time: 100, data: { turn: 1, step: 1 } },
-      { ...chunkEvent('stale', 3), time: 200 }, // step 1 interrupted right here
+    ] as const) replayProjectEvent(acc, event as unknown as SessionEvent)
+    streamText(acc, 'stale', 200) // step 1 interrupted right here
+    for (const event of [
       { type: 'step/start', seq: 4, time: 300, data: { turn: 1, step: 2 } },
       { ...assistantEvent('fresh', 5), time: 600 },
       { type: 'turn/end', seq: 6, time: 700, data: { turn: 1, reason: { kind: 'completed' } } },
-    ] as unknown as readonly SessionEvent[])
+    ] as const) replayProjectEvent(acc, event as unknown as SessionEvent)
+    const view = snapshotReplayView(acc)
     expect(view.anchors.stepStart.size).toBe(0)
     expect(view.anchors.firstChunkAt.size).toBe(0)
     expect(view.anchors.turnSteps.size).toBe(0)

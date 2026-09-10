@@ -7,7 +7,7 @@
  * @module @deepseek-ai/dsh-tui/render/projection
  */
 
-import { boundContextSummary, type ContentBlock, type ImageBlock, type MessageId } from '@deepseek-ai/dsh-llm'
+import { assistantStreamFirstTokenTime, boundContextSummary, isTokenDelta, type ContentBlock, type ImageBlock, type MessageId, type StreamChunk } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type { TodoItem } from '@deepseek-ai/dsh-tool-todo'
 import { graphemeWidth, splitGraphemes } from './width.ts'
@@ -269,7 +269,7 @@ export interface TranscriptStats {
 export interface TranscriptView {
   /** Settled entries in log order. */
   entries: readonly TranscriptEntry[]
-  /** Bounded text tail accumulated from `assistant/chunk` deltas since the last flush. */
+  /** Bounded text tail accumulated from live stream frames since the last settlement. */
   streaming: string
   /** Bounded thinking tail accumulated from reasoning deltas since the last flush. */
   streamingReasoning: string
@@ -525,52 +525,77 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
       }
       return { ...view, entries, pending: { ...view.pending, [target]: nextIds } }
     }
-    case 'assistant/chunk': {
-      const chunk = event.data.chunk
-      // First-token latency: the first non-empty delta of a step anchors the
-      // TTFT (empty keep-alive deltas do not count as tokens).
+    case 'system/message': {
+      // Session-log v3 carries the effective system prompt as a surface
+      // message (the `request/header.system` field is gone): maintain the
+      // system context-segment estimate from it. An empty content records
+      // "no system prompt" and clears the estimate.
+      return {
+        ...view,
+        stats: {
+          ...view.stats,
+          contextSegments: {
+            ...view.stats.contextSegments,
+            system: estimateTokens(textOf(event.data.message.content)),
+          },
+        },
+      }
+    }
+    case 'assistant/attempt': {
+      // A failed, retried, cancelled, or stream-error attempt that produced no
+      // surface message (session-log v2+ folds its chunk stream in here). The
+      // step is NOT closed — the kernel's session-stats keeps one step start
+      // across in-step retries, so llmMs spans them; keep the anchors so a
+      // retrying attempt and its final settlement time the step from one
+      // start. An attempt whose first token streamed only live (the frames
+      // died before the fold) restores its first-token anchor from the
+      // embedded stream exactly like a replayed one.
       const key = `${event.data.turn}:${event.data.step}`
-      const delta = chunk.type === 'text-delta' || chunk.type === 'reasoning-delta' ? chunk.text : ''
       let stats = view.stats
-      if (delta !== '' && !view.anchors.firstChunkAt.has(key)) {
-        view.anchors.firstChunkAt.set(key, event.time)
-        const started = view.anchors.stepStart.get(key)
-        if (started !== undefined) {
-          stats = {
-            ...stats,
-            ttftMs: stats.ttftMs + Math.max(0, event.time - started),
-            ttftSteps: stats.ttftSteps + 1,
+      if (!view.anchors.firstChunkAt.has(key)) {
+        const first = assistantStreamFirstTokenTime(event.data.stream ?? [])
+        if (first !== undefined) {
+          view.anchors.firstChunkAt.set(key, first)
+          const started = view.anchors.stepStart.get(key)
+          if (started !== undefined) {
+            stats = {
+              ...stats,
+              ttftMs: stats.ttftMs + Math.max(0, first - started),
+              ttftSteps: stats.ttftSteps + 1,
+            }
           }
         }
       }
-      if (chunk.type === 'text-delta') {
-        return {
-          ...view,
-          streaming: appendStreamingTail(view.streaming, chunk.text),
-          stats,
-        }
-      }
-      if (chunk.type === 'reasoning-delta') {
-        return {
-          ...view,
-          streamingReasoning: appendStreamingTail(view.streamingReasoning, chunk.text),
-          stats,
-        }
-      }
-      return view
+      if (view.streaming === '' && view.streamingReasoning === '' && stats === view.stats) return view
+      return { ...view, streaming: '', streamingReasoning: '', stats }
     }
     case 'assistant/message': {
       // The assembled message is authoritative; drop the streamed buffers.
       const key = `${event.data.turn}:${event.data.step}`
       const started = view.anchors.stepStart.get(key)
       view.anchors.stepStart.delete(key)
-      const firstChunk = view.anchors.firstChunkAt.get(key)
+      // Live streaming anchored the first token through the process-local
+      // assistant-stream frames; a replayed settlement has no live frames, so
+      // the embedded stream's own first-token time restores the same anchor
+      // AND the TTFT figures live frames accumulate on the live path.
+      let firstChunk = view.anchors.firstChunkAt.get(key)
+      let stats = view.stats
+      if (firstChunk === undefined) {
+        firstChunk = assistantStreamFirstTokenTime(event.data.stream ?? [])
+        if (firstChunk !== undefined && started !== undefined) {
+          stats = {
+            ...stats,
+            ttftMs: stats.ttftMs + Math.max(0, firstChunk - started),
+            ttftSteps: stats.ttftSteps + 1,
+          }
+        }
+      }
       view.anchors.firstChunkAt.delete(key)
       // The assembled message consumes the turn's current step anchor; a
       // later `turn/end` sweep then has nothing left to clean for this step.
       if (view.anchors.turnSteps.get(event.data.turn) === key) view.anchors.turnSteps.delete(event.data.turn)
       const usage = event.data.usage
-      const totals = view.stats.usage
+      const totals = stats.usage
       const text = textOf(event.data.message.content)
       const reasoning = reasoningOf(event.data.message.content)
       return {
@@ -579,23 +604,23 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
         streamingReasoning: '',
         entries: [...view.entries, { kind: 'assistant', text, reasoning, interrupted: event.data.interrupted === true ? true : undefined }],
         stats: {
-          ...view.stats,
-          llmMs: view.stats.llmMs + (started === undefined ? 0 : Math.max(0, event.time - started)),
+          ...stats,
+          llmMs: stats.llmMs + (started === undefined ? 0 : Math.max(0, event.time - started)),
           usage: usage === undefined ? totals : {
             inputTokens: totals.inputTokens + usage.inputTokens + (usage.cacheReadTokens ?? 0) + (usage.cacheWriteTokens ?? 0),
             outputTokens: totals.outputTokens + usage.outputTokens,
             cacheReadTokens: totals.cacheReadTokens + (usage.cacheReadTokens ?? 0),
           },
-          lastPromptTokens: usage === undefined ? view.stats.lastPromptTokens
+          lastPromptTokens: usage === undefined ? stats.lastPromptTokens
             : usage.inputTokens + (usage.cacheReadTokens ?? 0) + (usage.cacheWriteTokens ?? 0),
           // Decode span and its tokens pair up: an un-timed step (no first
           // chunk landed) contributes neither, so the rate stays honest.
-          decodeMs: view.stats.decodeMs + (firstChunk === undefined ? 0 : Math.max(0, event.time - firstChunk)),
-          decodeTokens: view.stats.decodeTokens + (firstChunk === undefined || usage === undefined ? 0 : usage.outputTokens),
+          decodeMs: stats.decodeMs + (firstChunk === undefined ? 0 : Math.max(0, event.time - firstChunk)),
+          decodeTokens: stats.decodeTokens + (firstChunk === undefined || usage === undefined ? 0 : usage.outputTokens),
           contextSegments: {
-            ...view.stats.contextSegments,
-            thinking: view.stats.contextSegments.thinking + estimateTokens(reasoning),
-            assistant: view.stats.contextSegments.assistant + estimateTokens(text),
+            ...stats.contextSegments,
+            thinking: stats.contextSegments.thinking + estimateTokens(reasoning),
+            assistant: stats.contextSegments.assistant + estimateTokens(text),
           },
         },
       }
@@ -880,8 +905,8 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
       // pair, exactly what a resumed TUI restores as the selection, plus the
       // effective reasoning effort that snapshot carried (the adapter may
       // materialize the model default, which is what the status line shows).
-      // The snapshot's rendered system prompt is the current system slot, so
-      // it REPLACES the estimate (an older system prompt is not re-sent).
+      // The system-prompt estimate lives with `system/message` events since
+      // session-log v3 removed the header's `system` field.
       const config = event.data.header.config
       return {
         ...view,
@@ -889,10 +914,6 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
         stats: {
           ...view.stats,
           reasoningEffort: config.reasoningEffort === undefined ? '' : String(config.reasoningEffort),
-          contextSegments: {
-            ...view.stats.contextSegments,
-            system: estimateTokens(event.data.header.system ?? ''),
-          },
         },
       }
     }
@@ -1196,36 +1217,60 @@ export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent):
       }
       return true
     }
-    case 'assistant/chunk': {
-      const chunk = event.data.chunk
+    case 'system/message': {
+      acc.stats = {
+        ...acc.stats,
+        contextSegments: {
+          ...acc.stats.contextSegments,
+          system: estimateTokens(textOf(event.data.message.content)),
+        },
+      }
+      return true
+    }
+    case 'assistant/attempt': {
+      // Mirrors the reducer: the step stays open across in-step retries; a
+      // missing first-token anchor is restored (and accrued) from the
+      // attempt's embedded stream, and only the live tails are dropped.
       const key = `${event.data.turn}:${event.data.step}`
-      const delta = chunk.type === 'text-delta' || chunk.type === 'reasoning-delta' ? chunk.text : ''
-      if (delta !== '' && !acc.firstChunkAt.has(key)) {
-        acc.firstChunkAt.set(key, event.time)
-        const started = acc.stepStart.get(key)
-        if (started !== undefined) {
-          acc.stats = {
-            ...acc.stats,
-            ttftMs: acc.stats.ttftMs + Math.max(0, event.time - started),
-            ttftSteps: acc.stats.ttftSteps + 1,
+      let changed = false
+      if (!acc.firstChunkAt.has(key)) {
+        const first = assistantStreamFirstTokenTime(event.data.stream ?? [])
+        if (first !== undefined) {
+          acc.firstChunkAt.set(key, first)
+          const started = acc.stepStart.get(key)
+          if (started !== undefined) {
+            acc.stats = {
+              ...acc.stats,
+              ttftMs: acc.stats.ttftMs + Math.max(0, first - started),
+              ttftSteps: acc.stats.ttftSteps + 1,
+            }
           }
+          changed = true
         }
       }
-      if (chunk.type === 'text-delta') {
-        acc.streaming = appendStreamingTail(acc.streaming, chunk.text)
-        return true
-      }
-      if (chunk.type === 'reasoning-delta') {
-        acc.streamingReasoning = appendStreamingTail(acc.streamingReasoning, chunk.text)
-        return true
-      }
-      return false
+      const streamed = acc.streaming !== '' || acc.streamingReasoning !== ''
+      acc.streaming = ''
+      acc.streamingReasoning = ''
+      return changed || streamed
     }
     case 'assistant/message': {
       const key = `${event.data.turn}:${event.data.step}`
       const started = acc.stepStart.get(key)
       acc.stepStart.delete(key)
-      const firstChunk = acc.firstChunkAt.get(key)
+      let firstChunk = acc.firstChunkAt.get(key)
+      if (firstChunk === undefined) {
+        // A replayed settlement has no live frames; the embedded stream's
+        // first-token time restores both the anchor and the TTFT figures the
+        // live path accumulates in applyAssistantStreamChunk.
+        firstChunk = assistantStreamFirstTokenTime(event.data.stream ?? [])
+        if (firstChunk !== undefined && started !== undefined) {
+          acc.stats = {
+            ...acc.stats,
+            ttftMs: acc.stats.ttftMs + Math.max(0, firstChunk - started),
+            ttftSteps: acc.stats.ttftSteps + 1,
+          }
+        }
+      }
       acc.firstChunkAt.delete(key)
       if (acc.turnSteps.get(event.data.turn) === key) acc.turnSteps.delete(event.data.turn)
       const usage = event.data.usage
@@ -1472,10 +1517,6 @@ export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent):
       acc.stats = {
         ...acc.stats,
         reasoningEffort: config.reasoningEffort === undefined ? '' : String(config.reasoningEffort),
-        contextSegments: {
-          ...acc.stats.contextSegments,
-          system: estimateTokens(event.data.header.system ?? ''),
-        },
       }
       return true
     }
@@ -1590,6 +1631,60 @@ export function projectEvents(events: readonly SessionEvent[]): TranscriptView {
   const acc = createReplayAccumulator()
   for (const event of events) replayProjectEvent(acc, event)
   return finishReplay(acc)
+}
+
+/**
+ * Fold one process-local assistant-stream chunk frame (session-log v2+ keeps
+ * durable logs settlement-only; live typing rides the `agent/assistant-stream`
+ * agent event). Same first-token anchoring the durable `assistant/chunk` event
+ * used to carry: the first non-empty delta anchors the TTFT and empty
+ * keep-alive deltas do not count. The caller maps the frame's attempt to the
+ * `turn:step` key (the start frame owns turn/step; chunk frames do not).
+ * @param acc - the live replay accumulator.
+ * @param key - the `turn:step` key the attempt's start frame declared.
+ * @param time - the frame's safe-integer timestamp.
+ * @param chunk - the model chunk the frame carries.
+ * @returns whether the accumulator changed (the store stays silent otherwise).
+ */
+export function applyAssistantStreamChunk(acc: ReplayAccumulator, key: string, time: number, chunk: StreamChunk): boolean {
+  // First-token latency uses the kernel's isTokenDelta rule (a non-empty
+  // text, reasoning, or tool-call fragment counts; block/usage/finish chunks
+  // do not), so live frames and replayed embedded streams time the same
+  // token.
+  if (isTokenDelta(chunk) && !acc.firstChunkAt.has(key)) {
+    acc.firstChunkAt.set(key, time)
+    const started = acc.stepStart.get(key)
+    if (started !== undefined) {
+      acc.stats = {
+        ...acc.stats,
+        ttftMs: acc.stats.ttftMs + Math.max(0, time - started),
+        ttftSteps: acc.stats.ttftSteps + 1,
+      }
+    }
+  }
+  if (chunk.type === 'text-delta') {
+    acc.streaming = appendStreamingTail(acc.streaming, chunk.text)
+    return true
+  }
+  if (chunk.type === 'reasoning-delta') {
+    acc.streamingReasoning = appendStreamingTail(acc.streamingReasoning, chunk.text)
+    return true
+  }
+  return false
+}
+
+/**
+ * Drop the live streaming tails without a settlement (an `agent/assistant-stream`
+ * end frame with an `abandoned` outcome, or a session switch). The next start
+ * frame rebuilds from scratch.
+ * @param acc - the live replay accumulator.
+ * @returns whether any tail text was discarded.
+ */
+export function clearAssistantStream(acc: ReplayAccumulator): boolean {
+  const streamed = acc.streaming !== '' || acc.streamingReasoning !== ''
+  acc.streaming = ''
+  acc.streamingReasoning = ''
+  return streamed
 }
 
 /**

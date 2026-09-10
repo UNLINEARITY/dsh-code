@@ -116,12 +116,16 @@ describe('streaming token bursts', () => {
       // adapter delivers when it flushes its token buffer (dt 0-2ms). The
       // store must coalesce this into a single re-render; per-event
       // notification cascades past React's 50-nested-passive-update guard.
+      // (Session-log v2+: the drain arrives as live assistant-stream frames.)
       const beforeThinking = read()
+      const reasoningAttempt = 'attempt-drain-reasoning' as never
+      store.applyStreamFrame({ type: 'start', attemptId: reasoningAttempt, revision: 1, turn: 1, step: 1 })
       for (let index = 0; index < 120; index += 1) {
-        store.apply({
-          type: 'assistant/chunk', seq: 5 + index, time: 5 + (index % 3),
-          data: { turn: 1, step: 1, chunk: { type: 'reasoning-delta', text: `t${index} ` } },
-        } as unknown as SessionEvent)
+        store.applyStreamFrame({
+          type: 'chunk', attemptId: reasoningAttempt, revision: 1, index,
+          time: 5 + (index % 3),
+          chunk: { type: 'reasoning-delta', index: 0, text: `t${index} ` },
+        } as never)
       }
       await wait()
       // Starting the thinking tail must not trigger a source-backed screen clear.
@@ -129,10 +133,11 @@ describe('streaming token bursts', () => {
       // A second drain still renders clean (the guard counts consecutive
       // cascades, so the regression must hold across bursts too).
       for (let index = 0; index < 120; index += 1) {
-        store.apply({
-          type: 'assistant/chunk', seq: 200 + index, time: 8 + (index % 3),
-          data: { turn: 1, step: 1, chunk: { type: 'text-delta', text: `a${index} ` } },
-        } as unknown as SessionEvent)
+        store.applyStreamFrame({
+          type: 'chunk', attemptId: reasoningAttempt, revision: 1, index: 120 + index,
+          time: 8 + (index % 3),
+          chunk: { type: 'text-delta', index: 0, text: `a${index} ` },
+        } as never)
       }
       await wait()
 
@@ -226,16 +231,19 @@ describe('streaming token bursts', () => {
       // notification chain once raced SyncLane uETS rerenders across batches
       // past React's 50-deep nested-update guard; the setImmediate boundary
       // lets every render finish before the next notification fires.
-      let seq = 10
+      // (Session-log v2+: the batches arrive as live assistant-stream frames.)
+      const attempt = 'attempt-sustained' as never
+      store.applyStreamFrame({ type: 'start', attemptId: attempt, revision: 1, turn: 1, step: 1 })
+      let frame = 0
       for (let index = 0; index < 150; index += 1) {
-        store.apply({
-          type: 'assistant/chunk', seq: seq++, time: 3,
-          data: { turn: 1, step: 1, chunk: { type: 'reasoning-delta', text: `r${index} ` } },
-        } as unknown as SessionEvent)
-        store.apply({
-          type: 'assistant/chunk', seq: seq++, time: 3,
-          data: { turn: 1, step: 1, chunk: { type: 'reasoning-delta', text: `r${index}b ` } },
-        } as unknown as SessionEvent)
+        store.applyStreamFrame({
+          type: 'chunk', attemptId: attempt, revision: 1, index: frame++, time: 3,
+          chunk: { type: 'reasoning-delta', index: 0, text: `r${index} ` },
+        } as never)
+        store.applyStreamFrame({
+          type: 'chunk', attemptId: attempt, revision: 1, index: frame++, time: 3,
+          chunk: { type: 'reasoning-delta', index: 0, text: `r${index}b ` },
+        } as never)
         await Promise.resolve()
         await Promise.resolve()
       }

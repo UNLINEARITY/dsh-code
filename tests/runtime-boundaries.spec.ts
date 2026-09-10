@@ -17,7 +17,8 @@ function header(id: string, createdAt: number, extra: Partial<SessionHeader> = {
 }
 
 function persistenceWith(headers: readonly SessionHeader[]): SessionPersistence {
-  return { list: async (): Promise<SessionHeader[]> => [...headers] } as unknown as SessionPersistence
+  // 0.1.5 `list()` resolves persistence snapshots; the TUI reads `.header`.
+  return { list: async () => [...headers.map(h => ({ header: h }))] } as unknown as SessionPersistence
 }
 
 const CWD = 'C:/repo'

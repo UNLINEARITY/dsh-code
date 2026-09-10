@@ -1,16 +1,22 @@
+import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { SessionHeader } from '@deepseek-ai/dsh-session'
 import {
   collectDeletionSubtree,
+  encodeProjectKey,
   encodeSessionSegment,
   formatRelativeTime,
+  isSessionArtifactName,
   isSubagentSession,
+  jsonlSessionRoot,
   matchSessionId,
   mergeSessionTitles,
   newestRootForCwd,
   planSessionDeletion,
   projectSessionRows,
   sessionArtifactDirectory,
+  sessionArtifactNames,
+  sessionDirectoryFor,
   type SessionRecord,
 } from '../src/session-directory.ts'
 
@@ -108,16 +114,42 @@ describe('session deletion guards', () => {
     expect(encodeSessionSegment('..')).toBe('~002E~002E')
   })
 
-  it('accepts only artifact files inside the id-named directory', () => {
+  it('accepts only directories named by the encoded id under a project grouping', () => {
     // The guard splits through node:path, so the fixtures follow the host
     // separator: windows drives on windows, posix roots elsewhere.
     const sep = process.platform === 'win32' ? '\\' : '/'
     const root = process.platform === 'win32' ? 'C:\\root\\--repo--' : '/root/--repo--'
     const dir = root + sep + 'session-x'
-    expect(sessionArtifactDirectory(dir + sep + 'session.jsonl', 'session-x')).toBe(dir)
-    expect(sessionArtifactDirectory(dir + sep + 'session.jsonl.zstd', 'session-x')).toBe(dir)
-    expect(sessionArtifactDirectory(dir + sep + 'notes.txt', 'session-x')).toBeUndefined()
-    expect(sessionArtifactDirectory(root + sep + 'other' + sep + 'session.jsonl', 'session-x')).toBeUndefined()
+    expect(sessionArtifactDirectory(dir, 'session-x')).toBe(dir)
+    expect(sessionArtifactDirectory(root + sep + 'other', 'session-x')).toBeUndefined()
+    expect(sessionArtifactDirectory(root + sep + '..~002Fevil', 'session-x')).toBeUndefined()
+  })
+
+  it('derives the 0.1.5 multi-generation layout from the backend root', () => {
+    // The JSONL backend groups sessions as <root>/<projectKey(cwd)>/
+    // <encodeSegment(id)>/ with `_no-cwd` for a missing cwd; generations are
+    // `session.jsonl` (v0) and `session.vN.jsonl`, each optionally zstd.
+    expect(encodeProjectKey('C:/Users/unlin/repo')).toBe('--C-Users-unlin-repo--')
+    expect(encodeProjectKey('C:\\Users\\unlin\\repo')).toBe('--C-Users-unlin-repo--')
+    expect(sessionDirectoryFor('C:/root', 'C:/work/app', 'session-x'))
+      .toBe(resolve('C:/root', '--C-work-app--', 'session-x'))
+    expect(sessionDirectoryFor('C:/root', undefined, 'session-x'))
+      .toBe(resolve('C:/root', '_no-cwd', 'session-x'))
+    const names = sessionArtifactNames()
+    for (const name of ['session.jsonl', 'session.jsonl.zstd', 'session.v1.jsonl', 'session.v1.jsonl.zstd', 'session.v3.jsonl', 'session.v3.jsonl.zstd']) {
+      expect(names).toContain(name)
+      expect(isSessionArtifactName(name)).toBe(true)
+    }
+    expect(isSessionArtifactName('notes.txt')).toBe(false)
+    expect(isSessionArtifactName('session.v0.jsonl')).toBe(false)
+  })
+
+  it('exposes the JSONL root only for backends that carry one', () => {
+    expect(jsonlSessionRoot({ config: { root: 'C:/sessions' } })).toBe('C:/sessions')
+    expect(jsonlSessionRoot({})).toBeUndefined()
+    expect(jsonlSessionRoot(undefined)).toBeUndefined()
+    expect(jsonlSessionRoot({ config: { root: '' } })).toBeUndefined()
+    expect(jsonlSessionRoot({ config: { root: 42 } })).toBeUndefined()
   })
 
   it('collects the deletion subtree across listing order', () => {

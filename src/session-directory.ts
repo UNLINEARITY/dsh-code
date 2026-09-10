@@ -170,9 +170,8 @@ export function mergeSessionTitles(
 
 /**
  * Encode a session id the way the JSONL backend does for its on-disk layout
- * (`encodeSegment`: safe units literal, everything else `~XXXX`). Used ONLY to
- * validate that a `locate()` path really is this session's directory before
- * any deletion touches the filesystem — a local copy of the pure upstream
+ * (`encodeSegment`: safe units literal, everything else `~XXXX`). Used to
+ * validate and derive session directories — a local copy of the pure upstream
  * contract, kept in sync with `session-persistence-jsonl/src/format.ts`.
  */
 export function encodeSessionSegment(raw: string): string {
@@ -192,22 +191,102 @@ export function encodeSessionSegment(raw: string): string {
   return out
 }
 
-/** The session-log artifact names the JSONL backend may create. */
-export const SESSION_ARTIFACT_NAMES: readonly string[] = ['session.jsonl', 'session.jsonl.zstd']
+/**
+ * Encode a project cwd the way the JSONL backend groups sessions on disk
+ * (`projectKey`: separators collapse to one `-`, everything else mirrors
+ * `encodeSegment`, bounded to 251 chars). A local copy of the pure upstream
+ * contract, kept in sync with `session-persistence-jsonl/src/format.ts`.
+ */
+export function encodeProjectKey(cwd: string): string {
+  if (cwd.length === 0) throw new Error('cannot encode an empty project path')
+  let readable = ''
+  let separatorRun = false
+  for (let i = 0; i < cwd.length; i += 1) {
+    const code = cwd.charCodeAt(i)
+    const ch = String.fromCharCode(code)
+    if (ch === '/' || ch === '\\' || ch === ':') {
+      if (!separatorRun) readable += '-'
+      separatorRun = true
+    } else if (ch !== '~' && /^[A-Za-z0-9._-]$/.test(ch)) {
+      readable += ch
+      separatorRun = false
+    } else {
+      readable += `~${code.toString(16).toUpperCase().padStart(4, '0')}`
+      separatorRun = false
+    }
+  }
+  const slug = readable.replace(/^-+/, '') || 'root'
+  return `--${slug.slice(0, 251)}--`
+}
+
+/** The project-level directory name the JSONL backend uses for a missing cwd. */
+const NO_CWD_DIRECTORY = '_no-cwd'
 
 /**
- * Guard one `locate()` artifact path before deletion (codex's scoped-path
- * check, adapted to the JSONL layout): the file must be a `session.jsonl`
- * artifact sitting in the directory named exactly `encodeSegment(id)`.
- * @param artifact - the path the persistence backend located.
- * @param id - the session id the artifact claims to belong to.
- * @returns the owning session directory, or undefined when the layout is unexpected.
+ * Derive one session's artifact directory under the JSONL backend root,
+ * mirroring the upstream `<root>/<projectKey(cwd)>/<encodeSegment(id)>/`
+ * layout (0.1.5 `sessionDir`/`projectDir`).
+ * @param root - the JSONL backend's configured session root.
+ * @param cwd - the session's pinned working directory, when the header has one.
+ * @param id - the session id.
+ * @returns the absolute session directory path.
  */
-export function sessionArtifactDirectory(artifact: string, id: string): string | undefined {
-  if (basename(artifact) !== 'session.jsonl' && basename(artifact) !== 'session.jsonl.zstd') return undefined
-  const dir = dirname(artifact)
+export function sessionDirectoryFor(root: string, cwd: string | undefined, id: string): string {
+  const project = cwd === undefined || cwd === '' ? NO_CWD_DIRECTORY : encodeProjectKey(cwd)
+  return resolve(root, project, encodeSessionSegment(id))
+}
+
+/**
+ * The canonical session-log artifact filenames the JSONL backend may create:
+ * format v0 writes the bare `session.jsonl` name; v1+ write
+ * `session.vN.jsonl`, each generation optionally zstd-compressed. Multiple
+ * immutable generations may coexist in one session directory (0.1.5).
+ */
+export function sessionArtifactNames(): readonly string[] {
+  const names: string[] = ['session.jsonl', 'session.jsonl.zstd']
+  for (let version = 1; version <= SESSION_FORMAT_GENERATIONS; version += 1) {
+    names.push(`session.v${version}.jsonl`, `session.v${version}.jsonl.zstd`)
+  }
+  return names
+}
+
+/** Highest session-log format generation this build enumerates (v3 in 0.1.5-rc.1). */
+export const SESSION_FORMAT_GENERATIONS = 3
+
+/** Canonical generation-log filenames as a lookup set (bare v0 or `vN`-suffixed, ± zstd). */
+const SESSION_ARTIFACT_NAME_SET: ReadonlySet<string> = new Set(sessionArtifactNames())
+
+/** True for one canonical session-log artifact filename the backend may own. */
+export function isSessionArtifactName(name: string): boolean {
+  return SESSION_ARTIFACT_NAME_SET.has(name)
+}
+
+/**
+ * Guard a derived session directory before deletion (codex's scoped-path
+ * check, adapted to the JSONL layout): the directory's base name must be
+ * exactly `encodeSegment(id)` beneath its project grouping.
+ * @param dir - the derived session artifact directory.
+ * @param id - the session id the directory claims to belong to.
+ * @returns the guarded directory, or undefined when the layout is unexpected.
+ */
+export function sessionArtifactDirectory(dir: string, id: string): string | undefined {
   if (basename(dir) !== encodeSessionSegment(id)) return undefined
-  return dir
+  if (basename(dirname(dir)) === NO_CWD_DIRECTORY) return dir
+  return /^--.*--$|^~/.test(basename(dirname(dir))) ? dir : undefined
+}
+
+/**
+ * The JSONL backend's configured session root, when the mounted backend
+ * exposes one. The upstream service contract dropped `locate()` in 0.1.5
+ * (artifact paths are backend-private; only refusal diagnostics carry them),
+ * so the TUI derives artifact paths from the backend's public plugin config.
+ * Backends without a JSONL-style config (or a foreign shape) yield undefined
+ * and callers degrade: mtime sorting falls back to createdAt and /delete
+ * refuses, exactly as before.
+ */
+export function jsonlSessionRoot(persistence: unknown): string | undefined {
+  const root = (persistence as { config?: { root?: unknown } } | undefined)?.config?.root
+  return typeof root === 'string' && root !== '' ? root : undefined
 }
 
 /**
