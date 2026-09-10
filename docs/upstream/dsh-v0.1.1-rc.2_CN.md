@@ -36,7 +36,7 @@ dsh-code 1.0.1 继续使用现有纯 transcript projection。只替换标题、�
 ### 模型与运行时变化
 
 - 默认 DeepSeek 模型目录加入支持文字与图片输入的 `deepseek-v4-flash-vision-exp`。
-- Linux bubblewrap 增加 PID namespace 隔离，堵住 `/proc/<pid>/root` 逃逸路径。
+- Linux bubblewrap 增加 PID namespace 隔离，封堵 `/proc/<pid>/root` 逃逸路径。
 - 模型重试耗尽后，最终 turn error 仍保持可见。
 - 稳定 Session snapshot 的工作加强了夹具和重放验证，不要求迁移已有会话。
 

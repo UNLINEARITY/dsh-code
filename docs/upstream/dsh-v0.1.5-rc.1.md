@@ -60,7 +60,7 @@ touching the committed files.
   `SessionHandle` with `read(offset?, length?)`, plus `stat(id)` / `list()`
   returning lightweight snapshots (`{header, revision, eventCount?, sizeBytes?}`).
 - `load`/`inspect`/`readFrom`/`locate` are gone; artifact paths are no longer
-  a consumer-facing query (`SessionLocation` only rides refusal diagnostics).
+  a consumer-facing query (`SessionLocation` now appears only on refusal diagnostics).
 - `SessionPersistence.list` takes an options object; `SessionHeader.version`
   is the current format version; `RestoredSessionOptions.seedSource` became
   `eventState: 'detached' | 'shared-frozen'`.
@@ -124,7 +124,7 @@ patch now overrides `personaPrefix`.
   resume a paused goal.
 - dsh-code consumes the stream frames for live typing and folds
   `assistant/attempt` as durable diagnostics; catalog/steer/activation
-  surfaces land later: the durable catalog feeds the /agents live rows (an
+  surfaces follow in later stages: the durable catalog feeds the /agents live rows (an
   idle row carrying the authored label and mode; late deliveries never
   regress a row that already ran), while steer delivery and the armed
   indicator remain follow-ups.
@@ -132,7 +132,7 @@ patch now overrides `personaPrefix`.
 ## What dsh-code adopted in this alignment (stages 1–3)
 
 Stage 2 added the provider configuration diagnostics (the adapter's `error`
-rides the provider row into the /model list and the setup page) and the
+now appears on the provider row in the /model list and the setup page) and the
 system-prompt data layer (per-node fold, `TranscriptView.systemPrompt`,
 /export collapsed block). Stage 3 added terminal file attachments (paste/drop
 split into image and file blocks, terminal-side bounds of 8 MiB and 8 files,
@@ -147,7 +147,7 @@ kernel rejects it).
   dev dependencies, the launcher's harness-line anchor, and the two specs
   that pin the line).
 - `src/render/projection.ts` speaks v3: the `assistant/chunk` branches are
-  gone; live typing rides `agent/assistant-stream` frames folded through new
+  gone; live typing now arrives over `agent/assistant-stream` frames folded through new
   accumulator primitives (`applyAssistantStreamChunk`, `clearAssistantStream`)
   in `src/store.ts`; settlements restore replayed text/timings from the
   embedded `data.stream` (first-token latency included);

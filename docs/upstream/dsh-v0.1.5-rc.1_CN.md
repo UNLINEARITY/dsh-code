@@ -15,7 +15,7 @@
 
 - **持久日志只含结算**（`v1→v2`）：顶层 `assistant/chunk` 事件不复存在。装配完成的 `assistant/message`（以及承载失败、重试、取消尝试的新日志事件 `assistant/attempt`）以内嵌的 `data.stream: AssistantStreamRecord[]` 保留精确计时，读取器（`expandAssistantStream`、`joinAssistantStreamText`、`assistantStreamFirstTokenTime`）由 `@deepseek-ai/dsh-llm` 导出。
 - **实时打字是独立通道**：进程内 `agent/assistant-stream` 帧（`start`/`chunk`/`end`，以 `attemptId` + `revision` 标识；`end` 帧指明落账的结算事件）。它不是预写日志——结算落盘前的硬崩溃会丢失在途流。
-- **系统提示成为 surface 节点**（`v2→v3`）：首个 `system/message` 事件是 surface 节点 0；`request/header.data.header.system` 字段被移除。压缩区间永远不会覆盖系统节点 0；后续节点可能落入压缩区间，终端的折叠对任意 surface 替换（不限于 `system/message`）都会退役被覆盖的节点。
+- **系统提示成为 surface 节点**（`v2→v3`）：首个 `system/message` 事件是 surface 节点 0；`request/header.data.header.system` 字段被移除。压缩区间永远不会覆盖系统节点 0；后续节点可能落入压缩区间，终端的折叠对任意 surface 替换（不限于 `system/message`）都会移除被覆盖的节点。
 - **PTC 持久词汇**（`v2→v3`）：`tool/code-dispatch(-start)` 改名为 `tool/ptc-dispatch(-start)`；插件署名 `tools-code-mode` 在 `user/message` 的来源槽位改为 `tools-ptc`；头与 `agent-preset/selected` 中的预设 id `code` 改为 `ptc`。
 - **规范信封**（`v2→v3`）：`surfaceOp.replace` 的字段 `start/end` 改名为 `startSeq/endSeq`；surface 事件必带 `surfaceOp`；`assistant/message` 禁止携带 `sourceEventSeqs`。
 - **新增已知事件**：`assistant/attempt`、`system/message`、`tool/ptc-dispatch(-start)`、`subagent/catalog`、`deliverables/presented`、`feedback/message-put`、`feedback/message-delete`。`present` 工具随 standard 与 ptc 预设挂载，因此 `deliverables/presented` 同样会到达终端——终端将其按已知类型空操作折叠，原因是发起展示的工具自身的工具卡已呈现所展示的路径，而非该工具缺席。
@@ -59,9 +59,9 @@ dsh-code 的两处文件系统需求（会话列表的最后活动时间、`/del
 
 ## 本次对齐中 dsh-code 的采纳（阶段 1–3）
 
-阶段 2 补充供应商配置诊断（适配器的 `error` 随目录行进入 /model 列表与统一配置页）与系统提示数据层（逐节点折叠、`TranscriptView.systemPrompt`、/export 折叠块）。阶段 3 补充终端文件附件（粘贴/拖拽按图片与文件块分流，终端侧自设单文件 8 MiB、每条 8 个上限，composer 草稿与投影/导出标签）以及子代理目录行。启动器在计划版本线低于已装宿主时拒绝降级；`/fork` 经 0.1.5 契约记录谱系（`meta.isSeeded` 加顶层 `inheritedEventCount`——`meta.seedLength` 拼法属于上游更晚的草案，已发布内核会拒绝该字段）。
+阶段 2 补充供应商配置诊断（适配器的 `error` 随目录行进入 /model 列表与统一配置页）与系统提示数据层（逐节点折叠、`TranscriptView.systemPrompt`、/export 折叠块）。阶段 3 补充终端文件附件（粘贴/拖拽按图片与文件块分流，终端侧自行设定单文件 8 MiB、每条 8 个的上限，composer 草稿与投影/导出标签）以及子代理目录行。启动器在计划版本线低于已装宿主时拒绝降级；`/fork` 按 0.1.5 契约记录谱系（`meta.isSeeded` 配合顶层 `inheritedEventCount`——`meta.seedLength` 写法属于上游更晚的草案，已发布内核会拒绝该字段）。
 
 - 全部 `@deepseek-ai/dsh-*` 依赖升至 `0.1.5-rc.1`（dependencies、peers、devDependencies、启动器的宿主版本线锚点以及两个锁定版本线的测试）。
-- `src/render/projection.ts` 改讲 v3 词汇：`assistant/chunk` 分支删除；实时打字走 `agent/assistant-stream` 帧，经 `src/store.ts` 中新的累加器原语（`applyAssistantStreamChunk`、`clearAssistantStream`）折叠；结算事件从内嵌的 `data.stream` 恢复重放文本与计时（含首 token 延迟）；`assistant/attempt` 释放步骤锚点并清空被放弃的尾部；`system/message` 接管 `request/header` 原先携带的系统段估算。
-- `src/session-directory.ts` 推导多代布局并保持 `/delete` 守卫；`src/index.ts` 读取快照列表、使用 setup 回调的 agent 参数并接线流监听。
-- `cordis.patch.yml` 覆写 `personaPrefix` 并移除已退役的 str-replace-editor 行。
+- `src/render/projection.ts` 改用 v3 词汇：`assistant/chunk` 分支删除；实时打字改由 `agent/assistant-stream` 帧驱动，经 `src/store.ts` 中新的累加器原语（`applyAssistantStreamChunk`、`clearAssistantStream`）折叠；结算事件从内嵌的 `data.stream` 恢复重放文本与计时（含首 token 延迟）；`assistant/attempt` 释放步骤锚点并清空已放弃尝试的流式尾部；`system/message` 接管 `request/header` 原先携带的系统段估算。
+- `src/session-directory.ts` 推导多代布局并保持 `/delete` 守卫；`src/index.ts` 读取快照列表、使用 setup 回调的 agent 参数并挂接流监听。
+- `cordis.patch.yml` 覆写 `personaPrefix`，并移除上游已撤销的 str-replace-editor 行。
