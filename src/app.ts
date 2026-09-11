@@ -40,6 +40,7 @@ import { WHALE_GLYPH, WHALE_GLYPH_COLUMNS } from './whale-glyph.ts'
 import { DSH_CODE_VERSION, dshKernelVersion } from './version.ts'
 import type { TranscriptStore } from './store.ts'
 import { settledEntryCount, type TranscriptEntry } from './render/projection.ts'
+import { imeCursorRowsUp, useImeCursorAnchor } from './render/ime-cursor.ts'
 import { type MdSegment, visibleColumns } from './render/markdown.ts'
 import {
   busyChaseFrame,
@@ -983,12 +984,15 @@ function deepseekWaveHues(tier: DeepseekWaveTier): readonly [RgbTriple, RgbTripl
     : [palette.brandBright, palette.code, palette.brandMid]
 }
 
-function StatusLine({ facts, stats, busy, columns, items }: {
+function StatusLine({ facts, stats, busy, columns, items, onRows }: {
   facts: StatusFacts
   stats: Parameters<typeof layoutStatusBar>[1]
   busy: boolean
   columns: number
   items: readonly string[]
+  /** Reports the footer's exact physical row count (1 or 2) so the IME
+   * anchor ledger below the composer stays exact. */
+  onRows?: (rows: 1 | 2) => void
 }): ReactElement {
   const layout = useMemo(() => layoutStatusBar(facts, stats, Math.max(8, columns - 2), {
     busy,
@@ -1014,6 +1018,13 @@ function StatusLine({ facts, stats, busy, columns, items }: {
     columns,
     items,
   ])
+  // The IME anchor below the composer counts every row between the caret and
+  // Ink's parked cursor, so the footer reports its exact row count one-way
+  // (same contract as the composer's row report).
+  const statusRowCount: 1 | 2 = layout.row2.left.length > 0 ? 2 : 1
+  useEffect(() => {
+    onRows?.(statusRowCount)
+  }, [onRows, statusRowCount])
 
   const renderRow = (row: { left: readonly StatusGroup[]; right: readonly StatusSpan[]; hint: boolean }, key: string, indent = 0): ReactElement => {
     const leftParts: ReactElement[] = []
@@ -3222,7 +3233,7 @@ interface DraftFile extends FilePathInspection {
  * While a modal (approval / question / model panel) owns the keys, the
  * box passes every key through untouched.
  */
-function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openEffort, openHelp, openMode, openPermission, openResume, openPlugin, openUpdate, openSchedule, openJobs, openStatusline, openTheme, openHistory, openAgents, openSubagent, openTodos, openDelete, openDiff, reviewChanges, deleteConfirm, confirmDelete, cancelDelete, createSession, forkSession, cancelSessionSwitch, notify, applyEditorKeys, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, inspectImages, prepareImages, inspectFiles, prepareFiles, cycleMode, exportTranscript, renameTitle, copyLastResponse, recallSpace, recordLocal, recordHistory, queued, cancelQueued, historyFill, historyConsumed, animations, applyAnimations, waveTier, waveStyle, maxRows, onEditorRows, onMenuRows, sessionKey }: {
+function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openEffort, openHelp, openMode, openPermission, openResume, openPlugin, openUpdate, openSchedule, openJobs, openStatusline, openTheme, openHistory, openAgents, openSubagent, openTodos, openDelete, openDiff, reviewChanges, deleteConfirm, confirmDelete, cancelDelete, createSession, forkSession, cancelSessionSwitch, notify, applyEditorKeys, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, inspectImages, prepareImages, inspectFiles, prepareFiles, cycleMode, exportTranscript, renameTitle, copyLastResponse, recallSpace, recordLocal, recordHistory, queued, cancelQueued, historyFill, historyConsumed, animations, applyAnimations, waveTier, waveStyle, maxRows, anchorRowsBelow, onEditorRows, onMenuRows, sessionKey }: {
   active: boolean
   frozen: boolean
   /** Frozen-band hint naming the surface that owns the keyboard; an empty
@@ -3317,6 +3328,10 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
   waveStyle: DeepseekWaveStyle | null
   /** Maximum physical editor rows the composer may occupy (see composerMaxRows). */
   maxRows: number
+  /** Terminal rows below the composer the editor does not own: the status
+   * footer and Ink's parked cursor row. The IME anchor adds these to the
+   * caret's in-band offset to reach that parked position. */
+  anchorRowsBelow: number
   /** Reports the editor's current physical row count so the live budget stays exact. */
   onEditorRows(rows: number): void
   /** Reports the open completion menu's physical row count (0 when closed)
@@ -4366,6 +4381,17 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
   useEffect(() => {
     onEditorRows(editorRowCount)
   }, [editorRowCount, onEditorRows])
+  // IME anchor: park the real terminal cursor on the caret cell while the
+  // composer accepts input. IME composition and candidate windows anchor to
+  // that real cursor cell, which otherwise sits below the status row where
+  // Ink leaves it, so Chinese input never appears at the caret. Frozen bands
+  // release the anchor; the wrapper keeps Ink's relative erase ledger exact.
+  const caretRowInWindow = Math.max(0, Math.min(caret.row - editorWindowStart, editorWindowRows - 1))
+  useImeCursorAnchor(
+    !frozen,
+    imeCursorRowsUp({ editorWindowRows, caretRowInWindow, rowsBelowComposer: anchorRowsBelow }),
+    2 + caret.column,
+  )
   // The menu's physical rows ride the same one-way report; the cleanup keeps
   // the reserve from outliving the menu (unmount or inactive handoff).
   useEffect(() => {
@@ -5084,6 +5110,16 @@ export function App(props: AppProps): ReactElement {
   const handleMenuRows = useCallback((rows: number): void => {
     setMenuRows(current => (current === rows ? current : rows))
   }, [])
+  // The status footer's exact row count, reported one-way by StatusLine (the
+  // second row renders only while it has content). The IME cursor anchor
+  // counts every row between the composer caret and Ink's parked cursor: the
+  // status footer plus Ink's own below-frame row. The gutter rows sit ABOVE
+  // the composer and never enter this distance.
+  const [statusBarRows, setStatusBarRows] = useState<1 | 2>(1)
+  const handleStatusRows = useCallback((rows: 1 | 2): void => {
+    setStatusBarRows(current => (current === rows ? current : rows))
+  }, [])
+  const imeRowsBelowComposer = statusBarRows + 1
   const composerEditorCap = composerMaxRows(terminalRows)
   // Bottom chrome is composer (2 borders + composerRows) + status (up to 2
   // rows) + todo/agents/notice (3) = 8 resting rows, plus the historical
@@ -5829,6 +5865,7 @@ export function App(props: AppProps): ReactElement {
         waveTier,
         waveStyle,
         maxRows: composerEditorCap,
+        anchorRowsBelow: imeRowsBelowComposer,
         onEditorRows: handleEditorRows,
         onMenuRows: handleMenuRows,
       }),
@@ -5849,6 +5886,7 @@ export function App(props: AppProps): ReactElement {
         busy,
         columns: terminalColumns,
         items: statuslineItems,
+        onRows: handleStatusRows,
       }),
     ),
   )

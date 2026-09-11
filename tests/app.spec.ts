@@ -1362,22 +1362,57 @@ describe('keyboard protocol and transcript alignment', () => {
     }
   })
 
-  it('leaves stdout frame ownership with Ink', async () => {
-    const harness = createTty(80, 24)
-    const { stdin } = harness
-    const originalWrite = harness.stdout.write
+  it('keeps the terminal cursor on Ink\'s parked row across every foreign write', async () => {
+    // The IME anchor displaces the real cursor onto the composer caret cell.
+    // The ledger contract refines the old write-identity guard: every write
+    // that is not the anchor\'s own must start with the cancel sequence that
+    // returns the cursor to Ink\'s parked row before Ink\'s relative erase
+    // runs, and log-update frame rewrites re-append the anchor inside the
+    // same write so a repaint can never leave the cursor displaced.
+    const chunks: string[] = []
+    const stdout = Object.assign(new PassThrough(), {
+      isTTY: true,
+      columns: 80,
+      rows: 24,
+    }) as unknown as NodeJS.WriteStream
+    stdout.on('data', chunk => {
+      chunks.push(chunk.toString())
+    })
+    const stdin = Object.assign(new PassThrough(), {
+      isTTY: true,
+      isRaw: false,
+      setRawMode(value: boolean) {
+        this.isRaw = value
+        return this
+      },
+      ref() {},
+      unref() {},
+    }) as unknown as NodeJS.ReadStream
+    const harness = { stdin, stdout, output: { text: '' } } as TtyHarness
     const instance = renderApp(harness, appProps())
     try {
       await wait()
       stdin.write('ab')
       await wait()
-      // App must not replace stdout.write to inject cursor movement after
-      // Ink's frame. Doing so splits the terminal cursor from Ink's ledger.
-      expect(harness.stdout.write).toBe(originalWrite)
+      // A frame rewrite always arrives cancel-prefixed (the cursor is back
+      // on Ink's parked row before the relative erase runs) and ends with the
+      // re-anchor appended inside the same write.
+      const frameWrites = chunks.filter(chunk => /^\x1b\[\d+B\r\x1b\[2K/.test(chunk))
+      expect(frameWrites.length).toBeGreaterThan(0)
+      for (const frame of frameWrites) {
+        expect(frame).toMatch(/\x1b\[\d+A\x1b\[\d+G$/)
+      }
+      // Writes that are neither frame rewrites nor the anchor's own moves
+      // leave no anchor behind.
+      for (const chunk of chunks) {
+        if (!/^\x1b\[\d+B\r\x1b\[2K/.test(chunk) && !/^\x1b\[\d+B\r\x1b\[\d+A\x1b\[\d+G$/.test(chunk) && !/^\x1b\[\d+A\x1b\[\d+G$/.test(chunk)) {
+          expect(chunk).not.toMatch(/\x1b\[\d+A\x1b\[\d+G$/)
+        }
+      }
     } finally {
       instance.unmount()
       stdin.destroy()
-      harness.stdout.destroy()
+      stdout.destroy()
     }
   })
 })
