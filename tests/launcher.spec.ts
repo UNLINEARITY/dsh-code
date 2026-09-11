@@ -5,6 +5,7 @@ import {
   compareHarnessLines,
   harnessLineFromPeers,
   installedGlobalDshVersion,
+  localCheckoutRefusal,
   npmInvocation,
   dshCommand,
   completionScript,
@@ -93,8 +94,7 @@ describe('global launcher aliases', () => {
     })
   })
 
-  it('finds globally installed DSH when npm links this launcher to a checkout', () => {
-    const command = dshCommand(['--help'], {
+  it('finds globally installed DSH when npm links this launcher to a checkout', () => {    const command = dshCommand(['--help'], {
       platform: 'win32',
       moduleUrl: 'file:///C:/repo/dsh-code/bin/deepseek.mjs',
       fileExists: () => false,
@@ -236,6 +236,20 @@ describe('update orchestration', () => {
     ])
     expect(profilePluginDependencies('C:/profiles/cli', () => false)).toEqual([])
     expect(profilePluginDependencies('C:/profiles/cli', () => true, () => 'not json')).toEqual([])
+  })
+
+  it('refuses to pair an older local checkout with the newer global host', () => {
+    // A link/file-mounted profile runs the checkout's own build; upgrading
+    // the global host beside older local code breaks the next launch. The
+    // refusal names both versions and the two ways forward.
+    const refusal = localCheckoutRefusal('1.0.5', '1.0.6', 'dsh-code@1.0.6')!
+    expect(refusal[0]).toContain('dsh-code 1.0.5')
+    expect(refusal[0]).toContain('1.0.6')
+    expect(refusal[1]).toContain('refusing to install')
+    expect(refusal[3]).toContain('dsh plugin --profile cli add dsh-code@1.0.6')
+    // An up-to-date checkout or no checkout at all lets the upgrade proceed.
+    expect(localCheckoutRefusal('1.0.6', '1.0.6', 'dsh-code@1.0.6')).toBeUndefined()
+    expect(localCheckoutRefusal(undefined, '1.0.6', 'dsh-code@1.0.6')).toBeUndefined()
   })
 
   it('orders harness lines so a downgrade plan is detectable', () => {

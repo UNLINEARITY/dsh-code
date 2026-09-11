@@ -116,6 +116,22 @@ export function harnessLineFromPeers(peers) {
 }
 
 /**
+ * Refusal reason when a local-checkout profile would pair an older local
+ * build with the newer global host this upgrade installs, or undefined when
+ * the upgrade may proceed (no checkout mounted, or the checkout already
+ * matches the release). The caller prints the lines verbatim.
+ */
+export function localCheckoutRefusal(mounted, latestCode, codeSpec) {
+  if (mounted === undefined || mounted === latestCode) return undefined
+  return [
+    `dsh-code: the cli profile mounts a local checkout of dsh-code ${mounted}, while this upgrade would install ${latestCode} globally`,
+    'dsh-code: upgrading the host beside an older local checkout pairs incompatible code; refusing to install',
+    'dsh-code: update the checkout first (git pull, pnpm install, pnpm build), or switch the profile to the published package:',
+    `dsh-code:   dsh plugin --profile cli remove dsh-code && dsh plugin --profile cli add ${codeSpec}`,
+  ]
+}
+
+/**
  * Decide what `update --apply` installs. The global DSH launcher is pinned
  * to the harness line the target dsh-code release declares in its peers,
  * so the launcher can never move ahead of the plugin it must boot. A
@@ -423,6 +439,19 @@ async function applyUpdate({
     console.error(`dsh-code: refusing to downgrade the host; to proceed anyway run: npm install -g @deepseek-ai/dsh@${plan.line} dsh-code@${latestCode}`)
     process.exitCode = 1
     return
+  }
+  // Local-checkout guard: a link/file-mounted profile runs the checkout's
+  // own build, and this command would upgrade the global host beside it.
+  // When the checkout is older than the release being installed, upgrading
+  // pairs a new host with old local code — the terminal breaks on the next
+  // launch. Refuse until the checkout is updated or unmounted.
+  if (!plan.profileStep) {
+    const refusal = localCheckoutRefusal(profileMountedVersion(), latestCode, plan.codeSpec)
+    if (refusal !== undefined) {
+      for (const line of refusal) console.error(line)
+      process.exitCode = 1
+      return
+    }
   }
   const steps = [{ command: npm.command, args: [...npm.args, 'install', '-g', plan.dshSpec, plan.codeSpec], label: 'npm install' }]
   if (plan.profileStep) {
