@@ -44,6 +44,7 @@ function applyStreamDeltas(
 }
 import type { TranscriptEntry } from '../src/render/projection.ts'
 import { DEFAULT_STATUSLINE_ITEMS } from '../src/render/status.ts'
+import { DEFAULT_TERMINAL_TITLE } from '../src/terminal-title.ts'
 import { DARK_PALETTE, setTheme } from '../src/theme.ts'
 import { DSH_CODE_VERSION, _resetDshKernelVersionForTests } from '../src/version.ts'
 import type { PendingQuestion, QuestionSnapshot } from '../src/questions.ts'
@@ -3949,7 +3950,18 @@ describe('settled tool/command name sanitization', () => {
       // reach the terminal bytes.
       expect(output.text).not.toContain('evil\x1b]0;pwned\x07fetch')
       expect(output.text).not.toContain('wipe\x1b[2Jfetch')
-      expect(output.text).not.toContain('\x1b]0;')
+      // The app writes exactly one managed tab-title OSC-0 itself
+      // (terminal-title.ts), whose payload is sanitized free of control
+      // bytes; in this fixture that is the "deepseek" default. Any OSC-0
+      // beyond that well-formed managed sequence — in particular one riding
+      // untrusted tool or command names — never reaches the terminal bytes.
+      const titleOsc = /\x1b\]0;([^\x07\u0000-\u001F\u007F]*)\x07/g
+      const payloads = [...output.text.matchAll(titleOsc)].map(match => match[1]!)
+      expect(payloads.length).toBeGreaterThan(0)
+      for (const payload of payloads) {
+        expect(payload).toBe(DEFAULT_TERMINAL_TITLE)
+      }
+      expect(output.text.replace(titleOsc, '')).not.toContain('\x1b]0;')
       // The safe remainder of the names still renders.
       expect(output.text).toContain('evil')
       expect(output.text).toContain('wipe')

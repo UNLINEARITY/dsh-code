@@ -19,6 +19,7 @@ import {
   shouldEnableKeyboardEnhancement,
 } from './keyboard.ts'
 import { createSplitStdin } from './input-split.ts'
+import { ensureVsCodeTabTitleSetting } from './terminal-title.ts'
 
 /** A mounted terminal app instance; the runner owns unmount ordering. */
 export interface TuiMount {
@@ -56,6 +57,10 @@ export const internals: {
         + BRACKETED_PASTE_ENABLE
         + (focusReporting ? TERMINAL_FOCUS_REPORT_ENABLE : ''),
       )
+      // Cosmetic best effort: inside a VS Code integrated terminal the tab
+      // shows the process name ("node") unless the user settings map it to
+      // the sequence title; align them once. Total function, never throws.
+      ensureVsCodeTabTitleSetting()
       // App owns Ctrl+C's deliberate three-state contract (interrupt, clear
       // draft, quit). Ink's default `exitOnCtrlC: true` would intercept the
       // normalized control byte first, unmount only its renderer, and leave the

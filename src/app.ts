@@ -39,6 +39,7 @@ import type { LauncherUpdateStatus } from './update.ts'
 import { WHALE_GLYPH, WHALE_GLYPH_COLUMNS } from './whale-glyph.ts'
 import { DSH_CODE_VERSION, dshKernelVersion } from './version.ts'
 import type { TranscriptStore } from './store.ts'
+import { DEFAULT_TERMINAL_TITLE, useTerminalTitle } from './terminal-title.ts'
 import { settledEntryCount, type TranscriptEntry } from './render/projection.ts'
 import { imeCursorRowsUp, useImeCursorAnchor } from './render/ime-cursor.ts'
 import { type MdSegment, visibleColumns } from './render/markdown.ts'
@@ -5131,6 +5132,9 @@ export function App(props: AppProps): ReactElement {
   const dynamicRows = Math.max(1, terminalRows - 8 - MENU_RESERVE_ROWS - composerGutterRows - (composerRows - 1) - Math.max(0, menuRows - MENU_RESERVE_ROWS))
   const streamingActive = view.streaming !== '' || view.streamingReasoning !== ''
   const deepDivingVisible = busy && !streamingActive
+  // Terminal tab label: "deepseek" until the session carries a name, then the
+  // session title; cleared on unmount so the host shell regains its default.
+  useTerminalTitle(view.title === '' ? DEFAULT_TERMINAL_TITLE : view.title)
   const allLiveLines = useMemo(
     () => view.entries.slice(settled).flatMap(
       // Width shrinks with the real terminal (no 10-column floor: on a
