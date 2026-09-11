@@ -103,7 +103,7 @@ function appProps(overrides: Partial<AppProps> = {}): AppProps {
     setSubagentModel: () => '',
     clearSubagentModel: noop,
     deleteSession: async () => '',
-    cyclePermission: () => '',
+    cycleMode: () => '',
     setPermission: id => id,
     exportTranscript: async () => {},
     renameTitle: () => '',

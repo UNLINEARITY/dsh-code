@@ -76,7 +76,6 @@ import { SessionSwitchQueue } from './session-switch.ts'
 import { agentPresetsFrom, normalizePresetId, resolvePreset, selectPreset } from './presets.ts'
 import {
   applyPendingPermission,
-  cyclePermission as cyclePermissionPreset,
   effectivePermission,
   listPermissionRows,
   permissionPresetsFrom,
@@ -268,6 +267,38 @@ export interface QueuedSubmission {
  */
 export function submissionBelongsToSession(origin: string | undefined, activeSessionId: string | undefined): boolean {
   return origin === undefined || origin === '' || origin === activeSessionId
+}
+
+/** One Shift+Tab station decision for the mode cycle. */
+export type ModeCycleDecision =
+  | { readonly kind: 'permission'; readonly preset: string }
+  | { readonly kind: 'plan-on' }
+  | { readonly kind: 'plan-off'; readonly preset: string }
+
+/**
+ * Decide the next Shift+Tab station. The cycle keeps the preset table's
+ * own order (most restrictive first) and inserts ONE plan station between
+ * the most restrictive preset and the wrap target: with the shipped three
+ * presets the user sees workspace-write → danger-full-access → read-only
+ * → plan → workspace-write. Plan IS the most restrictive preset plus the
+ * plan prompt layer — entering it switches nothing (the cycle is already
+ * parked on read-only), and leaving it lands on the next preset after the
+ * most restrictive one. Without the /plan command the cycle is exactly the
+ * preset table.
+ */
+export function planCycleDecision(input: {
+  readonly names: readonly string[]
+  readonly current: string
+  readonly inPlan: boolean
+  readonly planAvailable: boolean
+}): ModeCycleDecision | undefined {
+  const names = input.names
+  if (names.length === 0) return undefined
+  const first = names[0]!
+  if (input.inPlan) return { kind: 'plan-off', preset: names[1] ?? first }
+  const at = names.indexOf(input.current)
+  if (at === 0 && input.planAvailable) return { kind: 'plan-on' }
+  return { kind: 'permission', preset: names[(at + 1) % names.length] ?? first }
 }
 
 /**
@@ -512,6 +543,38 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   let pendingModeWork: Promise<void> = Promise.resolve()
   /** Permission preset selected before the first session exists. */
   let pendingPermission: string | undefined
+  /**
+   * Plan-mode choice made before the first session exists: materialized as a
+   * /plan registry command delivered ahead of the first queued input when the
+   * session composes, so the first assembled step already plans.
+   */
+  let pendingPlan = false
+  /**
+   * Whether the pre-session effective preset composes plan mode, answered by
+   * the presets service composition inventory (minimal does not). Cached and
+   * refreshed whenever the pending mode moves; unknown reads as unavailable
+   * so one keypress at most lands before the answer arrives.
+   */
+  let preSessionPlanAvailable = false
+  let preSessionPlanKnown = false
+  const refreshPreSessionPlan = (): void => {
+    if (presets === undefined) {
+      preSessionPlanAvailable = false
+      preSessionPlanKnown = true
+      return
+    }
+    preSessionPlanKnown = false
+    void presets.compositionInventory().then(inventory => {
+      const id = pendingMode ?? normalizePresetId(presets.defaultId)
+      preSessionPlanAvailable = inventory.some(composition => composition.id === id
+        && composition.rows.some(row => row.moduleName === '@deepseek-ai/dsh-plan-mode' && row.enabled !== false))
+      preSessionPlanKnown = true
+    }, () => {
+      preSessionPlanAvailable = false
+      preSessionPlanKnown = true
+    })
+  }
+  refreshPreSessionPlan()
   /**
    * Monotonic session epoch: bumped on every successful activation, on every
    * first-session creation, and on quit. Async callbacks (mention prepares,
@@ -1064,6 +1127,13 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
         abortPendingControllers()
         epoch += 1
         const queued = pendingInputs.splice(0)
+        if (pendingPlan) {
+          pendingPlan = false
+          // A pre-session plan choice materializes as the registry command
+          // delivered AHEAD of the queued lines, so the first assembled step
+          // of the user's opening message already runs in plan mode.
+          deliverLine('/plan', 'followup')
+        }
         for (const item of queued) deliverLine(item.text, item.mode, item.images)
       } finally {
         creating = false
@@ -1158,24 +1228,64 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   }
 
   /**
-   * Cycle to the next permission preset (Shift+Tab). Before the first session,
-   * the choice remains process-local and is materialized when Harness creates
-   * that session; afterwards the canonical service writes durable events.
+   * Shift+Tab mode cycle: permission presets in table order, then the plan
+   * station when the composition offers the /plan command (preset-mounted,
+   * so minimal sessions and the pre-session state cycle permissions only).
+   * Plan transitions submit the upstream registry command — it stays the
+   * single owner of plan state; the TUI renders the durable plan/mode event
+   * it appends. Returns the notice label, or '' when nothing changed.
    */
-  const cyclePermission = (): string => {
+  const cycleMode = (): string => {
     if (permissionPresets === undefined || permissionPresets.names.length === 0) {
       bridge.notify('permission presets are not mounted in this composition', 'warning')
       return ''
     }
     try {
-      const next = cyclePermissionPreset(permissionPresets, session, pendingPermission)
-      if (session === undefined && next !== '') {
-        pendingPermission = next
-        renderCurrent()
+      // Pre-session the plan station rides the pending choice; once a
+      // session exists the scoped /plan command descriptor decides, and the
+      // durable plan/mode event is the live truth.
+      const preSession = session === undefined
+      if (preSession && !preSessionPlanKnown) refreshPreSessionPlan()
+      const decision = planCycleDecision({
+        names: permissionPresets.names,
+        current: effectivePermission(permissionPresets, session, pendingPermission),
+        inPlan: preSession ? pendingPlan : store.getView().plan === true,
+        planAvailable: preSession ? preSessionPlanAvailable : commands.descriptors.some(descriptor => descriptor.name === 'plan'),
+      })
+      if (decision === undefined) return ''
+      if (decision.kind === 'permission') {
+        const next = selectPermission(permissionPresets, session, decision.preset)
+        if (preSession) {
+          pendingPermission = next
+          renderCurrent()
+        }
+        return `permission → ${next}`
       }
-      return next
+      if (decision.kind === 'plan-on') {
+        // Plan IS the most restrictive preset plus the plan prompt layer:
+        // the cycle arrives here from that preset, so permission needs no
+        // switch — only the plan mode itself toggles.
+        if (preSession) {
+          pendingPlan = true
+          renderCurrent()
+          return 'plan → on (applies to the first session)'
+        }
+        send('/plan', 'followup')
+        return 'plan → on'
+      }
+      // Leaving plan lands on the station after the most restrictive
+      // preset (workspace-write with the shipped table).
+      if (preSession) {
+        pendingPlan = false
+        pendingPermission = decision.preset
+        renderCurrent()
+        return `plan → off · permission → ${decision.preset}`
+      }
+      send('/plan off', 'followup')
+      selectPermission(permissionPresets, session, decision.preset)
+      return `plan → off · permission → ${decision.preset}`
     } catch (error: unknown) {
-      bridge.notify(`permission change failed: ${error instanceof Error ? error.message : String(error)}`, 'error')
+      bridge.notify(`mode change failed: ${error instanceof Error ? error.message : String(error)}`, 'error')
       return ''
     }
   }
@@ -1479,6 +1589,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
         subagents.reset()
         pendingMode = undefined
         pendingPermission = undefined
+        pendingPlan = false
       } catch (error: unknown) {
         active = previous
         agent = previous?.agent
@@ -1704,6 +1815,8 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       resumed: active?.resumed ?? false,
       mode: active?.mode ?? pendingMode ?? normalizePresetId(presets.defaultId),
       permission,
+      /** Pre-session plan choice for the status badge until a session composes. */
+      pendingPlan: session === undefined && pendingPlan,
       dispatch,
       steer,
       interrupt,
@@ -1730,7 +1843,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       prepareImages: (paths, signal) => saveImagePaths(paths, ctx.get('attachments'), signal),
       inspectFiles: paths => inspectFilePaths(paths, ctx.get('attachments'), session?.header.cwd ?? cwd),
       prepareFiles: (paths, signal) => saveFilePaths(paths, ctx.get('attachments'), signal),
-      cyclePermission,
+      cycleMode,
       setPermission: setPermissionAction,
       selectModel,
       subagentModel: subagentModelLabel(),

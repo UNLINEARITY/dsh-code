@@ -77,6 +77,7 @@ export type StatusTone =
   | 'meta'
   | 'accent'
   | 'success'
+  | 'plan'
   | 'warn'
   | 'error'
   // Context-bar fill: one DeepSeek blue for the whole occupied run (the free
@@ -419,9 +420,7 @@ function buildCandidates(
   const right: { span: StatusSpan; rank: number; id: string }[] = []
   const row2: { group: StatusGroup; rank: number; id: string }[] = []
 
-  if (facts.plan && enabled.has('plan')) {
-    row2.push({ group: { spans: [{ text: '⧉ plan', tone: 'accent' }] }, rank: RANK2_PLAN, id: 'plan' })
-  }
+
 
   if (stats.turns > 0 || stats.steps > 0) {
     if (enabled.has('turns')) {
@@ -522,9 +521,24 @@ function buildCandidates(
   }
   const permission = safe(facts.permission)
   let badge = -1
+  // The plan STATION names itself in the permission badge: with the most
+  // restrictive preset active, plan mode reads as the green fourth cycle
+  // station 'plan' (that preset IS the station's permission layer). Plan on
+  // any other preset (a typed /plan mid-session) stays orthogonal: the badge
+  // keeps naming the preset and row 2 carries the green plan marker.
+  const planStation = facts.plan && permissionTone(permission) === 'success'
   if (permission !== '' && enabled.has('permission')) {
-    right.push({ span: { text: permission, tone: permissionTone(permission) }, rank: RANK_BADGE, id: 'permission' })
+    right.push({
+      span: planStation
+        ? { text: 'plan on', tone: 'plan' }
+        : { text: permission, tone: permissionTone(permission) },
+      rank: RANK_BADGE,
+      id: 'permission',
+    })
     badge = right.length - 1
+  }
+  if (facts.plan && enabled.has('plan')) {
+    row2.push({ group: { spans: [{ text: '⧉ plan', tone: 'accent' }] }, rank: RANK2_PLAN, id: 'plan' })
   }
   return { left, right, badge, row2 }
 }

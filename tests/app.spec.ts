@@ -135,7 +135,7 @@ function appProps(overrides: Partial<AppProps> = {}): AppProps {
       setSubagentModel: () => '',
       clearSubagentModel: noop,
       deleteSession: async () => '',
-    cyclePermission: () => '',
+    cycleMode: () => '',
     setPermission: id => id,
     exportTranscript: async () => {},
     renameTitle: () => '',
@@ -189,7 +189,7 @@ describe('pre-session controls', () => {
     const dispatch = vi.fn()
     const switchMode = vi.fn(async (id: string) => id)
     const setPermission = vi.fn((id: string) => id)
-    const cyclePermission = vi.fn(() => 'danger-full-access')
+    const cycleMode = vi.fn(() => 'permission → danger-full-access')
     const instance = renderApp(harness, appProps({
       sessionId: '',
       mode: 'standard',
@@ -197,7 +197,7 @@ describe('pre-session controls', () => {
       dispatch,
       switchMode,
       setPermission,
-      cyclePermission,
+      cycleMode,
       loadPresets: async () => [{ id: 'minimal', trust: 'system' }],
       loadPermissions: async () => [{ id: 'read-only' }, { id: 'workspace-write' }, { id: 'danger-full-access' }],
     }))
@@ -228,7 +228,7 @@ describe('pre-session controls', () => {
 
       harness.stdin.write('\x1b[Z')
       await wait()
-      expect(cyclePermission).toHaveBeenCalledOnce()
+      expect(cycleMode).toHaveBeenCalledOnce()
 
       harness.stdin.write('/mode')
       await wait()
@@ -237,6 +237,34 @@ describe('pre-session controls', () => {
       harness.stdin.write('\r')
       await wait()
       expect(switchMode).toHaveBeenCalledWith('minimal')
+    } finally {
+      instance.unmount()
+    }
+  })
+
+  it('notifies the plan station from the Shift+Tab mode cycle', async () => {
+    const harness = createTty(140, 24)
+    const cycleMode = vi.fn(() => 'plan → on')
+    const instance = renderApp(harness, appProps({ cycleMode }))
+    try {
+      await wait()
+      harness.output.text = ''
+      harness.stdin.write('\x1b[Z')
+      await wait()
+      expect(cycleMode).toHaveBeenCalledOnce()
+      expect(harness.output.text).toContain('plan → on')
+    } finally {
+      instance.unmount()
+    }
+  })
+
+  it('names the plan station in the badge from the pre-session pending choice', async () => {
+    const harness = createTty(140, 24)
+    const instance = renderApp(harness, appProps({ sessionId: '', permission: 'read-only', pendingPlan: true }))
+    try {
+      await wait()
+      expect(harness.output.text).toContain('plan')
+      expect(harness.output.text).not.toContain('read-only (shift+tab to cycle)')
     } finally {
       instance.unmount()
     }
@@ -1427,7 +1455,7 @@ describe('Ctrl+O history details', () => {
       setSubagentModel: () => '',
       clearSubagentModel: noop,
       deleteSession: async () => '',
-      cyclePermission: () => '',
+      cycleMode: () => '',
       setPermission: id => id,
       exportTranscript: async () => {},
       renameTitle: () => '',
@@ -1680,7 +1708,7 @@ describe('DeepSeek model-switch easter egg', () => {
       setSubagentModel: () => '',
       clearSubagentModel: noop,
       deleteSession: async () => '',
-      cyclePermission: () => '',
+      cycleMode: () => '',
       setPermission: id => id,
       exportTranscript: async () => {},
       renameTitle: () => '',
@@ -1874,7 +1902,7 @@ describe('DeepSeek model-switch easter egg', () => {
       setSubagentModel: () => '',
       clearSubagentModel: noop,
       deleteSession: async () => '',
-      cyclePermission: () => '',
+      cycleMode: () => '',
       setPermission: id => id,
       exportTranscript: async () => {},
       renameTitle: () => '',
@@ -2056,7 +2084,7 @@ describe('DeepSeek model-switch easter egg', () => {
       setSubagentModel: () => '',
       clearSubagentModel: noop,
       deleteSession: async () => '',
-      cyclePermission: () => '',
+      cycleMode: () => '',
       setPermission: id => id,
       exportTranscript: async () => {},
       renameTitle: () => '',
@@ -2223,7 +2251,7 @@ describe('DeepSeek model-switch easter egg', () => {
       setSubagentModel: () => '',
       clearSubagentModel: noop,
       deleteSession: async () => '',
-      cyclePermission: () => '',
+      cycleMode: () => '',
       setPermission: id => id,
       exportTranscript: async () => {},
       renameTitle: () => '',
@@ -2364,7 +2392,7 @@ describe('DeepSeek model-switch easter egg', () => {
       setSubagentModel: () => '',
       clearSubagentModel: noop,
       deleteSession: async () => '',
-      cyclePermission: () => '',
+      cycleMode: () => '',
       setPermission: id => id,
       exportTranscript: async () => {},
       renameTitle: () => '',
@@ -2469,7 +2497,7 @@ describe('bracketed paste safety', () => {
       setSubagentModel: () => '',
       clearSubagentModel: noop,
       deleteSession: async () => '',
-      cyclePermission: () => '',
+      cycleMode: () => '',
       setPermission: id => id,
       exportTranscript: async () => {},
       renameTitle: () => '',
@@ -2803,7 +2831,7 @@ describe('Ctrl+R reasoning fold', () => {
       setSubagentModel: () => '',
       clearSubagentModel: noop,
       deleteSession: async () => '',
-      cyclePermission: () => '',
+      cycleMode: () => '',
       setPermission: id => id,
       exportTranscript: async () => {},
       renameTitle: () => '',
@@ -2933,7 +2961,7 @@ describe('Ctrl+R reasoning fold', () => {
       setSubagentModel: () => '',
       clearSubagentModel: noop,
       deleteSession: async () => '',
-      cyclePermission: () => '',
+      cycleMode: () => '',
       setPermission: id => id,
       exportTranscript: async () => {},
       renameTitle: () => '',
@@ -3052,7 +3080,7 @@ describe('Ctrl+R reasoning fold', () => {
       setSubagentModel: () => '',
       clearSubagentModel: noop,
       deleteSession: async () => '',
-      cyclePermission: () => '',
+      cycleMode: () => '',
       setPermission: id => id,
       exportTranscript: async () => {},
       renameTitle: () => '',
@@ -3168,7 +3196,7 @@ describe('Ctrl+R reasoning fold', () => {
       setSubagentModel: () => '',
       clearSubagentModel: noop,
       deleteSession: async () => '',
-      cyclePermission: () => '',
+      cycleMode: () => '',
       setPermission: id => id,
       exportTranscript: async () => {},
       renameTitle: () => '',
@@ -3306,7 +3334,7 @@ describe('deferred session remount', () => {
       setSubagentModel: () => '',
       clearSubagentModel: noop,
       deleteSession: async () => '',
-      cyclePermission: () => '',
+      cycleMode: () => '',
       setPermission: id => id,
       exportTranscript: async () => {},
       renameTitle: () => '',
@@ -3434,7 +3462,7 @@ describe('deferred session remount', () => {
       setSubagentModel: () => '',
       clearSubagentModel: noop,
       deleteSession: async () => '',
-      cyclePermission: () => '',
+      cycleMode: () => '',
       setPermission: id => id,
       exportTranscript: async () => {},
       renameTitle: () => '',
@@ -3603,7 +3631,7 @@ describe('context stepless bar', () => {
       setSubagentModel: () => '',
       clearSubagentModel: noop,
       deleteSession: async () => '',
-      cyclePermission: () => '',
+      cycleMode: () => '',
       setPermission: id => id,
       exportTranscript: async () => {},
       renameTitle: () => '',
@@ -3718,7 +3746,7 @@ describe('light theme rendering', () => {
       setSubagentModel: () => '',
       clearSubagentModel: noop,
       deleteSession: async () => '',
-      cyclePermission: () => '',
+      cycleMode: () => '',
       setPermission: id => id,
       exportTranscript: async () => {},
       renameTitle: () => '',

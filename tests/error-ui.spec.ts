@@ -83,7 +83,7 @@ function renderApp(
       setSubagentModel: () => '',
       clearSubagentModel: noop,
       deleteSession: async () => '',
-    cyclePermission: () => '',
+    cycleMode: () => '',
     setPermission: id => id,
     exportTranscript: async () => {},
     renameTitle: () => '',

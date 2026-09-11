@@ -95,7 +95,7 @@ describe('exclusive panel height budgets', () => {
       setSubagentModel: () => '',
       clearSubagentModel: noop,
       deleteSession: async () => '',
-      cyclePermission: () => '',
+      cycleMode: () => '',
       setPermission: id => id,
       exportTranscript: async () => {},
       renameTitle: () => '',
@@ -353,7 +353,7 @@ describe('exclusive panel height budgets', () => {
       setSubagentModel: () => '',
       clearSubagentModel: noop,
       deleteSession: async () => '',
-      cyclePermission: () => '',
+      cycleMode: () => '',
       setPermission: id => id,
       exportTranscript: async () => {},
       renameTitle: () => '',
@@ -526,7 +526,7 @@ describe('queued messages and global recall', () => {
       setSubagentModel: () => '',
       clearSubagentModel: noop,
       deleteSession: async () => '',
-      cyclePermission: () => '',
+      cycleMode: () => '',
       setPermission: id => id,
       exportTranscript: async () => {},
       renameTitle: () => '',
@@ -647,7 +647,7 @@ describe('queued messages and global recall', () => {
       setSubagentModel: () => '',
       clearSubagentModel: noop,
       deleteSession: async () => '',
-      cyclePermission: () => '',
+      cycleMode: () => '',
       setPermission: id => id,
       exportTranscript: async () => {},
       renameTitle: () => '',
@@ -781,7 +781,7 @@ describe('queued messages and global recall', () => {
       setSubagentModel: () => '',
       clearSubagentModel: noop,
       deleteSession: async () => '',
-      cyclePermission: () => '',
+      cycleMode: () => '',
       setPermission: id => id,
       exportTranscript: async () => {},
       renameTitle: () => '',
@@ -935,7 +935,7 @@ describe('/model effort stage', () => {
         picked.push({ row, effortId })
         return `${row.provider}/${row.model}`
       },
-      cyclePermission: () => '',
+      cycleMode: () => '',
       setPermission: id => id,
       exportTranscript: async () => {},
       renameTitle: () => '',
@@ -1159,7 +1159,7 @@ describe('/effort command', () => {
       loadModels: async () => ({ rows, failures: [] }),
       loadMentions: async () => [],
       selectModel: () => 'deepseek/deepseek-v4',
-      cyclePermission: () => '',
+      cycleMode: () => '',
       setPermission: id => id,
       exportTranscript: async () => {},
       renameTitle: () => '',
@@ -1543,7 +1543,7 @@ describe('/model typing filter', () => {
         picked.push(row)
         return `${row.provider}/${row.model}`
       },
-      cyclePermission: () => '',
+      cycleMode: () => '',
       setPermission: id => id,
       exportTranscript: async () => {},
       renameTitle: () => '',
@@ -1741,7 +1741,7 @@ describe('/model typing filter — late directory and compact copy', () => {
         picked.push(row)
         return `${row.provider}/${row.model}`
       },
-      cyclePermission: () => '',
+      cycleMode: () => '',
       setPermission: id => id,
       exportTranscript: async () => {},
       renameTitle: () => '',
@@ -1846,7 +1846,7 @@ describe('/model typing filter — late directory and compact copy', () => {
         picked.push(row)
         return `${row.provider}/${row.model}`
       },
-      cyclePermission: () => '',
+      cycleMode: () => '',
       setPermission: id => id,
       exportTranscript: async () => {},
       renameTitle: () => '',

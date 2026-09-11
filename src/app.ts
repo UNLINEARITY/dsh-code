@@ -362,8 +362,10 @@ export interface AppProps {
   logoutProviderAuthorization?(row: ProviderAuthorizationRow): Promise<void>
   openAuthorizationUrl?(url: string): boolean
   copyTextValue?(text: string): Promise<void>
-  /** Cycle to the next permission preset (Shift+Tab); returns the new label. */
-  cyclePermission(): string
+  /** Cycle to the next mode station (Shift+Tab): a permission preset or a plan switch; returns the notice label. */
+  cycleMode(): string
+  /** Pre-session plan choice: shows the plan badge before the first session exists. */
+  pendingPlan?: boolean
   /** Select or inspect a permission preset without requiring a pre-existing session. */
   setPermission(id: string): string
   /** Export the transcript to a markdown file (/export [path]); reports via notices. */
@@ -936,6 +938,10 @@ function statusToneProps(tone: StatusTone): {
       return { color: inkColor(getPalette().brand), bold: undefined, dimColor: undefined }
     case 'success':
       return { color: inkColor(getPalette().code), bold: true, dimColor: undefined }
+    // The plan station's dedicated green: the status bar otherwise speaks in
+    // blues, but the fourth cycle station IS a distinct green mode marker.
+    case 'plan':
+      return { color: inkColor(getPalette().success), bold: true, dimColor: undefined }
     case 'warn':
       return { color: inkColor(getPalette().warn), bold: true, dimColor: undefined }
     case 'error':
@@ -3216,7 +3222,7 @@ interface DraftFile extends FilePathInspection {
  * While a modal (approval / question / model panel) owns the keys, the
  * box passes every key through untouched.
  */
-function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openEffort, openHelp, openMode, openPermission, openResume, openPlugin, openUpdate, openSchedule, openJobs, openStatusline, openTheme, openHistory, openAgents, openSubagent, openTodos, openDelete, openDiff, reviewChanges, deleteConfirm, confirmDelete, cancelDelete, createSession, forkSession, cancelSessionSwitch, notify, applyEditorKeys, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, inspectImages, prepareImages, inspectFiles, prepareFiles, cyclePermission, exportTranscript, renameTitle, copyLastResponse, recallSpace, recordLocal, recordHistory, queued, cancelQueued, historyFill, historyConsumed, animations, applyAnimations, waveTier, waveStyle, maxRows, onEditorRows, onMenuRows, sessionKey }: {
+function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openEffort, openHelp, openMode, openPermission, openResume, openPlugin, openUpdate, openSchedule, openJobs, openStatusline, openTheme, openHistory, openAgents, openSubagent, openTodos, openDelete, openDiff, reviewChanges, deleteConfirm, confirmDelete, cancelDelete, createSession, forkSession, cancelSessionSwitch, notify, applyEditorKeys, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, inspectImages, prepareImages, inspectFiles, prepareFiles, cycleMode, exportTranscript, renameTitle, copyLastResponse, recallSpace, recordLocal, recordHistory, queued, cancelQueued, historyFill, historyConsumed, animations, applyAnimations, waveTier, waveStyle, maxRows, onEditorRows, onMenuRows, sessionKey }: {
   active: boolean
   frozen: boolean
   /** Frozen-band hint naming the surface that owns the keyboard; an empty
@@ -3279,7 +3285,7 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
   prepareImages(paths: readonly string[], signal?: AbortSignal): Promise<readonly ImageBlock[]>
   inspectFiles(paths: readonly string[]): Promise<readonly FilePathInspection[]>
   prepareFiles(paths: readonly string[], signal?: AbortSignal): Promise<readonly FileBlock[]>
-  cyclePermission(): string
+  cycleMode(): string
   exportTranscript(argument: string): Promise<void>
   renameTitle(argument: string): string
   copyLastResponse(): Promise<string>
@@ -3823,11 +3829,12 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
       }
       return
     }
-    // Shift+Tab cycles the permission preset (Claude-Code convention).
+    // Shift+Tab cycles the mode stations: permission presets, then the
+    // plan station when the composition offers it (Claude-Code convention).
     if (key.tab && key.shift) {
       try {
-        const next = cyclePermission()
-        if (next !== '') notify(`permission → ${next}`)
+        const label = cycleMode()
+        if (label !== '') notify(label)
       } catch (error: unknown) {
         notify(`permission change failed: ${error instanceof Error ? error.message : String(error)}`, 'error')
       }
@@ -5806,7 +5813,7 @@ export function App(props: AppProps): ReactElement {
         inspectFiles: props.inspectFiles,
         prepareFiles: props.prepareFiles,
         sessionKey: props.sessionKey,
-        cyclePermission: props.cyclePermission,
+        cycleMode: props.cycleMode,
         exportTranscript: props.exportTranscript,
         renameTitle: props.renameTitle,
         copyLastResponse: props.copyLastResponse,
@@ -5833,7 +5840,7 @@ export function App(props: AppProps): ReactElement {
           branch: props.branch,
           sessionId: props.sessionId,
           title: view.title,
-          plan: view.plan,
+          plan: view.plan || props.pendingPlan === true,
           permission: view.permission !== '' ? view.permission : props.permission,
           sandbox: view.sandbox,
           goal: view.goal === undefined ? undefined : { phase: view.goal.phase, rounds: view.goal.rounds, max: view.goal.max },
