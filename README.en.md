@@ -156,6 +156,7 @@ The following built-in commands are available inside the TUI. Additional Harness
 | `/todos` | View the complete todo list for the current session |
 | `/agents` | View subagent sessions created by the current session |
 | `/jobs` | View background jobs and their runtime status |
+| `/schedule` | Inspect active reminders (created through the model's schedule tools; read-only, overdue first) |
 | `/copy` | Copy the latest complete assistant response |
 
 #### Extensions, display, and exit
@@ -205,7 +206,56 @@ DSH-Code reads the live Harness registries instead of maintaining a separate loc
 
 `/plugin` provides a read-only view of the current Cordis loader state.
 
-### 2. Session-scoped Agent Presets
+### 2. Bundled and optional official plugins
+
+The following official plugins ship with DSH-Code and are enabled in the composition by default:
+
+- **Session search**: the model gets five read-only tools — `session_search`, `session_event_search`, `session_trace`, `session_event_trace`, `session_event_read` — over prior session logs (the index builds lazily on the first search; cross-session access is scoped by exact working directory; on Node 22 the first search prints a one-time `node:sqlite` experimental warning, which is expected).
+- **Reminders**: `schedule` provides durable, restart-surviving reminders (created through the `schedule_create` / `schedule_list` / `schedule_delete` tools); the `/schedule` panel shows them read-only with overdue rows first. `time-context` injects a clock reading for the model (throttled to 30s).
+- **Clock for reminders**: `time-context` injects the current time for the model (throttled to 30s), so phrasings like "remind me at 5 pm" work.
+
+The following official plugins are installed but opt-in (append rows in the user layer `~/.dsh/profiles/cli/cordis.patch.yml`, or install as noted):
+
+- **MCP servers** (`@deepseek-ai/dsh-mcp-client`, one row per server; tools register as `mcp__<server>__<tool>`):
+
+  ```yaml
+  - insert:
+      - id: mcp-memory
+        name: '@deepseek-ai/dsh-mcp-client'
+        config:
+          transport: stdio
+          serverName: memory
+          command: mcp-server-memory
+  ```
+
+  (HTTP transports use `transport: streamable-http` plus `url`; an unreachable server degrades to a reconnect loop and never breaks startup.)
+- **Claude Code / Codex hooks bridges** (`@deepseek-ai/dsh-hooks-claude-code` / `-codex`): run existing hooks configurations at the interception seams; a missing hooks file is a silent no-op:
+
+  ```yaml
+  - insert:
+      - id: hooks-claude
+        name: '@deepseek-ai/dsh-hooks-claude-code'
+        config:
+          configPath: C:/Users/you/.claude/hooks.json
+  ```
+- **LSP navigation**: the composition carries `lsp` / `lsp-stdio` / `tool-lsp` rows in a disabled state — language-server binaries resolve at mount, and a missing binary would fail the whole composition boot. Flip the three rows to `disabled: false` in the user layer and configure `lsp-stdio` `servers` (extension to language to server command); the model then gets the `lsp` tool (goToDefinition / findReferences / goToImplementation / hover).
+- **Persistent terminals**: the PTY service and platform backends (pwsh dialect on Windows, bash on POSIX) mount by default, but the six model tools `terminal_open` / `terminal_send` / `terminal_read` / `terminal_signal` / `terminal_close` / `terminal_list` ship DISABLED — enabling them grants shell capability to every session, which the preset layer is supposed to gate, so deployments opt in explicitly. Enable in the user layer:
+  ```yaml
+  - id: tool-terminal
+    disabled: false
+  ```
+  (Background sends appear in the /jobs panel.)
+- **tmux pane context** (`@deepseek-ai/dsh-tmux-context`): injects the current tmux pane into the model context when running inside tmux (`config: { refreshIntervalMs: 60000 }`); outside tmux every step degrades to a harmless no-op:
+  ```yaml
+  - insert:
+      - id: tmux-context
+        name: '@deepseek-ai/dsh-tmux-context'
+        config:
+          refreshIntervalMs: 60000
+  ```
+- **External CLI delegation**: `dsh plugin --profile cli add @deepseek-ai/dsh-subagent-claude-code` (or `-codex`) installs the dormant provider; following the upstream contract, copy the preset and enable the `tool-subagent-claude-code` / `tool-subagent-codex` row to let the model delegate tasks to the claude / codex CLIs.
+
+### 3. Session-scoped Agent Presets
 
 The Host owns the shared infrastructure—registries, persistence, session queries, permissions, and sandbox policies—while each session receives an isolated Agent scope composed by an **Agent Preset**:
 
@@ -217,7 +267,7 @@ The Host owns the shared infrastructure—registries, persistence, session queri
 
 Use `/mode` before the first turn, or start directly with `--mode <preset>`. The selected Preset is written to the session and restored when the session resumes.
 
-### 3. Session history and recovery
+### 4. Session history and recovery
 
 Prompts, streaming chunks, tool calls and results, model selections, plan state, permissions, titles, and Preset selections are all projected from durable Session events. Session recovery, export, history inspection, context metrics, and terminal replay use the same record.
 

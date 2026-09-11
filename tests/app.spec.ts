@@ -443,6 +443,35 @@ describe('composer image attachments', () => {
     }
   })
 
+  it('opens the /schedule panel from the command line and folds live schedule events', async () => {
+    const harness = createTty(120, 24)
+    const store = createTranscriptStore()
+    const instance = renderApp(harness, appProps({ store }))
+    try {
+      store.apply({
+        type: 'schedule/change',
+        seq: 1,
+        time: 1,
+        data: { operation: 'create', schedule: { id: 'schedule-1', kind: 'every', prompt: 'check the build', everySeconds: 1800, scheduledAt: new Date(Date.now() + 90_000).toISOString() } },
+      } as never)
+      await wait()
+      harness.stdin.write('/schedule')
+      await wait()
+      harness.stdin.write('\r')
+      await wait()
+      expect(harness.output.text).toContain('check the build')
+      expect(harness.output.text).toContain('Every 30m')
+      // Height budget is proven by the SchedulePanel TTY suite; here the
+      // accumulated multi-frame output would miscount.
+      harness.output.text = ''
+      harness.stdin.write('\x1b')
+      await wait()
+      expect(harness.output.text).not.toContain('Every 30m')
+    } finally {
+      instance.unmount()
+    }
+  })
+
   it('preserves a moved cursor when an async image mention resolves', async () => {
     const harness = createTty(120, 24)
     const dispatch = vi.fn()
@@ -1537,7 +1566,8 @@ describe('Ctrl+O history details', () => {
       stdin.write('\r')
       await wait()
       expect(output).toContain('/help')
-      expect(output.lastIndexOf('type a message')).toBeLessThan(output.lastIndexOf('test/model'))
+      expect(output).toContain('keys go to /help · esc closes')
+      expect(output.lastIndexOf('keys go to /help · esc closes')).toBeLessThan(output.lastIndexOf('test/model'))
       expect(output).not.toContain('\x1b[2J')
       expect(output.split('\n').length).toBeLessThanOrEqual(stdout.rows)
 
@@ -1555,12 +1585,16 @@ describe('Ctrl+O history details', () => {
       stdin.write('\r')
       await wait()
       expect(output).toContain('/model')
-      expect(output.lastIndexOf('type a message')).toBeLessThan(output.lastIndexOf('test/model'))
+      expect(output).toContain('keys go to /model · esc closes')
+      expect(output.lastIndexOf('keys go to /model · esc closes')).toBeLessThan(output.lastIndexOf('test/model'))
       expect(output).not.toContain('\x1b[2J')
 
       output = ''
-      stdin.write('G')
+      // Typing filters the directory in place: '99' matches exactly the
+      // Model 99 row (id and display name), replacing the old g/G jump.
+      stdin.write('99')
       await wait()
+      expect(output).toContain("1 of 100 match '99'")
       expect(output).toContain('Model 99')
       expect(output).not.toContain('\x1b[2J')
     } finally {
@@ -1679,14 +1713,14 @@ describe('DeepSeek model-switch easter egg', () => {
       await wait()
       expect(output).not.toContain('deepseek-reasoner')
 
-      // /model → jump to the bottom (the DeepSeek row) → select it. The
+      // /model → filter to the DeepSeek row → select it. The
       // deepseek tier runs the readability-extended 1.5s Wave-Ultra sweep.
       output = ''
       stdin.write('/model')
       await wait()
       stdin.write('\r')
       await wait()
-      stdin.write('G')
+      stdin.write('deepseek')
       await wait()
       stdin.write('\r')
       await wait()
@@ -2059,7 +2093,7 @@ describe('DeepSeek model-switch easter egg', () => {
       await wait()
       stdin.write('\r')
       await wait()
-      stdin.write('G')
+      stdin.write('deepseek')
       await wait()
       stdin.write('\r')
       await wait()
@@ -2232,7 +2266,7 @@ describe('DeepSeek model-switch easter egg', () => {
       await wait()
       stdin.write('\r')
       await wait()
-      stdin.write('G')
+      stdin.write('deepseek')
       await wait()
       stdin.write('\r')
       await wait()
@@ -2368,7 +2402,7 @@ describe('DeepSeek model-switch easter egg', () => {
       await wait()
       stdin.write('\r')
       await wait()
-      stdin.write('G')
+      stdin.write('deepseek')
       await wait()
       stdin.write('\r')
       await wait()

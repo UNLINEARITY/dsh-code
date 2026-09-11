@@ -24,6 +24,16 @@
   config:
     mode: !!js process.env.DSH_TOOLS_MODE
 
+# The base row keeps full-text search off entirely (openAt: never) so nothing
+# imports node:sqlite at boot. The terminal opens the derived index lazily on
+# the first search instead: no startup cost, no Node 22 experimental warning,
+# and the in-memory index rebuilds per process. Exact reads, titles, and
+# lineage traces were always available; this override adds search itself.
+- id: session-query-sqlite
+  config:
+    path: ':memory:'
+    openAt: first-search
+
 # Agent-plane rows are mounted by the selected preset. Keep this list aligned
 # with the upstream Web bundle so two sessions can use different compositions
 # without leaking model-facing registrations through the host layer.
@@ -131,6 +141,74 @@
     # any provider's OAuth or device-code protocol.
     - id: authorization
       name: '@deepseek-ai/dsh-authorization'
+
+    # Model-facing session-log search/trace/read tools over the sessionQuery
+    # service (read-only, workspace-scoped by exact cwd). A host-plane mount
+    # is deployment-global: every preset session sees the five tools. Kept
+    # ENABLED deliberately — read-only search leaks no capability — but note
+    # it does reach minimal-preset sessions too.
+    - id: tool-session-query
+      name: '@deepseek-ai/dsh-tool-session-query'
+
+    # Durable reminders: the schedule service arms per-root timers, injects
+    # due prompts as plugin-source user messages, and writes schedule/change
+    # events the projection folds into the /schedule panel. time-context
+    # gives the model a clock reading so 'at' times are phrased against the
+    # actual time; the 30s throttle bounds durable snapshot growth.
+    - id: schedule
+      name: '@deepseek-ai/dsh-schedule'
+
+    - id: time-context
+      name: '@deepseek-ai/dsh-time-context'
+      config:
+        refreshIntervalMs: 30000
+
+    # Persistent PTY plumbing: the owner-scoped registry and the one backend
+    # package in both dialects (pwsh is the Windows/ConPTY path, bash covers
+    # POSIX) mount as host SERVICES — no model-facing surface, so they break
+    # no preset boundary. The six terminal_* TOOLS ship DISABLED like LSP:
+    # enabling them at the host plane would hand every preset (including the
+    # shell-restricted minimal one) raw shell capability, the exact leak the
+    # disables above exist to prevent. Flip tool-terminal to disabled: false
+    # in the PROFILE layer to opt the deployment into PTY tools.
+    - id: pty
+      name: '@deepseek-ai/dsh-terminal'
+
+    - id: terminal-pwsh
+      name: '@deepseek-ai/dsh-terminal-bash'
+      disabled: !!js process.platform !== 'win32'
+      config:
+        shellDialect: pwsh
+
+    - id: terminal-bash
+      name: '@deepseek-ai/dsh-terminal-bash'
+      disabled: !!js process.platform === 'win32'
+
+    - id: tool-terminal
+      name: '@deepseek-ai/dsh-tool-terminal'
+      disabled: true
+
+    # LSP navigation ships DISABLED: lsp-stdio resolves every server command
+    # at mount and a missing binary would fail the whole composition boot.
+    # Enable in the PROFILE layer with real servers, e.g.:
+    #   lsp / lsp-stdio / tool-lsp rows with disabled: false and
+    #   lsp-stdio config.servers mapping extensions to server commands.
+    - id: lsp
+      name: '@deepseek-ai/dsh-lsp'
+      disabled: true
+
+    - id: lsp-stdio
+      name: '@deepseek-ai/dsh-lsp-stdio'
+      disabled: true
+
+    - id: tool-lsp
+      name: '@deepseek-ai/dsh-tool-lsp'
+      disabled: true
+
+    # MCP servers (dsh-mcp-client) and hooks bridges (dsh-hooks-claude-code /
+    # -codex) take per-instance config (server transports, hooks.json paths),
+    # so they mount as rows in the USER profile layer, not here; the packages
+    # ship as peers so those rows resolve. README documents the row shapes.
 
     - id: tui-startup
       name: 'dsh-code/startup'

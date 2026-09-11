@@ -143,7 +143,8 @@ describe('exclusive panel height budgets', () => {
       await wait()
       expect(output).toContain('Yes, proceed')
       expect(output).toContain('approval reason 0')
-      expect(output.lastIndexOf('type a message')).toBeLessThan(output.lastIndexOf('test/model'))
+      expect(output).toContain('keys go to the approval prompt · esc rejects')
+      expect(output.lastIndexOf('keys go to the approval prompt · esc rejects')).toBeLessThan(output.lastIndexOf('test/model'))
       expect(output).not.toContain('\x1b[2J')
 
       approvalSnapshot = { pending: undefined, answered: false, queued: 0 }
@@ -158,7 +159,8 @@ describe('exclusive panel height budgets', () => {
       stdin.write('\r')
       await wait()
       expect(output).toContain('/resume')
-      expect(output.lastIndexOf('type a message')).toBeLessThan(output.lastIndexOf('test/model'))
+      expect(output).toContain('keys go to /resume · esc closes')
+      expect(output.lastIndexOf('keys go to /resume · esc closes')).toBeLessThan(output.lastIndexOf('test/model'))
       expect(output).not.toContain('\x1b[2J')
       stdin.write('G')
       await wait()
@@ -181,7 +183,8 @@ describe('exclusive panel height budgets', () => {
       stdin.write('\r')
       await wait()
       expect(output).toContain('loader inspector')
-      expect(output.lastIndexOf('type a message')).toBeLessThan(output.lastIndexOf('test/model'))
+      expect(output).toContain('keys go to /plugin · esc closes')
+      expect(output.lastIndexOf('keys go to /plugin · esc closes')).toBeLessThan(output.lastIndexOf('test/model'))
       expect(output).not.toContain('\x1b[2J')
       stdin.write('q')
       await wait()
@@ -192,7 +195,8 @@ describe('exclusive panel height budgets', () => {
       stdin.write('\r')
       await wait()
       expect(output).toContain('current standard')
-      expect(output.lastIndexOf('type a message')).toBeLessThan(output.lastIndexOf('test/model'))
+      expect(output).toContain('keys go to /mode · esc closes')
+      expect(output.lastIndexOf('keys go to /mode · esc closes')).toBeLessThan(output.lastIndexOf('test/model'))
       expect(output).not.toContain('\x1b[2J')
       stdin.write('q')
       await wait()
@@ -220,7 +224,8 @@ describe('exclusive panel height budgets', () => {
       questionListeners.forEach(listener => listener())
       await wait()
       expect(output).toContain('plan review')
-      expect(output.lastIndexOf('type a message')).toBeLessThan(output.lastIndexOf('test/model'))
+      expect(output).toContain('keys go to the question · esc cancels')
+      expect(output.lastIndexOf('keys go to the question · esc cancels')).toBeLessThan(output.lastIndexOf('test/model'))
       expect(output).not.toContain('\x1b[2J')
 
       // Moving a question choice updates local focus and may reveal a distant
@@ -391,7 +396,8 @@ describe('exclusive panel height budgets', () => {
       await wait()
       expect(output).toContain('/statusline')
       expect(output).toContain('provider/model serving this session')
-      expect(output.lastIndexOf('type a message')).toBeLessThan(output.lastIndexOf('test/model'))
+      expect(output).toContain('keys go to /statusline · esc closes')
+      expect(output.lastIndexOf('keys go to /statusline · esc closes')).toBeLessThan(output.lastIndexOf('test/model'))
       expect(output).not.toContain('\x1b[2J')
       // Accumulated frames (input echo + open panel) each carry the two-row
       // status chrome and the padded composer band (two blank rows), so the
@@ -969,7 +975,8 @@ describe('/model effort stage', () => {
       // cursor follows the current pick. Jump to the first row to reach the
       // multi-level DeepSeek model.
       expect(output).toContain('· 3/4')
-      stdin.write('g')
+      // Typing filters the directory in place; 'v4' narrows to the DeepSeek row.
+      stdin.write('v4')
       await wait()
       stdin.write('\r')
       await wait()
@@ -1019,14 +1026,14 @@ describe('/model effort stage', () => {
       expect(output).toContain('model → next step uses acme/plain')
 
       // Re-open the multi-level model and pick the third level. The list
-      // opens on acme/plain again: jump to the top, then the effort stage
-      // opens ON the effective level (high) and one down reaches max.
+      // opens on acme/plain again: filter to the DeepSeek row, then the
+      // effort stage opens ON the effective level (high) and one down reaches max.
       output = ''
       stdin.write('/model')
       await wait()
       stdin.write('\r')
       await wait()
-      stdin.write('g')
+      stdin.write('v4')
       await wait()
       stdin.write('\r')
       await wait()
@@ -1470,6 +1477,421 @@ describe('/jobs panel', () => {
       stdin.write('')
       await wait()
       expect(closed).toBe(true)
+    } finally {
+      instance.unmount()
+      stdin.destroy()
+      stdout.destroy()
+    }
+  })
+})
+
+describe('/model typing filter', () => {
+  it('narrows the directory as you type, keeps q as query text mid-filter, and restores typing on close', async () => {
+    const stdin = Object.assign(new PassThrough(), {
+      isTTY: true,
+      isRaw: false,
+      setRawMode(value: boolean) {
+        this.isRaw = value
+        return this
+      },
+      ref() {},
+      unref() {},
+    }) as unknown as NodeJS.ReadStream
+    const stdout = Object.assign(new PassThrough(), {
+      isTTY: true,
+      columns: 100,
+      rows: 24,
+    }) as unknown as NodeJS.WriteStream
+    let output = ''
+    stdout.on('data', chunk => {
+      output += chunk.toString()
+    })
+    const noop = (): void => {}
+    const picked: ModelRow[] = []
+    const instance = render(createElement(App, {
+      store: createTranscriptStore(),
+      subagents: { subscribe: () => () => {}, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
+      approval: { subscribe: () => noop, getSnapshot: () => approvalSnapshot },
+      questions: {
+        subscribe: () => noop,
+        getSnapshot: () => questionSnapshot,
+        submit: noop,
+        cancel: noop,
+      },
+      commands: { descriptors: [], subscribe: () => noop },
+      skills: { rows: [], subscribe: () => noop },
+      model: 'deepseek/deepseek-chat',
+      cwd: 'dsh-cli',
+      workspaceRoot: 'C:\\repo\\dsh-cli',
+      branch: 'main',
+      sessionId: '12345678',
+      resumed: false,
+      mode: 'standard',
+      permission: 'workspace-write',
+      dispatch: noop,
+      steer: noop,
+      interrupt: () => false,
+      quit: noop,
+      loadModels: async () => ({ rows: [
+        { provider: 'deepseek', providerName: 'DeepSeek', model: 'deepseek-chat', modelName: 'DeepSeek Chat' },
+        { provider: 'deepseek', providerName: 'DeepSeek', model: 'deepseek-reasoner', modelName: 'DeepSeek Reasoner' },
+        { provider: 'openai', providerName: 'OpenAI', model: 'gpt-5.1', modelName: 'GPT-5.1' },
+        { provider: 'openai', providerName: 'OpenAI', model: 'gpt-5-mini', modelName: 'GPT-5 mini' },
+      ], failures: [] }),
+      loadMentions: async () => [],
+      selectModel: row => {
+        picked.push(row)
+        return `${row.provider}/${row.model}`
+      },
+      cyclePermission: () => '',
+      setPermission: id => id,
+      exportTranscript: async () => {},
+      renameTitle: () => '',
+      loadPresets: async () => [],
+      loadPermissions: async () => [],
+      switchMode: async id => id,
+      createSession: noop,
+      loadSessions: async () => [],
+      loadSubagents: async () => [],
+      loadSessionTranscript: async () => '',
+      switchSession: noop,
+      cancelSessionSwitch: () => false,
+      loadPlugins: () => [],
+      loadJobs: () => [],
+      statusline: DEFAULT_STATUSLINE_ITEMS,
+      saveStatusline: noop,
+      history: [],
+      recordHistory: noop,
+      onBridgeReady: noop,
+    }), {
+      stdin,
+      stdout,
+      stderr: stdout,
+      exitOnCtrlC: false,
+      patchConsole: false,
+    })
+    try {
+      await wait()
+      stdin.write('/model')
+      await wait()
+      stdin.write('\r')
+      await wait()
+      // The frozen band names the panel that owns the keyboard instead of
+      // advertising message typing the composer cannot accept.
+      expect(output).toContain('keys go to /model · esc closes')
+      output = ''
+      stdin.write('gpt')
+      await wait()
+      expect(output).toContain("2 of 4 match 'gpt'")
+      expect(output).toContain('GPT-5.1')
+      expect(output).toContain('GPT-5 mini')
+      expect(output).not.toContain('DeepSeek Chat')
+      // Mid-filter, q is query text: the panel stays open with no matches.
+      stdin.write('q')
+      await wait()
+      expect(output).toContain("no models match 'gptq'")
+      expect(output).toContain('/model — select model')
+      stdin.write('\x7f')
+      await wait()
+      expect(output).toContain("2 of 4 match 'gpt'")
+      // Enter applies the first filtered row and closes the panel.
+      stdin.write('\r')
+      await wait()
+      expect(picked.map(row => row.model)).toEqual(['gpt-5.1'])
+      expect(output.lastIndexOf('type a message')).toBeGreaterThan(output.lastIndexOf("match 'gpt'"))
+    } finally {
+      instance.unmount()
+      stdin.destroy()
+      stdout.destroy()
+    }
+  })
+})
+
+describe('panel query q-key guard', () => {
+  it('treats q as query text while filtering in /mode and closes only on an empty query', async () => {
+    const stdin = Object.assign(new PassThrough(), {
+      isTTY: true,
+      isRaw: false,
+      setRawMode(value: boolean) {
+        this.isRaw = value
+        return this
+      },
+      ref() {},
+      unref() {},
+    }) as unknown as NodeJS.ReadStream
+    const stdout = Object.assign(new PassThrough(), {
+      isTTY: true,
+      columns: 100,
+      rows: 24,
+    }) as unknown as NodeJS.WriteStream
+    let output = ''
+    stdout.on('data', chunk => {
+      output += chunk.toString()
+    })
+    let closed = false
+    const instance = render(createElement(ModePanel, {
+      current: 'standard',
+      load: async () => [
+        { id: 'standard', trust: 'user' as const, description: 'standard preset' },
+        { id: 'quiet', trust: 'user' as const, description: 'quiet preset' },
+      ],
+      select: () => {},
+      close: () => {
+        closed = true
+      },
+    }), {
+      stdin,
+      stdout,
+      stderr: stdout,
+      exitOnCtrlC: false,
+      patchConsole: false,
+    })
+    try {
+      await wait()
+      stdin.write('qu')
+      await wait()
+      expect(output).toContain('search: qu')
+      expect(output).toContain('quiet preset')
+      stdin.write('q')
+      await wait()
+      expect(closed).toBe(false)
+      expect(output).toContain('search: quq')
+      expect(output).toContain('no matching entries')
+      // Backspace arrives per keystroke; clearing restores the full list.
+      stdin.write('\x7f')
+      await wait()
+      stdin.write('\x7f')
+      await wait()
+      stdin.write('\x7f')
+      await wait()
+      expect(output.lastIndexOf('search: type to filter')).toBeGreaterThan(output.lastIndexOf('search: quq'))
+      expect(output.lastIndexOf('standard preset')).toBeGreaterThan(output.lastIndexOf('search: quq'))
+      stdin.write('q')
+      await wait()
+      expect(closed).toBe(true)
+    } finally {
+      instance.unmount()
+      stdin.destroy()
+      stdout.destroy()
+    }
+  })
+})
+
+describe('/model typing filter — late directory and compact copy', () => {
+  it('positions on the filtered list when the directory resolves after typing started', async () => {
+    const stdin = Object.assign(new PassThrough(), {
+      isTTY: true,
+      isRaw: false,
+      setRawMode(value: boolean) {
+        this.isRaw = value
+        return this
+      },
+      ref() {},
+      unref() {},
+    }) as unknown as NodeJS.ReadStream
+    const stdout = Object.assign(new PassThrough(), {
+      isTTY: true,
+      columns: 100,
+      rows: 24,
+    }) as unknown as NodeJS.WriteStream
+    let output = ''
+    stdout.on('data', chunk => {
+      output += chunk.toString()
+    })
+    const noop = (): void => {}
+    const picked: ModelRow[] = []
+    const instance = render(createElement(App, {
+      store: createTranscriptStore(),
+      subagents: { subscribe: () => () => {}, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
+      approval: { subscribe: () => noop, getSnapshot: () => approvalSnapshot },
+      questions: {
+        subscribe: () => noop,
+        getSnapshot: () => questionSnapshot,
+        submit: noop,
+        cancel: noop,
+      },
+      commands: { descriptors: [], subscribe: () => noop },
+      skills: { rows: [], subscribe: () => noop },
+      // The applied model sits at FULL-list index 1 but is NOT in the
+      // 'gpt' filter: a late directory resolve must not park the cursor on
+      // the full-row index (which lands on gpt-5-mini and would pick it).
+      model: 'deepseek/deepseek-reasoner',
+      cwd: 'dsh-cli',
+      workspaceRoot: 'C:\\repo\\dsh-cli',
+      branch: 'main',
+      sessionId: '12345678',
+      resumed: false,
+      mode: 'standard',
+      permission: 'workspace-write',
+      dispatch: noop,
+      steer: noop,
+      interrupt: () => false,
+      quit: noop,
+      loadModels: async () => {
+        await new Promise(resolve => setTimeout(resolve, 400))
+        return { rows: [
+          { provider: 'deepseek', providerName: 'DeepSeek', model: 'deepseek-chat', modelName: 'DeepSeek Chat' },
+          { provider: 'deepseek', providerName: 'DeepSeek', model: 'deepseek-reasoner', modelName: 'DeepSeek Reasoner' },
+          { provider: 'openai', providerName: 'OpenAI', model: 'gpt-5.1', modelName: 'GPT-5.1' },
+          { provider: 'openai', providerName: 'OpenAI', model: 'gpt-5-mini', modelName: 'GPT-5 mini' },
+        ], failures: [] }
+      },
+      loadMentions: async () => [],
+      selectModel: row => {
+        picked.push(row)
+        return `${row.provider}/${row.model}`
+      },
+      cyclePermission: () => '',
+      setPermission: id => id,
+      exportTranscript: async () => {},
+      renameTitle: () => '',
+      loadPresets: async () => [],
+      loadPermissions: async () => [],
+      switchMode: async id => id,
+      createSession: noop,
+      loadSessions: async () => [],
+      loadSubagents: async () => [],
+      loadSessionTranscript: async () => '',
+      switchSession: noop,
+      cancelSessionSwitch: () => false,
+      loadPlugins: () => [],
+      loadJobs: () => [],
+      statusline: DEFAULT_STATUSLINE_ITEMS,
+      saveStatusline: noop,
+      history: [],
+      recordHistory: noop,
+      onBridgeReady: noop,
+    }), {
+      stdin,
+      stdout,
+      stderr: stdout,
+      exitOnCtrlC: false,
+      patchConsole: false,
+    })
+    try {
+      await wait()
+      stdin.write('/model')
+      await wait()
+      stdin.write('\r')
+      await wait()
+      // Type while the directory is still loading, then wait for the match.
+      stdin.write('g')
+      await wait()
+      stdin.write('pt')
+      await wait()
+      for (let i = 0; i < 20 && !output.includes("2 of 4 match 'gpt'"); i += 1) await wait()
+      expect(output).toContain("2 of 4 match 'gpt'")
+      stdin.write('\r')
+      await wait()
+      expect(picked.map(row => row.model)).toEqual(['gpt-5.1'])
+    } finally {
+      instance.unmount()
+      stdin.destroy()
+      stdout.destroy()
+    }
+  })
+
+  it('keeps the compact one-liner honest while a filter is active', async () => {
+    const stdin = Object.assign(new PassThrough(), {
+      isTTY: true,
+      isRaw: false,
+      setRawMode(value: boolean) {
+        this.isRaw = value
+        return this
+      },
+      ref() {},
+      unref() {},
+    }) as unknown as NodeJS.ReadStream
+    const stdout = Object.assign(new PassThrough(), {
+      isTTY: true,
+      columns: 100,
+      rows: 9,
+    }) as unknown as NodeJS.WriteStream
+    let output = ''
+    stdout.on('data', chunk => {
+      output += chunk.toString()
+    })
+    const noop = (): void => {}
+    const picked: ModelRow[] = []
+    const instance = render(createElement(App, {
+      store: createTranscriptStore(),
+      subagents: { subscribe: () => () => {}, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
+      approval: { subscribe: () => noop, getSnapshot: () => approvalSnapshot },
+      questions: {
+        subscribe: () => noop,
+        getSnapshot: () => questionSnapshot,
+        submit: noop,
+        cancel: noop,
+      },
+      commands: { descriptors: [], subscribe: () => noop },
+      skills: { rows: [], subscribe: () => noop },
+      model: 'deepseek/deepseek-chat',
+      cwd: 'dsh-cli',
+      workspaceRoot: 'C:\\repo\\dsh-cli',
+      branch: 'main',
+      sessionId: '12345678',
+      resumed: false,
+      mode: 'standard',
+      permission: 'workspace-write',
+      dispatch: noop,
+      steer: noop,
+      interrupt: () => false,
+      quit: noop,
+      loadModels: async () => ({ rows: [
+        { provider: 'deepseek', providerName: 'DeepSeek', model: 'deepseek-chat', modelName: 'DeepSeek Chat' },
+        { provider: 'openai', providerName: 'OpenAI', model: 'gpt-5.1', modelName: 'GPT-5.1' },
+      ], failures: [] }),
+      loadMentions: async () => [],
+      selectModel: row => {
+        picked.push(row)
+        return `${row.provider}/${row.model}`
+      },
+      cyclePermission: () => '',
+      setPermission: id => id,
+      exportTranscript: async () => {},
+      renameTitle: () => '',
+      loadPresets: async () => [],
+      loadPermissions: async () => [],
+      switchMode: async id => id,
+      createSession: noop,
+      loadSessions: async () => [],
+      loadSubagents: async () => [],
+      loadSessionTranscript: async () => '',
+      switchSession: noop,
+      cancelSessionSwitch: () => false,
+      loadPlugins: () => [],
+      loadJobs: () => [],
+      statusline: DEFAULT_STATUSLINE_ITEMS,
+      saveStatusline: noop,
+      history: [],
+      recordHistory: noop,
+      onBridgeReady: noop,
+    }), {
+      stdin,
+      stdout,
+      stderr: stdout,
+      exitOnCtrlC: false,
+      patchConsole: false,
+    })
+    try {
+      await wait()
+      stdin.write('/model')
+      await wait()
+      stdin.write('\r')
+      await wait()
+      // The 9-row terminal degrades the panel to its compact one-liner.
+      expect(output).not.toContain('select model')
+      expect(output).toContain('❯ DeepSeek Chat')
+      expect(output).toContain('type to filter')
+      stdin.write('zzz')
+      await wait()
+      expect(output).toContain("no match for 'zzz'")
+      expect(output).toContain('backspace edits')
+      expect(output.lastIndexOf('backspace edits')).toBeGreaterThan(output.lastIndexOf('r retry'))
+      // Enter on an empty match list is a no-op, never a blind pick.
+      stdin.write('\r')
+      await wait()
+      expect(picked).toEqual([])
     } finally {
       instance.unmount()
       stdin.destroy()

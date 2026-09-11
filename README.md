@@ -164,6 +164,7 @@ dsh --profile cli --session my-id    # 使用指定 id 新建会话
 | `/todos` | 查看当前会话的完整 todo 列表 |
 | `/agents` | 查看当前会话创建的 subagent 会话 |
 | `/jobs` | 查看后台任务及其运行状态 |
+| `/schedule` | 查看活动提醒(模型经 schedule 工具创建/取消,面板只读展示,逾期优先) |
 | `/copy` | 复制最近一条完整助手回复 |
 
 #### 扩展、显示与退出
@@ -213,7 +214,56 @@ DSH-Code 读取 Harness 的实时注册表，不在本地维护另一套副本�
 
 `/plugin` 提供当前 Cordis loader 状态的只读视图。
 
-### 2. 会话级 Agent Preset
+### 2. 内置扩展与可选官方插件
+
+以下官方插件已随 DSH-Code 一起安装并在组合中默认启用：
+
+- **会话检索**：模型获得 `session_search` / `session_event_search` / `session_trace` / `session_event_trace` / `session_event_read` 五个只读工具，可检索历史会话内容（首次搜索时才构建索引，按工作目录精确匹配授权；Node 22 上首次搜索会当场打印一次 `node:sqlite` 实验性警告，属正常现象）。
+- **定时提醒**：`schedule` 提供跨重启的持久提醒（`schedule_create` / `schedule_list` / `schedule_delete` 工具创建），`/schedule` 面板只读展示、逾期条目置顶标红；`time-context` 为模型注入时钟读数（30 秒节流）。
+- **提醒的时钟读数**：`time-context` 为模型注入当前时间（30 秒节流），「下午五点提醒我」这类表述因此可用。
+
+以下官方插件已安装但需按需启用（在用户层 `~/.dsh/profiles/cli/cordis.patch.yml` 追加行，或按说明安装）：
+
+- **MCP 服务器**（`@deepseek-ai/dsh-mcp-client`，每个服务器一行，工具注册为 `mcp__<server>__<tool>`）：
+
+  ```yaml
+  - insert:
+      - id: mcp-memory
+        name: '@deepseek-ai/dsh-mcp-client'
+        config:
+          transport: stdio
+          serverName: memory
+          command: mcp-server-memory
+  ```
+
+  （HTTP 传输改用 `transport: streamable-http` + `url`；服务器不可达时安全降级为重连循环，不影响启动。）
+- **Claude Code / Codex hooks 桥**（`@deepseek-ai/dsh-hooks-claude-code` / `-codex`）：在拦截缝上运行既有 hooks 配置；hooks 文件缺失时静默不生效：
+
+  ```yaml
+  - insert:
+      - id: hooks-claude
+        name: '@deepseek-ai/dsh-hooks-claude-code'
+        config:
+          configPath: C:/Users/you/.claude/hooks.json
+  ```
+- **LSP 导航**：组合里预置了 `lsp` / `lsp-stdio` / `tool-lsp` 三行（禁用状态——语言服务器二进制在挂载期解析，缺失会让整个组合启动失败）。在用户层将三行 `disabled: false` 并为 `lsp-stdio` 配置 `servers`（扩展名到语言再到服务器命令），模型即获得 `lsp` 工具（goToDefinition / findReferences / goToImplementation / hover）。
+- **持久终端**：PTY 服务与平台后端（Windows 走 pwsh 方言、POSIX 走 bash）已默认挂载，但六个模型工具 `terminal_open` / `terminal_send` / `terminal_read` / `terminal_signal` / `terminal_close` / `terminal_list` 出厂禁用——启用等于向所有会话放开 shell 能力，与 preset 把关原则一致，由部署显式决定。在用户层开启：
+  ```yaml
+  - id: tool-terminal
+    disabled: false
+  ```
+  （后台发送会出现在 /jobs 面板。）
+- **tmux 面板上下文**（`@deepseek-ai/dsh-tmux-context`）：在 tmux 内运行时把当前面板内容注入模型上下文（`config: { refreshIntervalMs: 60000 }`）；不在 tmux 内时逐步为无害空操作：
+  ```yaml
+  - insert:
+      - id: tmux-context
+        name: '@deepseek-ai/dsh-tmux-context'
+        config:
+          refreshIntervalMs: 60000
+  ```
+- **外部 CLI 委托**：`dsh plugin --profile cli add @deepseek-ai/dsh-subagent-claude-code`（或 `-codex`）安装休眠 provider，再按上游契约复制预设并启用 `tool-subagent-claude-code` / `tool-subagent-codex` 行，模型即可把任务委托给 claude / codex CLI。
+
+### 3. 会话级 Agent Preset
 
 Host 持有共享基础设施——注册表、持久化、会话查询、权限和 sandbox 策略；每个会话则获得一个隔离的 Agent scope，并由 **Agent Preset** 进行组合：
 
@@ -225,7 +275,7 @@ Host 持有共享基础设施——注册表、持久化、会话查询、权限
 
 在第一次 turn 之前使用 `/mode`，或通过 `--mode <preset>` 直接启动。选中的 preset 会写入会话，并在恢复时还原。
 
-### 3. 会话记录与恢复
+### 4. 会话记录与恢复
 
 提示词、工具调用与结果、模型选择、plan 状态、权限、标题和 preset 选择都由持久 Session 事件投影得到；会话恢复、导出、历史检查、上下文统计和终端重放使用同一份记录。实时流式文本经进程内流帧呈现，落盘日志只保留装配完成的回复（内嵌计时流），两者在重放时得到同一视图。
 

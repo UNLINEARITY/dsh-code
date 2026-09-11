@@ -82,7 +82,7 @@ import type { QuestionSnapshot, QuestionStore } from './questions.ts'
 import type { SkillsView, SkillRow } from './skills.ts'
 import { isPathLikeMentionQuery, type MentionCandidate } from './mentions.ts'
 import type { SubagentFeedView, SubagentRow } from './subagents.ts'
-import { AgentsPanel, EffortPanel, HistoryPanel, JobsPanel, ModePanel, PermissionPanel, PluginPanel, ResumePanel, StatuslinePanel, runClock, SubagentPanel, type JobRow } from './kernel-panels.ts'
+import { AgentsPanel, editQuery, EffortPanel, HistoryPanel, JobsPanel, ModePanel, PermissionPanel, PluginPanel, ResumePanel, SchedulePanel, StatuslinePanel, runClock, SubagentPanel, type JobRow } from './kernel-panels.ts'
 import type { PresetRow } from './presets.ts'
 import type { PermissionRow } from './permissions.ts'
 import type { PluginRow } from './plugin-inventory.ts'
@@ -234,6 +234,7 @@ const LOCAL_COMMANDS = [
   { label: '/plugin', description: 'inspect the live plugin composition' },
   { label: '/update', description: 'update dsh-code, the harness host, and profile plugins in one aligned step' },
   { label: '/jobs', description: 'inspect background jobs' },
+  { label: '/schedule', description: 'inspect active reminders (created through schedule tools)' },
   { label: '/statusline', description: 'customize the status line items' },
   { label: '/theme', description: 'switch the color theme' },
   { label: '/animation', description: 'toggle timed animations (/animation [on|off])' },
@@ -1645,38 +1646,52 @@ function ModelPanel({ directory, error, current, onSelect, onProviders, onRetry,
   onRetry(): void
   onClose(): void
 }): ReactElement {
+  const [query, setQuery] = useState('')
   const [cursor, setCursor] = useState(0)
   const stdout = useStdout().stdout
   const viewport = panelViewport(stdout?.columns ?? 80, stdout?.rows ?? 30)
   const rows = directory?.rows ?? []
+  // Direct-typing filter over provider and model names (the /mode contract):
+  // printable keys edit the query, so a long directory is searchable without
+  // a separate search mode. With a query active, q/r/g/G stop acting as
+  // commands and become query text instead.
+  const filtered = useMemo(() => {
+    if (query === '') return rows
+    const needle = query.toLowerCase()
+    return rows.filter(row => `${row.provider} ${row.providerName ?? ''} ${row.model} ${row.modelName}`.toLowerCase().includes(needle))
+  }, [rows, query])
   const positioned = useRef(false)
 
   useEffect(() => {
     // Open ON the applied model (Codex resumes the previous pick): the first
     // non-empty directory positions the cursor once, never on later refreshes.
     if (positioned.current || rows.length === 0 || current === undefined) {
-      if (rows.length === 0) {
+      if (filtered.length === 0) {
         if (cursor !== 0) setCursor(0)
         return
       }
-      if (cursor >= rows.length) setCursor(rows.length - 1)
+      if (cursor >= filtered.length) setCursor(filtered.length - 1)
       return
     }
     const index = rows.findIndex(row => `${row.provider}/${row.model}` === current)
     if (index >= 0) {
       positioned.current = true
-      setCursor(index)
-    } else if (cursor >= rows.length) {
-      setCursor(Math.max(0, rows.length - 1))
+      // Position within the ACTIVE filter: the full-row index means nothing
+      // when the query already narrowed the list while the directory loaded
+      // (a late resolve must not place the cursor outside `filtered`).
+      const filteredIndex = filtered.indexOf(rows[index]!)
+      setCursor(filteredIndex >= 0 ? filteredIndex : 0)
+    } else if (cursor >= filtered.length) {
+      setCursor(Math.max(0, filtered.length - 1))
     }
-  }, [rows, cursor, current])
+  }, [rows, filtered, cursor, current])
 
   useInput((input, key) => {
-    if (key.escape || input === 'q') {
+    if (key.escape || (input === 'q' && query === '')) {
       onClose()
       return
     }
-    if (input === 'r') {
+    if (input === 'r' && query === '') {
       onRetry()
       return
     }
@@ -1689,13 +1704,19 @@ function ModelPanel({ directory, error, current, onSelect, onProviders, onRetry,
       onClose()
       return
     }
-    if (rows.length === 0) return
+    const next = editQuery(query, input, key)
+    if (next !== undefined) {
+      setQuery(next)
+      setCursor(0)
+      return
+    }
+    if (filtered.length === 0) return
     if (key.upArrow) {
-      setCursor(cursor > 0 ? cursor - 1 : rows.length - 1)
+      setCursor(cursor > 0 ? cursor - 1 : filtered.length - 1)
       return
     }
     if (key.downArrow) {
-      setCursor(cursor < rows.length - 1 ? cursor + 1 : 0)
+      setCursor(cursor < filtered.length - 1 ? cursor + 1 : 0)
       return
     }
     if (key.pageUp) {
@@ -1703,32 +1724,27 @@ function ModelPanel({ directory, error, current, onSelect, onProviders, onRetry,
       return
     }
     if (key.pageDown) {
-      setCursor(current => Math.min(rows.length - 1, current + Math.max(1, viewport.bodyRows - 1)))
+      setCursor(current => Math.min(filtered.length - 1, current + Math.max(1, viewport.bodyRows - 1)))
       return
     }
-    if (input === 'g') {
-      setCursor(0)
-      return
-    }
-    if (input === 'G') {
-      setCursor(rows.length - 1)
-      return
-    }
-    if (key.return && rows[cursor] !== undefined) {
-      onSelect(rows[cursor])
+    if (key.return && filtered[cursor] !== undefined) {
+      onSelect(filtered[cursor])
     }
   })
 
   if (viewport.maxHeight === 0 || viewport.compact) {
     const providers = onProviders === undefined ? '' : ' · tab providers'
-    const state = rows.length === 0
+    const state = filtered.length === 0
       ? directory === undefined && error === undefined
         ? 'loading…'
         : error !== undefined
           ? 'error'
-          : 'no models'
-      : `❯ ${rows[cursor]?.modelName ?? rows[cursor]?.model ?? ''}`
-    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(`/model · ${state}${providers} · r retry · esc/q close`, viewport.contentColumns))
+          : query === '' ? 'no models' : `no match for '${singleLineText(query)}'`
+      : `❯ ${filtered[cursor]?.modelName ?? filtered[cursor]?.model ?? ''}`
+    const tail = query === ''
+      ? 'type to filter · r retry · esc/q close'
+      : 'backspace edits · esc close'
+    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(`/model · ${state}${providers} · ${tail}`, viewport.contentColumns))
   }
 
   const stateRows: ReactElement[] = directory === undefined && error === undefined
@@ -1749,23 +1765,27 @@ function ModelPanel({ directory, error, current, onSelect, onProviders, onRetry,
           )]),
         ...(rows.length === 0
           ? [createElement(Text, { key: 'empty', dimColor: true, wrap: 'truncate-end' }, '  no models available')]
-          : []),
+          : filtered.length === 0
+            ? [createElement(Text, { key: 'no-match', dimColor: true, wrap: 'truncate-end' }, truncateColumns(`  no models match '${singleLineText(query)}'`, viewport.contentColumns))]
+            : []),
       ]
   // Measurement and rendering share the same physical-row budget: state
   // messages consume body rows before selectable entries, as in Codex's
   // list-selection views.
   const visibleStateRows = stateRows.slice(0, viewport.bodyRows)
   const rowBudget = Math.max(0, viewport.bodyRows - visibleStateRows.length)
-  const first = selectionWindow(cursor, rows.length, rowBudget)
-  const visible = rowBudget === 0 ? [] : rows.slice(first, first + rowBudget)
+  const first = selectionWindow(cursor, filtered.length, rowBudget)
+  const visible = rowBudget === 0 ? [] : filtered.slice(first, first + rowBudget)
   return createElement(
     Box,
     { flexDirection: 'column', width: viewport.outerColumns, paddingX: 1, borderStyle: 'round', borderColor: inkColor(getPalette().brand) },
-    createElement(Text, { color: inkColor(getPalette().brand), bold: true, wrap: 'truncate-end' }, truncateColumns(`/model — select model${rows.length === 0 ? '' : ` · ${cursor + 1}/${rows.length}`}`, viewport.contentColumns)),
+    createElement(Text, { color: inkColor(getPalette().brand), bold: true, wrap: 'truncate-end' }, truncateColumns(query === ''
+      ? `/model — select model${rows.length === 0 ? '' : ` · ${cursor + 1}/${rows.length}`}`
+      : `/model — select model · ${filtered.length} of ${rows.length} match '${singleLineText(query)}'`, viewport.contentColumns)),
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
     ...visibleStateRows,
     ...visible.map((row) => {
-      const index = rows.indexOf(row)
+      const index = filtered.indexOf(row)
       const capability = row.inputModalities?.includes('image') === true ? ' · image' : ''
       const label = displayText(`${row.providerName} · ${row.modelName}${capability}`)
       return createElement(
@@ -1779,7 +1799,9 @@ function ModelPanel({ directory, error, current, onSelect, onProviders, onRetry,
       )
     }),
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
-    createElement(Text, { dimColor: true, wrap: 'truncate-end' }, dim(truncateColumns(`↑↓ move · pgup/pgdn page · enter select${onProviders === undefined ? '' : ' · tab providers'} · r retry · esc/q close`, viewport.contentColumns))),
+    createElement(Text, { dimColor: true, wrap: 'truncate-end' }, dim(truncateColumns(query === ''
+      ? `type to filter · ↑↓ move · pgup/pgdn page · enter select${onProviders === undefined ? '' : ' · tab providers'} · r retry · esc/q close`
+      : `↑↓ move · pgup/pgdn page · enter select · backspace edits · esc close`, viewport.contentColumns))),
   )
 }
 
@@ -3194,9 +3216,12 @@ interface DraftFile extends FilePathInspection {
  * While a modal (approval / question / model panel) owns the keys, the
  * box passes every key through untouched.
  */
-function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openEffort, openHelp, openMode, openPermission, openResume, openPlugin, openUpdate, openJobs, openStatusline, openTheme, openHistory, openAgents, openSubagent, openTodos, openDelete, openDiff, reviewChanges, deleteConfirm, confirmDelete, cancelDelete, createSession, forkSession, cancelSessionSwitch, notify, applyEditorKeys, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, inspectImages, prepareImages, inspectFiles, prepareFiles, cyclePermission, exportTranscript, renameTitle, copyLastResponse, recallSpace, recordLocal, recordHistory, queued, cancelQueued, historyFill, historyConsumed, animations, applyAnimations, waveTier, waveStyle, maxRows, onEditorRows, onMenuRows, sessionKey }: {
+function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openEffort, openHelp, openMode, openPermission, openResume, openPlugin, openUpdate, openSchedule, openJobs, openStatusline, openTheme, openHistory, openAgents, openSubagent, openTodos, openDelete, openDiff, reviewChanges, deleteConfirm, confirmDelete, cancelDelete, createSession, forkSession, cancelSessionSwitch, notify, applyEditorKeys, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, inspectImages, prepareImages, inspectFiles, prepareFiles, cyclePermission, exportTranscript, renameTitle, copyLastResponse, recallSpace, recordLocal, recordHistory, queued, cancelQueued, historyFill, historyConsumed, animations, applyAnimations, waveTier, waveStyle, maxRows, onEditorRows, onMenuRows, sessionKey }: {
   active: boolean
   frozen: boolean
+  /** Frozen-band hint naming the surface that owns the keyboard; an empty
+   * draft otherwise advertises typing that the composer cannot accept. */
+  frozenHint?: string
   busy: boolean
   descriptors: readonly CommandDescriptor[]
   skills: readonly SkillRow[]
@@ -3215,6 +3240,8 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   openPlugin(query?: string): void
   /** Open the /update panel (aligned upgrade surface). */
   openUpdate(): void
+  /** Open the /schedule reminder panel (read-only catalog). */
+  openSchedule(): void
   openJobs(): void
   openStatusline(): void
   openTheme(): void
@@ -4069,6 +4096,10 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
         openUpdate()
         return
       }
+      if (text === '/schedule') {
+        openSchedule()
+        return
+      }
       if (text === '/jobs' || text.startsWith('/jobs ')) {
         openJobs()
         return
@@ -4363,7 +4394,7 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
       ))
     }
     const frozenLine = value === ''
-      ? 'type a message'
+      ? frozenHint ?? 'type a message'
       : verboseLine(value, Math.max(1, columns - 6))
     return band(createElement(
       Text,
@@ -4847,6 +4878,7 @@ export function App(props: AppProps): ReactElement {
   const [pluginOpen, setPluginOpen] = useState(false)
   const [pluginQuery, setPluginQuery] = useState('')
   const [updateOpen, setUpdateOpen] = useState(false)
+  const [scheduleOpen, setScheduleOpen] = useState(false)
   const [jobsOpen, setJobsOpen] = useState(false)
   const [statuslineOpen, setStatuslineOpen] = useState(false)
   const [statuslineItems, setStatuslineItems] = useState<readonly StatusItemId[]>(() => parseStatuslineItems(props.statusline))
@@ -4926,7 +4958,7 @@ export function App(props: AppProps): ReactElement {
   // panel keypress.
   const inputActive = deleteConfirmId !== undefined
     ? !approvalPending && !questionPending
-    : !modelOpen && !helpOpen && !modeOpen && !permissionOpen && !resumeOpen && !pluginOpen && !updateOpen && !jobsOpen && !statuslineOpen && !themeOpen && !historyOpen && !agentsOpen && !subagentOpen && !todosOpen && !verboseOpen && diffView === undefined && !approvalPending && !questionPending
+    : !modelOpen && !helpOpen && !modeOpen && !permissionOpen && !resumeOpen && !pluginOpen && !updateOpen && !scheduleOpen && !jobsOpen && !statuslineOpen && !themeOpen && !historyOpen && !agentsOpen && !subagentOpen && !todosOpen && !verboseOpen && diffView === undefined && !approvalPending && !questionPending
 
   // Human questions outrank local inspectors. Close the lower modal instead
   // of leaving an approval/question visible but keyboard-locked behind it.
@@ -4942,6 +4974,7 @@ export function App(props: AppProps): ReactElement {
     setResumeOpen(false)
     setPluginOpen(false)
     setUpdateOpen(false)
+    setScheduleOpen(false)
     setStatuslineOpen(false)
     setThemeOpen(false)
     setHistoryOpen(false)
@@ -5103,9 +5136,55 @@ export function App(props: AppProps): ReactElement {
     : visibleLiveLines.slice(-liveAudit.allocation.live)
   const auditedReasoningRows = liveAudit.allocation.reasoning
   const auditedAnswerRows = liveAudit.allocation.answer
-  const transcriptVisible = !modelOpen && !helpOpen && !modeOpen && !permissionOpen && !resumeOpen && !pluginOpen && !updateOpen && !jobsOpen && !statuslineOpen && !themeOpen && !historyOpen && !agentsOpen && !subagentOpen && !todosOpen && !verboseOpen && diffView === undefined && !approvalPending && !questionPending
+  const transcriptVisible = !modelOpen && !helpOpen && !modeOpen && !permissionOpen && !resumeOpen && !pluginOpen && !updateOpen && !scheduleOpen && !jobsOpen && !statuslineOpen && !themeOpen && !historyOpen && !agentsOpen && !subagentOpen && !todosOpen && !verboseOpen && diffView === undefined && !approvalPending && !questionPending
   const inspectorVisible = verboseOpen && !approvalPending && !questionPending
-  const modalVisible = modelOpen || helpOpen || modeOpen || permissionOpen || resumeOpen || pluginOpen || updateOpen || jobsOpen || statuslineOpen || themeOpen || historyOpen || agentsOpen || subagentOpen || todosOpen || inspectorVisible || diffView !== undefined || approvalPending || questionPending
+  const modalVisible = modelOpen || helpOpen || modeOpen || permissionOpen || resumeOpen || pluginOpen || updateOpen || scheduleOpen || jobsOpen || statuslineOpen || themeOpen || historyOpen || agentsOpen || subagentOpen || todosOpen || inspectorVisible || diffView !== undefined || approvalPending || questionPending
+  // The surface that currently owns the keyboard, named in the frozen band:
+  // an empty composer under a panel must not advertise typing it cannot
+  // accept — every key actually feeds the panel (which may or may not
+  // filter with it), so the honest hint names the owner and the way out.
+  const keyboardOwner = approvalPending
+    ? 'the approval prompt'
+    : questionPending
+      ? 'the question'
+      : diffView !== undefined
+        ? 'the diff review'
+        : modelOpen
+          ? '/model'
+          : helpOpen
+            ? '/help'
+            : modeOpen
+              ? '/mode'
+              : permissionOpen
+                ? '/permission'
+                : resumeOpen
+                  ? '/resume'
+                  : pluginOpen
+                    ? '/plugin'
+                    : updateOpen
+                      ? '/update'
+                      : scheduleOpen
+                        ? '/schedule'
+                        : jobsOpen
+                          ? '/jobs'
+                        : statuslineOpen
+                          ? '/statusline'
+                          : themeOpen
+                            ? '/theme'
+                            : historyOpen
+                              ? '/history'
+                              : agentsOpen
+                                ? '/agents'
+                                : subagentOpen
+                                  ? '/subagent'
+                                  : todosOpen
+                                    ? '/todos'
+                                    : inspectorVisible
+                                      ? 'history details'
+                                      : undefined
+  const frozenHint = keyboardOwner === undefined
+    ? undefined
+    : `keys go to ${keyboardOwner} · esc ${approvalPending ? 'rejects' : questionPending ? 'cancels' : 'closes'}`
   const closeInspector = useCallback((): void => {
     setVerboseOpen(false)
   }, [])
@@ -5515,6 +5594,9 @@ export function App(props: AppProps): ReactElement {
         close: () => setUpdateOpen(false),
       })
       : undefined,
+    scheduleOpen && !approvalPending && !questionPending
+      ? createElement(SchedulePanel, { rows: () => view.schedules, close: () => setScheduleOpen(false) })
+      : undefined,
     jobsOpen && !approvalPending && !questionPending
       ? createElement(JobsPanel, { load: props.loadJobs, close: () => setJobsOpen(false) })
       : undefined,
@@ -5600,6 +5682,7 @@ export function App(props: AppProps): ReactElement {
       createElement(Input, {
         active: inputActive,
         frozen: modalVisible,
+        frozenHint,
         busy,
         descriptors,
         skills,
@@ -5668,6 +5751,7 @@ export function App(props: AppProps): ReactElement {
         openResume: () => { setResumeDelete({ mode: false }); setResumeOpen(true) },
         openPlugin: (query = '') => { setPluginQuery(query); setPluginOpen(true) },
         openUpdate: () => setUpdateOpen(true),
+        openSchedule: () => setScheduleOpen(true),
         openJobs: () => setJobsOpen(true),
         openStatusline: () => setStatuslineOpen(true),
         openTheme: () => setThemeOpen(true),

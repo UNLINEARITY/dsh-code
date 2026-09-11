@@ -4,6 +4,7 @@ import { createElement, useEffect, useMemo, useRef, useState, type ReactElement 
 import { Box, Text, useInput, useStdout } from 'ink'
 import type { ModelDirectory, ModelRow } from './models.ts'
 import type { SubagentRow } from './subagents.ts'
+import type { ScheduleRow } from './render/projection.ts'
 import type { PermissionRow } from './permissions.ts'
 import type { PresetRow } from './presets.ts'
 import type { PluginRow } from './plugin-inventory.ts'
@@ -123,7 +124,9 @@ export function ModePanel({ current, load, select, close }: {
   const visible = useMemo(() => rows.filter(row => `${row.id} ${row.name ?? ''} ${row.description ?? ''}`.toLowerCase().includes(query.toLowerCase())), [rows, query])
   useEffect(() => setCursor(value => Math.min(value, Math.max(0, visible.length - 1))), [visible.length])
   useInput((input, key) => {
-    if (key.escape || input === 'q') return close()
+    if (key.escape) return close()
+    // q closes only while the query is empty; mid-filter it is query text.
+    if (input === 'q' && query === '') return close()
     if (input === 'r' && query === '') return refresh()
     if (key.upArrow) return setCursor(value => visible.length === 0 ? 0 : (value + visible.length - 1) % visible.length)
     if (key.downArrow) return setCursor(value => visible.length === 0 ? 0 : (value + 1) % visible.length)
@@ -162,7 +165,9 @@ export function PermissionPanel({ current, load, select, close }: {
   const visible = useMemo(() => rows.filter(row => `${row.id} ${row.description ?? ''}`.toLowerCase().includes(query.toLowerCase())), [rows, query])
   useEffect(() => setCursor(value => Math.min(value, Math.max(0, visible.length - 1))), [visible.length])
   useInput((input, key) => {
-    if (key.escape || input === 'q') return close()
+    if (key.escape) return close()
+    // q closes only while the query is empty; mid-filter it is query text.
+    if (input === 'q' && query === '') return close()
     if (input === 'r' && query === '') return refresh()
     if (key.upArrow) return setCursor(value => visible.length === 0 ? 0 : (value + visible.length - 1) % visible.length)
     if (key.downArrow) return setCursor(value => visible.length === 0 ? 0 : (value + 1) % visible.length)
@@ -185,7 +190,9 @@ export function PluginPanel({ load, close, initialQuery = '' }: { load(): readon
   const rows = useMemo(() => load().filter(row => `${row.entryId} ${row.moduleName} ${row.phase ?? ''}`.toLowerCase().includes(query.toLowerCase())), [epoch, query])
   useEffect(() => setCursor(value => Math.min(value, Math.max(0, rows.length - 1))), [rows.length])
   useInput((input, key) => {
-    if (key.escape || input === 'q') return close()
+    if (key.escape) return close()
+    // q closes only while the query is empty; mid-filter it is query text.
+    if (input === 'q' && query === '') return close()
     if (input === 'r' && query === '') return setEpoch(value => value + 1)
     if (key.upArrow) return setCursor(value => rows.length === 0 ? 0 : (value + rows.length - 1) % rows.length)
     if (key.downArrow) return setCursor(value => rows.length === 0 ? 0 : (value + 1) % rows.length)
@@ -927,4 +934,83 @@ export function SubagentPanel({ current, load, pick, inherit, close }: {
     query: '',
     footer: '↑↓ choose · enter apply · r refresh · esc close',
   })
+}
+
+/**
+ * The /schedule panel: the read-only catalog of active reminders folded from
+ * durable schedule/change events (the web ui-schedule contract: overdue
+ * first, then ascending target; the model creates and cancels through its
+ * schedule_* tools, the panel only shows state). A local second-hand keeps
+ * the relative labels live while the panel is open.
+ */
+export interface ScheduleDisplayRow {
+  readonly key: string
+  readonly text: string
+  readonly tone?: 'error'
+}
+
+/** Human frequency label: one-shot kinds read as Once, every rows carry the interval. */
+export function scheduleFrequency(row: ScheduleRow): string {
+  if (row.kind !== 'every') return 'Once'
+  const seconds = row.everySeconds ?? 0
+  if (seconds >= 3600 && seconds % 3600 === 0) return `Every ${seconds / 3600}h`
+  if (seconds >= 60 && seconds % 60 === 0) return `Every ${seconds / 60}m`
+  return `Every ${seconds}s`
+}
+
+/** Relative label for the next target: in N unit, or N unit overdue. */
+export function scheduleRelative(targetAt: number, now: number): string {
+  const delta = Math.max(0, Math.abs(targetAt - now))
+  const minutes = Math.floor(delta / 60_000)
+  const unit = minutes === 0
+    ? '<1m'
+    : minutes >= 60
+      ? `${Math.floor(minutes / 60)}h${String(minutes % 60).padStart(2, '0')}`
+      : `${minutes}m`
+  return targetAt <= now ? `${unit} overdue` : `in ${unit}`
+}
+
+/** Ordered display rows: overdue first (error tone), then ascending target. */
+export function scheduleDisplayRows(rows: readonly ScheduleRow[], now: number): readonly ScheduleDisplayRow[] {
+  return [...rows]
+    .sort((left, right) => (Number(left.targetAt > now) - Number(right.targetAt > now)) || (left.targetAt - right.targetAt))
+    .map(row => ({
+      key: row.id,
+      text: `${row.prompt} · ${scheduleFrequency(row)} · ${new Date(row.targetAt).toLocaleString()} (${scheduleRelative(row.targetAt, now)})`,
+      tone: row.targetAt <= now ? 'error' as const : undefined,
+    }))
+}
+
+export function SchedulePanel({ rows, close }: { rows(): readonly ScheduleRow[]; close(): void }): ReactElement {
+  const [, setTick] = useState(0)
+  useEffect(() => {
+    const id = setInterval(() => setTick(value => value + 1), 1_000)
+    return () => clearInterval(id)
+  }, [])
+  const display = scheduleDisplayRows(rows(), Date.now())
+  const stdout = useStdout().stdout
+  const viewport = panelViewport(stdout?.columns ?? 80, stdout?.rows ?? 30)
+  useInput((input, key) => {
+    if (key.escape || input === 'q') return close()
+  })
+  if (viewport.maxHeight === 0 || viewport.compact) {
+    const summary = display.length === 0 ? 'no active reminders' : singleLineText(display[0]!.text)
+    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(`/schedule · ${summary}`, viewport.contentColumns))
+  }
+  const budget = Math.max(1, viewport.bodyRows)
+  const visible = display.slice(0, budget)
+  const hidden = display.length - visible.length
+  return createElement(
+    Box,
+    { width: viewport.outerColumns, borderStyle: 'round', borderColor: inkColor(getPalette().dim), flexDirection: 'column', paddingX: 1 },
+    createElement(Text, { color: inkColor(getPalette().brandBright), wrap: 'truncate-end' }, truncateColumns(`/schedule · ${display.length} active reminder${display.length === 1 ? '' : 's'}`, viewport.contentColumns)),
+    ...(display.length === 0
+      ? [createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns('  no active reminders — the model creates them with schedule_create', viewport.contentColumns))]
+      : visible.map(row => createElement(Text, {
+        key: row.key,
+        color: row.tone === 'error' ? inkColor(getPalette().error) : undefined,
+        wrap: 'truncate-end',
+      }, truncateColumns(`  ${singleLineText(row.text)}`, viewport.contentColumns)))),
+    createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns(`esc/q close${hidden > 0 ? ` · +${hidden} more` : ''} · the model schedules via schedule_create`, viewport.contentColumns)),
+  )
 }

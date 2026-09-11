@@ -23,6 +23,7 @@ import type {} from '@deepseek-ai/dsh-goal'
 import type {} from '@deepseek-ai/dsh-llm-retry'
 import type {} from '@deepseek-ai/dsh-plan-mode'
 import type {} from '@deepseek-ai/dsh-permission-presets'
+import type {} from '@deepseek-ai/dsh-schedule'
 import type {} from '@deepseek-ai/dsh-sandbox-policy'
 import type {} from '@deepseek-ai/dsh-session-title'
 // The subagent package's durable catalog event joins the union the same way
@@ -273,6 +274,86 @@ export interface TranscriptStats {
   reasoningEffort: string
 }
 
+/** One active reminder folded from durable `schedule/change` events. */
+export interface ScheduleRow {
+  readonly id: string
+  readonly kind: 'after' | 'at' | 'every'
+  readonly prompt: string
+  /** Next due time (epoch ms); the /schedule panel derives overdue/relative labels. */
+  readonly targetAt: number
+  /** Recurrence seconds for 'every' rows, undefined otherwise. */
+  readonly everySeconds?: number
+}
+
+/**
+ * The durable `schedule/change` payload shape this fold consumes. Upstream
+ * strict-decodes the whole transition stream before appending, so unknown
+ * ids here are corrupt-input edges that degrade to a no-op.
+ */
+export interface ScheduleChangeLike {
+  readonly operation: 'create' | 'delete' | 'dispatch'
+  readonly schedule?: {
+    readonly id: string
+    readonly kind: 'after' | 'at' | 'every'
+    readonly prompt: string
+    readonly afterSeconds?: number
+    readonly everySeconds?: number
+    readonly scheduledAt: string
+  }
+  readonly id?: string
+  readonly acceptedAt?: string
+}
+
+/*
+ * Upstream record semantics (dsh-schedule types): `scheduledAt` is ALREADY
+ * the due instant — AfterScheduleRecord carries the RFC 3339 UTC target
+ * (delay included), EveryScheduleRecord carries the earliest anchor-aligned
+ * occurrence not yet dispatched. No kind ever adds its own interval on top.
+ */
+
+/** Fold one `schedule/change` into the active-reminder list (create/delete/dispatch). */
+export function applyScheduleChange(rows: readonly ScheduleRow[], data: ScheduleChangeLike): readonly ScheduleRow[] {
+  if (data.operation === 'create' && data.schedule !== undefined) {
+    const schedule = data.schedule
+    const row: ScheduleRow = {
+      id: schedule.id,
+      kind: schedule.kind,
+      prompt: schedule.prompt,
+      targetAt: Date.parse(schedule.scheduledAt),
+      ...(schedule.kind === 'every' ? { everySeconds: schedule.everySeconds ?? 0 } : {}),
+    }
+    return [...rows.filter(existing => existing.id !== schedule.id), row]
+  }
+  if (data.operation === 'delete' && data.id !== undefined) {
+    return rows.filter(existing => existing.id !== data.id)
+  }
+  if (data.operation === 'dispatch' && data.id !== undefined) {
+    // A dispatched one-shot reminder is finished. An 'every' reminder
+    // advances PAST every missed occurrence in one step: the next target is
+    // the first anchor-aligned instant strictly after acceptedAt, stepping
+    // from the previous aligned target (upstream advances the same way).
+    if (data.acceptedAt === undefined) return rows.filter(existing => existing.id !== data.id)
+    const accepted = Date.parse(data.acceptedAt)
+    return rows.map(existing => existing.id === data.id
+      ? { ...existing, targetAt: nextEveryTarget(existing.targetAt, accepted, existing.everySeconds ?? 0) }
+      : existing)
+  }
+  return rows
+}
+
+/** First anchor-aligned target after `acceptedAt`, stepping from the previous aligned target. */
+export function nextEveryTarget(previousTarget: number, acceptedAt: number, everySeconds: number): number {
+  const interval = Math.max(1, everySeconds) * 1000
+  if (acceptedAt <= previousTarget) return previousTarget + interval
+  const missed = Math.ceil((acceptedAt - previousTarget + 1) / interval)
+  return previousTarget + missed * interval
+}
+
+/** Plugin snapshot sources folded into token stats but never rendered as rows. */
+const HIDDEN_SNAPSHOT_PLUGINS = new Set(['time-context', 'tmux-context'])
+/** Plugin prompt sources rendered as full user rows (they ARE the conversation). */
+const REMINDER_PLUGINS = new Set(['schedule'])
+
 /** The complete TUI transcript view for one session. */
 export interface TranscriptView {
   /** Settled entries in log order. */
@@ -319,6 +400,8 @@ export interface TranscriptView {
   sandbox: string
   /** Current long-running goal folded from the last `goal/change`, undefined when cleared. */
   goal: GoalFold | undefined
+  /** Active reminders folded from `schedule/change` events, oldest target first at render. */
+  schedules: readonly ScheduleRow[]
   /**
    * Ordered live message ids per inbox target, mirrored from
    * `agent/inbox/spliced` exactly like the upstream Inbox projection — the
@@ -491,6 +574,7 @@ export function createTranscriptView(): TranscriptView {
     systemPrompt: '',
     sandbox: '',
     goal: undefined,
+    schedules: [],
     pending: { 'next-turn': [], 'next-step': [] },
     stats: { turns: 0, steps: 0, llmMs: 0, toolMs: 0, usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 }, lastPromptTokens: 0, contextWindow: 0, contextSegments: { system: 0, prompt: 0, assistant: 0, thinking: 0, tools: 0 }, ttftMs: 0, ttftSteps: 0, decodeMs: 0, decodeTokens: 0, reasoningEffort: '' },
     anchors: { stepStart: new Map(), toolStart: new Map(), firstChunkAt: new Map(), compactionTokens: new Map(), lastPruneTokens: 0, turnFiles: new Map(), turnSteps: new Map(), turnTools: new Map(), systemNodes: new Map() },
@@ -558,9 +642,42 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
           },
         }
       }
+      // Snapshot injections (time/tmux context) still spend model context but
+      // render nothing; the schedule reminder is a real prompt and renders in
+      // full — the model acts on it, so the transcript must show it.
+      if (message.source.kind === 'plugin' && HIDDEN_SNAPSHOT_PLUGINS.has(message.source.plugin)) {
+        return {
+          ...view,
+          pending,
+          entries,
+          stats: {
+            ...view.stats,
+            contextSegments: {
+              ...view.stats.contextSegments,
+              system: view.stats.contextSegments.system + estimateTokens(text),
+            },
+          },
+        }
+      }
+      if (message.source.kind === 'plugin' && REMINDER_PLUGINS.has(message.source.plugin)) {
+        return {
+          ...view,
+          pending,
+          entries: [...entries, { kind: 'user', text, notice: false, ...(images.length === 0 ? {} : { images }), ...(files.length === 0 ? {} : { files }) }],
+          stats: {
+            ...view.stats,
+            contextSegments: {
+              ...view.stats.contextSegments,
+              prompt: view.stats.contextSegments.prompt + estimateTokens(text),
+            },
+          },
+        }
+      }
       const notice = message.source.kind === 'plugin' && message.source.form === 'notice'
         ? message.source.summary
-        : message.source.kind
+        : message.source.kind === 'plugin'
+          ? message.source.plugin
+          : message.source.kind
       const summary = boundContextSummary(notice)
       return {
         ...view,
@@ -963,6 +1080,11 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
         entries: line === undefined ? view.entries : [...view.entries, { kind: 'turn-marker', text: line }],
       }
     }
+    case 'schedule/change':
+      // Non-conversational catalog state: the /schedule panel renders the
+      // active list, the transcript shows only the reminder prompts
+      // (handled at user/message above).
+      return { ...view, schedules: applyScheduleChange(view.schedules, event.data) }
     case 'session/title':
       // Latest-wins title snapshot, log-only; the status line prefers it.
       return { ...view, title: event.data.title }
@@ -1098,6 +1220,7 @@ export interface ReplayAccumulator {
   systemPrompt: string
   sandbox: string
   goal: GoalFold | undefined
+  schedules: readonly ScheduleRow[]
   stats: TranscriptStats
   stepStart: Map<string, number>
   toolStart: Map<string, number>
@@ -1137,6 +1260,7 @@ export function createReplayAccumulator(): ReplayAccumulator {
     systemPrompt: '',
     sandbox: '',
     goal: undefined,
+    schedules: [],
     stats: { turns: 0, steps: 0, llmMs: 0, toolMs: 0, usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 }, lastPromptTokens: 0, contextWindow: 0, contextSegments: { system: 0, prompt: 0, assistant: 0, thinking: 0, tools: 0 }, ttftMs: 0, ttftSteps: 0, decodeMs: 0, decodeTokens: 0, reasoningEffort: '' },
     stepStart: new Map(),
     toolStart: new Map(),
@@ -1270,7 +1394,7 @@ export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent):
       const text = textOf(message.content)
       const images = imagesOf(message.content)
       const files = filesOf(message.content)
-      if (message.source.kind === 'user') {
+      if (message.source.kind === 'user' || (message.source.kind === 'plugin' && REMINDER_PLUGINS.has(message.source.plugin))) {
         appendReplayEntry(acc, { kind: 'user', text, notice: false, ...(images.length === 0 ? {} : { images }), ...(files.length === 0 ? {} : { files }) })
         acc.stats = {
           ...acc.stats,
@@ -1281,9 +1405,21 @@ export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent):
         }
         return true
       }
+      if (message.source.kind === 'plugin' && HIDDEN_SNAPSHOT_PLUGINS.has(message.source.plugin)) {
+        acc.stats = {
+          ...acc.stats,
+          contextSegments: {
+            ...acc.stats.contextSegments,
+            system: acc.stats.contextSegments.system + estimateTokens(text),
+          },
+        }
+        return true
+      }
       const notice = message.source.kind === 'plugin' && message.source.form === 'notice'
         ? message.source.summary
-        : message.source.kind
+        : message.source.kind === 'plugin'
+          ? message.source.plugin
+          : message.source.kind
       const summary = boundContextSummary(notice)
       appendReplayEntry(acc, { kind: 'user', text: summary, notice: true })
       acc.stats = {
@@ -1603,6 +1739,10 @@ export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent):
       if (line !== undefined) appendReplayEntry(acc, { kind: 'turn-marker', text: line })
       return true
     }
+    case 'schedule/change':
+      acc.schedules = applyScheduleChange(acc.schedules, event.data)
+      acc.ops += 1
+      return true
     case 'session/title':
       acc.title = event.data.title
       return true
@@ -1715,6 +1855,7 @@ function materializeReplayView(acc: ReplayAccumulator, copy: boolean): Transcrip
     systemPrompt: acc.systemPrompt,
     sandbox: acc.sandbox,
     goal: acc.goal,
+    schedules: acc.schedules,
     pending: { 'next-turn': [...acc.pendingTurn], 'next-step': [...acc.pendingStep] },
     stats: acc.stats,
     // Handed-out views get their own anchors snapshot: the accumulator keeps
