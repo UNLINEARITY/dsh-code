@@ -37,8 +37,14 @@
   disabled: true
 - id: tool-fs-search
   disabled: true
+# skill-filesystem stays ENABLED on the host: it only feeds the skill
+# REGISTRY (local-root discovery), never the model-facing tool surface —
+# tool-skill below stays disabled and presets mount it per session. The
+# terminal offers skills in the slash menu before any session exists, and a
+# bare launch has no preset layer yet, so the registry's global layer needs
+# this provider; presets shadow it with the same discovery on their scope.
 - id: skill-filesystem
-  disabled: true
+  disabled: false
 - id: tool-skill
   disabled: true
 - id: command-goal
