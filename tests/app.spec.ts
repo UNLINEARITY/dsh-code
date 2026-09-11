@@ -1137,7 +1137,7 @@ describe('multiline composer', () => {
     }
   })
 
-  it('moves inside a recalled multiline entry before crossing history', async () => {
+  it('crosses history from a recalled multiline entry; Left still edits inside', async () => {
     const harness = createTty(80, 24)
     let dispatched = ''
     const instance = renderApp(harness, appProps({
@@ -1146,15 +1146,31 @@ describe('multiline composer', () => {
     }))
     try {
       await wait()
-      harness.stdin.write('\x1b[A') // recall the newest multiline entry
+      // Recall the newest multiline entry: its caret rests on the text
+      // end, so the next Up crosses to the older entry (either text edge
+      // switches history).
+      harness.stdin.write('\x1b[A')
       await wait()
-      harness.stdin.write('\x1b[A') // move inside it, not to the older entry
+      harness.stdin.write('\x1b[A')
+      await wait()
+      harness.stdin.write('\r')
+      await wait()
+      expect(dispatched).toBe('older entry')
+      // Recall again (the submitted older entry is now the newest), cross
+      // to the multiline entry, then step the caret inside with Left: an
+      // interior caret belongs to ordinary editing, where Up/Down move
+      // through the entry's rows.
+      harness.stdin.write('\x1b[A')
+      await wait()
+      harness.stdin.write('\x1b[A')
+      await wait()
+      harness.stdin.write('\x1b[D')
       await wait()
       harness.stdin.write('X')
       await wait()
       harness.stdin.write('\r')
       await wait()
-      expect(dispatched).toBe('firstX\nsecond')
+      expect(dispatched).toBe('first\nseconXd')
     } finally {
       instance.unmount()
       harness.stdin.destroy()
@@ -4800,5 +4816,51 @@ describe('settled row cap window', () => {
     expect(toggled.cache.droppedEntries).toBe(capped.cache.droppedEntries)
     expect(toggled.cache.totalRows).toBe(capped.cache.totalRows)
     expect(toggled.cache.flat).toBe(capped.cache.flat)
+  })
+})
+
+describe('composer recall history', () => {
+  it('records typed slash commands and prompts into one shared history', async () => {
+    const harness = createTty()
+    const { stdin } = harness
+    const recorded: string[] = []
+    const instance = renderApp(harness, appProps({
+      store: createTranscriptStore(),
+      recordHistory: text => {
+        recorded.push(text)
+      },
+    }))
+    try {
+      await wait()
+      // A plain prompt first.
+      stdin.write('hello world')
+      await wait()
+      stdin.write('\r')
+      await wait()
+      // A typed slash command keeps the completion menu open, so dismiss
+      // it with Esc before submitting the line.
+      stdin.write('/copy')
+      await wait()
+      stdin.write('\x1b')
+      await wait()
+      stdin.write('\r')
+      await wait()
+      expect(recorded).toEqual(['hello world', '/copy'])
+      // Up recalls the command (with the completion menu suppressed for
+      // the recalled text) and the next Up walks past it to the older
+      // prompt - either text edge is a valid recall position. Submitting
+      // then records the walked-to prompt.
+      stdin.write('\x1b[A')
+      await wait()
+      stdin.write('\x1b[A')
+      await wait()
+      stdin.write('\r')
+      await wait()
+      expect(recorded[recorded.length - 1]).toBe('hello world')
+    } finally {
+      instance.unmount()
+      stdin.destroy()
+      harness.stdout.destroy()
+    }
   })
 })

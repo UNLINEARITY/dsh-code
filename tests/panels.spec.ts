@@ -694,12 +694,12 @@ describe('queued messages and global recall', () => {
       await wait()
       stdin.write('\r')
       await wait()
-      expect(output).toContain('/history · 3 prompts · type to filter')
+      expect(output).toContain('/history · 4 prompts · type to filter')
 
       // Filter to one match and accept it: the composer fills and the panel closes.
       stdin.write('package')
       await wait()
-      expect(output).toContain('1 of 3 match')
+      expect(output).toContain('1 of 4 match')
       output = ''
       stdin.write('\r')
       await wait()
@@ -707,14 +707,35 @@ describe('queued messages and global recall', () => {
       expect(output).not.toContain('1 of 3 match')
 
       // The first Up stays inside the filled prompt and moves to its visual
-      // start; only a second Up at the true edge recalls the older entry.
+      // start; recall then walks the newest-first space - the locally
+      // recorded '/history' and 'draft prompt' lead, and the oldest
+      // persistent entry arrives last.
       output = ''
       stdin.write('\x1b[A')
       await wait()
-      expect(output).not.toContain('fix the login bug')
+      // The filled entry's caret rests on the text end, so the first Up
+      // crosses to the older persistent entry; Down walks back through
+      // the newer shared entries: the prompt and the typed /history
+      // command itself.
+      // The filled entry's caret rests on the text end, so the first Up
+      // crosses to the older persistent entry; Down walks back through
+      // the newer shared entries: the prompt and the typed /history
+      // command itself.
       stdin.write('\x1b[A')
       await wait()
       expect(output).toContain('fix the login bug')
+      stdin.write('\x1b[B')
+      await wait()
+      expect(output).toContain('bump the package version')
+      stdin.write('\x1b[B')
+      await wait()
+      expect(output).toContain('draft prompt')
+      stdin.write('\x1b[B')
+      await wait()
+      expect(output).toContain('/history')
+      // Both the prompt and the typed /history command joined the shared
+      // persistent history, in submission order.
+      expect(recorded).toEqual(['draft prompt', '/history'])
     } finally {
       instance.unmount()
       stdin.destroy()

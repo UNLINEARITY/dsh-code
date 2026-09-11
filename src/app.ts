@@ -3790,20 +3790,16 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
     notify('image submission cancelled', 'warning')
   }
 
-  /** Move through visual rows first, then cross history at the true edge. */
+  /** Cross history while an unchanged recalled draft rests its caret on
+   * either text edge; between the edges (or inside ordinary drafts) the
+   * arrows move through visual rows first. */
   const navigateVertical = (direction: -1 | 1): void => {
     const currentValue = valueRef.current
     const currentCursor = cursorRef.current
-    const model = editorModel(currentValue, editorColumns)
-    const preferred = preferredColumnRef.current ?? caretSite(model, currentCursor).column
-    const next = moveCursorVertically(model, currentCursor, preferred, direction)
-    if (next !== currentCursor) {
-      cursorRef.current = next
-      setCursor(next)
-      resetCursorBlink()
-      preferredColumnRef.current = preferred
-      return
-    }
+    // History owns the arrows while an unchanged recalled draft rests its
+    // caret on either text edge (start or end). Everywhere else - edited
+    // drafts, interior carets, ordinary typing - the arrows move through
+    // visual rows as plain editing.
     if (recall.current.entries.length > 0
       && shouldRecallNavigate(currentValue, currentCursor, recall.current.lastRecalled, direction)) {
       const step = direction < 0 ? recallOlder(recall.current, currentValue) : recallNewer(recall.current)
@@ -3815,10 +3811,24 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
         setValue(safe)
         setCursor(safe.length)
         preferredColumnRef.current = null
-        setDismissedMenuValue(undefined)
+        // Suppress the completion menu for the recalled text: a recalled
+        // command would otherwise reopen the menu, whose Up/Down navigation
+        // then traps the walk before it reaches older history entries. Any
+        // edit re-opens the menu; submitting resets the dismissal.
+        setDismissedMenuValue(safe)
       }
+      resetCursorBlink()
+      return
     }
-    resetCursorBlink()
+    const model = editorModel(currentValue, editorColumns)
+    const preferred = preferredColumnRef.current ?? caretSite(model, currentCursor).column
+    const next = moveCursorVertically(model, currentCursor, preferred, direction)
+    if (next !== currentCursor) {
+      cursorRef.current = next
+      setCursor(next)
+      resetCursorBlink()
+      preferredColumnRef.current = preferred
+    }
   }
 
   useStableInput((input, key) => {
@@ -4017,13 +4027,12 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
       setDismissedMenuValue(undefined)
       if (trimmed === '') return
       dismissNotice()
-      // Global recall records non-slash submissions only (slash lines are
-      // commands, not prompts) — Codex record_local_submission semantics;
-      // the submission resets any active recall browsing.
-      if (!text.startsWith('/')) {
-        recordLocal(text)
-        recordHistory(text)
-      }
+      // Global recall records every submission - prompts and typed slash
+      // commands share one history, so Up/Down and /history recall commands
+      // exactly like prompts; the submission resets any active recall
+      // browsing.
+      recordLocal(text)
+      recordHistory(text)
       recall.current = beginRecall(recallSpace, '')
       if (text === '/quit') {
         quit()

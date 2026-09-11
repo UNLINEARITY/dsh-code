@@ -254,11 +254,13 @@ describe('shouldRecallNavigate (boundary gate)', () => {
     expect(shouldRecallNavigate('', 0, null, -1)).toBe(true)
     expect(shouldRecallNavigate('', 0, null, 1)).toBe(false)
   })
-  it('recalls only past the directional boundary of the unchanged recalled entry', () => {
+  it('recalls from either text edge of the unchanged recalled entry; interior stays editing', () => {
     expect(shouldRecallNavigate('old', 0, 'old', -1)).toBe(true)
-    expect(shouldRecallNavigate('old', 3, 'old', -1)).toBe(false)
+    expect(shouldRecallNavigate('old', 3, 'old', -1)).toBe(true)
     expect(shouldRecallNavigate('old', 3, 'old', 1)).toBe(true)
-    expect(shouldRecallNavigate('old', 0, 'old', 1)).toBe(false)
+    expect(shouldRecallNavigate('old', 0, 'old', 1)).toBe(true)
+    expect(shouldRecallNavigate('old', 1, 'old', -1)).toBe(false)
+    expect(shouldRecallNavigate('old', 2, 'old', 1)).toBe(false)
     expect(shouldRecallNavigate('new', 3, 'old', 1)).toBe(false)
   })
 })

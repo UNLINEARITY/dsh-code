@@ -68,7 +68,7 @@ DSH-Code 的重点是让 DSH 的 Agent、模型、工具和持久会话可以直
 - 使用 `/new` 新建会话，或通过 `/resume`、`--continue` 恢复已有会话
 - 使用 `/fork` 从历史节点创建新的工作分支，同时保留原会话
 - 按当前目录、更新时间和会话范围搜索历史记录
-- 使用 Up/Down 召回输入历史，或通过 `/history` 搜索过去的提示词
+- 使用 Up/Down 召回输入历史（含 / 指令），或通过 `/history` 搜索过去的提示词与指令
 - 支持持久标题、Markdown 导出、上下文占用、token、缓存、TTFT 和耗时统计
 - 恢复会话时同步恢复该会话使用的 Agent Preset 和模型选择
 
@@ -142,7 +142,7 @@ dsh --profile cli --session my-id    # 使用指定 id 新建会话
 | `/delete [id\|前缀]` | 删除指定会话及其 subagent 会话 |
 | `/title <text>` | 修改当前会话标题 |
 | `/export [path]` | 将当前会话导出为 Markdown |
-| `/history` | 搜索并复用过去提交的提示词 |
+| `/history` | 搜索并复用过去提交的提示词与 / 指令 |
 | `/clear` | 清空当前终端显示，不删除持久会话 |
 
 #### Agent、模型与权限

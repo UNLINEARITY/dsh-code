@@ -64,7 +64,7 @@ DSH-Code brings DSH Agents, models, tools, and durable sessions directly into th
 - Create sessions with `/new`, or restore existing sessions with `/resume` and `--continue`
 - Create a new work branch from a historical point with `/fork` while preserving the original session
 - Search history by current directory, update time, and session scope
-- Recall input history with Up/Down, or search previous prompts with `/history`
+- Recall input history with Up/Down (typed slash commands included), or search previous prompts and commands with `/history`
 - Use persistent titles, Markdown export, context occupancy, token, cache, TTFT, and elapsed-time metrics
 - Restore the session's Agent Preset and model selection when resuming it
 
@@ -134,7 +134,7 @@ The following built-in commands are available inside the TUI. Additional Harness
 | `/delete [id\|prefix]` | Delete a session and its subagent sessions |
 | `/title <text>` | Change the current session title |
 | `/export [path]` | Export the current session as Markdown |
-| `/history` | Search and reuse previously submitted prompts |
+| `/history` | Search and reuse previously submitted prompts and slash commands |
 | `/clear` | Clear the current terminal display without deleting the durable session |
 
 #### Agents, models, and permissions

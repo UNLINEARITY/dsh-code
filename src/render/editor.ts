@@ -487,12 +487,13 @@ export function composerMaxRows(terminalRows: number): number {
 }
 
 /**
- * History navigation starts with Up on an empty draft, or after visual
- * movement has reached the directional text edge of an unchanged recalled
- * entry. Every other position remains under textarea movement.
+ * History navigation starts with Up on an empty draft, or continues from an
+ * unchanged recalled entry whenever the caret sits on either text edge
+ * (start or end) - moving the caret into the interior returns the keys to
+ * ordinary editing until an edge is reached again.
  */
 export function shouldRecallNavigate(value: string, cursor: number, lastRecalled: string | null, direction: -1 | 1): boolean {
   if (value === '') return direction < 0
   if (lastRecalled !== value) return false
-  return direction < 0 ? cursor === 0 : cursor === value.length
+  return cursor === 0 || cursor === value.length
 }
