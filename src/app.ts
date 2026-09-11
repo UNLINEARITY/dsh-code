@@ -39,7 +39,7 @@ import type { LauncherUpdateStatus } from './update.ts'
 import { WHALE_GLYPH, WHALE_GLYPH_COLUMNS } from './whale-glyph.ts'
 import { DSH_CODE_VERSION, dshKernelVersion } from './version.ts'
 import type { TranscriptStore } from './store.ts'
-import { DEFAULT_TERMINAL_TITLE, useTerminalTitle } from './terminal-title.ts'
+import { DEFAULT_TERMINAL_TITLE, sanitizeTerminalTitle, terminalTitleSequence, useTerminalTitle } from './terminal-title.ts'
 import { settledEntryCount, type TranscriptEntry } from './render/projection.ts'
 import { imeCursorRowsUp, useImeCursorAnchor } from './render/ime-cursor.ts'
 import { type MdSegment, visibleColumns } from './render/markdown.ts'
@@ -3234,7 +3234,7 @@ interface DraftFile extends FilePathInspection {
  * While a modal (approval / question / model panel) owns the keys, the
  * box passes every key through untouched.
  */
-function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openEffort, openHelp, openMode, openPermission, openResume, openPlugin, openUpdate, openSchedule, openJobs, openStatusline, openTheme, openHistory, openAgents, openSubagent, openTodos, openDelete, openDiff, reviewChanges, deleteConfirm, confirmDelete, cancelDelete, createSession, forkSession, cancelSessionSwitch, notify, applyEditorKeys, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, inspectImages, prepareImages, inspectFiles, prepareFiles, cycleMode, exportTranscript, renameTitle, copyLastResponse, recallSpace, recordLocal, recordHistory, queued, cancelQueued, historyFill, historyConsumed, animations, applyAnimations, waveTier, waveStyle, maxRows, anchorRowsBelow, onEditorRows, onMenuRows, sessionKey }: {
+function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openEffort, openHelp, openMode, openPermission, openResume, openPlugin, openUpdate, openSchedule, openJobs, openStatusline, openTheme, openHistory, openAgents, openSubagent, openTodos, openDelete, openDiff, reviewChanges, deleteConfirm, confirmDelete, cancelDelete, createSession, forkSession, cancelSessionSwitch, notify, applyEditorKeys, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, inspectImages, prepareImages, inspectFiles, prepareFiles, cycleMode, exportTranscript, renameTitle, copyLastResponse, recallSpace, recordLocal, recordHistory, queued, cancelQueued, historyFill, historyConsumed, animations, applyAnimations, waveTier, waveStyle, maxRows, anchorRowsBelow, tabTitle, onEditorRows, onMenuRows, sessionKey }: {
   active: boolean
   frozen: boolean
   /** Frozen-band hint naming the surface that owns the keyboard; an empty
@@ -3333,14 +3333,21 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
    * footer and Ink's parked cursor row. The IME anchor adds these to the
    * caret's in-band offset to reach that parked position. */
   anchorRowsBelow: number
+  /** The managed terminal tab label; re-asserted on terminal focus-in so a
+   * background process sharing the console cannot keep it overwritten. */
+  tabTitle: string
   /** Reports the editor's current physical row count so the live budget stays exact. */
   onEditorRows(rows: number): void
   /** Reports the open completion menu's physical row count (0 when closed)
    * for the same reason: the dynamic budget must reserve it, not overflow. */
   onMenuRows(rows: number): void
 }): ReactElement {
-  const columns = useStdout().stdout?.columns ?? 80
-  const inputTerminalRows = useStdout().stdout?.rows ?? 30
+  const { stdout: inputStdout } = useStdout()
+  const columns = inputStdout?.columns ?? 80
+  const inputTerminalRows = inputStdout?.rows ?? 30
+  // The managed tab label, kept current for the focus-in re-assert below.
+  const tabTitleRef = useRef(tabTitle)
+  tabTitleRef.current = tabTitle
   const editorColumns = Math.max(1, columns - 6)
   const stdin = useStdin().stdin
   const focusReporting = isVsCodeTerminalEnv()
@@ -3442,6 +3449,14 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
       const input = focusReporting
         ? stripTerminalFocusEvents(normalized, focused => {
           terminalFocusedRef.current = focused
+          // Focus-in re-asserts the managed tab label on both channels: a
+          // background process sharing this console (a test-runner worker,
+          // for example) may have overwritten the console title while the
+          // terminal was unfocused.
+          if (focused && inputStdout !== undefined) {
+            inputStdout.write(terminalTitleSequence(tabTitleRef.current))
+            process.title = sanitizeTerminalTitle(tabTitleRef.current)
+          }
         })
         : normalized
       rawEditorTokens.current = tokenizeRawEditorChunk(input)
@@ -5143,7 +5158,8 @@ export function App(props: AppProps): ReactElement {
   const deepDivingVisible = busy && !streamingActive
   // Terminal tab label: "deepseek" until the session carries a name, then the
   // session title; cleared on unmount so the host shell regains its default.
-  useTerminalTitle(view.title === '' ? DEFAULT_TERMINAL_TITLE : view.title)
+  const tabTitle = view.title === '' ? DEFAULT_TERMINAL_TITLE : view.title
+  useTerminalTitle(tabTitle)
   const allLiveLines = useMemo(
     () => view.entries.slice(settled).flatMap(
       // Width shrinks with the real terminal (no 10-column floor: on a
@@ -5879,6 +5895,7 @@ export function App(props: AppProps): ReactElement {
         waveStyle,
         maxRows: composerEditorCap,
         anchorRowsBelow: imeRowsBelowComposer,
+        tabTitle,
         onEditorRows: handleEditorRows,
         onMenuRows: handleMenuRows,
       }),

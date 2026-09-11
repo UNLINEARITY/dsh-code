@@ -4863,4 +4863,26 @@ describe('composer recall history', () => {
       harness.stdout.destroy()
     }
   })
+
+  it('re-asserts the tab title when the terminal regains focus', async () => {
+    vi.stubEnv('TERM_PROGRAM', 'vscode')
+    vi.stubEnv('VSCODE_INJECTION', '1')
+    const harness = createTty()
+    const instance = renderApp(harness, appProps())
+    try {
+      await wait()
+      expect(harness.output.text).toContain('\x1b]0;deepseek\x07')
+      // A background worker sharing the console overwrote the title while
+      // the terminal was unfocused; focus-in re-asserts the managed label.
+      harness.output.text = ''
+      harness.stdin.write('\x1b[I')
+      await wait()
+      expect(harness.output.text).toContain('\x1b]0;deepseek\x07')
+    } finally {
+      instance.unmount()
+      vi.unstubAllEnvs()
+      harness.stdin.destroy()
+      harness.stdout.destroy()
+    }
+  })
 })
