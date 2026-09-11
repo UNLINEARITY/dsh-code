@@ -1,0 +1,61 @@
+diff --git a/sq-orig.ts b/sq-fixed.ts
+index e0b24b3..90794bf 100644
+--- a/sq-orig.ts
++++ b/sq-fixed.ts
+@@ -141,6 +141,8 @@ interface ObservedPersistedSession {
+   header: SessionHeader
+   revision: SessionPersistenceRevision
+   loaded?: ObservedSession
++  /** Diagnosis for a cold read that failed; the session stays unindexed and its indexed rows are dropped. */
++  unreadable?: string
+ }
+
+ interface PersistenceBinding {
+@@ -422,7 +424,12 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
+       : [...observation.persisted.values()].filter(entry => entry.loaded !== undefined)
+     const persistentDeletes = observation.persistenceBinding.service === undefined
+       ? []
+-      : persistedRows.filter(row => !observation.persisted.has(row.id as SessionId))
++      : persistedRows.filter(row => {
++        const observed = observation.persisted.get(row.id as SessionId)
++        // An indexed session whose cold read now fails would keep stale
++        // ghost rows in the index unless the skip path removes them here.
++        return observed === undefined || observed.unreadable !== undefined
++      })
+     const liveChanges = [...observation.live.values()].filter((entry) => {
+       const indexed = liveById.get(entry.header.id)
+       const persisted = observation.persisted.has(entry.header.id) ? 1 : 0
+@@ -519,10 +526,29 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
+             // live-preferred.
+             if (initiallyLive.has(entry.header.id) || this.ctx.sessions.get(entry.header.id) !== undefined) continue
+             assertNotAborted(signal)
+-            const loaded = await readColdSessionLog(persistence, entry.header.id, signal)
+-            assertNotAborted(signal)
+-            assertSessionHeadersCompatible(entry.header, loaded.header)
+-            entry.loaded = observeSession(loaded.header, loaded.inheritedEventCount, loaded.events)
++            // One unreadable source must not poison the whole corpus: a
++            // session whose cold log fails to migrate or decode (for example
++            // a pre-release artifact the frozen codecs reject) stays out of
++            // the index with a warning, and the remaining sessions index
++            // normally. The skipped entry keeps 'loaded' undefined, exactly
++            // like a not-yet-read one, so the stable-snapshot comparison
++            // below is unaffected; reconciliation drops any indexed rows it
++            // still holds.
++            try {
++              const loaded = await readColdSessionLog(persistence, entry.header.id, signal)
++              assertNotAborted(signal)
++              assertSessionHeadersCompatible(entry.header, loaded.header)
++              entry.loaded = observeSession(loaded.header, loaded.inheritedEventCount, loaded.events)
++            } catch (error: unknown) {
++              if (isAbort(error) || signal?.aborted) throw error
++              if (this._persistenceBinding !== persistenceBinding) break
++              entry.unreadable = errorMessage(error)
++              this.ctx.logger.warn(
++                'session-search skipped unreadable session %s: %s',
++                entry.header.id,
++                entry.unreadable,
++              )
++            }
+           }
+           assertNotAborted(signal)
+           const afterSnapshots = await persistence.list(listOptions)

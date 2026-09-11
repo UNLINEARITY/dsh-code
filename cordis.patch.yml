@@ -25,14 +25,15 @@
     mode: !!js process.env.DSH_TOOLS_MODE
 
 # The base row keeps full-text search off entirely (openAt: never) so nothing
-# imports node:sqlite at boot. The terminal opens the derived index lazily on
-# the first search instead: no startup cost, no Node 22 experimental warning,
-# and the in-memory index rebuilds per process. Exact reads, titles, and
-# lineage traces were always available; this override adds search itself.
+# imports node:sqlite at boot; the terminal replaces it with the bundle's
+# skip-tolerant subclass below. An override row cannot retarget a row's
+# MODULE (name is only honored on inserts), so the base row is disabled and
+# an equivalent row mounts the subclass: the derived index opens lazily on
+# the first search (no startup cost, no Node 22 experimental warning), and
+# one unreadable source (a pre-release artifact the frozen codecs reject)
+# is skipped with a warning instead of failing every cross-session search.
 - id: session-query-sqlite
-  config:
-    path: ':memory:'
-    openAt: first-search
+  disabled: true
 
 # Agent-plane rows are mounted by the selected preset. Keep this list aligned
 # with the upstream Web bundle so two sessions can use different compositions
@@ -141,6 +142,15 @@
     # any provider's OAuth or device-code protocol.
     - id: authorization
       name: '@deepseek-ai/dsh-authorization'
+
+    # The bundle's skip-tolerant session-query engine replacing the disabled
+    # base row above: same SQLite FTS5 service, observation loop patched to
+    # skip unreadable sources instead of failing every search.
+    - id: session-query-skip
+      name: 'dsh-code/session-query'
+      config:
+        path: ':memory:'
+        openAt: first-search
 
     # Model-facing session-log search/trace/read tools over the sessionQuery
     # service (read-only, workspace-scoped by exact cwd). A host-plane mount

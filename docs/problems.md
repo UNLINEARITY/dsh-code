@@ -2,6 +2,30 @@
 
 本页记录 DSH-Code 安装、启动和插件加载时最常见的问题。开始排查前，请确认 Node.js 版本符合 `^22.19 || >=24`，并使用 `dsh --profile cli` 启动。
 
+## `session_search` 每次调用都失败并报「session query operation failed」
+
+### 现象
+
+模型调用 `session_search` / `session_event_search` 时总是返回通用错误「session query operation failed」，而 `session_trace`、`session_event_read` 正常。终端 stderr（被界面覆盖，翻看启动日志可见）里才有真实原因，形如：
+
+```text
+SessionQueryError: SESSION_QUERY_PERSISTENCE_FAILED
+subagent/descriptor … uses unsupported descriptor version 2
+```
+
+### 原因
+
+全文搜索在每次查询前要对全部持久化会话做一次语料核对。只要**任意一个**会话文件里存在当前版本的冻结解码器无法接受的事件（已知实例：0.1.5 发布前 alpha 时代的构建把 `subagent/descriptor` 以版本 2 写进了 v0 代会话文件，而发布版 v0 解码器只接受版本 3），整个核对就会失败，导致**所有**跨会话搜索整体不可用——同一工作区里可能存在**大量**此类历史会话。精确读取与谱系工具不经过语料核对，近期会话（v3 代）也不受影响，因此问题常被误判为局部故障。此外，若插件与宿主各自解析到两份物理不同的会话查询包（版本号相同但模块实例不同），类型化错误会在边界处退化为上述通用文案，真实诊断只进日志。
+
+### 解决
+
+本 bundle 已内置修复：dsh-code 自带的容错会话检索引擎在核对时**跳过**无法解析的会话（每次跳过在日志中留一条警告），其余会话照常索引；被跳过的会话在后续搜索中自动重试，升级到能够解析它的 dsh 版本线后会自动回到索引，无需任何手动处理。旧版 dsh-code 的临时办法是把对应会话目录移出会话根目录隔离（移出后该会话不再出现在 resume 列表，移回即恢复）：
+
+```powershell
+New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.dsh\sessions-quarantine" | Out-Null
+Move-Item "$env:USERPROFILE\.dsh\sessions\<工作区目录>\<会话 id>" "$env:USERPROFILE\.dsh\sessions-quarantine\"
+```
+
 ## Linux：`Failed to load native module: pty.node`
 
 ### 现象

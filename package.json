@@ -14,17 +14,21 @@
       "types": "./lib/types/index.d.ts",
       "default": "./lib/index.mjs"
     },
-    "./startup": {
-      "types": "./lib/types/startup.d.ts",
-      "default": "./lib/startup.mjs"
-    },
+    "./cordis.patch.yml": "./cordis.patch.yml",
     "./invariant": {
       "types": "./lib/types/invariant.d.ts",
       "default": "./lib/invariant.mjs"
     },
-    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json",
+    "./session-query": {
+      "types": "./lib/types/session-query.d.ts",
+      "default": "./lib/session-query.mjs"
+    },
     "./src/*": "./src/*",
-    "./package.json": "./package.json"
+    "./startup": {
+      "types": "./lib/types/startup.d.ts",
+      "default": "./lib/startup.mjs"
+    }
   },
   "files": [
     "lib",
@@ -103,6 +107,8 @@
     "@deepseek-ai/dsh-session": "0.1.5-rc.1",
     "@deepseek-ai/dsh-session-persistence": "0.1.5-rc.1",
     "@deepseek-ai/dsh-session-persistence-jsonl": "0.1.5-rc.1",
+    "@deepseek-ai/dsh-session-query": "0.1.5-rc.1",
+    "@deepseek-ai/dsh-session-query-sqlite": "0.1.5-rc.1",
     "@deepseek-ai/dsh-session-reference": "0.1.5-rc.1",
     "@deepseek-ai/dsh-session-title": "0.1.5-rc.1",
     "@deepseek-ai/dsh-skill": "0.1.5-rc.1",
@@ -208,6 +214,12 @@
     "@deepseek-ai/dsh-session-persistence-jsonl": {
       "optional": true
     },
+    "@deepseek-ai/dsh-session-query": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-session-query-sqlite": {
+      "optional": true
+    },
     "@deepseek-ai/dsh-session-reference": {
       "optional": true
     },
@@ -268,6 +280,8 @@
     "@deepseek-ai/dsh-schedule": "0.1.5-rc.1",
     "@deepseek-ai/dsh-session-persistence": "0.1.5-rc.1",
     "@deepseek-ai/dsh-session-persistence-jsonl": "0.1.5-rc.1",
+    "@deepseek-ai/dsh-session-query": "0.1.5-rc.1",
+    "@deepseek-ai/dsh-session-query-sqlite": "0.1.5-rc.1",
     "@deepseek-ai/dsh-session-reference": "0.1.5-rc.1",
     "@deepseek-ai/dsh-session-title": "0.1.5-rc.1",
     "@deepseek-ai/dsh-settings": "0.1.5-rc.1",
