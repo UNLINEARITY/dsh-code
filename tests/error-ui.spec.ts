@@ -59,6 +59,8 @@ function renderApp(
       cancel: noop,
     },
     commands: { descriptors: [], subscribe: () => noop },
+    probeUpdate: () => Promise.reject(new Error('update probe not wired in test')),
+    applyUpdate: () => Promise.resolve(0),
     skills: { rows: [], subscribe: () => noop },
     model: 'test/model',
     cwd: 'dsh-cli',

@@ -153,6 +153,8 @@ function appProps(overrides: Partial<AppProps> = {}): AppProps {
     switchSession: noop,
     cancelSessionSwitch: () => false,
     loadPlugins: () => [],
+    probeUpdate: () => Promise.reject(new Error('update probe not wired in test')),
+    applyUpdate: () => Promise.resolve(0),
     loadJobs: () => [],
     statusline: DEFAULT_STATUSLINE_ITEMS,
     saveStatusline: noop,
@@ -404,6 +406,38 @@ describe('composer image attachments', () => {
       await wait()
       expect(selectModel).toHaveBeenCalled()
       expect(harness.output.text).toContain('image history will be sent as text placeholders')
+    } finally {
+      instance.unmount()
+    }
+  })
+
+  it('opens the /update panel with the aligned plan and closes on escape', async () => {
+    const harness = createTty(120, 24)
+    const instance = renderApp(harness, appProps({
+      probeUpdate: () => Promise.resolve({
+        code: { running: '1.0.6', latest: '1.0.7' },
+        host: { installed: '0.1.5-rc.1', targetLine: '0.1.5-rc.2' },
+        profile: { spec: '1.0.6', mounted: '1.0.6', localCheckout: false },
+        plan: { dshSpec: '@deepseek-ai/dsh@0.1.5-rc.2', codeSpec: 'dsh-code@1.0.7', pluginSpecs: [] },
+        blockers: { registry: null, downgrade: false, localCheckout: null },
+        upToDate: false,
+      }),
+      applyUpdate: () => Promise.resolve(0),
+    }))
+    try {
+      await wait()
+      harness.stdin.write('/update')
+      await wait()
+      harness.stdin.write('\r')
+      await wait()
+      expect(harness.output.text).toContain('dsh-code    1.0.6 → 1.0.7')
+      expect(harness.output.text).toContain('enter update')
+      // The panel owns the keys while open: escape closes it and the
+      // panel footer leaves the last frame.
+      harness.output.text = ''
+      harness.stdin.write('\x1b')
+      await wait()
+      expect(harness.output.text).not.toContain('enter update')
     } finally {
       instance.unmount()
     }

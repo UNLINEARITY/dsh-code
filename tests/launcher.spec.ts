@@ -2,11 +2,13 @@ import { EventEmitter } from 'node:events'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
+  buildUpdateStatus,
   compareHarnessLines,
   harnessLineFromPeers,
   installedGlobalDshVersion,
   localCheckoutRefusal,
   npmInvocation,
+  packageVersion,
   dshCommand,
   completionScript,
   operationName,
@@ -281,6 +283,65 @@ describe('update orchestration', () => {
       isManifest,
       path => inSecondRoot(path) ? manifestAt('0.1.2-rc.1') : 'not json',
     )).toBe('0.1.2-rc.1')
+  })
+
+  describe('buildUpdateStatus', () => {
+    const registry = () => ({
+      // view(subject) returns the FIELD value, so the peers map is bare.
+      'dsh-code@1.0.7': { '@deepseek-ai/dsh-session': '0.1.5-rc.2' },
+    })
+    // Profile readers stay injectable: the real machine state must not leak
+    // into these contract tests (a link-mounted dev profile would flip every
+    // fixture into the local-checkout refusal).
+    const readers = { readSpec: () => '1.0.6', readMounted: () => '1.0.6', readPlugins: () => [] }
+
+    it('reports an aligned upgrade with the plugin carry and no blockers', () => {
+      const status = buildUpdateStatus({
+        view: subjectParts => subjectParts[0] === 'dsh-code' ? '1.0.7' : registry()[subjectParts[0]],
+        installedDsh: () => '0.1.5-rc.1',
+        ...readers,
+      })
+      expect(status.code).toEqual({ running: packageVersion, latest: "1.0.7" })
+      expect(status.host).toEqual({ installed: '0.1.5-rc.1', targetLine: '0.1.5-rc.2' })
+      expect(status.plan.dshSpec).toBe('@deepseek-ai/dsh@0.1.5-rc.2')
+      expect(status.plan.codeSpec).toBe('dsh-code@1.0.7')
+      expect(status.blockers).toEqual({ registry: null, downgrade: false, localCheckout: null })
+      expect(status.upToDate).toBe(false)
+    })
+
+    it('marks everything current as up to date', () => {
+      const status = buildUpdateStatus({
+        view: subjectParts => subjectParts[0] === 'dsh-code'
+          ? packageVersion
+          : subjectParts[0] === 'dsh-code@' + packageVersion
+            ? { '@deepseek-ai/dsh-session': '0.1.5-rc.1' }
+            : undefined,
+        installedDsh: () => '0.1.5-rc.1',
+        ...readers,
+      })
+      expect(status.upToDate).toBe(true)
+    })
+
+    it('flags the downgrade refusal when the installed host is newer than the pinned line', () => {
+      const status = buildUpdateStatus({
+        view: subjectParts => subjectParts[0] === 'dsh-code'
+          ? '1.0.6'
+          : subjectParts[0] === 'dsh-code@1.0.6'
+            ? { '@deepseek-ai/dsh-session': '0.1.5-rc.1' }
+            : undefined,
+        installedDsh: () => '0.1.5-rc.2',
+        ...readers,
+      })
+      expect(status.blockers.downgrade).toBe(true)
+      expect(status.upToDate).toBe(false)
+    })
+
+    it('surfaces the npm registry failure instead of guessing', () => {
+      const status = buildUpdateStatus({ view: () => undefined, installedDsh: () => '0.1.5-rc.1', ...readers })
+      expect(status.blockers.registry).toContain('could not read the latest dsh-code version')
+      expect(status.code.latest).toBeNull()
+      expect(status.upToDate).toBe(false)
+    })
   })
 
   it('reads the profile dependency spec and the actually mounted version', () => {

@@ -163,6 +163,7 @@ The following built-in commands are available inside the TUI. Additional Harness
 | Command | Purpose |
 | --- | --- |
 | `/plugin [query]` | Inspect loaded extensions and their status |
+| `/update` | One aligned upgrade: pins the global Harness host to the line the target release declares in its peers, moves dsh-code, the host, and profile companion plugins together, shows the full plan and refusal reasons before confirming, and prompts a restart when done |
 | `/statusline` | Select the items displayed in the status bar |
 | `/vscode-keys` | Pass Ctrl+R through VS Code-family terminals (idempotent user-level keybindings.json write) |
 | `/theme` | Switch the terminal color theme |

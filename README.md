@@ -171,6 +171,7 @@ dsh --profile cli --session my-id    # 使用指定 id 新建会话
 | 命令 | 用途 |
 | --- | --- |
 | `/plugin [query]` | 查看已加载扩展及其状态 |
+| `/update` | 一键对齐升级：按目标版本的 peers 锁定宿主 Harness 线，同步升级 dsh-code、全局宿主与 profile 内伴生插件，升级前展示完整计划与拒绝条件，完成后提示重启生效 |
 | `/statusline` | 选择状态栏显示的项目 |
 | `/vscode-keys` | 将 Ctrl+R 放行进 VS Code 系终端（幂等写入用户级 keybindings.json） |
 | `/theme` | 切换终端配色主题 |

@@ -34,6 +34,8 @@ import {
   type ThemeName,
 } from './theme.ts'
 import { ThemePanel } from './theme-panel.ts'
+import { UpdatePanel } from './update-panel.ts'
+import type { LauncherUpdateStatus } from './update.ts'
 import { WHALE_GLYPH, WHALE_GLYPH_COLUMNS } from './whale-glyph.ts'
 import { DSH_CODE_VERSION, dshKernelVersion } from './version.ts'
 import type { TranscriptStore } from './store.ts'
@@ -230,6 +232,7 @@ const LOCAL_COMMANDS = [
   { label: '/fork', description: 'fork at the latest completed turn (/fork [event-seq])' },
   { label: '/resume', description: 'browse or switch root sessions (/resume [id|prefix])' },
   { label: '/plugin', description: 'inspect the live plugin composition' },
+  { label: '/update', description: 'update dsh-code, the harness host, and profile plugins in one aligned step' },
   { label: '/jobs', description: 'inspect background jobs' },
   { label: '/statusline', description: 'customize the status line items' },
   { label: '/theme', description: 'switch the color theme' },
@@ -389,6 +392,10 @@ export interface AppProps {
   loadPlugins(): readonly PluginRow[]
   /** Caller-visible background jobs (the host jobs registry, read-only). */
   loadJobs(): readonly JobRow[]
+  /** Probe the launcher's aligned update plan (read-only; never installs). */
+  probeUpdate(): Promise<LauncherUpdateStatus>
+  /** Run the launcher's aligned update; streams sanitized lines; resolves with the exit code. */
+  applyUpdate(onLine: (line: string) => void): Promise<number>
   /** Registers the app's notice channel with the runner (called once on mount). */
   onBridgeReady(bridge: { notify(text: string, tone?: NoticeTone): void }): void
   /** Ordered enabled status items (/statusline config); the runner owns persistence. */
@@ -3187,7 +3194,7 @@ interface DraftFile extends FilePathInspection {
  * While a modal (approval / question / model panel) owns the keys, the
  * box passes every key through untouched.
  */
-function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openEffort, openHelp, openMode, openPermission, openResume, openPlugin, openJobs, openStatusline, openTheme, openHistory, openAgents, openSubagent, openTodos, openDelete, openDiff, reviewChanges, deleteConfirm, confirmDelete, cancelDelete, createSession, forkSession, cancelSessionSwitch, notify, applyEditorKeys, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, inspectImages, prepareImages, inspectFiles, prepareFiles, cyclePermission, exportTranscript, renameTitle, copyLastResponse, recallSpace, recordLocal, recordHistory, queued, cancelQueued, historyFill, historyConsumed, animations, applyAnimations, waveTier, waveStyle, maxRows, onEditorRows, onMenuRows, sessionKey }: {
+function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openEffort, openHelp, openMode, openPermission, openResume, openPlugin, openUpdate, openJobs, openStatusline, openTheme, openHistory, openAgents, openSubagent, openTodos, openDelete, openDiff, reviewChanges, deleteConfirm, confirmDelete, cancelDelete, createSession, forkSession, cancelSessionSwitch, notify, applyEditorKeys, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, inspectImages, prepareImages, inspectFiles, prepareFiles, cyclePermission, exportTranscript, renameTitle, copyLastResponse, recallSpace, recordLocal, recordHistory, queued, cancelQueued, historyFill, historyConsumed, animations, applyAnimations, waveTier, waveStyle, maxRows, onEditorRows, onMenuRows, sessionKey }: {
   active: boolean
   frozen: boolean
   busy: boolean
@@ -3206,6 +3213,8 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
   openPermission(): void
   openResume(): void
   openPlugin(query?: string): void
+  /** Open the /update panel (aligned upgrade surface). */
+  openUpdate(): void
   openJobs(): void
   openStatusline(): void
   openTheme(): void
@@ -4056,6 +4065,10 @@ function Input({ active, frozen, busy, descriptors, skills, dispatch, steer, int
         openPlugin(text.slice(7).trim())
         return
       }
+      if (text === '/update') {
+        openUpdate()
+        return
+      }
       if (text === '/jobs' || text.startsWith('/jobs ')) {
         openJobs()
         return
@@ -4833,6 +4846,7 @@ export function App(props: AppProps): ReactElement {
   const [resumeOpen, setResumeOpen] = useState(false)
   const [pluginOpen, setPluginOpen] = useState(false)
   const [pluginQuery, setPluginQuery] = useState('')
+  const [updateOpen, setUpdateOpen] = useState(false)
   const [jobsOpen, setJobsOpen] = useState(false)
   const [statuslineOpen, setStatuslineOpen] = useState(false)
   const [statuslineItems, setStatuslineItems] = useState<readonly StatusItemId[]>(() => parseStatuslineItems(props.statusline))
@@ -4912,7 +4926,7 @@ export function App(props: AppProps): ReactElement {
   // panel keypress.
   const inputActive = deleteConfirmId !== undefined
     ? !approvalPending && !questionPending
-    : !modelOpen && !helpOpen && !modeOpen && !permissionOpen && !resumeOpen && !pluginOpen && !jobsOpen && !statuslineOpen && !themeOpen && !historyOpen && !agentsOpen && !subagentOpen && !todosOpen && !verboseOpen && diffView === undefined && !approvalPending && !questionPending
+    : !modelOpen && !helpOpen && !modeOpen && !permissionOpen && !resumeOpen && !pluginOpen && !updateOpen && !jobsOpen && !statuslineOpen && !themeOpen && !historyOpen && !agentsOpen && !subagentOpen && !todosOpen && !verboseOpen && diffView === undefined && !approvalPending && !questionPending
 
   // Human questions outrank local inspectors. Close the lower modal instead
   // of leaving an approval/question visible but keyboard-locked behind it.
@@ -4927,6 +4941,7 @@ export function App(props: AppProps): ReactElement {
     setPermissionOpen(false)
     setResumeOpen(false)
     setPluginOpen(false)
+    setUpdateOpen(false)
     setStatuslineOpen(false)
     setThemeOpen(false)
     setHistoryOpen(false)
@@ -5088,9 +5103,9 @@ export function App(props: AppProps): ReactElement {
     : visibleLiveLines.slice(-liveAudit.allocation.live)
   const auditedReasoningRows = liveAudit.allocation.reasoning
   const auditedAnswerRows = liveAudit.allocation.answer
-  const transcriptVisible = !modelOpen && !helpOpen && !modeOpen && !permissionOpen && !resumeOpen && !pluginOpen && !jobsOpen && !statuslineOpen && !themeOpen && !historyOpen && !agentsOpen && !subagentOpen && !todosOpen && !verboseOpen && diffView === undefined && !approvalPending && !questionPending
+  const transcriptVisible = !modelOpen && !helpOpen && !modeOpen && !permissionOpen && !resumeOpen && !pluginOpen && !updateOpen && !jobsOpen && !statuslineOpen && !themeOpen && !historyOpen && !agentsOpen && !subagentOpen && !todosOpen && !verboseOpen && diffView === undefined && !approvalPending && !questionPending
   const inspectorVisible = verboseOpen && !approvalPending && !questionPending
-  const modalVisible = modelOpen || helpOpen || modeOpen || permissionOpen || resumeOpen || pluginOpen || jobsOpen || statuslineOpen || themeOpen || historyOpen || agentsOpen || subagentOpen || todosOpen || inspectorVisible || diffView !== undefined || approvalPending || questionPending
+  const modalVisible = modelOpen || helpOpen || modeOpen || permissionOpen || resumeOpen || pluginOpen || updateOpen || jobsOpen || statuslineOpen || themeOpen || historyOpen || agentsOpen || subagentOpen || todosOpen || inspectorVisible || diffView !== undefined || approvalPending || questionPending
   const closeInspector = useCallback((): void => {
     setVerboseOpen(false)
   }, [])
@@ -5492,6 +5507,14 @@ export function App(props: AppProps): ReactElement {
     pluginOpen && !approvalPending && !questionPending
       ? createElement(PluginPanel, { load: props.loadPlugins, initialQuery: pluginQuery, close: () => setPluginOpen(false) })
       : undefined,
+    updateOpen && !approvalPending && !questionPending
+      ? createElement(UpdatePanel, {
+        probe: props.probeUpdate,
+        apply: props.applyUpdate,
+        notify: (text: string, tone?: NoticeTone) => notify(text, tone),
+        close: () => setUpdateOpen(false),
+      })
+      : undefined,
     jobsOpen && !approvalPending && !questionPending
       ? createElement(JobsPanel, { load: props.loadJobs, close: () => setJobsOpen(false) })
       : undefined,
@@ -5644,6 +5667,7 @@ export function App(props: AppProps): ReactElement {
         openPermission: () => setPermissionOpen(true),
         openResume: () => { setResumeDelete({ mode: false }); setResumeOpen(true) },
         openPlugin: (query = '') => { setPluginQuery(query); setPluginOpen(true) },
+        openUpdate: () => setUpdateOpen(true),
         openJobs: () => setJobsOpen(true),
         openStatusline: () => setStatuslineOpen(true),
         openTheme: () => setThemeOpen(true),

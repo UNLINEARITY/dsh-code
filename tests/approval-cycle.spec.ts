@@ -121,6 +121,8 @@ function appProps(overrides: Partial<AppProps> = {}): AppProps {
     switchSession: noop,
     cancelSessionSwitch: () => false,
     loadPlugins: () => [],
+    probeUpdate: () => Promise.reject(new Error('update probe not wired in test')),
+    applyUpdate: () => Promise.resolve(0),
     loadJobs: () => [],
     statusline: DEFAULT_STATUSLINE_ITEMS,
     saveStatusline: noop,

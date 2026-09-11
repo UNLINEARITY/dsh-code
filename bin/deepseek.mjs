@@ -8,7 +8,8 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const packageRequire = createRequire(import.meta.url)
-const packageVersion = packageRequire('../package.json').version
+/** This launcher's release version (exported for probes and tests). */
+export const packageVersion = packageRequire('../package.json').version
 
 /** Arguments required to boot DSH-Code's conventional profile. */
 export const profileArgs = (args = []) => ['--profile', 'cli', ...args]
@@ -401,6 +402,57 @@ function printUpdateStatus() {
 }
 
 /**
+ * The structured form of the update status for machine consumers
+ * (`update --json`, consumed by the TUI /update panel): what is running,
+ * what npm serves, the exact steps `update --apply` would run, and every
+ * refusal that would stop it. One JSON object on stdout; `null` marks an
+ * unreadable value so the payload shape stays constant.
+ */
+export function buildUpdateStatus({
+  view = viewJson,
+  installedDsh = installedDshVersion,
+  readSpec = profileDependencySpec,
+  readMounted = profileMountedVersion,
+  readPlugins = profilePluginDependencies,
+} = {}) {
+  const codeLatest = view(['dsh-code', 'version'])
+  const installed = installedDsh()
+  const spec = readSpec()
+  const mounted = readMounted()
+  const peers = codeLatest === undefined ? undefined : view([`dsh-code@${codeLatest}`, 'peerDependencies'])
+  const plan = updatePlan({
+    latestCode: codeLatest ?? 'unknown',
+    peers,
+    profileSpec: spec,
+    profilePlugins: readPlugins(),
+  })
+  const registry = codeLatest === undefined ? 'could not read the latest dsh-code version from npm' : undefined
+  // The same refusals applyUpdate enforces, precomputed so a caller can
+  // show them BEFORE any confirmation instead of failing mid-flight.
+  const downgrade = plan.line !== undefined && installed !== undefined && compareHarnessLines(plan.line, installed) < 0
+  const localCheckout = plan.profileStep ? undefined : localCheckoutRefusal(mounted, codeLatest, plan.codeSpec)
+  const hostOnLine = installed !== undefined && (plan.line === undefined || compareHarnessLines(installed, plan.line) === 0)
+  const upToDate = registry === undefined
+    && codeLatest === packageVersion
+    && !downgrade
+    && localCheckout === undefined
+    && hostOnLine
+    && plan.pluginSpecs.length === 0
+    && (mounted === undefined || mounted === codeLatest)
+  return {
+    code: { running: packageVersion, latest: codeLatest ?? null },
+    host: { installed: installed ?? null, targetLine: plan.line ?? null },
+    profile: { spec: spec ?? null, mounted: mounted ?? null, localCheckout: !plan.profileStep },
+    plan: { dshSpec: plan.dshSpec, codeSpec: plan.codeSpec, pluginSpecs: plan.pluginSpecs },
+    // JSON.stringify drops undefined members; every unreadable value must
+    // serialize as an explicit null so machine consumers never see a missing
+    // key drift into a truthy comparison.
+    blockers: { registry: registry ?? null, downgrade, localCheckout: localCheckout ?? null },
+    upToDate,
+  }
+}
+
+/**
  * Upgrade the global launcher and the cli profile plugin together. The
  * global install is pinned to the harness line the new dsh-code release
  * declares, the profile follows through `dsh plugin add` with the same
@@ -519,6 +571,10 @@ export function launchOperation(args = process.argv.slice(2)) {
     return launchChild(command.command, command.args)
   }
   if (operation === 'update') {
+    if (args.includes('--json')) {
+      console.log(JSON.stringify(buildUpdateStatus()))
+      return true
+    }
     if (args.includes('--apply')) {
       void applyUpdate()
       return true

@@ -1,0 +1,209 @@
+import { PassThrough } from 'node:stream'
+import { describe, expect, it } from 'vitest'
+import { render } from 'ink'
+import { createElement } from 'react'
+import { UpdatePanel, clipUpdateLines, updateFooter, updatePlanView, UPDATE_OUTPUT_CAP } from '../src/update-panel.ts'
+import type { LauncherUpdateStatus } from '../src/update.ts'
+
+const wait = async (ms = 120): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
+
+/** A probe payload with an available aligned upgrade and no blockers. */
+function upgradeStatus(overrides: Partial<LauncherUpdateStatus> = {}): LauncherUpdateStatus {
+  return {
+    code: { running: '1.0.6', latest: '1.0.7' },
+    host: { installed: '0.1.5-rc.1', targetLine: '0.1.5-rc.2' },
+    profile: { spec: '1.0.6', mounted: '1.0.6', localCheckout: false },
+    plan: { dshSpec: '@deepseek-ai/dsh@0.1.5-rc.2', codeSpec: 'dsh-code@1.0.7', pluginSpecs: [] },
+    blockers: { registry: null, downgrade: false, localCheckout: null },
+    upToDate: false,
+    ...overrides,
+  }
+}
+
+/** TTY streams the panel renders through (the app-spec contract). */
+function tty(columns: number, rows: number): { stdin: NodeJS.ReadStream; stdout: NodeJS.WriteStream; text: () => string; reset: () => void } {
+  let buffer = ''
+  const stdin = Object.assign(new PassThrough(), {
+    isTTY: true,
+    isRaw: false,
+    setRawMode(value: boolean) {
+      this.isRaw = value
+      return this
+    },
+    ref() {},
+    unref() {},
+  }) as unknown as NodeJS.ReadStream
+  const stdout = Object.assign(new PassThrough(), {
+    isTTY: true,
+    columns,
+    rows,
+    write(chunk: string) {
+      buffer += chunk
+      return true
+    },
+  }) as unknown as NodeJS.WriteStream
+  return { stdin, stdout, text: () => buffer, reset: () => { buffer = '' } }
+}
+
+describe('updatePlanView', () => {
+  it('renders the aligned upgrade facts with current/target arrows', () => {
+    const view = updatePlanView(upgradeStatus())
+    expect(view.rows.map(row => row.text)).toEqual([
+      'dsh-code    1.0.6 → 1.0.7',
+      'harness     0.1.5-rc.1 → 0.1.5-rc.2',
+      'profile     dsh-code 1.0.6',
+    ])
+    expect(view.runnable).toBe(true)
+  })
+
+  it('marks the up-to-date state and drops runnability', () => {
+    const view = updatePlanView(upgradeStatus({
+      code: { running: '1.0.6', latest: '1.0.6' },
+      host: { installed: '0.1.5-rc.2', targetLine: '0.1.5-rc.2' },
+      upToDate: true,
+    }))
+    expect(view.rows.some(row => row.text.includes('already on the pinned line'))).toBe(true)
+    expect(view.runnable).toBe(false)
+  })
+
+  it('names the downgrade refusal row and blocks the confirm', () => {
+    const view = updatePlanView(upgradeStatus({
+      code: { running: '1.0.6', latest: '1.0.6' },
+      host: { installed: '0.1.5-rc.2', targetLine: '0.1.5-rc.1' },
+      blockers: { registry: null, downgrade: true, localCheckout: null },
+    }))
+    const refusal = view.rows.find(row => row.tone === 'error')
+    expect(refusal?.text).toContain('refusing to downgrade the host')
+    expect(view.runnable).toBe(false)
+  })
+
+  it('lists local-checkout refusal lines as errors', () => {
+    const view = updatePlanView(upgradeStatus({
+      profile: { spec: 'link:C:/repo', mounted: '1.0.5', localCheckout: true },
+      blockers: { registry: null, downgrade: false, localCheckout: ['dsh-code: the cli profile mounts a local checkout'] },
+    }))
+    expect(view.rows.filter(row => row.tone === 'error').length).toBe(1)
+    expect(view.runnable).toBe(false)
+  })
+
+  it('treats a JSON-dropped blocker key as no blocker instead of crashing', () => {
+    // JSON.stringify omits undefined members: an older launcher payload may
+    // arrive without blockers.registry. The row body must never be undefined.
+    const status = { ...upgradeStatus(), blockers: { downgrade: false } }
+    const view = updatePlanView(status as unknown as LauncherUpdateStatus)
+    expect(view.rows.some(row => row.text === undefined)).toBe(false)
+    expect(view.rows.some(row => row.tone === 'error')).toBe(false)
+    expect(view.runnable).toBe(true)
+  })
+
+  it('carries companion plugin rows', () => {
+    const view = updatePlanView(upgradeStatus({
+      plan: {
+        dshSpec: '@deepseek-ai/dsh@0.1.5-rc.2',
+        codeSpec: 'dsh-code@1.0.7',
+        pluginSpecs: ['@deepseek-ai/dsh-web-search-exa@0.1.5-rc.2'],
+      },
+    }))
+    expect(view.rows.some(row => row.text.includes('dsh-web-search-exa@0.1.5-rc.2'))).toBe(true)
+  })
+})
+
+describe('updateFooter and clipUpdateLines', () => {
+  it('names the confirm key only when the plan is runnable', () => {
+    expect(updateFooter('plan', true, false)).toBe('enter update · r recheck · esc close')
+    expect(updateFooter('plan', false, true)).toBe('up to date · r recheck · esc close')
+    expect(updateFooter('plan', false, false)).toBe('blocked · r recheck · esc close')
+    expect(updateFooter('apply', true, false)).toBe('updating… · ↑↓ scroll · esc waits')
+  })
+
+  it("keeps only the newest UPDATE_OUTPUT_CAP lines", () => {
+    const lines = Array.from({ length: UPDATE_OUTPUT_CAP + 250 }, (_, index) => `line ${index}`)
+    const clipped = clipUpdateLines(lines)
+    expect(clipped.length).toBe(UPDATE_OUTPUT_CAP)
+    expect(clipped[0]).toBe(`line ${250}`)
+  })
+})
+
+describe('UpdatePanel lifecycle', () => {
+  it("probes, confirms, streams apply output, and lands on the restart hint", async () => {
+    const harness = tty(100, 24)
+    const notices: string[] = []
+    const applyCalls: ((line: string) => void)[] = []
+    const apply = (onLine: (line: string) => void): Promise<number> => {
+      applyCalls.push(onLine)
+      return new Promise(resolve => { releaseApply = resolve })
+    }
+    let releaseApply: (code: number) => void = () => {}
+    const instance = render(createElement(UpdatePanel, {
+      probe: () => Promise.resolve(upgradeStatus()),
+      apply,
+      close: () => instance.unmount(),
+      notify: (text: string) => { notices.push(text) },
+    }), { stdin: harness.stdin, stdout: harness.stdout, stderr: harness.stdout, exitOnCtrlC: false })
+    await wait()
+    let text = harness.text()
+    expect(text).toContain('dsh-code    1.0.6 → 1.0.7')
+    expect(text).toContain('enter update')
+    // Confirm: the apply child starts and streams sanitized lines.
+    harness.stdin.write('\r')
+    await wait()
+    expect(applyCalls.length).toBe(1)
+    text = harness.text()
+    expect(text).toContain('updating…')
+    applyCalls[0]!('npm install  ')
+    applyCalls[0]!('added 42 packages')
+    await wait()
+    text = harness.text()
+    expect(text).toContain('added 42 packages')
+    // Panel stays inside the terminal height budget while streaming: count
+    // ONE fresh frame, not the accumulated multi-phase byte history.
+    harness.reset()
+    applyCalls[0]!('final verification line')
+    await wait()
+    expect(harness.text().split('\n').length).toBeLessThan(24)
+    releaseApply(0)
+    await wait()
+    text = harness.text()
+    expect(text).toContain('restart dsh to load the new version')
+    expect(notices).toContain('update installed — restart dsh to activate')
+    instance.unmount()
+  })
+
+  it("keeps escape locked while the update child runs", async () => {
+    const harness = tty(100, 24)
+    let releaseApply: (code: number) => void = () => {}
+    let closed = false
+    const instance = render(createElement(UpdatePanel, {
+      probe: () => Promise.resolve(upgradeStatus()),
+      apply: () => new Promise<number>(resolve => { releaseApply = resolve }),
+      close: () => { closed = true },
+      notify: () => {},
+    }), { stdin: harness.stdin, stdout: harness.stdout, stderr: harness.stdout, exitOnCtrlC: false })
+    await wait()
+    harness.stdin.write('\r')
+    await wait()
+    harness.stdin.write('\x1b')
+    await wait()
+    expect(closed).toBe(false)
+    releaseApply(1)
+    await wait()
+    harness.stdin.write('\x1b')
+    await wait()
+    expect(closed).toBe(true)
+    instance.unmount()
+  })
+
+  it("shows the probe failure with a retry hint and keeps the panel open", async () => {
+    const harness = tty(100, 24)
+    const instance = render(createElement(UpdatePanel, {
+      probe: () => Promise.reject(new Error('ECONNRESET')),
+      apply: () => Promise.resolve(0),
+      close: () => instance.unmount(),
+      notify: () => {},
+    }), { stdin: harness.stdin, stdout: harness.stdout, stderr: harness.stdout, exitOnCtrlC: false })
+    await wait()
+    expect(harness.text()).toContain('ECONNRESET')
+    expect(harness.text()).toContain('r recheck')
+    instance.unmount()
+  })
+})
