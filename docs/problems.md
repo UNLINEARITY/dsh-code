@@ -157,3 +157,35 @@ pnpm --version
 ```
 
 如仍无法定位，请附上完整的安装输出、`dsh --profile cli --dump-config` 输出，以及系统、架构和 Node.js 版本信息后提交 Issue。不要只截取最后一行错误；原生模块和 pnpm 问题通常需要前面的安装日志来判断原因。
+
+## 升级或本地开发后行为未变化
+
+### 现象
+
+已通过 `dsh plugin --profile cli add .` 重新挂载（或修改了仓库的 `cordis.patch.yml`），但 `--dump-config` 输出或运行行为仍是旧版本：例如禁用的插件仍禁用、配置键仍为旧名。
+
+### 原因
+
+宿主进程解析 bundle 的补丁层时，会从自身的包解析路径读取 `dsh-code`。若全局 npm 目录中存在一份 `npm install -g dsh-code` 安装的独立副本，它优先于 cli profile 中的挂载，profile 里的任何变更都不会进入组合结果。
+
+```sh
+ls "$(npm root -g)/dsh-code" >/dev/null 2>&1 && grep '"version"' "$(npm root -g)/dsh-code/package.json"
+```
+
+以上命令有输出，即存在全局副本。
+
+### 解决
+
+将全局副本更新到与当前使用版本一致：
+
+```sh
+npm install -g dsh-code@<version>
+```
+
+本地开发仓库则从仓库根重新安装全局副本：
+
+```sh
+npm install -g .
+```
+
+随后用 `dsh --profile cli --dump-config` 确认组合结果已更新。
