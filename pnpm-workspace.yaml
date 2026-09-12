@@ -2,6 +2,10 @@ allowBuilds:
   # esbuild ships the native binary tsdown/vitest resolve through; its install
   # script only downloads/links that binary.
   esbuild: true
+  # koffi is the FFI dependency behind dsh-session-persistence-jsonl on the
+  # dev/test path; its cnoke install script compiles or validates the native
+  # extension from the prebuilt sources the tarball ships.
+  koffi: true
 minimumReleaseAgeExclude:
   - '@deepseek-ai/cordis-plugin-loader@1.0.2'
   - '@deepseek-ai/cordis@4.0.1'

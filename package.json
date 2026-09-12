@@ -70,6 +70,7 @@
     "@deepseek-ai/dsh-authorization": "0.1.5-rc.2",
     "@deepseek-ai/dsh-web-fetch-http": "0.1.5-rc.2",
     "@deepseek-ai/dsh-util-values": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-tool-session-query": "0.1.5-rc.2",
     "@deepseek-ai/schemastery": "^3.18.2",
     "chalk": "^5.6.2",
     "commander": "^15.0.0",
@@ -118,7 +119,6 @@
     "@deepseek-ai/dsh-time-context": "0.1.5-rc.2",
     "@deepseek-ai/dsh-tmux-context": "0.1.5-rc.2",
     "@deepseek-ai/dsh-tool-lsp": "0.1.5-rc.2",
-    "@deepseek-ai/dsh-tool-session-query": "0.1.5-rc.2",
     "@deepseek-ai/dsh-tool-terminal": "0.1.5-rc.2",
     "@deepseek-ai/dsh-user-approval": "0.1.5-rc.2",
     "@deepseek-ai/dsh-user-questions": "0.1.5-rc.2"
@@ -247,9 +247,6 @@
     "@deepseek-ai/dsh-tool-lsp": {
       "optional": true
     },
-    "@deepseek-ai/dsh-tool-session-query": {
-      "optional": true
-    },
     "@deepseek-ai/dsh-tool-terminal": {
       "optional": true
     },
@@ -292,7 +289,6 @@
     "@deepseek-ai/dsh-time-context": "0.1.5-rc.2",
     "@deepseek-ai/dsh-tmux-context": "0.1.5-rc.2",
     "@deepseek-ai/dsh-tool-lsp": "0.1.5-rc.2",
-    "@deepseek-ai/dsh-tool-session-query": "0.1.5-rc.2",
     "@deepseek-ai/dsh-tool-terminal": "0.1.5-rc.2",
     "@deepseek-ai/dsh-tool-todo": "0.1.5-rc.2",
     "@deepseek-ai/dsh-user-approval": "0.1.5-rc.2",

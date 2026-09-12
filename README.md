@@ -246,8 +246,8 @@ DSH-Code 读取 Harness 的实时注册表，不在本地维护另一套副本�
         config:
           configPath: C:/Users/you/.claude/hooks.json
   ```
-- **LSP 导航**：组合里预置了 `lsp` / `lsp-stdio` / `tool-lsp` 三行（禁用状态——语言服务器二进制在挂载期解析，缺失会让整个组合启动失败）。在用户层将三行 `disabled: false` 并为 `lsp-stdio` 配置 `servers`（扩展名到语言再到服务器命令），模型即获得 `lsp` 工具（goToDefinition / findReferences / goToImplementation / hover）。
-- **持久终端**：PTY 服务与平台后端（Windows 走 pwsh 方言、POSIX 走 bash）已默认挂载，但六个模型工具 `terminal_open` / `terminal_send` / `terminal_read` / `terminal_signal` / `terminal_close` / `terminal_list` 出厂禁用——启用等于向所有会话放开 shell 能力，与 preset 把关原则一致，由部署显式决定。在用户层开启：
+- **LSP 导航**：组合里预置了 `lsp` / `lsp-stdio` / `tool-lsp` 三行（禁用状态——语言服务器二进制在挂载期解析，缺失会让整个组合启动失败）。这三个包宿主 CLI 未捆绑：先装入 profile（`dsh plugin --profile cli add @deepseek-ai/dsh-lsp @deepseek-ai/dsh-lsp-stdio @deepseek-ai/dsh-tool-lsp`），再在用户层将三行 `disabled: false` 并为 `lsp-stdio` 配置 `servers`（扩展名到语言再到服务器命令），模型即获得 `lsp` 工具（goToDefinition / findReferences / goToImplementation / hover）。
+- **持久终端**：PTY 服务与平台后端（Windows 走 pwsh 方言、POSIX 走 bash）已默认挂载，但六个模型工具 `terminal_open` / `terminal_send` / `terminal_read` / `terminal_signal` / `terminal_close` / `terminal_list` 出厂禁用——启用等于向所有会话放开 shell 能力，与 preset 把关原则一致，由部署显式决定。`@deepseek-ai/dsh-tool-terminal` 同样不在宿主捆绑内：先 `dsh plugin --profile cli add @deepseek-ai/dsh-tool-terminal`，再在用户层开启：
   ```yaml
   - id: tool-terminal
     disabled: false
