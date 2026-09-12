@@ -133,6 +133,19 @@ export function selfInstallHint(options = {}) {
 }
 
 /**
+ * Refusal line when npm's latest dsh-code is OLDER than this running
+ * launcher — a registry rollback, or a launcher installed from a GitHub
+ * release that sits ahead of the registry — and applying would downgrade
+ * the bundle back over the user's profile. Undefined when the upgrade may
+ * proceed.
+ */
+export function bundleDowngradeRefusal(latest, running = packageVersion) {
+  return latest !== undefined && compareHarnessLines(latest, running) < 0
+    ? `dsh-code: npm latest is dsh-code@${latest}, older than this launcher (dsh-code@${running}); refusing to downgrade the bundle`
+    : undefined
+}
+
+/**
  * Refusal reason when a local-checkout profile would pair an older local
  * build with the newer global host this upgrade installs, or undefined when
  * the upgrade may proceed (no checkout mounted, or the checkout already
@@ -512,13 +525,17 @@ export function buildUpdateStatus({
   const downgrade = plan.line !== undefined && installed !== undefined && compareHarnessLines(plan.line, installed) < 0
   const localCheckout = plan.profileStep ? undefined : localCheckoutRefusal(mounted, codeLatest, plan.codeSpec)
   const hostOnLine = installed !== undefined && (plan.line === undefined || compareHarnessLines(installed, plan.line) === 0)
-  const upToDate = registry === undefined
+  // A launcher ahead of the registry (a GitHub-release install) has nothing
+  // npm can offer: the registry's older latest must not present as a pending
+  // update, and applyUpdate refuses it anyway.
+  const bundleAhead = codeLatest !== undefined && compareHarnessLines(codeLatest, packageVersion) < 0
+  const upToDate = bundleAhead || (registry === undefined
     && codeLatest === packageVersion
     && !downgrade
     && localCheckout === undefined
     && hostOnLine
     && plan.pluginSpecs.length === 0
-    && (mounted === undefined || mounted === codeLatest)
+    && (mounted === undefined || mounted === codeLatest))
   return {
     code: { running: packageVersion, latest: codeLatest ?? null },
     host: { installed: installed ?? null, targetLine: plan.line ?? null },
@@ -547,6 +564,15 @@ async function applyUpdate({
   const latestCode = view(['dsh-code', 'version'], undefined, npm)
   if (latestCode === undefined) {
     console.error('dsh-code: could not read the latest dsh-code version from npm')
+    process.exitCode = 1
+    return
+  }
+  // A launcher installed from a GitHub release (or any source ahead of the
+  // registry) must not be walked back by an apply targeting npm's older
+  // latest - the downgrade guard below only covers the host line.
+  const bundleRefusal = bundleDowngradeRefusal(latestCode)
+  if (bundleRefusal !== undefined) {
+    console.error(bundleRefusal)
     process.exitCode = 1
     return
   }

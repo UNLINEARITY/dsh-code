@@ -1,0 +1,45 @@
+name: Release
+
+# A tag push builds the publish artifact and attaches it to a GitHub
+# Release, so the bundle stays installable straight from GitHub
+# (`npm install -g <release asset url>`) when the npm registry path is
+# unavailable. The artifact is the same `pnpm pack` tarball npm would
+# serve; lib/ is built before packing, so no build toolchain is needed on
+# the installing machine.
+
+on:
+  push:
+    tags: ['*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm exec vitest run --retry=2
+      - run: pnpm pack --pack-destination dist
+      - name: Create the GitHub release with the packed bundle
+        run: |
+          NOTES="docs/releases/${GITHUB_REF_NAME}.md"
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/*.tgz --clobber
+          elif [ -f "$NOTES" ]; then
+            gh release create "$GITHUB_REF_NAME" dist/*.tgz --title "dsh-code $GITHUB_REF_NAME" --notes-file "$NOTES"
+          else
+            gh release create "$GITHUB_REF_NAME" dist/*.tgz --title "dsh-code $GITHUB_REF_NAME" --generate-notes
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

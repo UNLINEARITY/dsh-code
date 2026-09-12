@@ -29,21 +29,31 @@ DeepSeek Harness 将模型、工具、存储、策略和界面作为插件，通
 
 ### 1. 安装与更新
 
-初次安装和更新使用同一组指令：
+初次安装和更新使用同一组指令（GitHub Release 直装，产物由 CI 在打 tag 时构建并校验，lib 已预构建，安装机无需工具链）：
 
 ```sh
-npm install -g @deepseek-ai/dsh@0.1.5-rc.2 dsh-code@1.0.8
-npm install -g pnpm
-dsh plugin --profile cli add dsh-code@1.0.8
+npm install -g @deepseek-ai/dsh@0.1.5-rc.2 pnpm
+npm install -g https://github.com/unlinearity/dsh-code/releases/download/1.0.8/dsh-code-1.0.8.tgz
+dsh plugin --profile cli add https://github.com/unlinearity/dsh-code/releases/download/1.0.8/dsh-code-1.0.8.tgz
 ```
 
-> 提示：pnpm 会忽略发布不足 24 小时的包，因此发布首日请使用精确版本 `dsh-code@1.0.8`；24 小时后可省略版本号。npm 安装不受此限制。
+> 通过 GitHub 安装的版本领先于 npm 注册表时，`deepseek update --apply` 会拒绝执行以防降级；注册表上出现更新的版本后即可照常更新。
+>
+> 提示：pnpm 会忽略发布不足 24 小时的包。GitHub 直装的 URL 已含精确版本，不受此限制；注册表渠道恢复后，发布首日请使用精确版本，24 小时后可省略版本号。
 >
 > npm 脚本提示：npm 11.6+ 可能在全局安装时提示 `npm warn install-scripts`（node-pty、koffi 等原生依赖的构建脚本未获批准）。宿主随包自带预编译产物，常规平台可直接忽略；若安装后出现原生模块报错，按 npm 提示执行 `npm install -g --allow-scripts=<包名列表>` 后重装。
 >
 > 版本对齐：dsh-code 面向 dsh `0.1.5-rc.2` 构建，全部 Harness 依赖均精确锁定为 `0.1.5-rc.2`。已安装的用户运行 `deepseek update --apply` 即可按同一条版本线一起升级全局宿主与 cli profile 中的插件，本地开发挂载（`link:`）不受影响。
 >
 > 升级说明：旧会话与旧参数中记录的 `code` 预设会自动映射到上游已改名的 `ptc`，无需手动迁移。会话日志读取端随上游升级到格式 v3：旧格式日志在读取时由内核自动迁移，磁盘上的原始文件保持不变。
+
+npm 安装渠道暂停使用，恢复后可改用：
+
+```sh
+npm install -g @deepseek-ai/dsh@0.1.5-rc.2 dsh-code@1.0.8
+npm install -g pnpm
+dsh plugin --profile cli add dsh-code@1.0.8
+```
 
 ### 2. 启动指令
 

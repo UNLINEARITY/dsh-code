@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import {
   buildUpdateStatus,
+  bundleDowngradeRefusal,
   compareHarnessLines,
   harnessLineFromPeers,
   installedGlobalDshVersion,
@@ -268,6 +269,17 @@ describe('update orchestration', () => {
       .toBe('npm install -g @deepseek-ai/dsh dsh-code@1.0.8')
   })
 
+  it('refuses an apply that would walk the bundle back over npm latest', () => {
+    // The GitHub-release path can put a launcher ahead of the registry; an
+    // apply computed from npm's older latest would downgrade the bundle and,
+    // for 1.0.7, reinstall the unbootable release.
+    expect(bundleDowngradeRefusal('1.0.7', '1.0.8')).toContain('refusing to downgrade the bundle')
+    expect(bundleDowngradeRefusal('1.0.7', '1.0.8')).toContain('dsh-code@1.0.7')
+    expect(bundleDowngradeRefusal('1.0.8', '1.0.8')).toBeUndefined()
+    expect(bundleDowngradeRefusal('1.0.9', '1.0.8')).toBeUndefined()
+    expect(bundleDowngradeRefusal(undefined, '1.0.8')).toBeUndefined()
+  })
+
   it('collects only harness companion plugins from the profile manifest', () => {
     const manifest = JSON.stringify({
       dependencies: {
@@ -374,10 +386,12 @@ describe('update orchestration', () => {
     })
 
     it('flags the downgrade refusal when the installed host is newer than the pinned line', () => {
+      // The release-ordering window: npm's latest matches this launcher, but
+      // the line it pins is older than the host already installed globally.
       const status = buildUpdateStatus({
         view: subjectParts => subjectParts[0] === 'dsh-code'
-          ? '1.0.6'
-          : subjectParts[0] === 'dsh-code@1.0.6'
+          ? packageVersion
+          : subjectParts[0] === 'dsh-code@' + packageVersion
             ? { '@deepseek-ai/dsh-session': '0.1.5-rc.1' }
             : undefined,
         installedDsh: () => '0.1.5-rc.2',
@@ -385,6 +399,23 @@ describe('update orchestration', () => {
       })
       expect(status.blockers.downgrade).toBe(true)
       expect(status.upToDate).toBe(false)
+    })
+
+    it('treats a launcher ahead of the registry as up to date', () => {
+      // A GitHub-release install while npm publish is delayed: npm's older
+      // latest is not a pending update, it is a downgrade applyUpdate must
+      // refuse — the status reports up to date instead of offering it.
+      const status = buildUpdateStatus({
+        view: subjectParts => subjectParts[0] === 'dsh-code'
+          ? '1.0.7'
+          : subjectParts[0] === 'dsh-code@1.0.7'
+            ? { '@deepseek-ai/dsh-session': '0.1.5-rc.2' }
+            : undefined,
+        installedDsh: () => '0.1.5-rc.2',
+        ...readers,
+      })
+      expect(status.upToDate).toBe(true)
+      expect(status.blockers.downgrade).toBe(false)
     })
 
     it('surfaces the npm registry failure instead of guessing', () => {
