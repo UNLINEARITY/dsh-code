@@ -32,12 +32,14 @@ DeepSeek Harness 将模型、工具、存储、策略和界面作为插件，通
 初次安装和更新使用同一组指令：
 
 ```sh
-npm install -g @deepseek-ai/dsh@0.1.5-rc.2 dsh-code@1.0.7
+npm install -g @deepseek-ai/dsh@0.1.5-rc.2 dsh-code@1.0.8
 npm install -g pnpm
-dsh plugin --profile cli add dsh-code@1.0.7
+dsh plugin --profile cli add dsh-code@1.0.8
 ```
 
-> 提示：pnpm 会忽略发布不足 24 小时的包，因此发布首日请使用精确版本 `dsh-code@1.0.7`；24 小时后可省略版本号。npm 安装不受此限制。
+> 提示：pnpm 会忽略发布不足 24 小时的包，因此发布首日请使用精确版本 `dsh-code@1.0.8`；24 小时后可省略版本号。npm 安装不受此限制。
+>
+> npm 脚本提示：npm 11.6+ 可能在全局安装时提示 `npm warn install-scripts`（node-pty、koffi 等原生依赖的构建脚本未获批准）。宿主随包自带预编译产物，常规平台可直接忽略；若安装后出现原生模块报错，按 npm 提示执行 `npm install -g --allow-scripts=<包名列表>` 后重装。
 >
 > 版本对齐：dsh-code 面向 dsh `0.1.5-rc.2` 构建，全部 Harness 依赖均精确锁定为 `0.1.5-rc.2`。已安装的用户运行 `deepseek update --apply` 即可按同一条版本线一起升级全局宿主与 cli profile 中的插件，本地开发挂载（`link:`）不受影响。
 >
@@ -57,7 +59,7 @@ dsh-code
 
 > DeepSeek Harness 目前仍处于 developer preview，可能出现破坏兼容性的变化；DSH-Code 会持续跟随其插件接口演进。
 
-安装、原生模块和插件加载问题，请查看[常见问题与排障](docs/problems.md)。
+安装、原生模块和插件加载问题，请先运行 `deepseek doctor` 自检，更多排查见[常见问题与排障](docs/problems.md)。
 
 ## 三、核心功能与使用方式
 

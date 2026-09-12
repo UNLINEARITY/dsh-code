@@ -30,12 +30,14 @@ Requires Node `^22.19 || >=24` and the preview `dsh` CLI (current release line: 
 Use the same commands for the initial installation and subsequent updates:
 
 ```sh
-npm install -g @deepseek-ai/dsh@0.1.5-rc.2 dsh-code@1.0.7
+npm install -g @deepseek-ai/dsh@0.1.5-rc.2 dsh-code@1.0.8
 npm install -g pnpm
-dsh plugin --profile cli add dsh-code@1.0.7
+dsh plugin --profile cli add dsh-code@1.0.8
 ```
 
-> Note: pnpm ignores packages published less than 24 hours ago, so use the exact version `dsh-code@1.0.7` on release day; the version may be omitted after 24 hours. npm installation is not affected.
+> Note: pnpm ignores packages published less than 24 hours ago, so use the exact version `dsh-code@1.0.8` on release day; the version may be omitted after 24 hours. npm installation is not affected.
+>
+> npm script prompts: npm 11.6+ may print `npm warn install-scripts` during a global install (unapproved build scripts for node-pty, koffi, and friends). The host ships prebuilt artifacts, so common platforms can ignore the warning; if a native-module error appears after installing, follow npm's own hint and rerun with `npm install -g --allow-scripts=<package list>`.
 >
 > Version alignment: dsh-code targets dsh `0.1.5-rc.2`, with every Harness dependency pinned exactly to `0.1.5-rc.2`. Keep the global dsh CLI and dsh-code aligned instead of mixing release candidates; the legacy `code` preset id maps to its renamed `ptc` automatically.
 
@@ -53,7 +55,7 @@ dsh-code
 
 > DeepSeek Harness is still a developer preview and may introduce compatibility-breaking changes. DSH-Code will continue to track the evolution of its plugin interfaces.
 
-For installation, native-module, and plugin-loading issues, see [Troubleshooting](docs/problems.md).
+For installation, native-module, and plugin-loading issues, run `deepseek doctor` first, then see [Troubleshooting](docs/problems.md).
 
 ## 3. Core features and usage
 
