@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   buildUpdateStatus,
   compareHarnessLines,
@@ -19,8 +19,10 @@ import {
   profileMountedVersion,
   profilePluginDependencies,
   runSequence,
+  selfInstallHint,
   setupBundle,
   updatePlan,
+  updateSteps,
 } from '../bin/deepseek.mjs'
 
 describe('global launcher aliases', () => {
@@ -217,6 +219,55 @@ describe('update orchestration', () => {
     expect(updatePlan({ latestCode: '1.0.6', peers: { '@deepseek-ai/dsh-session': '0.1.5-rc.1' }, profileSpec: 'link:C:/repo', profilePlugins: plugins }).pluginSpecs).toEqual([])
   })
 
+  it('builds update steps that fail loudly and retryably', () => {
+    const plan = updatePlan({
+      latestCode: '1.0.6',
+      peers: { '@deepseek-ai/dsh-session': '0.1.5-rc.1' },
+      profileSpec: '^1.0.5',
+      profilePlugins: [{ name: '@deepseek-ai/dsh-web-search-exa', spec: '0.1.2-rc.1' }],
+    })
+    const npm = { command: 'npm', args: [] }
+    const { steps, blockers } = updateSteps({ plan, npm, resolveCommand: args => ({ command: 'dsh', args }) })
+    expect(blockers).toEqual([])
+    expect(steps.map(step => step.label)).toEqual([
+      'npm install',
+      'dsh plugin add',
+      'dsh plugin add @deepseek-ai/dsh-web-search-exa@0.1.5-rc.1',
+    ])
+    // The two mandatory steps stop the sequence on failure — a half-run
+    // update would strand host and bundle on different lines — and each
+    // names the exact manual command to recover with.
+    expect(steps[0]).toMatchObject({ fatal: true, remedy: 'npm install -g @deepseek-ai/dsh@0.1.5-rc.1 dsh-code@1.0.6' })
+    expect(steps[1]).toMatchObject({ fatal: true, remedy: 'dsh plugin --profile cli add dsh-code@1.0.6' })
+    // The companion carry is best-effort: one plugin without a build on the
+    // target line must not strand the finished upgrade.
+    expect(steps[2]).toMatchObject({ fatal: false, remedy: 'dsh plugin --profile cli add @deepseek-ai/dsh-web-search-exa@0.1.5-rc.1' })
+
+    // Unresolvable dsh commands are blockers, enforced before any step runs:
+    // starting the host install without a working profile step is the
+    // half-updated state the plan refuses to create.
+    const unresolvable = updateSteps({ plan, npm, resolveCommand: () => undefined })
+    expect(unresolvable.blockers).toEqual([
+      'dsh-code: could not resolve the dsh command for the profile update',
+      'dsh-code: could not resolve the dsh command for @deepseek-ai/dsh-web-search-exa@0.1.5-rc.1',
+    ])
+    expect(unresolvable.steps).toHaveLength(1)
+
+    // A checkout-mounted profile carries no steps beyond the host install.
+    const linked = updatePlan({ latestCode: '1.0.6', peers: { '@deepseek-ai/dsh-session': '0.1.5-rc.1' }, profileSpec: 'link:C:/repo' })
+    const checkout = updateSteps({ plan: linked, npm, resolveCommand: () => undefined })
+    expect(checkout.steps).toHaveLength(1)
+    expect(checkout.blockers).toEqual([])
+  })
+
+  it('pins the missing-host guidance to this launcher line and release', () => {
+    expect(selfInstallHint({ version: '1.0.8', peers: { '@deepseek-ai/dsh-session': '0.1.5-rc.2' } }))
+      .toBe('npm install -g @deepseek-ai/dsh@0.1.5-rc.2 dsh-code@1.0.8')
+    // No readable peers: the command stays usable, only the host pin drops.
+    expect(selfInstallHint({ version: '1.0.8', peers: undefined }))
+      .toBe('npm install -g @deepseek-ai/dsh dsh-code@1.0.8')
+  })
+
   it('collects only harness companion plugins from the profile manifest', () => {
     const manifest = JSON.stringify({
       dependencies: {
@@ -389,5 +440,37 @@ describe('update orchestration', () => {
     children[2].emit('exit', 3, null)
     await expect(aborted).resolves.toBe(3)
     expect(started).toHaveLength(3)
+  })
+
+  it('reports a best-effort step failure and keeps the sequence running', async () => {
+    const children = []
+    const started = []
+    const fakeSpawn = (command, args) => {
+      started.push(`${command} ${args.join(' ')}`)
+      const child = new EventEmitter()
+      children.push(child)
+      return child
+    }
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const done = runSequence([
+        { command: 'node', args: ['dsh'], label: 'npm install', fatal: true },
+        { command: 'node', args: ['dsh'], label: 'dsh plugin add @deepseek-ai/dsh-web-search-exa', fatal: false, remedy: 'dsh plugin --profile cli add @deepseek-ai/dsh-web-search-exa@0.1.5-rc.1' },
+        { command: 'node', args: ['dsh'], label: 'dsh plugin add @deepseek-ai/dsh-web-search-perplexity', fatal: false },
+      ], fakeSpawn)
+      await new Promise(resolve => setImmediate(resolve))
+      children[0].emit('exit', 0, null)
+      await new Promise(resolve => setImmediate(resolve))
+      children[1].emit('exit', 7, null)
+      await new Promise(resolve => setImmediate(resolve))
+      // The failed carry did not strand the remaining carries.
+      expect(started).toHaveLength(3)
+      children[2].emit('exit', 0, null)
+      // The incomplete pass still reports non-zero, with the retry command.
+      await expect(done).resolves.toBe(7)
+      expect(errorSpy.mock.calls.some(call => String(call[0]).includes('@deepseek-ai/dsh-web-search-exa@0.1.5-rc.1'))).toBe(true)
+    } finally {
+      errorSpy.mockRestore()
+    }
   })
 })

@@ -117,6 +117,22 @@ export function harnessLineFromPeers(peers) {
 }
 
 /**
+ * The exact global install that pairs with this launcher: the harness line
+ * its own package declares in peers, and its own release. The guidance a
+ * missing host prints must not send the user to an unpinned `dsh-code`,
+ * which could mount a newer bundle beside this older wrapper.
+ */
+export function selfInstallHint(options = {}) {
+  const version = options.version ?? packageVersion
+  // An explicitly passed peers value — including undefined, the "no peers
+  // were readable" case — must win over this launcher's own manifest, which
+  // a destructuring default would conflate with the argument being absent.
+  const peers = 'peers' in options ? options.peers : packageRequire('../package.json').peerDependencies
+  const line = harnessLineFromPeers(peers)
+  return `npm install -g @deepseek-ai/dsh${line === undefined ? '' : `@${line}`} dsh-code@${version}`
+}
+
+/**
  * Refusal reason when a local-checkout profile would pair an older local
  * build with the newer global host this upgrade installs, or undefined when
  * the upgrade may proceed (no checkout mounted, or the checkout already
@@ -153,6 +169,56 @@ export function updatePlan({ latestCode, peers, profileSpec, profilePlugins = []
       .filter(plugin => plugin.spec !== line)
       .map(plugin => `${plugin.name}@${line}`),
   }
+}
+
+/**
+ * The concrete steps `update --apply` runs. The host install and the
+ * dsh-code mount are fatal: a failure there strands the global host and the
+ * profile bundle on different release lines, so the sequence stops. The
+ * companion plugin carries are best-effort — one plugin without a build on
+ * the target line must not strand the rest of the upgrade, so each reports
+ * its manual retry command and lets the sequence finish. Unresolvable dsh
+ * commands come back as blockers: they are enforced before any step runs,
+ * because starting the host install without a working profile step is
+ * exactly the half-updated state the fatal marking exists to prevent.
+ */
+export function updateSteps({ plan, npm = npmInvocation(), resolveCommand = rawDshCommand }) {
+  const steps = [{
+    command: npm.command,
+    args: [...npm.args, 'install', '-g', plan.dshSpec, plan.codeSpec],
+    label: 'npm install',
+    fatal: true,
+    remedy: `npm install -g ${plan.dshSpec} ${plan.codeSpec}`,
+  }]
+  if (!plan.profileStep) return { steps, blockers: [] }
+  const blockers = []
+  const codeCommand = resolveCommand(['plugin', '--profile', 'cli', 'add', plan.codeSpec])
+  if (codeCommand === undefined) {
+    blockers.push('dsh-code: could not resolve the dsh command for the profile update')
+  } else {
+    steps.push({
+      command: codeCommand.command,
+      args: codeCommand.args,
+      label: 'dsh plugin add',
+      fatal: true,
+      remedy: `dsh plugin --profile cli add ${plan.codeSpec}`,
+    })
+  }
+  for (const pluginSpec of plan.pluginSpecs) {
+    const pluginCommand = resolveCommand(['plugin', '--profile', 'cli', 'add', pluginSpec])
+    if (pluginCommand === undefined) {
+      blockers.push(`dsh-code: could not resolve the dsh command for ${pluginSpec}`)
+      continue
+    }
+    steps.push({
+      command: pluginCommand.command,
+      args: pluginCommand.args,
+      label: `dsh plugin add ${pluginSpec}`,
+      fatal: false,
+      remedy: `dsh plugin --profile cli add ${pluginSpec}`,
+    })
+  }
+  return { steps, blockers }
 }
 
 /**
@@ -201,23 +267,37 @@ export function installedGlobalDshVersion(roots = globalDshRoots(), fileExists =
   return undefined
 }
 
-/** Run wrapper-owned child steps in order, stopping at the first failure. */
+/**
+ * Run wrapper-owned child steps in order. A step marked fatal stops the
+ * sequence at its failure (the default: the next step depends on this one);
+ * a `fatal: false` step is best-effort — its failure is reported with the
+ * step's manual retry command, the sequence continues, and the resolved
+ * code stays non-zero so the caller still sees the incomplete pass.
+ */
 export function runSequence(steps, spawnProcess = spawn) {
   return new Promise(resolve => {
+    const failures = []
     const run = index => {
       const step = steps[index]
       if (step === undefined) {
-        resolve(0)
+        resolve(failures.length === 0 ? 0 : failures[failures.length - 1])
         return
       }
       const needsShell = process.platform === 'win32' && /\.(cmd|bat)$/iu.test(step.command)
       const child = spawnProcess(step.command, step.args, { stdio: 'inherit', ...(needsShell ? { shell: true } : {}) })
+      const report = code => {
+        if (step.remedy !== undefined) console.error(`dsh-code: to retry ${step.label} manually: ${step.remedy}`)
+        failures.push(code ?? 1)
+        run(index + 1)
+      }
       child.once('error', error => {
         console.error(`dsh-code: ${step.label} failed: ${error.message}`)
-        resolve(1)
+        if (step.fatal === false) report(undefined)
+        else resolve(1)
       })
       child.once('exit', (code, signal) => {
         if (code === 0) run(index + 1)
+        else if (step.fatal === false) report(code)
         else resolve(code ?? 1)
       })
     }
@@ -505,26 +585,13 @@ async function applyUpdate({
       return
     }
   }
-  const steps = [{ command: npm.command, args: [...npm.args, 'install', '-g', plan.dshSpec, plan.codeSpec], label: 'npm install' }]
+  const { steps, blockers } = updateSteps({ plan, npm, resolveCommand })
+  if (blockers.length > 0) {
+    for (const line of blockers) console.error(line)
+    process.exitCode = 1
+    return
+  }
   if (plan.profileStep) {
-    const command = resolveCommand(['plugin', '--profile', 'cli', 'add', plan.codeSpec])
-    if (command === undefined) {
-      console.error('dsh-code: could not resolve the dsh command for the profile update')
-      process.exitCode = 1
-      return
-    }
-    steps.push({ command: command.command, args: command.args, label: 'dsh plugin add' })
-    // Companion plugins ride the same line: without this, `dsh plugin add`-ed
-    // extras stay pinned to the old harness line after an upgrade.
-    for (const pluginSpec of plan.pluginSpecs) {
-      const pluginCommand = resolveCommand(['plugin', '--profile', 'cli', 'add', pluginSpec])
-      if (pluginCommand === undefined) {
-        console.error(`dsh-code: could not resolve the dsh command for ${pluginSpec}`)
-        process.exitCode = 1
-        return
-      }
-      steps.push({ command: pluginCommand.command, args: pluginCommand.args, label: `dsh plugin add ${pluginSpec}` })
-    }
     if (plan.pluginSpecs.length > 0) {
       console.log(`carrying ${plan.pluginSpecs.length} profile plugin${plan.pluginSpecs.length === 1 ? '' : 's'} to the same line: ${plan.pluginSpecs.join(', ')}`)
     }
@@ -564,7 +631,7 @@ export function launchOperation(args = process.argv.slice(2)) {
     // Setup must mount the exact globally installed release on launch day.
     const command = rawDshCommand(['plugin', '--profile', 'cli', 'add', setupBundle(args)])
     if (command === undefined) {
-      console.error('dsh-code: @deepseek-ai/dsh is not installed; run: npm install -g @deepseek-ai/dsh dsh-code')
+      console.error(`dsh-code: @deepseek-ai/dsh is not installed; run: ${selfInstallHint()}`)
       process.exitCode = 1
       return true
     }
@@ -607,7 +674,7 @@ export function launchDsh(
   }
   const command = resolveCommand(args)
   if (command === undefined) {
-    console.error('dsh-code: @deepseek-ai/dsh must be installed globally beside dsh-code; run: npm install -g @deepseek-ai/dsh dsh-code')
+    console.error(`dsh-code: @deepseek-ai/dsh must be installed globally beside dsh-code; run: ${selfInstallHint()}`)
     process.exitCode = 1
     return undefined
   }
