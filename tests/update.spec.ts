@@ -35,7 +35,12 @@ describe('launcherUpdateCommand', () => {
   it('spawns node with the sibling launcher entrypoint and given args', () => {
     const command = launcherUpdateCommand(['update', '--json'], 'file:///C:/repo/dsh-cli/lib/index.mjs')
     expect(command.command).toBe(process.execPath)
-    expect(command.args[0]).toBe('C:\\repo\\dsh-cli\\bin\\deepseek.mjs')
+    // fileURLToPath renders the drive URL per host convention: backslash
+    // drive paths on Windows, a /C:/ root elsewhere — assert both shapes so
+    // the sibling resolution is pinned on every platform.
+    expect(command.args[0]).toBe(process.platform === 'win32'
+      ? 'C:\\repo\\dsh-cli\\bin\\deepseek.mjs'
+      : '/C:/repo/dsh-cli/bin/deepseek.mjs')
     expect(command.args.slice(1)).toEqual(['update', '--json'])
   })
 })
