@@ -25,21 +25,21 @@ DeepSeek Harness 将模型、工具、存储、策略和界面作为插件，通
 
 ## 二、快速开始
 
-需要 Node `^22.19 || >=24` 和预览版 `dsh` CLI（当前版本线：`@deepseek-ai/dsh@0.1.5-rc.1`）。未配置模型时仍可进入 TUI、查看会话和使用非模型功能；在 `/model` 中按 Tab 进入供应商管理，配置 API key、OAuth 与设备码登录。
+需要 Node `^22.19 || >=24` 和预览版 `dsh` CLI（当前版本线：`@deepseek-ai/dsh@0.1.5-rc.2`）。未配置模型时仍可进入 TUI、查看会话和使用非模型功能；在 `/model` 中按 Tab 进入供应商管理，配置 API key、OAuth 与设备码登录。
 
 ### 1. 安装与更新
 
 初次安装和更新使用同一组指令：
 
 ```sh
-npm install -g @deepseek-ai/dsh@0.1.5-rc.1 dsh-code@1.0.6
+npm install -g @deepseek-ai/dsh@0.1.5-rc.2 dsh-code@1.0.6
 npm install -g pnpm
 dsh plugin --profile cli add dsh-code@1.0.6
 ```
 
 > 提示：pnpm 会忽略发布不足 24 小时的包，因此发布首日请使用精确版本 `dsh-code@1.0.6`；24 小时后可省略版本号。npm 安装不受此限制。
 >
-> 版本对齐：dsh-code 面向 dsh `0.1.5-rc.1` 构建，全部 Harness 依赖均精确锁定为 `0.1.5-rc.1`。已安装的用户运行 `deepseek update --apply` 即可按同一条版本线一起升级全局宿主与 cli profile 中的插件，本地开发挂载（`link:`）不受影响。
+> 版本对齐：dsh-code 面向 dsh `0.1.5-rc.2` 构建，全部 Harness 依赖均精确锁定为 `0.1.5-rc.2`。已安装的用户运行 `deepseek update --apply` 即可按同一条版本线一起升级全局宿主与 cli profile 中的插件，本地开发挂载（`link:`）不受影响。
 >
 > 升级说明：旧会话与旧参数中记录的 `code` 预设会自动映射到上游已改名的 `ptc`，无需手动迁移。会话日志读取端随上游升级到格式 v3：旧格式日志在读取时由内核自动迁移，磁盘上的原始文件保持不变。
 
