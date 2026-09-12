@@ -35,7 +35,7 @@ describe('global launcher aliases', () => {
   })
 
   it('pins setup to this release so pnpm can install it on publication day', () => {
-    expect(setupBundle([])).toBe('dsh-code@1.0.6')
+    expect(setupBundle([])).toBe('dsh-code@1.0.7')
   })
 
   it('starts dsh with inherited stdio and preserves its exit code', () => {
@@ -288,23 +288,23 @@ describe('update orchestration', () => {
   describe('buildUpdateStatus', () => {
     const registry = () => ({
       // view(subject) returns the FIELD value, so the peers map is bare.
-      'dsh-code@1.0.7': { '@deepseek-ai/dsh-session': '0.1.5-rc.2' },
+      'dsh-code@1.0.8': { '@deepseek-ai/dsh-session': '0.1.5-rc.2' },
     })
     // Profile readers stay injectable: the real machine state must not leak
     // into these contract tests (a link-mounted dev profile would flip every
     // fixture into the local-checkout refusal).
-    const readers = { readSpec: () => '1.0.6', readMounted: () => '1.0.6', readPlugins: () => [] }
+    const readers = { readSpec: () => packageVersion, readMounted: () => packageVersion, readPlugins: () => [] }
 
     it('reports an aligned upgrade with the plugin carry and no blockers', () => {
       const status = buildUpdateStatus({
-        view: subjectParts => subjectParts[0] === 'dsh-code' ? '1.0.7' : registry()[subjectParts[0]],
+        view: subjectParts => subjectParts[0] === 'dsh-code' ? '1.0.8' : registry()[subjectParts[0]],
         installedDsh: () => '0.1.5-rc.1',
         ...readers,
       })
-      expect(status.code).toEqual({ running: packageVersion, latest: "1.0.7" })
+      expect(status.code).toEqual({ running: packageVersion, latest: "1.0.8" })
       expect(status.host).toEqual({ installed: '0.1.5-rc.1', targetLine: '0.1.5-rc.2' })
       expect(status.plan.dshSpec).toBe('@deepseek-ai/dsh@0.1.5-rc.2')
-      expect(status.plan.codeSpec).toBe('dsh-code@1.0.7')
+      expect(status.plan.codeSpec).toBe('dsh-code@1.0.8')
       expect(status.blockers).toEqual({ registry: null, downgrade: false, localCheckout: null })
       expect(status.upToDate).toBe(false)
     })

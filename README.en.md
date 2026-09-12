@@ -30,12 +30,12 @@ Requires Node `^22.19 || >=24` and the preview `dsh` CLI (current release line: 
 Use the same commands for the initial installation and subsequent updates:
 
 ```sh
-npm install -g @deepseek-ai/dsh@0.1.5-rc.2 dsh-code@1.0.6
+npm install -g @deepseek-ai/dsh@0.1.5-rc.2 dsh-code@1.0.7
 npm install -g pnpm
-dsh plugin --profile cli add dsh-code@1.0.6
+dsh plugin --profile cli add dsh-code@1.0.7
 ```
 
-> Note: pnpm ignores packages published less than 24 hours ago, so use the exact version `dsh-code@1.0.6` on release day; the version may be omitted after 24 hours. npm installation is not affected.
+> Note: pnpm ignores packages published less than 24 hours ago, so use the exact version `dsh-code@1.0.7` on release day; the version may be omitted after 24 hours. npm installation is not affected.
 >
 > Version alignment: dsh-code targets dsh `0.1.5-rc.2`, with every Harness dependency pinned exactly to `0.1.5-rc.2`. Keep the global dsh CLI and dsh-code aligned instead of mixing release candidates; the legacy `code` preset id maps to its renamed `ptc` automatically.
 

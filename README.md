@@ -32,12 +32,12 @@ DeepSeek Harness 将模型、工具、存储、策略和界面作为插件，通
 初次安装和更新使用同一组指令：
 
 ```sh
-npm install -g @deepseek-ai/dsh@0.1.5-rc.2 dsh-code@1.0.6
+npm install -g @deepseek-ai/dsh@0.1.5-rc.2 dsh-code@1.0.7
 npm install -g pnpm
-dsh plugin --profile cli add dsh-code@1.0.6
+dsh plugin --profile cli add dsh-code@1.0.7
 ```
 
-> 提示：pnpm 会忽略发布不足 24 小时的包，因此发布首日请使用精确版本 `dsh-code@1.0.6`；24 小时后可省略版本号。npm 安装不受此限制。
+> 提示：pnpm 会忽略发布不足 24 小时的包，因此发布首日请使用精确版本 `dsh-code@1.0.7`；24 小时后可省略版本号。npm 安装不受此限制。
 >
 > 版本对齐：dsh-code 面向 dsh `0.1.5-rc.2` 构建，全部 Harness 依赖均精确锁定为 `0.1.5-rc.2`。已安装的用户运行 `deepseek update --apply` 即可按同一条版本线一起升级全局宿主与 cli profile 中的插件，本地开发挂载（`link:`）不受影响。
 >
