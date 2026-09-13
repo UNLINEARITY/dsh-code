@@ -16,6 +16,8 @@
 
 import chalk from 'chalk'
 
+import { rainbowRoll } from './rainbow.ts'
+
 /** One RGB triple for a palette token. */
 export type RgbTriple = readonly [number, number, number]
 
@@ -40,11 +42,11 @@ export type ThemeToken =
 /** One full color palette: every token key mapped to an RGB triple. */
 export type ThemePalette = Readonly<Record<ThemeToken, RgbTriple>>
 
-/** Selectable theme names: dark, light, prismatic, or auto (terminal-sensed). */
-export type ThemeName = 'dark' | 'light' | 'prismatic' | 'auto'
+/** Selectable theme names: dark, light, prismatic, rainbow, or auto (terminal-sensed). */
+export type ThemeName = 'dark' | 'light' | 'prismatic' | 'rainbow' | 'auto'
 
 /** Valid theme names in canonical picker order. */
-export const THEME_NAMES: readonly ThemeName[] = ['dark', 'light', 'prismatic', 'auto']
+export const THEME_NAMES: readonly ThemeName[] = ['dark', 'light', 'prismatic', 'rainbow', 'auto']
 
 /** One /theme picker row: the theme id plus its display copy. */
 export interface ThemeDescriptor {
@@ -65,6 +67,7 @@ export const THEMES: readonly ThemeDescriptor[] = [
   { id: 'dark', label: 'dark', description: 'DeepSeek dark palette (default)' },
   { id: 'light', label: 'light', description: 'light palette for bright terminals' },
   { id: 'prismatic', label: 'prismatic', description: 'neon synthwave palette (violet/magenta/cyan)' },
+  { id: 'rainbow', label: 'rainbow', description: 'randomized carnival palette (new roll every launch)' },
   { id: 'auto', label: 'auto', description: 'follow the terminal; dark until detection lands' },
 ]
 
@@ -188,12 +191,16 @@ export const PRISMATIC_PALETTE = {
   diffDelFg: [248, 113, 113],
 } as const satisfies ThemePalette
 
-/** Every palette by theme name; auto resolves through {@link resolveTheme}. */
+/**
+ * Every STATIC palette by theme name; auto resolves through {@link resolveTheme}
+ * and rainbow is rolled per launch ({@link rainbowRoll}), so neither lives
+ * here — {@link setTheme} resolves both through the same key space.
+ */
 export const PALETTES = {
   dark: DARK_PALETTE,
   light: LIGHT_PALETTE,
   prismatic: PRISMATIC_PALETTE,
-} as const satisfies Record<Exclude<ThemeName, 'auto'>, ThemePalette>
+} as const satisfies Record<Exclude<ThemeName, 'auto' | 'rainbow'>, ThemePalette>
 
 /** The theme name in force (the requested name; 'auto' included). */
 let activeName: ThemeName = 'dark'
@@ -204,13 +211,13 @@ let activePalette: ThemePalette = DARK_PALETTE
 /**
  * Resolve a theme name to the palette actually in use. `auto` detection
  * (OSC 11 terminal background query) is a later enhancement; until it lands,
- * auto falls back to the dark palette (prismatic is always an explicit
- * choice, never auto-resolved).
+ * auto falls back to the dark palette (prismatic and rainbow are always
+ * explicit choices, never auto-resolved).
  * @param name - the requested theme name.
- * @returns 'dark', 'light', or 'prismatic' — the palette key to paint with.
+ * @returns 'dark', 'light', 'prismatic', or 'rainbow' — the palette key.
  */
-export function resolveTheme(name: ThemeName): 'dark' | 'light' | 'prismatic' {
-  return name === 'light' ? 'light' : name === 'prismatic' ? 'prismatic' : 'dark'
+export function resolveTheme(name: ThemeName): 'dark' | 'light' | 'prismatic' | 'rainbow' {
+  return name === 'light' ? 'light' : name === 'prismatic' ? 'prismatic' : name === 'rainbow' ? 'rainbow' : 'dark'
 }
 
 /**
@@ -221,7 +228,8 @@ export function resolveTheme(name: ThemeName): 'dark' | 'light' | 'prismatic' {
  */
 export function setTheme(name: ThemeName): void {
   activeName = name
-  activePalette = PALETTES[resolveTheme(name)]
+  const resolved = resolveTheme(name)
+  activePalette = resolved === 'rainbow' ? rainbowRoll().palette : PALETTES[resolved]
 }
 
 /**
@@ -301,6 +309,33 @@ export function isPrismatic(): boolean {
   return activeName === 'prismatic'
 }
 
+/** Whether the active theme is rainbow (the per-launch carnival roll). */
+export function isRainbow(): boolean {
+  return activeName === 'rainbow'
+}
+
+/** The active theme's flow walk, if it has one (anchors plus phase offset). */
+export interface ThemeFlow {
+  /** Anchor colors walked in order over one 2.4s lap. */
+  readonly anchors: readonly RgbTriple[]
+  /** Phase offset into the lap, milliseconds (0 for prismatic). */
+  readonly phaseMs: number
+}
+
+/**
+ * The flowing theme's anchor walk: prismatic rides the fixed violet→fuchsia→
+ * cyan triangle; rainbow rides its rolled full-spectrum anchors with a random
+ * phase; dark and light have no flow (undefined) and keep static accents.
+ */
+export function themeFlow(): ThemeFlow | undefined {
+  if (isPrismatic()) return { anchors: FLOW_ANCHORS, phaseMs: 0 }
+  if (isRainbow()) {
+    const roll = rainbowRoll()
+    return { anchors: roll.flowAnchors, phaseMs: roll.flowPhaseMs }
+  }
+  return undefined
+}
+
 /**
  * The accent for one surface slot: prismatic rotates the {@link ACCENT_RING}
  * by slot index; every other theme gets the caller's base color back.
@@ -309,9 +344,15 @@ export function isPrismatic(): boolean {
  * @returns the accent to paint the surface's border/title with.
  */
 export function surfaceAccent(index: number, base: RgbTriple): RgbTriple {
-  if (!isPrismatic()) return base
-  const ring = ACCENT_RING
-  return ring[((index % ring.length) + ring.length) % ring.length]!
+  if (isPrismatic()) {
+    const ring = ACCENT_RING
+    return ring[((index % ring.length) + ring.length) % ring.length]!
+  }
+  if (isRainbow()) {
+    const ring = rainbowRoll().ring
+    return ring[((index % ring.length) + ring.length) % ring.length]!
+  }
+  return base
 }
 
 /** Paint with the primary brand blue: whale, wordmark, tool names, accents. */

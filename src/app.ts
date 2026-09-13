@@ -32,11 +32,14 @@ import {
   getTheme,
   inkColor,
   isPrismatic,
+  isRainbow,
+  themeFlow,
   setTheme,
   type RgbTriple,
   type ThemeName,
 } from './theme.ts'
 import { panelAccent } from './panel-accent.ts'
+import { rainbowRoll, rainbowSeedLabel } from './rainbow.ts'
 import { ThemePanel } from './theme-panel.ts'
 import { UpdatePanel } from './update-panel.ts'
 import type { LauncherUpdateStatus } from './update.ts'
@@ -493,9 +496,12 @@ function useStableInput(handler: (input: string, key: Key) => void, active: bool
  */
 function BusyChase({ animated = true }: { animated?: boolean }): ReactElement {
   const tick = useFrames(BUSY_CHASE_TICK_MS, animated)
-  // Prismatic rides the flow triangle while busy; every other theme (and the
-  // frozen state) keeps the palette's live accent.
-  const marker = isPrismatic() && animated ? flowColor(tick * BUSY_CHASE_TICK_MS, FLOW_ANCHORS) : getPalette().brandBright
+  // Flowing themes (prismatic, rainbow) ride their anchor walk while busy;
+  // every other theme (and the frozen state) keeps the palette's live accent.
+  const flow = themeFlow()
+  const marker = flow !== undefined && animated
+    ? flowColor(tick * BUSY_CHASE_TICK_MS + flow.phaseMs, flow.anchors)
+    : getPalette().brandBright
   return createElement(Text, { color: inkColor(marker) }, busyChaseFrame(tick) + ' ')
 }
 
@@ -535,9 +541,13 @@ function useCursorBlink(active: boolean): { visible: boolean; reset(): void } {
 function ShimmerLine({ text, animated = true }: { text: string; animated?: boolean }): ReactElement {
   const tick = useFrames(DEEP_DIVING_SHIMMER_TICK_MS, animated)
   const palette = getPalette()
-  // Prismatic walks the flow triangle for the shimmer highlight so streaming
-  // text glows violet→fuchsia→cyan; other themes keep the bright accent.
-  const highlight = isPrismatic() && animated ? flowColor(tick * DEEP_DIVING_SHIMMER_TICK_MS, FLOW_ANCHORS) : palette.brandBright
+  // Flowing themes walk their anchors for the shimmer highlight so
+  // streaming text glows along the spectrum; other themes keep the bright
+  // accent.
+  const flow = themeFlow()
+  const highlight = flow !== undefined && animated
+    ? flowColor(tick * DEEP_DIVING_SHIMMER_TICK_MS + flow.phaseMs, flow.anchors)
+    : palette.brandBright
   const graphemes = splitGraphemes(text)
   return createElement(
     Text,
@@ -951,15 +961,26 @@ function statusToneProps(tone: StatusTone, flowMs?: number): {
   bold: boolean | undefined
   dimColor: boolean | undefined
 } {
+  if (isRainbow()) {
+    // Carnival roll: every tone carries its rolled color (adjacent tones in
+    // canonical on-screen order never match, the row boundary included);
+    // the live dot rides the flow walk while busy. Bold emphasis carries
+    // the semantic hierarchy so randomness never hides importance.
+    const emphasized = tone === 'model' || tone === 'success' || tone === 'plan' || tone === 'warn' || tone === 'error'
+    const color = tone === 'live' && flowMs !== undefined
+      ? flowColor(flowMs, themeFlow()?.anchors ?? FLOW_ANCHORS)
+      : rainbowRoll().toneColors[tone]
+    return { color: inkColor(color), bold: emphasized || undefined, dimColor: undefined }
+  }
   switch (tone) {
     case 'model':
       // Same tone as the working-directory segment: the model name reads as
       // a path fact, not a brand accent.
       return { color: inkColor(getPalette().code), bold: true, dimColor: undefined }
     case 'live':
-      // With a flow sample (prismatic busy), the live dot rides the anchor
-      // triangle; otherwise the palette's live accent.
-      return { color: inkColor(flowMs === undefined ? getPalette().brandBright : flowColor(flowMs, FLOW_ANCHORS)), bold: undefined, dimColor: undefined }
+      // With a flow sample (flowing theme while busy), the live dot rides
+      // the anchor walk; otherwise the palette's live accent.
+      return { color: inkColor(flowMs === undefined ? getPalette().brandBright : flowColor(flowMs, themeFlow()?.anchors ?? FLOW_ANCHORS)), bold: undefined, dimColor: undefined }
     case 'path':
       return { color: inkColor(getPalette().code), bold: undefined, dimColor: undefined }
     case 'branch':
@@ -1021,6 +1042,13 @@ function statusToneProps(tone: StatusTone, flowMs?: number): {
  * the prompt keeps is always hues[0]. */
 function deepseekWaveHues(tier: DeepseekWaveTier): readonly [RgbTriple, RgbTriple, RgbTriple] {
   const palette = getPalette()
+  // Rainbow waves pick three SPECTRALLY SPREAD anchors from the rolled
+  // pool — spectral neighbors would wash into one hue across the band.
+  if (isRainbow()) {
+    const anchors = rainbowRoll().flowAnchors
+    const stride = Math.max(1, Math.floor(anchors.length / 3))
+    return [anchors[0]!, anchors[stride]!, anchors[stride * 2]!]
+  }
   // Prismatic waves ride the flow anchors for both tiers — the model-switch
   // easter egg becomes a violet→fuchsia→cyan sweep.
   if (isPrismatic()) return [FLOW_ANCHORS[0]!, FLOW_ANCHORS[1]!, FLOW_ANCHORS[2]!]
@@ -1041,11 +1069,12 @@ function StatusLine({ facts, stats, busy, columns, items, onRows, animated }: {
   /** Whether timed animations run (the persisted preference). */
   animated: boolean
 }): ReactElement {
-  // Prismatic busy flow: the identity cluster's live dot cycles the anchor
-  // triangle while a turn runs; every other theme never starts the timer.
-  const flowActive = animated && busy && isPrismatic()
+  // Flowing-theme busy flow: the identity cluster's live dot cycles the
+  // anchor walk while a turn runs; static themes never start the timer.
+  const flow = themeFlow()
+  const flowActive = animated && busy && flow !== undefined
   const flowTick = useFrames(BUSY_CHASE_TICK_MS, flowActive)
-  const flowMs = flowActive ? flowTick * BUSY_CHASE_TICK_MS : undefined
+  const flowMs = flowActive ? flowTick * BUSY_CHASE_TICK_MS + (flow?.phaseMs ?? 0) : undefined
   const layout = useMemo(() => layoutStatusBar(facts, stats, Math.max(8, columns - 2), {
     busy,
     items,
@@ -5821,7 +5850,11 @@ export function App(props: AppProps): ReactElement {
           // palette. `auto` stores as requested; detection is a later step.
           setTheme(name)
           props.saveTheme?.(name)
-          notify(`theme → ${name}`)
+          // Rainbow prints its roll seed so a lucky launch can be reproduced
+          // with RAINBOW_SEED=<seed>.
+          notify(name === 'rainbow'
+            ? `theme → rainbow · seed ${rainbowSeedLabel()} (RAINBOW_SEED=${rainbowSeedLabel()} to reproduce)`
+            : `theme → ${name}`)
           setThemeOpen(false)
           // The header whale and settled history live in the Static region,
           // which renders once and would keep the old palette's colors; the

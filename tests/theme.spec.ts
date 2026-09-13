@@ -2,11 +2,12 @@
 
 import chalk from 'chalk'
 import { describe, expect, it } from 'vitest'
+import { rainbowRoll } from '../src/rainbow.ts'
 import {
   brand, brandBright, brandDeep, dim, error, success, warn,
   ACCENT_RING, DARK_PALETTE, FLOW_ANCHORS, LIGHT_PALETTE, PALETTES, PRISMATIC_PALETTE,
-  THEMES, THEME_NAMES, diffBackground, getPalette, getTheme, inkColor, isPrismatic,
-  parseThemeName, resolveTheme, setTheme, surfaceAccent, type RgbTriple,
+  THEMES, THEME_NAMES, diffBackground, getPalette, getTheme, inkColor, isPrismatic, isRainbow,
+  parseThemeName, resolveTheme, setTheme, surfaceAccent, themeFlow, type RgbTriple,
 } from '../src/theme.ts'
 
 describe('tui theme', () => {
@@ -127,11 +128,30 @@ describe('tui theme', () => {
     }
   })
 
+  it('activates rainbow through setTheme with the per-launch roll', () => {
+    try {
+      setTheme('rainbow')
+      expect(getTheme()).toBe('rainbow')
+      expect(isRainbow()).toBe(true)
+      expect(getPalette()).toBe(rainbowRoll().palette)
+      // The flow walk comes from the roll with its phase; dark has none.
+      const flow = themeFlow()
+      expect(flow?.anchors).toBe(rainbowRoll().flowAnchors)
+      expect(flow?.phaseMs).toBe(rainbowRoll().flowPhaseMs)
+      expect(surfaceAccent(5, DARK_PALETTE.brand)).toBe(rainbowRoll().ring[1]!)
+      setTheme('dark')
+      expect(themeFlow()).toBeUndefined()
+      expect(isRainbow()).toBe(false)
+    } finally {
+      setTheme('dark')
+    }
+  })
+
   it('keeps both palettes on the same token keys and the canonical names', () => {
     expect(Object.keys(PALETTES).sort()).toEqual(['dark', 'light', 'prismatic'])
     expect(Object.keys(LIGHT_PALETTE).sort()).toEqual(Object.keys(DARK_PALETTE).sort())
     expect(Object.keys(PRISMATIC_PALETTE).sort()).toEqual(Object.keys(DARK_PALETTE).sort())
-    expect(THEME_NAMES).toEqual(['dark', 'light', 'prismatic', 'auto'])
+    expect(THEME_NAMES).toEqual(['dark', 'light', 'prismatic', 'rainbow', 'auto'])
   })
 
   it('exposes one picker registry matching the canonical names', () => {
@@ -184,6 +204,8 @@ describe('tui theme', () => {
     try {
       expect(resolveTheme('dark')).toBe('dark')
       expect(resolveTheme('light')).toBe('light')
+      expect(resolveTheme('prismatic')).toBe('prismatic')
+      expect(resolveTheme('rainbow')).toBe('rainbow')
       expect(resolveTheme('auto')).toBe('dark')
       setTheme('auto')
       expect(getTheme()).toBe('auto')
@@ -229,6 +251,7 @@ describe('tui theme', () => {
   it('parses persisted theme names with a dark fallback', () => {
     expect(parseThemeName('light')).toBe('light')
     expect(parseThemeName('prismatic')).toBe('prismatic')
+    expect(parseThemeName('rainbow')).toBe('rainbow')
     expect(parseThemeName('auto')).toBe('auto')
     expect(parseThemeName('dark')).toBe('dark')
     expect(parseThemeName(undefined)).toBe('dark')

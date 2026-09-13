@@ -14,7 +14,7 @@
  *   whose project directory matches the current working directory.
  * - `--session <id>` — create a new session under an explicit identity (the
  *   id must not exist yet).
- * - `--theme <dark|light|prismatic|auto>` — the color palette; auto follows the
+ * - `--theme <dark|light|prismatic|rainbow|auto>` — the color palette; auto follows the
  *   terminal (dark fallback until OSC-11 detection lands).
  * - no flags — a fresh session with a minted id.
  *
@@ -99,7 +99,7 @@ function tuiCommand(): Command {
     .option('-c, --continue', 'resume the most recent persisted session for this working directory')
     .option('--session <id>', 'create a new session under this explicit id')
     .option('--mode <preset>', 'agent preset for a newly created session')
-    .option('--theme <name>', 'color theme: dark (default), light, prismatic, or auto')
+    .option('--theme <name>', 'color theme: dark (default), light, prismatic, rainbow, or auto')
     .option('-i, --image <path>', 'attach an image to the initial prompt (repeatable)', (path, paths: string[]) => [...paths, path], [])
     .argument('[prompt...]', 'initial prompt; sends immediately after startup')
     .addHelpText('after', `
