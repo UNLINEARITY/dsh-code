@@ -3,8 +3,9 @@
 import { describe, expect, it } from 'vitest'
 import { visibleColumns } from '../src/render/markdown.ts'
 import { stringWidth } from '../src/render/width.ts'
-import { clampLiveAllocation, settledEntryLines, styledLines, lineSegment, reasoningLines, transcriptEntryLines } from '../src/render/lines.ts'
+import { clampLiveAllocation, diffLineStyle, fillDiffLineBars, settledEntryLines, styledLines, lineSegment, reasoningLines, transcriptEntryLines } from '../src/render/lines.ts'
 import type { TranscriptEntry } from '../src/render/projection.ts'
+import type { StyledLine } from '../src/render/lines.ts'
 
 const textOf = (lines: ReturnType<typeof styledLines>): string => lines
   .map(line => line.segments.map(segment => segment.text).join(''))
@@ -116,6 +117,76 @@ describe('styled terminal lines', () => {
       expect(line.segments.map(segment => segment.text).join('')).toMatch(/^    /u)
       expect(visibleColumns(line.segments.map(segment => segment.text).join(''))).toBeLessThanOrEqual(40)
     }
+  })
+
+  it('fills only pure diff rows, leaving mixed and wrapped rows exact', () => {
+    const columns = 20
+    const built = styledLines([lineSegment('    +short', 'diffAdd')], columns)
+    expect(built).toHaveLength(1)
+    const filled = fillDiffLineBars(built, columns)
+    expect(filled[0]!.segments.every(segment => segment.style === 'diffAdd')).toBe(true)
+    expect(visibleColumns(filled[0]!.segments.map(segment => segment.text).join(''))).toBe(columns)
+    // Mixed-style rows and non-diff rows pass through untouched.
+    const mixed: StyledLine[] = [{ segments: [lineSegment('+x', 'diffAdd'), lineSegment('note', 'dim')] }]
+    expect(fillDiffLineBars(mixed, columns)).toBe(mixed)
+    const plain: StyledLine[] = [{ segments: [lineSegment('plain', 'plain')] }]
+    expect(fillDiffLineBars(plain, columns)).toBe(plain)
+  })
+
+  it('classifies unified-diff rows for the /diff panel', () => {
+    expect(diffLineStyle('+new text')).toBe('diffAdd')
+    expect(diffLineStyle('-old text')).toBe('diffDel')
+    // File headers count as context markers, not additions/removals.
+    expect(diffLineStyle('+++ b/file.ts')).toBe('dim')
+    expect(diffLineStyle('--- a/file.ts')).toBe('dim')
+    expect(diffLineStyle('@@ -1,3 +1,4 @@')).toBe('brand')
+    expect(diffLineStyle('diff --git a/x b/x')).toBe('brand')
+    expect(diffLineStyle('index 123..456 100644')).toBe('brand')
+    expect(diffLineStyle(' unchanged')).toBe('dim')
+  })
+
+  it('styles diff detail rows as added/removed bars spanning the gutter', () => {
+    const entry: TranscriptEntry = {
+      kind: 'tool',
+      callId: 'call',
+      ordinal: 1,
+      name: 'edit',
+      arguments: '{}',
+      preview: 'a.ts',
+      prompt: '',
+      state: 'done',
+      summary: 'done',
+      detail: {
+        kind: 'diff',
+        diffs: [{
+          path: 'src/a.ts',
+          truncated: false,
+          lines: [
+            { mark: '-', text: 'old line' },
+            { mark: '+', text: 'new line' },
+            { mark: ' ', text: 'context' },
+          ],
+        }],
+      },
+      subs: [],
+      subsDropped: 0,
+    }
+    const lines = transcriptEntryLines(entry, 80, true)
+    // The path header stays dim; +/- rows carry the diff style on the
+    // four-column gutter, the body, AND same-styled padding to the full
+    // width, so the tint reads as one unbroken full-row bar.
+    const pathRow = lines.find(line => line.segments.some(segment => segment.text.includes('src/a.ts')))
+    expect(pathRow?.segments.every(segment => segment.style === 'dim')).toBe(true)
+    const delRow = lines.find(line => line.segments.some(segment => segment.text.includes('old line')))
+    expect(delRow?.segments.every(segment => segment.style === 'diffDel')).toBe(true)
+    expect(visibleColumns(delRow?.segments.map(segment => segment.text).join('') ?? '')).toBe(80)
+    const addRow = lines.find(line => line.segments.some(segment => segment.text.includes('new line')))
+    expect(addRow?.segments.every(segment => segment.style === 'diffAdd')).toBe(true)
+    expect(visibleColumns(addRow?.segments.map(segment => segment.text).join('') ?? '')).toBe(80)
+    // Context rows keep the plain dim gutter and stay unpadded.
+    const contextRow = lines.find(line => line.segments.some(segment => segment.text.includes('context')))
+    expect(contextRow?.segments.every(segment => segment.style === 'dim')).toBe(true)
+    expect(visibleColumns(contextRow?.segments.map(segment => segment.text).join('') ?? '')).toBeLessThan(80)
   })
 
   it('folds raw tool output to three rows by default and expands with Ctrl/Alt+R state', () => {

@@ -26,6 +26,7 @@ import type { AskUserQuestionAnswerItem, AskUserQuestionItem } from '@deepseek-a
 import type { AuthorizationInteraction, AuthorizationStatus } from '@deepseek-ai/dsh-authorization'
 import {
   dim,
+  diffBackground,
   getPalette,
   getTheme,
   inkColor,
@@ -182,6 +183,8 @@ import {
 } from './render/inspector.ts'
 import {
   clampLiveAllocation,
+  diffLineStyle,
+  fillDiffLineBars,
   lineSegment,
   markdownLines,
   settledEntryLines,
@@ -644,20 +647,28 @@ function lineStyleProps(style: LineStyle): {
   italic: boolean | undefined
   strikethrough: boolean | undefined
   dimColor: boolean | undefined
+  backgroundColor: string | undefined
 } {
   switch (style) {
     case 'brand':
-      return { color: inkColor(getPalette().brandBright), bold: undefined, italic: undefined, strikethrough: undefined, dimColor: undefined }
+      return { color: inkColor(getPalette().brandBright), bold: undefined, italic: undefined, strikethrough: undefined, dimColor: undefined, backgroundColor: undefined }
     case 'success':
-      return { color: inkColor(getPalette().success), bold: undefined, italic: undefined, strikethrough: undefined, dimColor: undefined }
+      return { color: inkColor(getPalette().success), bold: undefined, italic: undefined, strikethrough: undefined, dimColor: undefined, backgroundColor: undefined }
     case 'error':
-      return { color: inkColor(getPalette().error), bold: undefined, italic: undefined, strikethrough: undefined, dimColor: undefined }
+      return { color: inkColor(getPalette().error), bold: undefined, italic: undefined, strikethrough: undefined, dimColor: undefined, backgroundColor: undefined }
     case 'warn':
-      return { color: inkColor(getPalette().warn), bold: undefined, italic: undefined, strikethrough: undefined, dimColor: undefined }
+      return { color: inkColor(getPalette().warn), bold: undefined, italic: undefined, strikethrough: undefined, dimColor: undefined, backgroundColor: undefined }
     case 'dimItalic':
-      return { color: inkColor(getPalette().dim), bold: undefined, italic: true, strikethrough: undefined, dimColor: undefined }
+      return { color: inkColor(getPalette().dim), bold: undefined, italic: true, strikethrough: undefined, dimColor: undefined, backgroundColor: undefined }
+    // Codex diff rendering: added/removed lines carry a theme tint behind
+    // the sign and text; the depth gate turns this into plain foreground
+    // styling on 16-color terminals.
+    case 'diffAdd':
+      return { color: inkColor(getPalette().success), bold: undefined, italic: undefined, strikethrough: undefined, dimColor: undefined, backgroundColor: diffBackground('diffAdd') }
+    case 'diffDel':
+      return { color: inkColor(getPalette().error), bold: undefined, italic: undefined, strikethrough: undefined, dimColor: undefined, backgroundColor: diffBackground('diffDel') }
     default:
-      return { ...segmentProps(style), dimColor: undefined }
+      return { ...segmentProps(style), dimColor: undefined, backgroundColor: undefined }
   }
 }
 
@@ -689,15 +700,7 @@ function DiffPanel({ view, onClose }: { view: GitDiffView; onClose(): void }): R
   const file = view.files[fileIndex]
   const lines = useMemo(() => {
     if (file === undefined) return textLines('  (no changes)', viewport.contentColumns, 'dim')
-    return file.lines.flatMap(line => styledLines([
-      lineSegment(line, line.startsWith('+') && !line.startsWith('+++')
-        ? 'success'
-        : line.startsWith('-') && !line.startsWith('---')
-          ? 'error'
-          : line.startsWith('@@') || line.startsWith('diff --git') || line.startsWith('index ')
-            ? 'brand'
-            : 'dim'),
-    ], viewport.contentColumns))
+    return fillDiffLineBars(file.lines.flatMap(line => styledLines([lineSegment(line, diffLineStyle(line))], viewport.contentColumns)), viewport.contentColumns)
   }, [file, viewport.contentColumns])
   const visibleScroll = clampScroll(scroll, lines.length, viewport.bodyRows)
   useInput((input, key) => {

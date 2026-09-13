@@ -4,7 +4,7 @@ import chalk from 'chalk'
 import { describe, expect, it } from 'vitest'
 import {
   TUI_RGB, brand, brandBright, brandDeep, dim, error, success, warn,
-  DARK_PALETTE, LIGHT_PALETTE, PALETTES, THEME_NAMES, getPalette, getTheme,
+  DARK_PALETTE, LIGHT_PALETTE, PALETTES, THEME_NAMES, diffBackground, getPalette, getTheme,
   inkColor, parseThemeName, resolveTheme, setTheme,
 } from '../src/theme.ts'
 
@@ -127,6 +127,32 @@ describe('tui theme', () => {
       expect(getTheme()).toBe('auto')
       expect(getPalette()).toBe(DARK_PALETTE)
     } finally {
+      setTheme('dark')
+    }
+  })
+
+  it('pins the Codex diff tints and gates them on color depth', () => {
+    // Codex diff renderer palettes: muted dark tints, GitHub light pastels.
+    expect(DARK_PALETTE.diffAdd).toEqual([33, 58, 43])
+    expect(DARK_PALETTE.diffDel).toEqual([74, 34, 29])
+    expect(LIGHT_PALETTE.diffAdd).toEqual([218, 251, 225])
+    expect(LIGHT_PALETTE.diffDel).toEqual([255, 235, 233])
+
+    // Rich terminals get the active theme's tint as an Ink background.
+    const level = chalk.level
+    chalk.level = 3
+    try {
+      expect(diffBackground('diffAdd')).toBe('rgb(33, 58, 43)')
+      expect(diffBackground('diffDel')).toBe('rgb(74, 34, 29)')
+      setTheme('light')
+      expect(diffBackground('diffAdd')).toBe('rgb(218, 251, 225)')
+      expect(diffBackground('diffDel')).toBe('rgb(255, 235, 233)')
+      // 16-color terminals keep the foreground-only look (no background).
+      chalk.level = 1
+      expect(diffBackground('diffAdd')).toBeUndefined()
+      expect(diffBackground('diffDel')).toBeUndefined()
+    } finally {
+      chalk.level = level
       setTheme('dark')
     }
   })

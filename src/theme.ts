@@ -33,6 +33,8 @@ export type ThemeToken =
   | 'text'
   | 'code'
   | 'composerBand'
+  | 'diffAdd'
+  | 'diffDel'
 
 /** One full color palette: every token key mapped to an RGB triple. */
 export type ThemePalette = Readonly<Record<ThemeToken, RgbTriple>>
@@ -71,6 +73,10 @@ export const DARK_PALETTE = {
   code: [125, 211, 252],
   /** Composer three-row band base — neutral light gray, hue-free so wave tints read on it. */
   composerBand: [46, 48, 52],
+  /** Diff added-line background — Codex's muted dark green tint (#213A2B). */
+  diffAdd: [33, 58, 43],
+  /** Diff removed-line background — Codex's muted dark red tint (#4A221D). */
+  diffDel: [74, 34, 29],
 } as const satisfies ThemePalette
 
 /**
@@ -102,6 +108,10 @@ export const LIGHT_PALETTE = {
   code: [14, 116, 144],
   /** Composer three-row band base — neutral light gray, hue-free so wave tints read on it. */
   composerBand: [229, 231, 235],
+  /** Diff added-line background — GitHub's pastel green (#dafbe1), Codex's light pick. */
+  diffAdd: [218, 251, 225],
+  /** Diff removed-line background — GitHub's pastel red (#ffebe9), Codex's light pick. */
+  diffDel: [255, 235, 233],
 } as const satisfies ThemePalette
 
 /** Every palette by theme name; auto resolves through {@link resolveTheme}. */
@@ -176,6 +186,20 @@ export function parseThemeName(value: unknown): ThemeName {
 /** Ink `color` string for one RGB triple. */
 export function inkColor(triple: RgbTriple): string {
   return `rgb(${triple[0]}, ${triple[1]}, ${triple[2]})`
+}
+
+/**
+ * Diff-line background as an Ink `backgroundColor` string, theme-aware and
+ * depth-gated (the Codex diff renderer's rule): 16-color terminals paint
+ * backgrounds from the saturated system palette, which drowns the text, so
+ * they keep the foreground-only look; 256-color and truecolor terminals get
+ * the palette's tint (chalk quantizes the RGB form down automatically).
+ * @param token - which diff background, added or removed lines.
+ * @returns the Ink background color, or undefined to paint foreground-only.
+ */
+export function diffBackground(token: 'diffAdd' | 'diffDel'): string | undefined {
+  if (chalk.level < 2) return undefined
+  return inkColor(activePalette[token])
 }
 
 /** Paint with the primary brand blue: whale, wordmark, tool names, accents. */

@@ -8,7 +8,7 @@ import { formatTokens } from './status.ts'
 import { displayText, truncateColumns } from './text.ts'
 
 /** Presentation classes mapped to Ink colors by the app boundary. */
-export type LineStyle = MdStyle | 'brand' | 'success' | 'error' | 'warn' | 'dimItalic'
+export type LineStyle = MdStyle | 'brand' | 'success' | 'error' | 'warn' | 'dimItalic' | 'diffAdd' | 'diffDel'
 
 /** One styled run within a physical terminal row. */
 export interface StyledSegment {
@@ -24,6 +24,40 @@ export interface StyledLine {
 /** Construct one segment without leaking mutable objects into cached rows. */
 export function lineSegment(text: string, style: LineStyle = 'plain'): StyledSegment {
   return { text, style }
+}
+
+/**
+ * Classify one unified-diff row for coloring: additions and deletions carry
+ * the diff tint styles (background on rich terminals), hunk headers and file
+ * markers stay brand-blue, and everything else is dim context.
+ */
+export function diffLineStyle(line: string): LineStyle {
+  if (line.startsWith('+') && !line.startsWith('+++')) return 'diffAdd'
+  if (line.startsWith('-') && !line.startsWith('---')) return 'diffDel'
+  if (line.startsWith('@@') || line.startsWith('diff --git') || line.startsWith('index ')) return 'brand'
+  return 'dim'
+}
+
+/**
+ * Extend pure diff-tinted rows to the full width with same-styled padding so
+ * the tint reads as one unbroken bar (GitHub-style), including wrapped
+ * continuation rows; mixed or non-diff rows pass through untouched.
+ */
+export function fillDiffLineBars(lines: readonly StyledLine[], columns: number): readonly StyledLine[] {
+  const width = Math.max(1, Math.floor(columns))
+  let changed = false
+  const filled = lines.map(line => {
+    const style = line.segments[0]?.style
+    if (style !== 'diffAdd' && style !== 'diffDel') return line
+    if (line.segments.some(segment => segment.style !== style)) return line
+    const used = visibleColumns(line.segments.map(segment => segment.text).join(''))
+    const pad = width - used
+    if (pad <= 0) return line
+    changed = true
+    return { segments: [...line.segments, lineSegment(' '.repeat(pad), style)] }
+  })
+  // Identity-stable when nothing needed padding: callers cache row arrays.
+  return changed ? filled : lines
 }
 
 /** Append a character while merging adjacent runs with the same style. */
@@ -204,12 +238,12 @@ function toolDetailLines(detail: ToolDetail, columns: number): readonly StyledLi
     case 'diff':
       return detail.diffs.flatMap(diff => [
         ...prefixedTextLines(`${diff.path}${diff.truncated ? ' (diff truncated)' : ''}`, columns, '    ── ', 'dim'),
-        ...diff.lines.flatMap(line => prefixedTextLines(
+        ...fillDiffLineBars(diff.lines.flatMap(line => prefixedTextLines(
           `${line.mark}${line.text}`,
           columns,
           '    ',
-          line.mark === '+' ? 'success' : line.mark === '-' ? 'error' : 'dim',
-        )),
+          line.mark === '+' ? 'diffAdd' : line.mark === '-' ? 'diffDel' : 'dim',
+        )), columns),
       ])
     case 'read':
       return [
