@@ -51,6 +51,13 @@ export function buildExportMarkdown(view: TranscriptView, sessionId: string): st
       case 'tool':
         out.push(`### tool \`${entry.name}\``, '')
         if (entry.preview !== '') out.push(`- args: ${entry.preview}`)
+        if (entry.subs.length > 0) {
+          for (const sub of entry.subs) {
+            const label = sub.preview === '' ? sub.name : `${sub.name} ${sub.preview}`
+            out.push(`- dispatch: ${sub.state === 'error' ? 'error' : sub.state === 'running' ? 'running' : 'ok'} · ${label}${sub.summary === '' ? '' : ` · ${sub.summary}`}`)
+          }
+          if (entry.subsDropped > 0) out.push(`- dispatch: … ${entry.subsDropped} earlier dispatch${entry.subsDropped === 1 ? '' : 'es'}`)
+        }
         if (entry.summary !== '') out.push(`- ${entry.state === 'error' ? 'error' : 'result'}: ${entry.summary}`)
         out.push('')
         break
@@ -75,6 +82,15 @@ export function buildExportMarkdown(view: TranscriptView, sessionId: string): st
         break
       case 'files':
         out.push(`> files changed: ${entry.paths.join(', ')}`, '')
+        break
+      case 'workflow':
+        out.push(`### workflow \`${entry.name}\` (${entry.state})`, '')
+        for (const member of entry.members) {
+          const phase = member.phase === '' ? '' : ` [${member.phase}]`
+          out.push(`- ${member.outcome}: ${member.label}${phase}`)
+        }
+        if (entry.membersDropped > 0) out.push(`- … ${entry.membersDropped} earlier member${entry.membersDropped === 1 ? '' : 's'}`)
+        out.push('')
         break
       case 'pending':
         // Codex PendingSteer: queued prompts export like ordinary user rows.

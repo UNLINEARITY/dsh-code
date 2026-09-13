@@ -4,12 +4,14 @@ import { describe, expect, it } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import { ReasoningEffortId, type LlmModelReasoningInfo } from '@deepseek-ai/dsh-llm'
 import type { ModelSelection } from '@deepseek-ai/dsh-agent'
+import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import {
   applyModelSelectionToConfig,
   buildModelSelection,
   loadModelDirectory,
   mapReasoning,
   modelSelectionLabel,
+  pendingModelSelection,
   resolveEffectiveSelection,
   type ModelRow,
 } from '../src/models.ts'
@@ -58,6 +60,77 @@ describe('resolveEffectiveSelection', () => {
 
   it('keeps the deployment default when nothing else selects', () => {
     expect(resolveEffectiveSelection(undefined, undefined, defaults)).toBe(defaults)
+  })
+})
+
+describe('pendingModelSelection (resume layer)', () => {
+  /** Log-shaped event double: only the fields the fold reads. */
+  function event(type: string, data: unknown, seq = 1): SessionEvent {
+    return { type, seq, time: seq, data } as unknown as SessionEvent
+  }
+
+  it('returns the unconsumed selection recorded after the last request', () => {
+    const events = [
+      event('request/header', { header: { config: { provider: 'route', model: 'old' } } }, 1),
+      event('model/selection', { provider: 'route', model: 'picked-model', reasoningEffort: 'high' }, 2),
+    ]
+    expect(pendingModelSelection(events)).toEqual({
+      provider: 'route',
+      model: 'picked-model',
+      reasoningEffort: 'high',
+    })
+  })
+
+  it('retires the selection once a request assembles exactly it', () => {
+    const events = [
+      event('model/selection', { provider: 'route', model: 'picked-model' }, 1),
+      event('request/header', { header: { config: { provider: 'route', model: 'picked-model' } } }, 2),
+    ]
+    expect(pendingModelSelection(events)).toBeUndefined()
+  })
+
+  it('keeps the selection armed when a request used different values', () => {
+    const events = [
+      event('model/selection', { provider: 'route', model: 'picked-model' }, 1),
+      event('request/header', { header: { config: { provider: 'other', model: 'forced' } } }, 2),
+    ]
+    expect(pendingModelSelection(events)).toEqual({ provider: 'route', model: 'picked-model' })
+  })
+
+  it('folds to the latest selection and ignores unrelated events', () => {
+    const events = [
+      event('model/selection', { provider: 'route', model: 'first' }, 1),
+      event('user/message', { message: 'hi' }, 2),
+      event('model/selection', { provider: 'route', model: 'second' }, 3),
+    ]
+    expect(pendingModelSelection(events)).toEqual({ provider: 'route', model: 'second' })
+  })
+
+  it('consumes only on an exact match across the effort boundary', () => {
+    // A picked effort is part of the identity: a header assembling the same
+    // provider/model WITHOUT the effort leaves the pick armed.
+    const pickedWithEffort = [
+      event('model/selection', { provider: 'route', model: 'm', reasoningEffort: 'high' }, 1),
+      event('request/header', { header: { config: { provider: 'route', model: 'm' } } }, 2),
+    ]
+    expect(pendingModelSelection(pickedWithEffort)).toEqual({ provider: 'route', model: 'm', reasoningEffort: 'high' })
+    // The same header carrying the effort retires it.
+    const consumed = [
+      event('model/selection', { provider: 'route', model: 'm', reasoningEffort: 'high' }, 1),
+      event('request/header', { header: { config: { provider: 'route', model: 'm', reasoningEffort: 'high' } } }, 2),
+    ]
+    expect(pendingModelSelection(consumed)).toBeUndefined()
+    // A header carrying an effort while the pick carried none does not retire it.
+    const pickedWithoutEffort = [
+      event('model/selection', { provider: 'route', model: 'm' }, 1),
+      event('request/header', { header: { config: { provider: 'route', model: 'm', reasoningEffort: 'low' } } }, 2),
+    ]
+    expect(pendingModelSelection(pickedWithoutEffort)).toEqual({ provider: 'route', model: 'm' })
+  })
+
+  it('answers undefined without any selection facts', () => {
+    expect(pendingModelSelection([event('request/header', { header: { config: { provider: 'route', model: 'old' } } }, 1)])).toBeUndefined()
+    expect(pendingModelSelection([])).toBeUndefined()
   })
 })
 

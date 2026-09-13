@@ -8,12 +8,14 @@ import {
   type CallId,
 } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
-import type { ToolEntry } from '../src/render/projection.ts'
+import type { ToolEntry, WorkflowEntry } from '../src/render/projection.ts'
 import {
   applyAssistantStreamChunk,
   createReplayAccumulator,
   createTranscriptView,
   finishReplay,
+  MAX_TOOL_SUB_DISPATCHES,
+  MAX_WORKFLOW_MEMBERS,
   projectEvent,
   projectEvents,
   promptDisplayText,
@@ -471,8 +473,8 @@ describe('transcript projection', () => {
       toolResultEvent(callId.current, 'missing file', true, 4),
     ])
     expect(view.entries).toEqual([
-      { kind: 'tool', callId: 'c1', ordinal: 1, name: 'read_file', arguments: '{"path":"a.ts"}', preview: 'a.ts', prompt: '', state: 'error', summary: 'missing file', detail: { kind: 'raw', text: 'missing file', truncated: false } },
-      { kind: 'tool', callId: 'c2', ordinal: 2, name: 'bash', arguments: '{"path":"a.ts"}', preview: 'a.ts', prompt: '', state: 'done', summary: 'done', detail: { kind: 'raw', text: 'done', truncated: false } },
+      { kind: 'tool', callId: 'c1', ordinal: 1, name: 'read_file', arguments: '{"path":"a.ts"}', preview: 'a.ts', prompt: '', state: 'error', summary: 'missing file', detail: { kind: 'raw', text: 'missing file', truncated: false }, subs: [], subsDropped: 0 },
+      { kind: 'tool', callId: 'c2', ordinal: 2, name: 'bash', arguments: '{"path":"a.ts"}', preview: 'a.ts', prompt: '', state: 'done', summary: 'done', detail: { kind: 'raw', text: 'done', truncated: false }, subs: [], subsDropped: 0 },
     ])
   })
 
@@ -526,6 +528,8 @@ describe('transcript projection', () => {
         kind: 'diff',
         diffs: [{ path: 'src/a.ts', lines: [{ mark: '-', text: 'two' }, { mark: '+', text: 'TWO' }], truncated: false }],
       },
+      subs: [],
+      subsDropped: 0,
     })
   })
 
@@ -951,6 +955,183 @@ describe('transcript projection', () => {
       decodeTokens: 0,
       reasoningEffort: '',
     })
+  })
+})
+
+describe('PTC sub-dispatch projection', () => {
+  function ptcStartEvent(root: string, sub: string, name: string, args: unknown, seq: number, time: number): SessionEvent {
+    return {
+      type: 'tool/ptc-dispatch-start',
+      seq,
+      time,
+      data: { rootCallId: root, parentCallId: root, subCallId: sub, name, arguments: args },
+    } as unknown as SessionEvent
+  }
+
+  function ptcSettleEvent(root: string, sub: string, name: string, seq: number, time: number, isError = false, text = 'ok'): SessionEvent {
+    return {
+      type: 'tool/ptc-dispatch',
+      seq,
+      time,
+      data: {
+        rootCallId: root,
+        parentCallId: root,
+        subCallId: sub,
+        name,
+        arguments: {},
+        isError,
+        content: [{ type: 'text', text }],
+      },
+    } as unknown as SessionEvent
+  }
+
+  it('folds start/settle pairs into bounded rows on the parent run_code card', () => {
+    const events: readonly SessionEvent[] = [
+      { type: 'turn/start', seq: 1, time: 0, data: { turn: 1 } },
+      toolCallEvent('run_code', callId.current, 2),
+      ptcStartEvent(callId.current, 'run:ptc:1', 'read_file', { path: 'a.ts' }, 3, 1_000),
+      ptcStartEvent(callId.current, 'run:ptc:2', 'bash', { command: 'ls' }, 4, 1_500),
+      ptcSettleEvent(callId.current, 'run:ptc:1', 'read_file', 5, 2_500),
+      ptcSettleEvent(callId.current, 'run:ptc:2', 'bash', 6, 4_000, true, 'boom'),
+      toolResultEvent(callId.current, 'done', false, 7),
+    ]
+    const view = projectEvents(events)
+    const entry = view.entries.find(item => item.kind === 'tool') as ToolEntry
+    expect(entry.name).toBe('run_code')
+    expect(entry.subs.map(sub => [sub.subCallId, sub.state, sub.durationMs])).toEqual([
+      ['run:ptc:1', 'done', 1_500],
+      ['run:ptc:2', 'error', 2_500],
+    ])
+    expect(entry.subs[0]!.summary).toBe('ok')
+    expect(entry.subs[1]!.summary).toBe('boom')
+    // JSON-normalized sub arguments preview like the native card.
+    expect(entry.subs[0]!.preview).toContain('a.ts')
+    // Sub durations are display-only: the parent tool/result already owns
+    // the wall-clock, so stats.toolMs stays the parent's alone.
+    expect(view.stats.toolMs).toBe(0)
+  })
+
+  it('keeps a start without its parent entry and a settle without a live row as no-ops', () => {
+    const orphan = projectEvents([
+      ptcStartEvent('missing', 'run:ptc:1', 'bash', {}, 1, 0),
+      ptcSettleEvent('missing', 'run:ptc:1', 'bash', 2, 10),
+    ])
+    expect(orphan.entries).toEqual([])
+
+    const settledOnly = projectEvents([
+      toolCallEvent('run_code', callId.current, 1),
+      ptcSettleEvent(callId.current, 'never-started', 'bash', 2, 10),
+    ])
+    const entry = settledOnly.entries.find(item => item.kind === 'tool') as ToolEntry
+    expect(entry.subs).toEqual([])
+    expect(entry.subsDropped).toBe(0)
+  })
+
+  it('bounds the window to the newest dispatches and counts evictions', () => {
+    const events: SessionEvent[] = [toolCallEvent('run_code', callId.current, 1)]
+    for (let index = 0; index < MAX_TOOL_SUB_DISPATCHES + 3; index += 1) {
+      events.push(ptcStartEvent(callId.current, `run:ptc:${index}`, 'bash', {}, 2 + index * 2, index))
+      events.push(ptcSettleEvent(callId.current, `run:ptc:${index}`, 'bash', 3 + index * 2, index))
+    }
+    const view = projectEvents(events)
+    const entry = view.entries.find(item => item.kind === 'tool') as ToolEntry
+    expect(entry.subs).toHaveLength(MAX_TOOL_SUB_DISPATCHES)
+    expect(entry.subsDropped).toBe(3)
+    expect(entry.subs[entry.subs.length - 1]!.subCallId).toBe(`run:ptc:${MAX_TOOL_SUB_DISPATCHES + 2}`)
+  })
+
+  it('matches between the live fold and the replay fold', () => {
+    const events: readonly SessionEvent[] = [
+      { type: 'turn/start', seq: 1, time: 0, data: { turn: 1 } },
+      toolCallEvent('run_code', callId.current, 2),
+      ptcStartEvent(callId.current, 'run:ptc:1', 'read_file', { path: 'a.ts' }, 3, 1_000),
+      ptcSettleEvent(callId.current, 'run:ptc:1', 'read_file', 4, 3_000),
+      toolResultEvent(callId.current, 'done', false, 5),
+    ]
+    const replayed = projectEvents(events)
+    const folded = events.reduce(projectEvent, createTranscriptView())
+    expect(replayed).toStrictEqual(folded)
+  })
+})
+
+describe('workflow run projection', () => {
+  function runStartEvent(runId: string, name: string, seq: number): SessionEvent {
+    return { type: 'tool-workflow/run-start', seq, time: 0, data: { runId, name } } as unknown as SessionEvent
+  }
+
+  function agentStartEvent(runId: string, member: number, label: string, seq: number, phase?: string): SessionEvent {
+    return {
+      type: 'tool-workflow/agent-start',
+      seq,
+      time: 0,
+      data: { runId, seq: member, label, phase, childId: `child-${member}` },
+    } as unknown as SessionEvent
+  }
+
+  function agentEndEvent(runId: string, member: number, outcome: 'completed' | 'failed' | 'cancelled', seq: number): SessionEvent {
+    return { type: 'tool-workflow/agent-end', seq, time: 0, data: { runId, seq: member, outcome } } as unknown as SessionEvent
+  }
+
+  function runEndEvent(runId: string, stopReason: 'completed' | 'cancelled' | 'error', seq: number): SessionEvent {
+    return { type: 'tool-workflow/run-end', seq, time: 0, data: { runId, stopReason } } as unknown as SessionEvent
+  }
+
+  it('folds one bounded card per run with members paired by sequence', () => {
+    const view = projectEvents([
+      runStartEvent('run-1', 'audit', 1),
+      agentStartEvent('run-1', 1, 'scan sources', 2, 'phase-a'),
+      agentStartEvent('run-1', 2, 'verify fixes', 3),
+      agentEndEvent('run-1', 1, 'completed', 4),
+      agentEndEvent('run-1', 2, 'failed', 5),
+      runEndEvent('run-1', 'error', 6),
+    ])
+    const entry = view.entries.find(item => item.kind === 'workflow') as WorkflowEntry
+    expect(entry.name).toBe('audit')
+    expect(entry.state).toBe('error')
+    expect(entry.members.map(member => [member.label, member.outcome, member.phase])).toEqual([
+      ['scan sources', 'completed', 'phase-a'],
+      ['verify fixes', 'failed', ''],
+    ])
+    // The mutable boundary: a run that has not settled keeps its card out
+    // of the settled region; the settled run above counts in.
+    const running = projectEvents([
+      runStartEvent('run-2', 'live', 1),
+      agentStartEvent('run-2', 1, 'busy', 2),
+    ])
+    expect(settledEntryCount(running.entries)).toBe(0)
+    expect(settledEntryCount(view.entries)).toBe(1)
+  })
+
+  it('bounds the member window and settles unmatched sequences as no-ops', () => {
+    const events: SessionEvent[] = [runStartEvent('run-1', 'fan-out', 1)]
+    for (let member = 0; member < MAX_WORKFLOW_MEMBERS + 2; member += 1) {
+      events.push(agentStartEvent('run-1', member, `m${member}`, 2 + member * 2))
+      events.push(agentEndEvent('run-1', member, 'completed', 3 + member * 2))
+    }
+    events.push(agentEndEvent('run-1', 9_999, 'completed', 90))
+    events.push(runEndEvent('run-1', 'completed', 91))
+    const view = projectEvents(events)
+    const entry = view.entries.find(item => item.kind === 'workflow') as WorkflowEntry
+    expect(entry.members).toHaveLength(MAX_WORKFLOW_MEMBERS)
+    expect(entry.membersDropped).toBe(2)
+    expect(entry.state).toBe('completed')
+    expect(settledEntryCount(view.entries)).toBe(1)
+  })
+
+  it('ignores member events for an unknown run and matches live against replay', () => {
+    const orphan = projectEvents([
+      agentStartEvent('missing', 1, 'ghost', 1),
+      runEndEvent('missing', 'completed', 2),
+    ])
+    expect(orphan.entries).toEqual([])
+
+    const events: readonly SessionEvent[] = [
+      runStartEvent('run-1', 'audit', 1),
+      agentStartEvent('run-1', 1, 'scan', 2, 'p1'),
+      agentEndEvent('run-1', 1, 'cancelled', 3),
+      runEndEvent('run-1', 'cancelled', 4),
+    ]
+    expect(projectEvents(events)).toStrictEqual(events.reduce(projectEvent, createTranscriptView()))
   })
 })
 

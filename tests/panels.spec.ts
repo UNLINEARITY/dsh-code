@@ -6,7 +6,7 @@ import { createElement } from 'react'
 import { render } from 'ink'
 import { describe, expect, it, vi } from 'vitest'
 import { App } from '../src/app.ts'
-import { editQuery, HistoryPanel, JobsPanel, ModePanel, PermissionPanel, ResumePanel, type JobRow } from '../src/kernel-panels.ts'
+import { editQuery, HistoryPanel, JobsPanel, ModePanel, PermissionPanel, ResumePanel, SearchPanel, type JobRow, type SearchRow } from '../src/kernel-panels.ts'
 import { createTranscriptStore } from '../src/store.ts'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { DEFAULT_STATUSLINE_ITEMS } from '../src/render/status.ts'
@@ -743,6 +743,528 @@ describe('queued messages and global recall', () => {
     }
   })
 
+  it('opens /search with a seed query and searches immediately', async () => {
+    const stdin = Object.assign(new PassThrough(), {
+      isTTY: true,
+      isRaw: false,
+      setRawMode(value: boolean) {
+        this.isRaw = value
+        return this
+      },
+      ref() {},
+      unref() {},
+    }) as unknown as NodeJS.ReadStream
+    const stdout = Object.assign(new PassThrough(), {
+      isTTY: true,
+      columns: 100,
+      rows: 24,
+    }) as unknown as NodeJS.WriteStream
+    let output = ''
+    stdout.on('data', chunk => {
+      output += chunk.toString()
+    })
+    const noop = (): void => {}
+    const searched: string[] = []
+    const approvalListeners = new Set<() => void>()
+    const questionListeners = new Set<() => void>()
+    const instance = render(createElement(App, {
+      store: createTranscriptStore(),
+      subagents: { subscribe: () => () => {}, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
+      approval: {
+        subscribe: (listener: () => void) => {
+          approvalListeners.add(listener)
+          return () => approvalListeners.delete(listener)
+        },
+        getSnapshot: () => approvalSnapshot,
+      },
+      questions: {
+        subscribe: (listener: () => void) => {
+          questionListeners.add(listener)
+          return () => questionListeners.delete(listener)
+        },
+        getSnapshot: () => questionSnapshot,
+        submit: noop,
+        cancel: noop,
+      },
+      commands: { descriptors: [], subscribe: () => noop },
+      skills: { rows: [], subscribe: () => noop },
+      model: 'test/model',
+      cwd: 'dsh-cli',
+      workspaceRoot: 'C:\repo\dsh-cli',
+      branch: 'main',
+      sessionId: '12345678',
+      resumed: false,
+      mode: 'standard',
+      permission: 'workspace-write',
+      dispatch: noop,
+      steer: noop,
+      interrupt: () => false,
+      quit: noop,
+      loadModels: async () => ({ rows: [], failures: [] }),
+      loadMentions: async () => [],
+      selectModel: () => 'test/model',
+      subagentModel: '',
+      setSubagentModel: () => '',
+      clearSubagentModel: noop,
+      deleteSession: async () => '',
+      cycleMode: () => '',
+      setPermission: id => id,
+      exportTranscript: async () => {},
+      renameTitle: () => '',
+      loadPresets: async () => [],
+      loadPermissions: async () => [],
+      switchMode: async id => id,
+      createSession: noop,
+      loadSessions: async () => [],
+      searchSessions: async (query: string) => {
+        searched.push(query)
+        return [{
+          id: 'session-seed-hit',
+          label: 'seed hit',
+          detail: '',
+          snippet: 'matched the seeded query',
+          updatedAt: Date.now(),
+          subagent: false,
+          resumable: true,
+        }]
+      },
+      loadSubagents: async () => [],
+      loadSessionTranscript: async () => '',
+      switchSession: noop,
+      cancelSessionSwitch: () => false,
+      loadPlugins: () => [],
+      loadJobs: () => [],
+      statusline: DEFAULT_STATUSLINE_ITEMS,
+      saveStatusline: noop,
+      history: [],
+      recordHistory: noop,
+      cancelQueued: noop,
+      onBridgeReady: noop,
+    }), {
+      stdin,
+      stdout,
+      stderr: stdout,
+      exitOnCtrlC: false,
+      patchConsole: false,
+    })
+
+    try {
+      await wait()
+      // /search <query> opens the panel seeded: the effect fires the search
+      // immediately, before any keystroke.
+      stdin.write('/search seeded query')
+      await wait()
+      stdin.write('\r')
+      for (let i = 0; i < 20 && !output.includes("1 hit for 'seeded query'"); i += 1) await wait()
+      expect(searched).toEqual(['seeded query'])
+      expect(output).toContain("1 hit for 'seeded query'")
+    } finally {
+      instance.unmount()
+      stdin.destroy()
+      stdout.destroy()
+    }
+  })
+
+  it('notifies instead of opening /search when the deployment has no engine', async () => {
+    const stdin = Object.assign(new PassThrough(), {
+      isTTY: true,
+      isRaw: false,
+      setRawMode(value: boolean) {
+        this.isRaw = value
+        return this
+      },
+      ref() {},
+      unref() {},
+    }) as unknown as NodeJS.ReadStream
+    const stdout = Object.assign(new PassThrough(), {
+      isTTY: true,
+      columns: 100,
+      rows: 24,
+    }) as unknown as NodeJS.WriteStream
+    let output = ''
+    stdout.on('data', chunk => {
+      output += chunk.toString()
+    })
+    const noop = (): void => {}
+    const approvalListeners = new Set<() => void>()
+    const questionListeners = new Set<() => void>()
+    const instance = render(createElement(App, {
+      store: createTranscriptStore(),
+      subagents: { subscribe: () => () => {}, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
+      approval: {
+        subscribe: (listener: () => void) => {
+          approvalListeners.add(listener)
+          return () => approvalListeners.delete(listener)
+        },
+        getSnapshot: () => approvalSnapshot,
+      },
+      questions: {
+        subscribe: (listener: () => void) => {
+          questionListeners.add(listener)
+          return () => questionListeners.delete(listener)
+        },
+        getSnapshot: () => questionSnapshot,
+        submit: noop,
+        cancel: noop,
+      },
+      commands: { descriptors: [], subscribe: () => noop },
+      skills: { rows: [], subscribe: () => noop },
+      model: 'test/model',
+      cwd: 'dsh-cli',
+      workspaceRoot: 'C:\repo\dsh-cli',
+      branch: 'main',
+      sessionId: '12345678',
+      resumed: false,
+      mode: 'standard',
+      permission: 'workspace-write',
+      dispatch: noop,
+      steer: noop,
+      interrupt: () => false,
+      quit: noop,
+      loadModels: async () => ({ rows: [], failures: [] }),
+      loadMentions: async () => [],
+      selectModel: () => 'test/model',
+      subagentModel: '',
+      setSubagentModel: () => '',
+      clearSubagentModel: noop,
+      deleteSession: async () => '',
+      cycleMode: () => '',
+      setPermission: id => id,
+      exportTranscript: async () => {},
+      renameTitle: () => '',
+      loadPresets: async () => [],
+      loadPermissions: async () => [],
+      switchMode: async id => id,
+      createSession: noop,
+      loadSessions: async () => [],
+      loadSubagents: async () => [],
+      loadSessionTranscript: async () => '',
+      switchSession: noop,
+      cancelSessionSwitch: () => false,
+      loadPlugins: () => [],
+      loadJobs: () => [],
+      statusline: DEFAULT_STATUSLINE_ITEMS,
+      saveStatusline: noop,
+      history: [],
+      recordHistory: noop,
+      cancelQueued: noop,
+      onBridgeReady: noop,
+    }), {
+      stdin,
+      stdout,
+      stderr: stdout,
+      exitOnCtrlC: false,
+      patchConsole: false,
+    })
+
+    try {
+      await wait()
+      // No searchSessions prop: /search degrades to a notice, no panel.
+      stdin.write('/search')
+      await wait()
+      stdin.write('\r')
+      await wait()
+      expect(output).toContain('session search is unavailable')
+      expect(output).not.toContain("type a query")
+    } finally {
+      instance.unmount()
+      stdin.destroy()
+      stdout.destroy()
+    }
+  })
+
+  it('searches persisted sessions from /search and resumes the picked hit', async () => {
+    const stdin = Object.assign(new PassThrough(), {
+      isTTY: true,
+      isRaw: false,
+      setRawMode(value: boolean) {
+        this.isRaw = value
+        return this
+      },
+      ref() {},
+      unref() {},
+    }) as unknown as NodeJS.ReadStream
+    const stdout = Object.assign(new PassThrough(), {
+      isTTY: true,
+      columns: 100,
+      rows: 24,
+    }) as unknown as NodeJS.WriteStream
+    let output = ''
+    stdout.on('data', chunk => {
+      output += chunk.toString()
+    })
+    const noop = (): void => {}
+    const switched: string[] = []
+    const approvalListeners = new Set<() => void>()
+    const questionListeners = new Set<() => void>()
+    const instance = render(createElement(App, {
+      store: createTranscriptStore(),
+      subagents: { subscribe: () => () => {}, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
+      approval: {
+        subscribe: (listener: () => void) => {
+          approvalListeners.add(listener)
+          return () => approvalListeners.delete(listener)
+        },
+        getSnapshot: () => approvalSnapshot,
+      },
+      questions: {
+        subscribe: (listener: () => void) => {
+          questionListeners.add(listener)
+          return () => questionListeners.delete(listener)
+        },
+        getSnapshot: () => questionSnapshot,
+        submit: noop,
+        cancel: noop,
+      },
+      commands: { descriptors: [], subscribe: () => noop },
+      skills: { rows: [], subscribe: () => noop },
+      model: 'test/model',
+      cwd: 'dsh-cli',
+      workspaceRoot: 'C:\repo\dsh-cli',
+      branch: 'main',
+      sessionId: '12345678',
+      resumed: false,
+      mode: 'standard',
+      permission: 'workspace-write',
+      dispatch: noop,
+      steer: noop,
+      interrupt: () => false,
+      quit: noop,
+      loadModels: async () => ({ rows: [], failures: [] }),
+      loadMentions: async () => [],
+      selectModel: () => 'test/model',
+      subagentModel: '',
+      setSubagentModel: () => '',
+      clearSubagentModel: noop,
+      deleteSession: async () => '',
+      cycleMode: () => '',
+      setPermission: id => id,
+      exportTranscript: async () => {},
+      renameTitle: () => '',
+      loadPresets: async () => [],
+      loadPermissions: async () => [],
+      switchMode: async id => id,
+      createSession: noop,
+      loadSessions: async () => [],
+      searchSessions: async (query: string) => {
+        expect(query).toBe('login bug')
+        return [
+          {
+            id: 'session-hit-1',
+            label: 'session-hit',
+            detail: 'dsh-cli · standard',
+            snippet: 'fix the login bug in auth.ts',
+            updatedAt: Date.now(),
+            subagent: false,
+            resumable: true,
+          },
+          {
+            id: 'child-hit-1',
+            label: 'child-hit',
+            detail: '',
+            snippet: 'subagent also mentions the login bug',
+            updatedAt: Date.now(),
+            subagent: true,
+            resumable: false,
+          },
+        ]
+      },
+      loadSubagents: async () => [],
+      loadSessionTranscript: async () => '',
+      switchSession: (row: { id: string }) => {
+        switched.push(row.id)
+      },
+      cancelSessionSwitch: () => false,
+      loadPlugins: () => [],
+      loadJobs: () => [],
+      statusline: DEFAULT_STATUSLINE_ITEMS,
+      saveStatusline: noop,
+      history: [],
+      recordHistory: noop,
+      cancelQueued: noop,
+      onBridgeReady: noop,
+    }), {
+      stdin,
+      stdout,
+      stderr: stdout,
+      exitOnCtrlC: false,
+      patchConsole: false,
+    })
+
+    try {
+      await wait()
+      // Open the panel, type a query, and search.
+      stdin.write('/search')
+      await wait()
+      stdin.write('\r')
+      await wait()
+      expect(output).toContain('/search · type a query')
+      stdin.write('login bug')
+      await wait()
+      stdin.write('\r')
+      await wait()
+      expect(output).toContain("2 hits for 'login bug'")
+      expect(output).toContain('⎿ fix the login bug in auth.ts')
+      // Down onto the read-only subagent hit: Enter must keep the panel and
+      // its results instead of trading them for a rejected switch.
+      stdin.write('\x1b[B')
+      await wait()
+      expect(output).toContain('read-only')
+      stdin.write('\r')
+      await wait()
+      expect(switched).toEqual([])
+      expect(output).toContain('2 hits for')
+      // Back up onto the resumable hit: Enter resumes it.
+      stdin.write('\x1b[A')
+      await wait()
+      stdin.write('\r')
+      await wait()
+      expect(switched).toEqual(['session-hit-1'])
+    } finally {
+      instance.unmount()
+      stdin.destroy()
+      stdout.destroy()
+    }
+  })
+
+  it('keeps uppercase letters in /history filters and makes g/G query text mid-filter', async () => {
+    const stdin = Object.assign(new PassThrough(), {
+      isTTY: true,
+      isRaw: false,
+      setRawMode(value: boolean) {
+        this.isRaw = value
+        return this
+      },
+      ref() {},
+      unref() {},
+    }) as unknown as NodeJS.ReadStream
+    const stdout = Object.assign(new PassThrough(), {
+      isTTY: true,
+      columns: 100,
+      rows: 24,
+    }) as unknown as NodeJS.WriteStream
+    let output = ''
+    stdout.on('data', chunk => {
+      output += chunk.toString()
+    })
+    const noop = (): void => {}
+    const approvalListeners = new Set<() => void>()
+    const questionListeners = new Set<() => void>()
+    const instance = render(createElement(App, {
+      store: createTranscriptStore(),
+      subagents: { subscribe: () => () => {}, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
+      approval: {
+        subscribe: (listener: () => void) => {
+          approvalListeners.add(listener)
+          return () => approvalListeners.delete(listener)
+        },
+        getSnapshot: () => approvalSnapshot,
+      },
+      questions: {
+        subscribe: (listener: () => void) => {
+          questionListeners.add(listener)
+          return () => questionListeners.delete(listener)
+        },
+        getSnapshot: () => questionSnapshot,
+        submit: noop,
+        cancel: noop,
+      },
+      commands: { descriptors: [], subscribe: () => noop },
+      skills: { rows: [], subscribe: () => noop },
+      model: 'test/model',
+      cwd: 'dsh-cli',
+      workspaceRoot: 'C:\repo\dsh-cli',
+      branch: 'main',
+      sessionId: '12345678',
+      resumed: false,
+      mode: 'standard',
+      permission: 'workspace-write',
+      dispatch: noop,
+      steer: noop,
+      interrupt: () => false,
+      quit: noop,
+      loadModels: async () => ({ rows: [], failures: [] }),
+      loadMentions: async () => [],
+      selectModel: () => 'test/model',
+      subagentModel: '',
+      setSubagentModel: () => '',
+      clearSubagentModel: noop,
+      deleteSession: async () => '',
+      cycleMode: () => '',
+      setPermission: id => id,
+      exportTranscript: async () => {},
+      renameTitle: () => '',
+      loadPresets: async () => [],
+      loadPermissions: async () => [],
+      switchMode: async id => id,
+      createSession: noop,
+      loadSessions: async () => [],
+      loadSubagents: async () => [],
+      loadSessionTranscript: async () => '',
+      switchSession: noop,
+      cancelSessionSwitch: () => false,
+      loadPlugins: () => [],
+      loadJobs: () => [],
+      statusline: DEFAULT_STATUSLINE_ITEMS,
+      saveStatusline: noop,
+      history: ['Fix the login bug', 'bump the package version'],
+      recordHistory: noop,
+      cancelQueued: noop,
+      onBridgeReady: noop,
+    }), {
+      stdin,
+      stdout,
+      stderr: stdout,
+      exitOnCtrlC: false,
+      patchConsole: false,
+    })
+
+    try {
+      await wait()
+      // Open /history: the recall space holds the typed command plus the two
+      // persistent entries, newest first.
+      stdin.write('/history')
+      await wait()
+      stdin.write('\r')
+      await wait()
+      expect(output).toContain('/history · 3 prompts · type to filter')
+
+      // Typing 'Fix' sends a shift-marked 'F' through Ink's key parser; the
+      // uppercase letter must reach the query, not vanish (regression).
+      stdin.write('Fix')
+      await wait()
+      expect(output).toContain("1 of 3 match 'Fix'")
+
+      // Mid-filter, 'g' extends the query instead of jumping to the top.
+      stdin.write('g')
+      await wait()
+      expect(output).toContain("0 of 3 match 'Fixg'")
+
+      // Clear the query: with it empty again, G/g regain their jump roles.
+      stdin.write('\x7f')
+      await wait()
+      stdin.write('\x7f')
+      await wait()
+      stdin.write('\x7f')
+      await wait()
+      stdin.write('\x7f')
+      await wait()
+      output = ''
+      stdin.write('G')
+      await wait()
+      // The recall space is newest-first ('/history' leads), so G lands on
+      // the oldest row: the last persistent entry.
+      expect(output).toContain('› Fix the login bug')
+      stdin.write('g')
+      await wait()
+      expect(output).toContain('› /history')
+    } finally {
+      instance.unmount()
+      stdin.destroy()
+      stdout.destroy()
+    }
+  })
+
   it('shows the Codex shimmer Deep-diving line and original braille busy marker', async () => {
     const originalChalkLevel = chalk.level
     chalk.level = 3
@@ -1403,6 +1925,55 @@ describe('panel row sanitization', () => {
     }
   })
 
+  it('drops stale search results once a newer query supersedes them', async () => {
+    const { stdin, stdout, read } = fakeStreams()
+    const pending: Array<(rows: readonly SearchRow[]) => void> = []
+    const row = (id: string): SearchRow => ({
+      id, label: id, detail: '', snippet: `snippet ${id}`, updatedAt: Date.now(), subagent: false, resumable: true,
+    })
+    const instance = render(createElement(SearchPanel, {
+      // Every search parks on a caller-resolved promise so the test controls
+      // settlement order exactly.
+      load: () => new Promise(resolve => { pending.push(resolve) }),
+      select: () => {},
+      close: () => {},
+    }), {
+      stdin,
+      stdout,
+      stderr: stdout,
+      exitOnCtrlC: false,
+      patchConsole: false,
+    })
+    try {
+      await wait()
+      stdin.write('first')
+      await wait()
+      stdin.write('\r')
+      await wait()
+      expect(pending).toHaveLength(1)
+      stdin.write('\x7f\x7f\x7f\x7f\x7f')
+      await wait()
+      stdin.write('second')
+      await wait()
+      stdin.write('\r')
+      await wait()
+      expect(pending).toHaveLength(2)
+      // The NEWER search settles first and must own the panel; the stale
+      // promise resolving afterwards is dropped by the abort guard.
+      pending[1]!([row('second-hit')])
+      await wait()
+      pending[0]!([row('first-hit')])
+      await wait()
+      const output = read()
+      expect(output).toContain('second-hit')
+      expect(output).not.toContain('first-hit')
+    } finally {
+      instance.unmount()
+      stdin.destroy()
+      stdout.destroy()
+    }
+  })
+
   it('keeps multiline, tabbed, and OSC history entries on one physical row', async () => {
     const { stdin, stdout, read } = fakeStreams()
     const instance = render(createElement(HistoryPanel, {
@@ -1802,6 +2373,11 @@ describe('/model typing filter — late directory and compact copy', () => {
       await wait()
       for (let i = 0; i < 20 && !output.includes("2 of 4 match 'gpt'"); i += 1) await wait()
       expect(output).toContain("2 of 4 match 'gpt'")
+      // Wait for the cursor row itself, not just the header: the filtered
+      // list and its cursor commit in the same render, so anchoring on the
+      // row keeps Enter from racing a half-applied directory.
+      for (let i = 0; i < 20 && !output.includes('❯ OpenAI · GPT-5.1'); i += 1) await wait()
+      expect(output).toContain('❯ OpenAI · GPT-5.1')
       stdin.write('\r')
       await wait()
       expect(picked.map(row => row.model)).toEqual(['gpt-5.1'])

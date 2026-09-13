@@ -35,7 +35,7 @@ describe('buildExportMarkdown', () => {
       entries: [
         { kind: 'user', text: 'fix it', notice: false },
         { kind: 'assistant', text: 'doing it', reasoning: 'hmm' },
-        { kind: 'tool', callId: 'c1', ordinal: 1, name: 'edit', arguments: '{}', preview: 'a.ts', prompt: '', state: 'done', summary: 'Updated file', detail: undefined },
+        { kind: 'tool', callId: 'c1', ordinal: 1, name: 'edit', arguments: '{}', preview: 'a.ts', prompt: '', state: 'done', summary: 'Updated file', detail: undefined, subs: [], subsDropped: 0 },
         { kind: 'turn-marker', text: 'turn cancelled by the user' },
         { kind: 'error', text: 'X: boom' },
       ] as const,
@@ -49,6 +49,40 @@ describe('buildExportMarkdown', () => {
     expect(markdown).toContain('> turn cancelled by the user')
     expect(markdown).toContain('> ⨯ X: boom')
     expect(markdown).toContain('- model: p/m')
+  })
+
+  it('exports PTC sub-dispatch rows and the workflow run section', () => {
+    const view = {
+      ...createTranscriptView(),
+      entries: [
+        {
+          kind: 'tool', callId: 'call', ordinal: 1, name: 'run_code', arguments: '{}', preview: 'main.ts', prompt: '',
+          state: 'done', summary: 'ok', detail: undefined,
+          subs: [
+            { subCallId: 'run:ptc:1', name: 'read_file', preview: 'a.ts', state: 'done', summary: '', durationMs: 1_000 },
+            { subCallId: 'run:ptc:2', name: 'bash', preview: 'ls', state: 'error', summary: 'boom', durationMs: 50 },
+          ],
+          subsDropped: 2,
+        },
+        {
+          kind: 'workflow', runId: 'run-1', name: 'audit', membersDropped: 1,
+          members: [
+            { seq: 1, label: 'scan', phase: 'p1', childId: 'child-1', outcome: 'completed' },
+            { seq: 2, label: 'verify', phase: '', childId: 'child-2', outcome: 'failed' },
+          ],
+          state: 'error',
+        },
+      ],
+    } as unknown as ReturnType<typeof createTranscriptView>
+    const markdown = buildExportMarkdown(view, 's')
+    expect(markdown).toContain('### tool `run_code`')
+    expect(markdown).toContain('- dispatch: ok · read_file a.ts')
+    expect(markdown).toContain('- dispatch: error · bash ls · boom')
+    expect(markdown).toContain('- dispatch: … 2 earlier dispatches')
+    expect(markdown).toContain('### workflow `audit` (error)')
+    expect(markdown).toContain('- completed: scan [p1]')
+    expect(markdown).toContain('- failed: verify')
+    expect(markdown).toContain('- … 1 earlier member')
   })
 
   it('collapses injected context rows to quoted notices', () => {

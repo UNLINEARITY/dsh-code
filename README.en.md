@@ -141,6 +141,7 @@ The following built-in commands are available inside the TUI. Additional Harness
 | --- | --- |
 | `/new [preset]` | Create a session, optionally selecting an Agent Preset |
 | `/resume [id\|prefix]` | Search for or restore an existing session |
+| `/search [query]` | Full-text search across persisted sessions (Enter resumes the hit) |
 | `/resume cancel` | Cancel a pending session switch |
 | `/fork [event-seq]` | Create a session branch from the latest completed turn or a specified event position |
 | `/delete [id\|prefix]` | Delete a session and its subagent sessions |
@@ -189,6 +190,7 @@ The following built-in commands are available inside the TUI. Additional Harness
 | Action | Purpose |
 | --- | --- |
 | `Enter` | Submit the current input |
+| `Ctrl+J` / `Alt+Enter` | Insert a newline in the composer (with the enhanced keyboard protocol, `Shift+Enter` / `Ctrl+Enter` work too) |
 | `Up` / `Down` | Recall the previous or next input-history entry |
 | `Tab` | Complete commands, skills, or `@` references |
 | `@` | Reference workspace files or existing sessions; image files are sent as attachments |

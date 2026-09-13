@@ -1001,7 +1001,7 @@ describe('structured question multi-select', () => {
 })
 
 describe('multiline composer', () => {
-  it('treats enhanced modified Enter as ordinary Enter', async () => {
+  it('inserts newlines for the modified-Enter family and submits only on plain Enter', async () => {
     const harness = createTty(100, 24)
     const dispatched: string[] = []
     const instance = renderApp(harness, appProps({
@@ -1011,14 +1011,29 @@ describe('multiline composer', () => {
       await wait()
       harness.stdin.write('first')
       await wait()
+      // Kitty Shift+Enter (13;2) and Ctrl+Enter (13;5) normalize to the LF
+      // byte; Alt+Enter keeps its escape form with meta — all three insert a
+      // newline instead of submitting.
       harness.stdin.write('\x1b[13;2u')
       await wait()
-      expect(dispatched).toEqual(['first'])
       harness.stdin.write('second')
+      await wait()
+      harness.stdin.write('\x1b[13;5u')
+      await wait()
+      harness.stdin.write('third')
+      await wait()
+      harness.stdin.write('\x1b\r')
+      await wait()
+      harness.stdin.write('fourth')
+      await wait()
+      // Ctrl+J is the legacy-terminal newline key (bare LF, no protocol).
+      harness.stdin.write('\n')
+      await wait()
+      harness.stdin.write('fifth')
       await wait()
       harness.stdin.write('\r')
       await wait()
-      expect(dispatched).toEqual(['first', 'second'])
+      expect(dispatched).toEqual(['first\nsecond\nthird\nfourth\nfifth'])
     } finally {
       instance.unmount()
       harness.stdin.destroy()

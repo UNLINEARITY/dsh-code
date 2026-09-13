@@ -36,7 +36,7 @@ import { mountApprovalAnswerer, type ApprovalStore } from './approval.ts'
 import { isSlashLine, submissionPayload, watchCommands, type CommandsView } from './commands.ts'
 import { internals, type TuiMount } from './internals.ts'
 import { syncModelCapabilities } from './model-capabilities.ts'
-import { buildModelSelection, applyModelSelectionToConfig, loadModelDirectory, modelSelectionLabel, resolveEffectiveSelection, type ModelRow } from './models.ts'
+import { buildModelSelection, applyModelSelectionToConfig, loadModelDirectory, modelSelectionLabel, pendingModelSelection, resolveEffectiveSelection, type ModelRow } from './models.ts'
 import {
   discoverProviderModels,
   loadProviderSettings,
@@ -100,6 +100,7 @@ import {
   type SessionQueryService,
   type SessionRow,
 } from './session-directory.ts'
+import type { SearchRow } from './kernel-panels.ts'
 import { createUserSettingsPersistence, writeFileAtomically } from './settings-file.ts'
 
 /** Stable Cordis plugin name. */
@@ -267,6 +268,44 @@ export interface QueuedSubmission {
  */
 export function submissionBelongsToSession(origin: string | undefined, activeSessionId: string | undefined): boolean {
   return origin === undefined || origin === '' || origin === activeSessionId
+}
+
+/**
+ * Root-log catalog facts a resumed session must replay into the subagent
+ * feed: constructor seeds never fire on the live bus, so without this the
+ * children of a resumed session vanish behind a restart. The empty-child
+ * placeholder row (childId '') is a placeholder, not a child, and stays out.
+ */
+export function subagentCatalogSeed(events: readonly SessionEvent[]): readonly SessionEvent<'subagent/catalog'>[] {
+  return events.filter((event): event is SessionEvent<'subagent/catalog'> =>
+    event.type === 'subagent/catalog' && event.data.childId !== '')
+}
+
+/**
+ * Map one cross-session full-text hit onto the /search panel's row (pure).
+ * Labels fall back to the short id form — the engine's hit carries the
+ * strongest matching event, not the title observation.
+ */
+export function searchHitToRow(hit: {
+  header: SessionHeader
+  bestMatch: { snippet: string; time: number }
+}): SearchRow {
+  const subagent = hit.header.origin === 'subagent'
+  const cwd = hit.header.cwd ?? ''
+  // Session cwds may arrive in either separator style regardless of the
+  // observing host (a workspace synced from Windows), so split on both.
+  const workspace = cwd.split(/[\\/]/u).filter(part => part !== '').at(-1) ?? ''
+  const preset = hit.header.agentPreset ?? ''
+  const flat = hit.bestMatch.snippet.replace(/\s+/gu, ' ').trim()
+  return {
+    id: hit.header.id,
+    label: hit.header.id.slice(-12),
+    detail: [workspace, preset].filter(part => part !== '').join(' · '),
+    snippet: flat.length > 158 ? `${flat.slice(0, 157)}…` : flat,
+    updatedAt: hit.bestMatch.time,
+    subagent,
+    resumable: !subagent,
+  }
 }
 
 /** One Shift+Tab station decision for the mode cycle. */
@@ -444,6 +483,13 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     mode: string
     selection: { picked?: ModelSelection }
     resumed: boolean
+    /**
+     * Root-log `subagent/catalog` facts (resume path): constructor seeds
+     * never fire on the live bus, so activation replays them into the
+     * subagent feed after its reset — a resumed session's children stay
+     * visible instead of vanishing behind a restart.
+     */
+    catalogSeed: readonly SessionEvent<'subagent/catalog'>[]
   }
 
   /** Prepare a complete next session before disturbing the currently visible one. */
@@ -512,15 +558,24 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     if (!next.resume && permissionPresets !== undefined) {
       applyPendingPermission(permissionPresets, session, pendingPermission)
     }
+    const seedEvents = session.snapshotEvents()
+    // Resume precedence, middle layer: the log's unconsumed `model/selection`
+    // (a pick the web host recorded that no request ever assembled) outranks
+    // the older request header; an in-process pick still outranks both.
+    if (next.resume && selectionState.picked === undefined) {
+      const pending = pendingModelSelection(seedEvents)
+      if (pending !== undefined) selectionState.picked = pending
+    }
     return {
       handle,
       agent: handle.agent,
       session,
-      store: createTranscriptStore(session.snapshotEvents()),
+      store: createTranscriptStore(seedEvents),
       mentions: createMentions(ctx, handle.agent, session.header.cwd ?? nextCwd),
       mode: mode ?? 'standard',
       selection: selectionState,
       resumed: next.resume,
+      catalogSeed: subagentCatalogSeed(seedEvents),
     }
   }
 
@@ -616,6 +671,9 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     session = prepared.session
     store = prepared.store
     mentions = prepared.mentions
+    // Replayed catalog facts rebuild the resumed session's child rows before
+    // the first render (the live handler only folds events from now on).
+    for (const event of prepared.catalogSeed) subagents.apply(event.data.childId, event)
   }
 
   // Seed the transcript from the full session log: constructor seeds never
@@ -1093,6 +1151,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
           store = next.store
           mentions = next.mentions
           subagents.reset()
+          for (const event of next.catalogSeed) subagents.apply(event.data.childId, event)
           pendingMode = undefined
           pendingPermission = undefined
           commands.setAgent(agent)
@@ -1579,6 +1638,11 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       commands.setAgent(agent)
       skills.setAgent(agent)
       try {
+        // Reseed the feed BEFORE the first frame of the new session so no
+        // stale row from the previous one flashes; a rolled-back handoff
+        // re-seeds the previous session's catalog the same way.
+        subagents.reset()
+        for (const event of next.catalogSeed) subagents.apply(event.data.childId, event)
         process.stdout.write('\x1b[r\x1b[0m\x1b[H\x1b[2J\x1b[3J\x1b[H')
         renderCurrent()
         // Only a successful handoff may clear the transient per-session
@@ -1586,7 +1650,6 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
         // subagent feed plus the user's pre-session /mode and permission
         // picks (the bare-launch promise: explicit choices survive until
         // composition takes them).
-        subagents.reset()
         pendingMode = undefined
         pendingPermission = undefined
         pendingPlan = false
@@ -1598,6 +1661,10 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
         mentions = previous === undefined ? createMentions(ctx, undefined, cwd) : previous.mentions
         if (agent !== undefined) commands.setAgent(agent)
         if (agent !== undefined) skills.setAgent(agent)
+        subagents.reset()
+        if (previous !== undefined) {
+          for (const event of previous.catalogSeed) subagents.apply(event.data.childId, event)
+        }
         await next.handle.dispose()
         if (!quitting) renderCurrent()
         throw error
@@ -1773,6 +1840,30 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     requestSwitch({ target: { sessionId: row.id, resume: true }, label: row.title ?? row.id.slice(-12) })
   }
 
+  // /search reads the SAME in-process engine the model's session_search
+  // tools use (the bundle's skip-tolerant subclass). The row may be disabled
+  // by a deployment; /search then degrades to a notice instead of a panel.
+  const searchSessions = sessionQuery === undefined
+    ? undefined
+    : async (query: string, signal?: AbortSignal): Promise<readonly SearchRow[]> => {
+      const page = await sessionQuery.searchSessions({ query, limit: 30 }, signal === undefined ? undefined : { signal })
+      const rows = page.items.map(hit => searchHitToRow(hit))
+      // Best-effort title enrichment (the same snapshots /resume merges):
+      // a failure keeps the short-id labels instead of failing the search.
+      try {
+        const observations = await sessionQuery.readTitleSnapshots(rows.map(row => row.id), signal)
+        const titles = new Map<string, string>()
+        for (const observation of observations) {
+          if (observation.status !== 'fulfilled') continue
+          const title = observation.value?.title?.title
+          if (title !== undefined && title.trim() !== '') titles.set(observation.sessionId, title)
+        }
+        return rows.map(row => titles.has(row.id) ? { ...row, label: titles.get(row.id)! } : row)
+      } catch {
+        return rows
+      }
+    }
+
   const cancelSessionSwitch = (): boolean => {
     return switchQueue.cancel()
   }
@@ -1871,6 +1962,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
           .then(rows => rows.filter(row => row.parent === current.id && row.subagent))
       },
       switchSession,
+      searchSessions,
       cancelSessionSwitch,
       loadPlugins: () => listPluginRows(ctx),
       // The launcher owns every update decision; the TUI only drives its

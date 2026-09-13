@@ -84,7 +84,7 @@ import type { QuestionSnapshot, QuestionStore } from './questions.ts'
 import type { SkillsView, SkillRow } from './skills.ts'
 import { isPathLikeMentionQuery, type MentionCandidate } from './mentions.ts'
 import type { SubagentFeedView, SubagentRow } from './subagents.ts'
-import { AgentsPanel, editQuery, EffortPanel, HistoryPanel, JobsPanel, ModePanel, PermissionPanel, PluginPanel, ResumePanel, SchedulePanel, StatuslinePanel, runClock, SubagentPanel, type JobRow } from './kernel-panels.ts'
+import { AgentsPanel, editQuery, EffortPanel, HistoryPanel, JobsPanel, ModePanel, PermissionPanel, PluginPanel, ResumePanel, SchedulePanel, SearchPanel, StatuslinePanel, runClock, SubagentPanel, type JobRow, type SearchRow } from './kernel-panels.ts'
 import type { PresetRow } from './presets.ts'
 import type { PermissionRow } from './permissions.ts'
 import type { PluginRow } from './plugin-inventory.ts'
@@ -233,6 +233,7 @@ const LOCAL_COMMANDS = [
   { label: '/new', description: 'create and switch to a fresh session (/new [preset])' },
   { label: '/fork', description: 'fork at the latest completed turn (/fork [event-seq])' },
   { label: '/resume', description: 'browse or switch root sessions (/resume [id|prefix])' },
+  { label: '/search', description: 'full-text search across persisted sessions (/search [query])' },
   { label: '/plugin', description: 'inspect the live plugin composition' },
   { label: '/update', description: 'update dsh-code, the harness host, and profile plugins in one aligned step' },
   { label: '/jobs', description: 'inspect background jobs' },
@@ -390,6 +391,12 @@ export interface AppProps {
   forkSession(argument: string): void
   loadSessions(options: SessionDirectoryOptions, signal?: AbortSignal): Promise<readonly SessionRow[]>
   loadSessionTranscript(id: string, signal?: AbortSignal): Promise<string>
+  /**
+   * Full-text search over every persisted session (the in-process
+   * session-query engine). Absent when the deployment disabled the row;
+   * /search degrades to a notice instead of opening the panel.
+   */
+  searchSessions?(query: string, signal?: AbortSignal): Promise<readonly SearchRow[]>
   /** Load this session's subagent conversations (children by lineage). */
   loadSubagents(): Promise<readonly SessionRow[]>
   switchSession(row: SessionRow): void
@@ -1679,6 +1686,13 @@ function ModelPanel({ directory, error, current, onSelect, onProviders, onRetry,
     return rows.filter(row => `${row.provider} ${row.providerName ?? ''} ${row.model} ${row.modelName}`.toLowerCase().includes(needle))
   }, [rows, query])
   const positioned = useRef(false)
+  // Latest-value ref: Ink re-subscribes useInput when its effect flushes,
+  // which can lag a committed render (a directory that just landed paints
+  // before the subscription swaps). A keystroke in that window would meet a
+  // stale closure — Enter died as an empty-filter no-op right after "2 of 4
+  // match" painted. The handler reads render-fresh values through the ref.
+  const liveRef = useRef({ filtered, query, cursor })
+  liveRef.current = { filtered, query, cursor }
 
   useEffect(() => {
     // Open ON the applied model (Codex resumes the previous pick): the first
@@ -1705,11 +1719,12 @@ function ModelPanel({ directory, error, current, onSelect, onProviders, onRetry,
   }, [rows, filtered, cursor, current])
 
   useInput((input, key) => {
-    if (key.escape || (input === 'q' && query === '')) {
+    const { filtered: list, query: text, cursor: at } = liveRef.current
+    if (key.escape || (input === 'q' && text === '')) {
       onClose()
       return
     }
-    if (input === 'r' && query === '') {
+    if (input === 'r' && text === '') {
       onRetry()
       return
     }
@@ -1722,19 +1737,19 @@ function ModelPanel({ directory, error, current, onSelect, onProviders, onRetry,
       onClose()
       return
     }
-    const next = editQuery(query, input, key)
+    const next = editQuery(text, input, key)
     if (next !== undefined) {
       setQuery(next)
       setCursor(0)
       return
     }
-    if (filtered.length === 0) return
+    if (list.length === 0) return
     if (key.upArrow) {
-      setCursor(cursor > 0 ? cursor - 1 : filtered.length - 1)
+      setCursor(at > 0 ? at - 1 : list.length - 1)
       return
     }
     if (key.downArrow) {
-      setCursor(cursor < filtered.length - 1 ? cursor + 1 : 0)
+      setCursor(at < list.length - 1 ? at + 1 : 0)
       return
     }
     if (key.pageUp) {
@@ -1742,11 +1757,11 @@ function ModelPanel({ directory, error, current, onSelect, onProviders, onRetry,
       return
     }
     if (key.pageDown) {
-      setCursor(current => Math.min(filtered.length - 1, current + Math.max(1, viewport.bodyRows - 1)))
+      setCursor(current => Math.min(list.length - 1, current + Math.max(1, viewport.bodyRows - 1)))
       return
     }
-    if (key.return && filtered[cursor] !== undefined) {
-      onSelect(filtered[cursor])
+    if (key.return && list[at] !== undefined) {
+      onSelect(list[at])
     }
   })
 
@@ -2574,7 +2589,7 @@ function HelpPanel({ descriptors, skills, commandError, skillError, onClose }: {
   )
   const content: ReactElement[] = [
     createElement(Text, { key: 'keys-title', bold: true, wrap: 'truncate-end' }, ' keys'),
-    createElement(Text, { key: 'key-submit', dimColor: true, wrap: 'truncate-end' }, '  enter submit · up/down history · tab complete'),
+    createElement(Text, { key: 'key-submit', dimColor: true, wrap: 'truncate-end' }, '  enter submit · ctrl+j / alt+enter newline · up/down history · tab complete'),
     createElement(Text, { key: 'key-mentions', dimColor: true, wrap: 'truncate-end' }, '  @ mentions workspace files and sessions'),
     createElement(Text, { key: 'key-inspector', dimColor: true, wrap: 'truncate-end' }, '  ctrl+o history details · ctrl/alt+r thinking · shift+tab permission preset'),
     createElement(Text, { key: 'key-cancel', dimColor: true, wrap: 'truncate-end' }, '  esc interrupt the running turn · ctrl+c cancel / clear / quit · ctrl+d exit'),
@@ -3234,7 +3249,7 @@ interface DraftFile extends FilePathInspection {
  * While a modal (approval / question / model panel) owns the keys, the
  * box passes every key through untouched.
  */
-function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openEffort, openHelp, openMode, openPermission, openResume, openPlugin, openUpdate, openSchedule, openJobs, openStatusline, openTheme, openHistory, openAgents, openSubagent, openTodos, openDelete, openDiff, reviewChanges, deleteConfirm, confirmDelete, cancelDelete, createSession, forkSession, cancelSessionSwitch, notify, applyEditorKeys, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, inspectImages, prepareImages, inspectFiles, prepareFiles, cycleMode, exportTranscript, renameTitle, copyLastResponse, recallSpace, recordLocal, recordHistory, queued, cancelQueued, historyFill, historyConsumed, animations, applyAnimations, waveTier, waveStyle, maxRows, anchorRowsBelow, tabTitle, onEditorRows, onMenuRows, sessionKey }: {
+function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openEffort, openHelp, openMode, openPermission, openResume, openSearch, openPlugin, openUpdate, openSchedule, openJobs, openStatusline, openTheme, openHistory, openAgents, openSubagent, openTodos, openDelete, openDiff, reviewChanges, deleteConfirm, confirmDelete, cancelDelete, createSession, forkSession, cancelSessionSwitch, notify, applyEditorKeys, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, inspectImages, prepareImages, inspectFiles, prepareFiles, cycleMode, exportTranscript, renameTitle, copyLastResponse, recallSpace, recordLocal, recordHistory, queued, cancelQueued, historyFill, historyConsumed, animations, applyAnimations, waveTier, waveStyle, maxRows, anchorRowsBelow, tabTitle, onEditorRows, onMenuRows, sessionKey }: {
   active: boolean
   frozen: boolean
   /** Frozen-band hint naming the surface that owns the keyboard; an empty
@@ -3255,6 +3270,8 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
   openMode(): void
   openPermission(): void
   openResume(): void
+  /** Open the /search panel with an optional seed query. */
+  openSearch(query: string): void
   openPlugin(query?: string): void
   /** Open the /update panel (aligned upgrade surface). */
   openUpdate(): void
@@ -4127,6 +4144,10 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
         else dispatch(text)
         return
       }
+      if (text === '/search' || text.startsWith('/search ')) {
+        openSearch(text.slice(7).trim())
+        return
+      }
       if (text === '/new' || text.startsWith('/new ')) {
         createSession(text.slice(4).trim() || undefined)
         return
@@ -4203,9 +4224,17 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
       dispatch(text)
       return
     }
-    // Ink exposes Ctrl+J as a bare LF and Alt+Enter as a bare CR after
-    // stripping the leading escape. Neither is a multiline shortcut.
-    if (input === '\n' || input === '\r') return
+    // The modified-Enter newline family: Ctrl+J arrives as a bare LF (Ink
+    // names it 'enter', not 'return'), and the kitty layer normalizes
+    // Ctrl/Shift+Enter to the same byte. Alt+Enter reaches here as a bare CR
+    // with no flags — Ink's parser drops the escape and reports no meta, and
+    // plain Enter always carries key.return — so a flagless CR is Alt+Enter.
+    // Only plain Enter submits. app.spec's "modified-Enter family" test pins
+    // this exact parser shape; an Ink upgrade that changes it fails there.
+    if (input === '\n' || input === '\r') {
+      applyEdit(insertText(liveValue, liveCursor, '\n'))
+      return
+    }
     // A fast Tab followed by text can arrive as one readable chunk in an
     // integrated terminal. Accept the candidate first, then apply the
     // remaining characters against the synchronously updated editor refs.
@@ -4933,6 +4962,9 @@ export function App(props: AppProps): ReactElement {
   const [modeOpen, setModeOpen] = useState(false)
   const [permissionOpen, setPermissionOpen] = useState(false)
   const [resumeOpen, setResumeOpen] = useState(false)
+  const [searchOpen, setSearchOpen] = useState(false)
+  /** /search seed: the query from `/search <text>` (cleared on open). */
+  const [searchSeed, setSearchSeed] = useState('')
   const [pluginOpen, setPluginOpen] = useState(false)
   const [pluginQuery, setPluginQuery] = useState('')
   const [updateOpen, setUpdateOpen] = useState(false)
@@ -5655,6 +5687,28 @@ export function App(props: AppProps): ReactElement {
         close: () => setResumeOpen(false),
       })
       : undefined,
+    searchOpen && !approvalPending && !questionPending && props.searchSessions !== undefined
+      ? createElement(SearchPanel, {
+        load: props.searchSessions,
+        initialQuery: searchSeed,
+        select: (row: SearchRow) => {
+          setSearchOpen(false)
+          props.switchSession({
+            id: row.id,
+            createdAt: row.updatedAt,
+            updatedAt: row.updatedAt,
+            cwd: '',
+            workspace: '',
+            subagent: row.subagent,
+            resumable: row.resumable,
+            live: false,
+            persisted: true,
+            preset: '',
+          })
+        },
+        close: () => setSearchOpen(false),
+      })
+      : undefined,
     pluginOpen && !approvalPending && !questionPending
       ? createElement(PluginPanel, { load: props.loadPlugins, initialQuery: pluginQuery, close: () => setPluginOpen(false) })
       : undefined,
@@ -5821,6 +5875,14 @@ export function App(props: AppProps): ReactElement {
         openMode: () => setModeOpen(true),
         openPermission: () => setPermissionOpen(true),
         openResume: () => { setResumeDelete({ mode: false }); setResumeOpen(true) },
+        openSearch: (query: string) => {
+          if (props.searchSessions === undefined) {
+            notify('session search is unavailable in this deployment', 'warning')
+            return
+          }
+          setSearchSeed(query)
+          setSearchOpen(true)
+        },
         openPlugin: (query = '') => { setPluginQuery(query); setPluginOpen(true) },
         openUpdate: () => setUpdateOpen(true),
         openSchedule: () => setScheduleOpen(true),

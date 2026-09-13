@@ -105,6 +105,8 @@ describe('styled terminal lines', () => {
       state: 'done',
       summary: 'done',
       detail: { kind: 'raw', text: raw, truncated: false },
+      subs: [],
+      subsDropped: 0,
     }
     const lines = transcriptEntryLines(entry, 40)
     expect(lines.length).toBeGreaterThan(10)
@@ -129,6 +131,8 @@ describe('styled terminal lines', () => {
       state: 'done',
       summary: 'done',
       detail: { kind: 'raw', text: raw, truncated: false },
+      subs: [],
+      subsDropped: 0,
     }
     const collapsed = transcriptEntryLines(entry, 40, false)
     expect(collapsed).toHaveLength(3)
@@ -151,12 +155,44 @@ describe('styled terminal lines', () => {
       state: 'error',
       summary: 'command failed',
       detail: undefined,
+      subs: [],
+      subsDropped: 0,
     }
     const text = textOf(transcriptEntryLines(entry, 80))
     // The badge and the nested error line share one index: an error named
     // "call 7" always points at the card that shows [7].
     expect(text).toContain('[7] bash')
     expect(text).toContain('⎿ call 7: command failed')
+  })
+
+  it('renders PTC sub-dispatch rows with state marks, durations, and the eviction count', () => {
+    const entry: TranscriptEntry = {
+      kind: 'tool',
+      callId: 'call',
+      ordinal: 1,
+      name: 'run_code',
+      arguments: '{}',
+      preview: 'main.ts',
+      prompt: '',
+      state: 'running',
+      summary: '',
+      detail: undefined,
+      subs: [
+        { subCallId: 'run:ptc:1', name: 'read_file', preview: 'a.ts', state: 'running', summary: '', durationMs: 0 },
+        { subCallId: 'run:ptc:2', name: 'bash', preview: 'ls', state: 'done', summary: '', durationMs: 1_230 },
+        { subCallId: 'run:ptc:3', name: 'edit', preview: 'b.ts', state: 'error', summary: 'boom', durationMs: 40 },
+      ],
+      subsDropped: 2,
+    }
+    const text = textOf(transcriptEntryLines(entry, 80, true))
+    expect(text).toContain('┆ ● read_file a.ts')
+    expect(text).toContain('┆ ⏺ bash ls · 1.2s')
+    expect(text).toContain('┆ ⨯ edit b.ts · boom')
+    expect(text).toContain('┆ … 2 earlier dispatches')
+    // Collapsed (Ctrl+R fold closed) keeps the bounded three-row window.
+    const collapsed = transcriptEntryLines(entry, 80, false)
+    expect(collapsed).toHaveLength(3)
+    expect(textOf(collapsed)).toContain('Ctrl/Alt+R')
   })
 
   it('sanitizes live tool and command names before physical-row rendering', () => {
@@ -171,6 +207,8 @@ describe('styled terminal lines', () => {
       state: 'running',
       summary: '',
       detail: undefined,
+      subs: [],
+      subsDropped: 0,
     }
     const command: TranscriptEntry = {
       kind: 'command',

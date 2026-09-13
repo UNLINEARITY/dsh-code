@@ -59,7 +59,9 @@ describe('normalizeKeyboardChunk', () => {
   })
   it('maps Enter family to canonical forms', () => {
     expect(normalizeKeyboardChunk('\x1b[13u')).toBe('\r')
-    expect(normalizeKeyboardChunk('\x1b[13;2u')).toBe('\r')
+    // Shift+Enter joins the modified-Enter newline family (the LF byte
+    // Ctrl+J sends); plain Enter alone stays the submit key.
+    expect(normalizeKeyboardChunk('\x1b[13;2u')).toBe('\n')
     expect(normalizeKeyboardChunk('\x1b[13;5u')).toBe('\n')
     expect(normalizeKeyboardChunk('\x1b[13;3u')).toBe('\x1b\r')
   })

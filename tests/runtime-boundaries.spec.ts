@@ -7,6 +7,7 @@ import {
   exportSessionIdSuffix,
   resolveTarget,
   runQuitSequence,
+  searchHitToRow,
   StartupInputGate,
   submissionBelongsToSession,
   type QueuedSubmission,
@@ -237,5 +238,32 @@ describe('StartupInputGate (startup input ordering)', () => {
       throw new Error('image preparation failed')
     })).rejects.toThrow('image preparation failed')
     expect(delivered).toEqual(['first', 'second'])
+  })
+})
+
+describe('searchHitToRow (/search panel mapping)', () => {
+  it('maps a root hit with workspace and preset detail', () => {
+    const row = searchHitToRow({
+      header: { version: 0, id: 'session-abcdef123456', createdAt: 1, cwd: 'C:/repo/dsh-cli', agentPreset: 'standard' } as SessionHeader,
+      bestMatch: { snippet: 'fix the\n  login bug', time: 1_000 },
+    })
+    expect(row.id).toBe('session-abcdef123456')
+    expect(row.label).toBe('abcdef123456'.slice(-12))
+    expect(row.detail).toBe('dsh-cli · standard')
+    expect(row.snippet).toBe('fix the login bug')
+    expect(row.subagent).toBe(false)
+    expect(row.resumable).toBe(true)
+    expect(row.updatedAt).toBe(1_000)
+  })
+
+  it('marks subagent conversations read-only and bounds long snippets', () => {
+    const row = searchHitToRow({
+      header: { version: 0, id: 'child1', createdAt: 1, cwd: 'C:/repo', origin: 'subagent', parentSession: 'root1' } as SessionHeader,
+      bestMatch: { snippet: 'x'.repeat(300), time: 5 },
+    })
+    expect(row.subagent).toBe(true)
+    expect(row.resumable).toBe(false)
+    expect(row.snippet.length).toBeLessThanOrEqual(158)
+    expect(row.snippet.endsWith('…')).toBe(true)
   })
 })

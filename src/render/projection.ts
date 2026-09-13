@@ -122,6 +122,169 @@ export interface ToolEntry {
    * result lands and only when something renderable exists.
    */
   detail: ToolDetail | undefined
+  /**
+   * Nested PTC sub-dispatches (`run_code`) in start order, bounded to the
+   * newest {@link MAX_TOOL_SUB_DISPATCHES} rows.
+   */
+  subs: readonly ToolSubDispatch[]
+  /** Sub-dispatches evicted from the bounded window. */
+  subsDropped: number
+}
+
+/**
+ * One nested PTC sub-dispatch under a `run_code` parent call: the durable
+ * `tool/ptc-dispatch-start`/`tool/ptc-dispatch` pair folded to one bounded
+ * row (upstream contract: pair by `subCallId`, every start settles, and the
+ * settle carries `tool/result`'s own vocabulary).
+ */
+export interface ToolSubDispatch {
+  /** Opaque sub-call id pairing the start with its settle. */
+  subCallId: string
+  /** Sub-call tool name. */
+  name: string
+  /** Bounded arguments preview. */
+  preview: string
+  /** Lifecycle; `running` until the paired settle lands. */
+  state: 'running' | 'done' | 'error'
+  /** Bounded first text block of the settle content, '' until it lands. */
+  summary: string
+  /** Wall-clock duration (settle − start), 0 while running. */
+  durationMs: number
+}
+
+/** Bounded sub-dispatch window per tool card (display budget only). */
+export const MAX_TOOL_SUB_DISPATCHES = 12
+
+/** Bounded member window per workflow run card (display budget only). */
+export const MAX_WORKFLOW_MEMBERS = 12
+
+/** One workflow member (an `agent()` call inside a `workflow` script). */
+export interface WorkflowMember {
+  /** Member sequence within the run (the agent-start/agent-end pairing key). */
+  seq: number
+  /** Display label. */
+  label: string
+  /** Declared phase title, '' when none. */
+  phase: string
+  /** Child session id (cross-links the subagent feed's rows). */
+  childId: string
+  /** Settlement; `running` until the paired `tool-workflow/agent-end`. */
+  outcome: 'running' | 'completed' | 'failed' | 'cancelled'
+}
+
+/**
+ * One durable workflow run (the `tool-workflow/*` record a `workflow` or
+ * `ralph` tool appends to the parent session): run identity plus its
+ * bounded member list, live until `tool-workflow/run-end` settles.
+ */
+export interface WorkflowEntry {
+  kind: 'workflow'
+  /** Stable run identity shared by every event of the run. */
+  runId: string
+  /** Display name of the run. */
+  name: string
+  /** Members in sequence order, bounded to the newest window. */
+  members: readonly WorkflowMember[]
+  /** Members evicted from the bounded window. */
+  membersDropped: number
+  /** Run settlement; `running` until `tool-workflow/run-end`. */
+  state: 'running' | 'completed' | 'cancelled' | 'error'
+}
+
+/** Payload of `tool-workflow/run-start` (dsh-tool-workflow's map merge). */
+interface WorkflowRunStartData {
+  runId: string
+  name: string
+}
+
+/** Payload of `tool-workflow/agent-start`. */
+interface WorkflowAgentStartData {
+  runId: string
+  seq: number
+  label: string
+  phase?: string
+  childId: string
+}
+
+/** Payload of `tool-workflow/agent-end`. */
+interface WorkflowAgentEndData {
+  runId: string
+  seq: number
+  outcome: 'completed' | 'failed' | 'cancelled'
+}
+
+/** Payload of `tool-workflow/run-end`. */
+interface WorkflowRunEndData {
+  runId: string
+  stopReason: 'completed' | 'cancelled' | 'error'
+}
+
+/** Append one member to a run entry, evicting past the bounded window. */
+function pushWorkflowMember(entry: WorkflowEntry, member: WorkflowMember): WorkflowEntry {
+  if (entry.members.length >= MAX_WORKFLOW_MEMBERS) {
+    return { ...entry, members: [...entry.members.slice(1), member], membersDropped: entry.membersDropped + 1 }
+  }
+  return { ...entry, members: [...entry.members, member] }
+}
+
+/** Settle one member by its sequence number (pure; unmatched stays a no-op). */
+function settleWorkflowMember(entry: WorkflowEntry, data: WorkflowAgentEndData): WorkflowEntry {
+  let paired = false
+  const members = entry.members.map(member => {
+    if (member.seq !== data.seq) return member
+    paired = true
+    return { ...member, outcome: data.outcome }
+  })
+  return paired ? { ...entry, members } : entry
+}
+
+/**
+ * Payload of `tool/ptc-dispatch-start` (`@deepseek-ai/dsh-tools`'s
+ * SessionEventMap merge — the bundle does not depend on that package, so
+ * the fold guards the discriminator by string instead of by type).
+ */
+interface PtcDispatchStartData {
+  rootCallId: string
+  subCallId: string
+  name: string
+  arguments: unknown
+}
+
+/** Payload of `tool/ptc-dispatch` (a start plus its settled outcome). */
+interface PtcDispatchData extends PtcDispatchStartData {
+  isError: boolean
+  content: readonly ContentBlock[]
+}
+
+/** JSON-stringify one sub-dispatch argument value for the preview helper. */
+function subDispatchArguments(arguments_: unknown): string {
+  if (typeof arguments_ === 'string') return arguments_
+  try {
+    return JSON.stringify(arguments_) ?? ''
+  } catch {
+    return ''
+  }
+}
+
+/** Append one running sub-dispatch under its parent, evicting past the cap. */
+function pushSubDispatch(entry: ToolEntry, sub: ToolSubDispatch): ToolEntry {
+  if (entry.subs.length >= MAX_TOOL_SUB_DISPATCHES) {
+    return { ...entry, subs: [...entry.subs.slice(1), sub], subsDropped: entry.subsDropped + 1 }
+  }
+  return { ...entry, subs: [...entry.subs, sub] }
+}
+
+/** Fold one settled sub-dispatch into its matching row (pure). */
+function settleSubDispatch(entry: ToolEntry, data: PtcDispatchData, summary: string, durationMs: number): ToolEntry {
+  let paired = false
+  const subs = entry.subs.map(sub => {
+    if (sub.subCallId !== data.subCallId) return sub
+    paired = true
+    return { ...sub, state: data.isError === true ? 'error' as const : 'done' as const, summary, durationMs }
+  })
+  // A settle without a live row (the sub left the bounded window, or the
+  // parent entry was never seen) stays a provable no-op.
+  return paired ? { ...entry, subs } : entry
 }
 
 /** One slash-command execution dispatched through `ctx.commands`. */
@@ -194,7 +357,7 @@ export interface FilesEntry {
 }
 
 /** Ordered transcript items the renderer draws. */
-export type TranscriptEntry = UserEntry | PendingEntry | AssistantEntry | ToolEntry | CommandEntry | ErrorEntry | TurnMarkerEntry | CompactionEntry | RetryEntry | FilesEntry
+export type TranscriptEntry = UserEntry | PendingEntry | AssistantEntry | ToolEntry | CommandEntry | ErrorEntry | TurnMarkerEntry | CompactionEntry | RetryEntry | FilesEntry | WorkflowEntry
 
 /** The live goal the status line badges, folded from `goal/change`. */
 export interface GoalFold {
@@ -419,6 +582,8 @@ export interface TranscriptView {
   readonly anchors: {
     stepStart: Map<string, number>
     toolStart: Map<string, number>
+    /** Open PTC sub-dispatch starts by `subCallId` (duration anchors). */
+    subStart: Map<string, number>
     firstChunkAt: Map<string, number>
     compactionTokens: Map<string, number>
     lastPruneTokens: number
@@ -482,6 +647,7 @@ function cloneViewAnchors(anchors: TranscriptView['anchors']): TranscriptView['a
   return {
     stepStart: new Map(anchors.stepStart),
     toolStart: new Map(anchors.toolStart),
+    subStart: new Map(anchors.subStart),
     firstChunkAt: new Map(anchors.firstChunkAt),
     compactionTokens: new Map(anchors.compactionTokens),
     lastPruneTokens: anchors.lastPruneTokens,
@@ -577,7 +743,7 @@ export function createTranscriptView(): TranscriptView {
     schedules: [],
     pending: { 'next-turn': [], 'next-step': [] },
     stats: { turns: 0, steps: 0, llmMs: 0, toolMs: 0, usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 }, lastPromptTokens: 0, contextWindow: 0, contextSegments: { system: 0, prompt: 0, assistant: 0, thinking: 0, tools: 0 }, ttftMs: 0, ttftSteps: 0, decodeMs: 0, decodeTokens: 0, reasoningEffort: '' },
-    anchors: { stepStart: new Map(), toolStart: new Map(), firstChunkAt: new Map(), compactionTokens: new Map(), lastPruneTokens: 0, turnFiles: new Map(), turnSteps: new Map(), turnTools: new Map(), systemNodes: new Map() },
+    anchors: { stepStart: new Map(), toolStart: new Map(), subStart: new Map(), firstChunkAt: new Map(), compactionTokens: new Map(), lastPruneTokens: 0, turnFiles: new Map(), turnSteps: new Map(), turnTools: new Map(), systemNodes: new Map() },
   }
 }
 
@@ -862,6 +1028,8 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
           state: 'running',
           summary: '',
           detail: undefined,
+          subs: [],
+          subsDropped: 0,
         }],
         stats: {
           ...view.stats,
@@ -1165,8 +1333,86 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
       })
       return { ...view, entries }
     }
-    default:
+    default: {
+      // `tool/ptc-dispatch*` live in @deepseek-ai/dsh-tools' map merge,
+      // which this bundle does not depend on; the string guards keep the
+      // fold decoupled while following the upstream contract exactly (pair
+      // by subCallId; every start settles; settle speaks tool/result's own
+      // vocabulary). Log-only upstream: deriveMessages ignores them, so the
+      // sub rows are pure display state on the parent run_code card.
+      const type = event.type as string
+      if (type === 'tool/ptc-dispatch-start') {
+        const data = event.data as PtcDispatchStartData
+        view.anchors.subStart.set(data.subCallId, event.time)
+        const entries = view.entries.map(entry => entry.kind !== 'tool' || entry.callId !== data.rootCallId
+          ? entry
+          : pushSubDispatch(entry, {
+            subCallId: data.subCallId,
+            name: data.name,
+            preview: toolArgumentsPreview(subDispatchArguments(data.arguments), data.name),
+            state: 'running',
+            summary: '',
+            durationMs: 0,
+          }))
+        return { ...view, entries }
+      }
+      if (type === 'tool/ptc-dispatch') {
+        const data = event.data as PtcDispatchData
+        const started = view.anchors.subStart.get(data.subCallId)
+        view.anchors.subStart.delete(data.subCallId)
+        const summary = boundContextSummary(textOf(data.content))
+        const durationMs = started === undefined ? 0 : Math.max(0, event.time - started)
+        const entries = view.entries.map(entry => entry.kind !== 'tool' || entry.callId !== data.rootCallId
+          ? entry
+          : settleSubDispatch(entry, data, summary, durationMs))
+        return { ...view, entries }
+      }
+      // The durable workflow record (`tool-workflow/*`, appended by the
+      // workflow/ralph tools): one bounded card per run, members paired by
+      // their sequence number, the run settling on run-end.
+      if (type === 'tool-workflow/run-start') {
+        const data = event.data as WorkflowRunStartData
+        return {
+          ...view,
+          entries: [...view.entries, {
+            kind: 'workflow',
+            runId: data.runId,
+            name: data.name,
+            members: [],
+            membersDropped: 0,
+            state: 'running',
+          }],
+        }
+      }
+      if (type === 'tool-workflow/agent-start') {
+        const data = event.data as WorkflowAgentStartData
+        const entries = view.entries.map(entry => entry.kind !== 'workflow' || entry.runId !== data.runId
+          ? entry
+          : pushWorkflowMember(entry, {
+            seq: data.seq,
+            label: data.label,
+            phase: data.phase ?? '',
+            childId: data.childId,
+            outcome: 'running',
+          }))
+        return { ...view, entries }
+      }
+      if (type === 'tool-workflow/agent-end') {
+        const data = event.data as WorkflowAgentEndData
+        const entries = view.entries.map(entry => entry.kind !== 'workflow' || entry.runId !== data.runId
+          ? entry
+          : settleWorkflowMember(entry, data))
+        return { ...view, entries }
+      }
+      if (type === 'tool-workflow/run-end') {
+        const data = event.data as WorkflowRunEndData
+        const entries = view.entries.map(entry => entry.kind !== 'workflow' || entry.runId !== data.runId
+          ? entry
+          : { ...entry, state: data.stopReason })
+        return { ...view, entries }
+      }
       return view
+    }
   }
 }
 
@@ -1201,6 +1447,8 @@ export interface ReplayAccumulator {
   retryIndex: Map<string, number[]>
   /** messageId → every index into `entries` holding a `pending` row with that id. */
   pendingIndex: Map<string, number[]>
+  /** runId → every index into `entries` holding a `workflow` row with that id. */
+  workflowIndex: Map<string, number[]>
   /** Tombstone count; zero means `entries` is already the final array. */
   removedCount: number
   /** Mutable inbox id lists, mirroring `view.pending` order per target. */
@@ -1224,6 +1472,8 @@ export interface ReplayAccumulator {
   stats: TranscriptStats
   stepStart: Map<string, number>
   toolStart: Map<string, number>
+  /** Open PTC sub-dispatch starts by `subCallId` (duration anchors). */
+  subStart: Map<string, number>
   firstChunkAt: Map<string, number>
   compactionTokens: Map<string, number>
   lastPruneTokens: number
@@ -1244,6 +1494,7 @@ export function createReplayAccumulator(): ReplayAccumulator {
     commandIndex: new Map(),
     retryIndex: new Map(),
     pendingIndex: new Map(),
+    workflowIndex: new Map(),
     removedCount: 0,
     pendingTurn: [],
     pendingStep: [],
@@ -1264,6 +1515,7 @@ export function createReplayAccumulator(): ReplayAccumulator {
     stats: { turns: 0, steps: 0, llmMs: 0, toolMs: 0, usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 }, lastPromptTokens: 0, contextWindow: 0, contextSegments: { system: 0, prompt: 0, assistant: 0, thinking: 0, tools: 0 }, ttftMs: 0, ttftSteps: 0, decodeMs: 0, decodeTokens: 0, reasoningEffort: '' },
     stepStart: new Map(),
     toolStart: new Map(),
+    subStart: new Map(),
     firstChunkAt: new Map(),
     compactionTokens: new Map(),
     lastPruneTokens: 0,
@@ -1569,6 +1821,8 @@ export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent):
         state: 'running',
         summary: '',
         detail: undefined,
+        subs: [],
+        subsDropped: 0,
       })
       indexList(acc.toolIndex, data.callId).push(acc.entries.length - 1)
       acc.stats = {
@@ -1804,8 +2058,75 @@ export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent):
       updateReplayById<CommandEntry>(acc, acc.commandIndex, data.commandId, entry => entry.commandId === data.commandId, update)
       return true
     }
-    default:
+    default: {
+      // PTC sub-dispatch pair, string-guarded like the live fold above; the
+      // parent run_code row is addressed through the same call-id index the
+      // tool/result case uses.
+      const type = event.type as string
+      if (type === 'tool/ptc-dispatch-start') {
+        const data = event.data as PtcDispatchStartData
+        acc.subStart.set(data.subCallId, event.time)
+        updateReplayById<ToolEntry>(acc, acc.toolIndex, data.rootCallId, entry => entry.callId === data.rootCallId, entry =>
+          pushSubDispatch(entry, {
+            subCallId: data.subCallId,
+            name: data.name,
+            preview: toolArgumentsPreview(subDispatchArguments(data.arguments), data.name),
+            state: 'running',
+            summary: '',
+            durationMs: 0,
+          }))
+        return true
+      }
+      if (type === 'tool/ptc-dispatch') {
+        const data = event.data as PtcDispatchData
+        const started = acc.subStart.get(data.subCallId)
+        acc.subStart.delete(data.subCallId)
+        const summary = boundContextSummary(textOf(data.content))
+        const durationMs = started === undefined ? 0 : Math.max(0, event.time - started)
+        updateReplayById<ToolEntry>(acc, acc.toolIndex, data.rootCallId, entry => entry.callId === data.rootCallId, entry =>
+          settleSubDispatch(entry, data, summary, durationMs))
+        return true
+      }
+      // Durable workflow record, string-guarded like the live fold above.
+      if (type === 'tool-workflow/run-start') {
+        const data = event.data as WorkflowRunStartData
+        appendReplayEntry(acc, {
+          kind: 'workflow',
+          runId: data.runId,
+          name: data.name,
+          members: [],
+          membersDropped: 0,
+          state: 'running',
+        })
+        indexList(acc.workflowIndex, data.runId).push(acc.entries.length - 1)
+        return true
+      }
+      if (type === 'tool-workflow/agent-start') {
+        const data = event.data as WorkflowAgentStartData
+        updateReplayById<WorkflowEntry>(acc, acc.workflowIndex, data.runId, entry => entry.runId === data.runId, entry =>
+          pushWorkflowMember(entry, {
+            seq: data.seq,
+            label: data.label,
+            phase: data.phase ?? '',
+            childId: data.childId,
+            outcome: 'running',
+          }))
+        return true
+      }
+      if (type === 'tool-workflow/agent-end') {
+        const data = event.data as WorkflowAgentEndData
+        updateReplayById<WorkflowEntry>(acc, acc.workflowIndex, data.runId, entry => entry.runId === data.runId, entry =>
+          settleWorkflowMember(entry, data))
+        return true
+      }
+      if (type === 'tool-workflow/run-end') {
+        const data = event.data as WorkflowRunEndData
+        updateReplayById<WorkflowEntry>(acc, acc.workflowIndex, data.runId, entry => entry.runId === data.runId, entry =>
+          ({ ...entry, state: data.stopReason }))
+        return true
+      }
       return false
+    }
   }
 }
 
@@ -1863,6 +2184,7 @@ function materializeReplayView(acc: ReplayAccumulator, copy: boolean): Transcrip
     anchors: {
       stepStart: new Map(acc.stepStart),
       toolStart: new Map(acc.toolStart),
+      subStart: new Map(acc.subStart),
       firstChunkAt: new Map(acc.firstChunkAt),
       compactionTokens: new Map(acc.compactionTokens),
       lastPruneTokens: acc.lastPruneTokens,
@@ -1969,6 +2291,7 @@ export function settledEntryCount(entries: readonly TranscriptEntry[]): number {
     if (entry.kind === 'tool' && entry.state === 'running') return index
     if (entry.kind === 'retry' && entry.state === 'running') return index
     if (entry.kind === 'command' && entry.state === 'running') return index
+    if (entry.kind === 'workflow' && entry.state === 'running') return index
   }
   return entries.length
 }

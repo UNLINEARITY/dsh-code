@@ -1,6 +1,6 @@
 /** Width-safe styled physical rows for bounded terminal panels. */
 
-import { promptDisplayText, type TranscriptEntry } from './projection.ts'
+import { promptDisplayText, type TranscriptEntry, type ToolEntry } from './projection.ts'
 import type { ToolDetail } from './tool-detail.ts'
 import { renderMarkdown, visibleColumns, type MdStyle } from './markdown.ts'
 import { graphemeWidth, splitGraphemes } from './width.ts'
@@ -249,6 +249,33 @@ function toolDetailLines(detail: ToolDetail, columns: number): readonly StyledLi
 /** Default compact tool-card window used while the Ctrl+R fold is closed. */
 const DEFAULT_TOOL_ROWS = 3
 
+/** Format one sub-dispatch duration in seconds at tenth resolution. */
+function subDispatchSeconds(durationMs: number): string {
+  if (durationMs < 100) return ''
+  return ` · ${Math.round(durationMs / 100) / 10}s`
+}
+
+/**
+ * Nested PTC sub-dispatch rows under a `run_code` parent card: one bounded
+ * row per child call (running keeps the brand pulse mark, errors carry the
+ * bounded settle summary), plus a count row for evicted earlier dispatches.
+ */
+function subDispatchLines(entry: ToolEntry, columns: number): readonly StyledLine[] {
+  if (entry.subs.length === 0) return []
+  const width = Math.max(1, Math.floor(columns))
+  const rows = entry.subs.flatMap(sub => {
+    const mark = sub.state === 'running' ? '●' : sub.state === 'error' ? '⨯' : '⏺'
+    const style: LineStyle = sub.state === 'running' ? 'brand' : sub.state === 'error' ? 'error' : 'dim'
+    const label = sub.preview === '' ? sub.name : `${sub.name} ${sub.preview}`
+    if (sub.state === 'error' && sub.summary !== '') {
+      return textLines(`  ┆ ${mark} ${label} · ${sub.summary}${subDispatchSeconds(sub.durationMs)}`, width, style)
+    }
+    return textLines(`  ┆ ${mark} ${label}${subDispatchSeconds(sub.durationMs)}`, width, style)
+  })
+  if (entry.subsDropped === 0) return rows
+  return [...rows, ...textLines(`  ┆ … ${entry.subsDropped} earlier dispatch${entry.subsDropped === 1 ? '' : 'es'}`, width, 'dim')]
+}
+
 /** Keep the invocation visible while making hidden tool output discoverable. */
 function compactToolLines(lines: readonly StyledLine[], columns: number): readonly StyledLine[] {
   if (lines.length <= DEFAULT_TOOL_ROWS) return lines
@@ -312,6 +339,9 @@ export function transcriptEntryLines(
         // A delegation card carries what the child was asked (Codex's
         // SpawnAgent prompt preview) while it runs, before any result.
         ...(entry.prompt === '' ? [] : hangingTextLines(entry.prompt, width, '  └ ', 'dim', '    ')),
+        // Nested PTC sub-dispatches (run_code): one bounded row per child
+        // call, live while the parent card itself is still running.
+        ...subDispatchLines(entry, width),
         ...(entry.summary === '' ? [] : hangingTextLines(
           entry.state === 'error' ? `call ${entry.ordinal}: ${entry.summary}` : entry.summary,
           width, '  ⎿ ', summaryStyle, '    ', summaryStyle,
@@ -331,6 +361,26 @@ export function transcriptEntryLines(
         ], width, `${mark} `, markStyle, '  ', 'plain'),
         ...(entry.summary === '' ? [] : hangingTextLines(entry.summary, width, '  ⎿ ', summaryStyle, '    ', summaryStyle)),
       ]
+    }
+    case 'workflow': {
+      const mark = entry.state === 'running' ? '●' : entry.state === 'error' ? '⨯' : entry.state === 'cancelled' ? '⏹' : '⏺'
+      const markStyle: LineStyle = entry.state === 'running' ? 'brand' : entry.state === 'error' ? 'error' : entry.state === 'cancelled' ? 'dim' : 'success'
+      const lines = [
+        ...hangingStyledLines([
+          lineSegment('workflow ', 'brand'),
+          lineSegment(entry.name, 'dim'),
+        ], width, `${mark} `, markStyle, '  ', 'plain'),
+        // One bounded row per member; the child session id cross-links the
+        // subagent feed's live rows for the same agent.
+        ...entry.members.flatMap(member => {
+          const state = member.outcome === 'running' ? '●' : member.outcome === 'failed' ? '⨯' : member.outcome === 'cancelled' ? '⏹' : '⏺'
+          const style: LineStyle = member.outcome === 'running' ? 'brand' : member.outcome === 'failed' ? 'error' : 'dim'
+          const phase = member.phase === '' ? '' : ` [${member.phase}]`
+          return textLines(`  ┆ ${state} ${member.label}${phase}`, width, style)
+        }),
+        ...(entry.membersDropped === 0 ? [] : textLines(`  ┆ … ${entry.membersDropped} earlier member${entry.membersDropped === 1 ? '' : 's'}`, width, 'dim')),
+      ]
+      return showToolDetails ? lines : compactToolLines(lines, width)
     }
     case 'turn-marker':
       return textLines(`  ⏹ ${entry.text}`, width, 'dim')

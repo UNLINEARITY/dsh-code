@@ -149,6 +149,7 @@ dsh --profile cli --session my-id    # 使用指定 id 新建会话
 | --- | --- |
 | `/new [preset]` | 创建新会话，可同时指定 Agent Preset |
 | `/resume [id\|前缀]` | 搜索或恢复已有会话 |
+| `/search [query]` | 跨会话全文检索（复用 session-query 引擎，回车恢复命中的会话） |
 | `/resume cancel` | 取消正在等待的会话切换 |
 | `/fork [event-seq]` | 从最近完成的 turn 或指定事件位置创建分支会话 |
 | `/delete [id\|前缀]` | 删除指定会话及其 subagent 会话 |
@@ -197,6 +198,7 @@ dsh --profile cli --session my-id    # 使用指定 id 新建会话
 | 操作 | 用途 |
 | --- | --- |
 | `Enter` | 提交当前输入 |
+| `Ctrl+J` / `Alt+Enter` | 在输入中插入换行（增强键盘协议下 `Shift+Enter` / `Ctrl+Enter` 同效） |
 | `Up` / `Down` | 召回上一条或下一条输入记录 |
 | `Tab` | 补全命令、技能或 `@` 引用 |
 | `@` | 引用工作区文件或已有会话；图片文件自动作为附件发送 |

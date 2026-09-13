@@ -10,6 +10,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { ModelSelection } from '@deepseek-ai/dsh-agent'
+import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import {
   ReasoningEffortId,
   type LlmCallConfig,
@@ -108,6 +109,57 @@ export function resolveEffectiveSelection(
     }
   }
   return defaults
+}
+
+/** Structural equality of two selections (upstream `sameSelection`). */
+function sameModelSelection(left: ModelSelection, right: ModelSelection): boolean {
+  return left.provider === right.provider
+    && left.model === right.model
+    && left.reasoningEffort === right.reasoningEffort
+}
+
+/**
+ * The session log's unconsumed explicit model selection (the resume layer of
+ * the documented precedence). `model/selection` events are log-only facts the
+ * web host's session-controller appends when its user picks a model for the
+ * NEXT request; a request header assembling exactly that selection retires
+ * it, while a header for different values (another route forced the request)
+ * leaves it armed. Seeding the resumed pick from here restores a selection
+ * that was made but never sent — the request header alone would answer with
+ * the older model.
+ * @param events - the full persisted event list of the resumed session.
+ * @returns the still-pending selection, when one exists.
+ */
+export function pendingModelSelection(events: readonly SessionEvent[]): ModelSelection | undefined {
+  let pending: ModelSelection | undefined
+  for (const event of events) {
+    // The event map merge lives in @deepseek-ai/dsh-api-session-controller,
+    // which this bundle does not depend on; the string guard keeps the fold
+    // decoupled while matching the typed upstream projection exactly.
+    if ((event.type as string) === 'model/selection') {
+      const data = event.data as Partial<ModelSelection>
+      if (typeof data.provider === 'string' && typeof data.model === 'string') {
+        const selection: ModelSelection = {
+          provider: data.provider,
+          model: data.model,
+          ...data.reasoningEffort === undefined ? {} : { reasoningEffort: data.reasoningEffort },
+        }
+        if (pending === undefined || !sameModelSelection(pending, selection)) pending = selection
+      }
+      continue
+    }
+    if (event.type === 'request/header') {
+      const config = event.data.header.config
+      if (pending !== undefined && sameModelSelection(pending, {
+        provider: config.provider,
+        model: config.model,
+        ...config.reasoningEffort === undefined ? {} : { reasoningEffort: config.reasoningEffort },
+      })) {
+        pending = undefined
+      }
+    }
+  }
+  return pending
 }
 
 /**

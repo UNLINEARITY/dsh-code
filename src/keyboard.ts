@@ -129,9 +129,10 @@ function legacyForKey(key: CsiUKey): string | undefined {
   const alt = (bits & 2) !== 0
   const ctrl = (bits & 4) !== 0
   if (key.code === 13) {
-    // Modified Enter has no dedicated composer behavior. Preserve the legacy
-    // Ctrl/Alt bytes and collapse every other form to ordinary Enter.
-    if (ctrl) return '\n'
+    // Modified Enter is the composer's newline family (Codex insert_newline):
+    // Ctrl+Enter and Shift+Enter collapse to the LF byte Ctrl+J already sends,
+    // Alt keeps its legacy escape form, and plain Enter stays the submit key.
+    if (ctrl || shift) return '\n'
     if (alt) return '\x1b\r'
     return '\r'
   }

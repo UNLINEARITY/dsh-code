@@ -6,6 +6,7 @@
 
 import { describe, expect, it } from 'vitest'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import { subagentCatalogSeed } from '../src/index.ts'
 import { createSubagentFeed, foldSubagentRow, MAX_SUBAGENT_ROWS } from '../src/subagents.ts'
 
 function event(type: string, data: Record<string, unknown>, time = 1): SessionEvent {
@@ -108,6 +109,29 @@ describe('createSubagentFeed', () => {
     feed.reset()
     await new Promise<void>(resolve => setTimeout(resolve, 25))
     expect(feed.getSnapshot()).toEqual([])
+  })
+
+  it('rebuilds a resumed session’s children from replayed catalog facts', async () => {
+    // Resume path: the root log already carries subagent/catalog facts, but
+    // constructor seeds never fire on the live bus — activation must replay
+    // the filtered seed after reset or the child rows vanish behind a restart.
+    const feed = createSubagentFeed()
+    feed.apply('a', event('request/header', {}, 1))
+    feed.reset()
+    for (const fact of subagentCatalogSeed([
+      event('subagent/catalog', { version: 0, childId: 'b', childCreatedAt: 1, mode: 'one-shot', label: 'research helper' }, 2),
+      event('subagent/catalog', { version: 0, childId: '', childCreatedAt: 1, mode: 'one-shot' }, 3),
+      event('request/header', {}, 4),
+    ])) {
+      feed.apply(fact.data.childId, fact)
+    }
+    await new Promise<void>(resolve => setTimeout(resolve, 25))
+    const rows = feed.getSnapshot()
+    expect(rows.map(row => row.id)).toEqual(['b'])
+    expect(rows[0]!.label).toBe('research helper')
+    expect(rows[0]!.state).toBe('idle')
+    expect(rows[0]!.activity).toBe('catalog · one-shot · research helper')
+    expect(feed.getTotalSeen()).toBe(1)
   })
 
   it('coalesces one notification per synchronous burst', async () => {

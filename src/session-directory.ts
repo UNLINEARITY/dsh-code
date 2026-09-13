@@ -26,6 +26,8 @@ export interface SessionQueryService {
   listSessions(signal?: AbortSignal): Promise<SessionRecord[]>
   readTitleSnapshots(ids: readonly string[], signal?: AbortSignal): Promise<TitleObservationResult[]>
   readSession(id: string, signal?: AbortSignal): Promise<SessionLogSnapshot>
+  /** Cross-session full-text search (SQLite FTS engine; openAt may gate it). */
+  searchSessions(request: { query: string; limit?: number }, exec?: { signal?: AbortSignal }): Promise<{ items: readonly { header: SessionHeader; live: boolean; persisted: boolean; bestMatch: { snippet: string; time: number } }[] }>
 }
 
 export type SessionScope = 'roots' | 'all'

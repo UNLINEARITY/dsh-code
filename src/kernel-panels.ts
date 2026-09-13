@@ -497,14 +497,18 @@ export function HistoryPanel({ entries, fill, close }: {
     }
     if (key.upArrow) return setCursor(value => Math.max(0, value - 1))
     if (key.downArrow) return setCursor(value => Math.min(matches.length - 1, value + 1))
-    if (input === 'g') return setCursor(0)
-    if (input === 'G') return setCursor(matches.length - 1)
-    if (key.backspace) {
+    // g/G stay vim-style jumps only on an empty query (the /mode contract):
+    // mid-filter they are query text, so filters like 'Fix' or 'grep' survive.
+    if (input === 'g' && query === '') return setCursor(0)
+    if (input === 'G' && query === '') return setCursor(matches.length - 1)
+    if (key.backspace || key.delete) {
       setQuery(current => deleteLastGrapheme(current))
       setCursor(0)
       return
     }
-    if (input !== '' && !key.ctrl && !key.meta && !key.shift) {
+    // Ink reports single uppercase letters and shifted symbols ('!', '@')
+    // with key.shift set; only ctrl/meta mark real command input.
+    if (input !== '' && !key.ctrl && !key.meta) {
       const text = stripPasteMarkers(input)
       if (text !== '') {
         setQuery(current => (current + text).slice(0, 120))
@@ -545,6 +549,153 @@ export function HistoryPanel({ entries, fill, close }: {
         )
       })),
     createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns('↑↓ move · g/G ends · enter fill · esc close', viewport.contentColumns)),
+  )
+}
+
+/** One cross-session full-text search hit mapped from the session-query engine. */
+export interface SearchRow {
+  /** Session id (Enter resumes it through the switch machinery). */
+  readonly id: string
+  /** Display label: session title or the short id form. */
+  readonly label: string
+  /** Secondary facts line (workspace · preset markers). */
+  readonly detail: string
+  /** Bounded plain-text excerpt around the strongest match. */
+  readonly snippet: string
+  /** Match timestamp (relative labels derive from it). */
+  readonly updatedAt: number
+  /** Whether the hit is a delegated subagent conversation (not resumable). */
+  readonly subagent: boolean
+  /** Whether Enter may switch into it. */
+  readonly resumable: boolean
+}
+
+/**
+ * The /search panel: full-text search over every persisted session through
+ * the in-process session-query engine (the same corpus the model's
+ * session_search tool reads). Type a query, Enter searches, Enter again
+ * resumes the hit; the query line edits like every kernel panel.
+ */
+export function SearchPanel({ load, select, initialQuery = '', close }: {
+  load(query: string, signal?: AbortSignal): Promise<readonly SearchRow[]>
+  select(row: SearchRow): void
+  initialQuery?: string
+  close(): void
+}): ReactElement {
+  const [query, setQuery] = useState(initialQuery)
+  const [rows, setRows] = useState<readonly SearchRow[]>([])
+  const [cursor, setCursor] = useState(0)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string>()
+  const [searched, setSearched] = useState('')
+  const searchRef = useRef<AbortController>()
+  const run = (next: string): void => {
+    const trimmed = next.trim()
+    if (trimmed === '') return
+    searchRef.current?.abort()
+    const controller = new AbortController()
+    searchRef.current = controller
+    setLoading(true)
+    setError(undefined)
+    void Promise.resolve().then(() => load(trimmed, controller.signal)).then(hits => {
+      if (controller.signal.aborted) return
+      setLoading(false)
+      setRows(hits)
+      setCursor(0)
+      setSearched(next)
+    }, reason => {
+      if (controller.signal.aborted) return
+      setLoading(false)
+      // Stale results must not stay interactive under an error header: a
+      // later Enter re-runs the query instead of resuming an old hit.
+      setRows([])
+      setCursor(0)
+      setError(reason instanceof Error ? reason.message : String(reason))
+    })
+  }
+  // An /search <query> invocation searches immediately with its argument.
+  useEffect(() => {
+    if (initialQuery.trim() !== '') run(initialQuery)
+    return () => searchRef.current?.abort()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  useInput((input, key) => {
+    if (key.escape || (input === 'q' && query === '')) return close()
+    if (key.ctrl && input === 'c') return close()
+    if (key.backspace || key.delete) {
+      setQuery(current => deleteLastGrapheme(current))
+      setCursor(0)
+      return
+    }
+    const next = editQuery(query, input, key)
+    if (next !== undefined) {
+      setQuery(next)
+      setCursor(0)
+      return
+    }
+    if (key.upArrow) return setCursor(value => Math.max(0, value - 1))
+    if (key.downArrow) return setCursor(value => Math.min(rows.length - 1, value + 1))
+    if (key.return) {
+      // A changed query searches; the SAME query re-runs when the previous
+      // pass failed or produced nothing (Enter is then the refresh key).
+      const stale = error !== undefined || rows.length === 0
+      if (query.trim() !== '' && (query.trim() !== searched.trim() || stale)) {
+        run(query)
+        return
+      }
+      // Non-resumable hits (subagent conversations) keep the panel open:
+      // Enter must not trade the visible results for a rejected switch.
+      const row = rows[cursor]
+      if (row !== undefined && row.resumable) select(row)
+      return
+    }
+  })
+  const stdout = useStdout().stdout
+  const viewport = panelViewport(stdout?.columns ?? 80, stdout?.rows ?? 30)
+  const now = useMemo(() => Date.now(), [rows, searched])
+  if (viewport.maxHeight === 0 || viewport.compact) {
+    const state = loading ? 'searching…' : error !== undefined ? `error: ${error}` : rows.length === 0 ? 'no results yet' : `❯ ${rows[cursor]?.label ?? ''}`
+    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(`/search · ${state} · esc close`, viewport.contentColumns))
+  }
+  const bodyRows = Math.max(1, viewport.bodyRows - 1)
+  const offset = revealRow(0, cursor, rows.length, bodyRows)
+  const visible = rows.slice(offset, offset + bodyRows)
+  const header = error !== undefined
+    ? `/search · error: ${truncateColumns(singleLineText(error), viewport.contentColumns - 12)}`
+    : loading
+      ? `/search · searching…`
+      : searched === ''
+        ? '/search · type a query and press enter'
+        : `/search · ${rows.length} hit${rows.length === 1 ? '' : 's'} for '${truncateColumns(singleLineText(searched), viewport.contentColumns - 30)}'`
+  return createElement(
+    Box,
+    { width: viewport.outerColumns, borderStyle: 'round', borderColor: inkColor(getPalette().dim), flexDirection: 'column', paddingX: 1 },
+    createElement(Text, { color: inkColor(getPalette().brandBright), wrap: 'truncate-end' }, truncateColumns(header, viewport.contentColumns)),
+    createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns(`  ${query === '' ? 'type to search sessions' : singleLineText(query)} · enter searches or resumes`, viewport.contentColumns)),
+    ...(visible.length === 0
+      ? [createElement(Text, { key: 'empty', dimColor: true, wrap: 'truncate-end' }, truncateColumns(searched === '' ? '  full-text search across every persisted session' : `  no matching sessions${loading ? '…' : ''}`, viewport.contentColumns))]
+      : visible.flatMap((row, index) => {
+        const absolute = offset + index
+        const selected = absolute === cursor
+        return [
+          createElement(
+            Text,
+            {
+              key: `search-${absolute}`,
+              color: selected ? inkColor(getPalette().brandBright) : undefined,
+              dimColor: row.subagent,
+              wrap: 'truncate-end',
+            },
+            truncateColumns(`${selected ? '› ' : '  '}${row.subagent ? '↳ ' : ''}${singleLineText(row.label)} · ${formatRelativeTime(row.updatedAt, now)}${row.detail === '' ? '' : ` · ${row.detail}`}${row.resumable ? '' : ' · read-only'}`, viewport.contentColumns),
+          ),
+          createElement(
+            Text,
+            { key: `search-snippet-${absolute}`, dimColor: true, wrap: 'truncate-end' },
+            truncateColumns(`  ⎿ ${singleLineText(row.snippet)}`, viewport.contentColumns),
+          ),
+        ]
+      })),
+    createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns('↑↓ move · enter search/resume · esc close', viewport.contentColumns)),
   )
 }
 
