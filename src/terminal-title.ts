@@ -74,6 +74,25 @@ export function clearTerminalTitleSequence(): string {
   return '\x1b]0;\x07'
 }
 
+/**
+ * Resolve the VS Code stable user-settings file for one platform and
+ * environment: `%APPDATA%` on Windows, the bundle data folder on macOS (NOT
+ * XDG `~/.config` — VS Code never reads that path there, so writing it
+ * silently no-ops and the tab kept showing the process name "node"), and
+ * XDG config on Linux.
+ */
+export function vscodeSettingsPath(platform: NodeJS.Platform, env: NodeJS.ProcessEnv): string | undefined {
+  const windows = platform === 'win32'
+  const darwin = platform === 'darwin'
+  const base = windows ? env['APPDATA'] : env['HOME']
+  if (base === undefined || base === '') return undefined
+  return windows
+    ? join(base, 'Code', 'User', 'settings.json')
+    : darwin
+      ? join(base, 'Library', 'Application Support', 'Code', 'User', 'settings.json')
+      : join(base, '.config', 'Code', 'User', 'settings.json')
+}
+
 /** Outcome of the VS Code settings alignment. */
 export interface VsCodeTitleSettingResult {
   wrote: boolean
@@ -98,11 +117,9 @@ export function ensureVsCodeTabTitleSetting(options: {
   if ((options.isTTY ?? process.stdout.isTTY) !== true) return { wrote: false, reason: 'not-vscode' }
   let file = options.settingsFile
   if (file === undefined) {
-    const base = process.platform === 'win32' ? env['APPDATA'] : env['HOME']
-    if (base === undefined || base === '') return { wrote: false, reason: 'error' }
-    file = process.platform === 'win32'
-      ? join(base, 'Code', 'User', 'settings.json')
-      : join(base, '.config', 'Code', 'User', 'settings.json')
+    const resolved = vscodeSettingsPath(process.platform, env)
+    if (resolved === undefined) return { wrote: false, reason: 'error' }
+    file = resolved
   }
   try {
     if (!existsSync(file)) {

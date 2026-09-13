@@ -17,6 +17,7 @@ import {
   DEFAULT_TERMINAL_TITLE,
   ensureVsCodeTabTitleSetting,
   MAX_TERMINAL_TITLE_CHARS,
+  vscodeSettingsPath,
   sanitizeTerminalTitle,
   terminalTitleSequence,
   useTerminalTitle,
@@ -228,6 +229,29 @@ describe('App tab label over real streams', () => {
       harness.stdin.destroy()
       harness.stdout.destroy()
     }
+  })
+})
+
+describe('vscodeSettingsPath (per-platform VS Code settings location)', () => {
+  it('resolves the macOS bundle data folder, not XDG config', () => {
+    // The bug this pins: macOS VS Code reads ~/Library/Application Support,
+    // and a write to ~/.config silently no-ops (tab kept showing "node").
+    expect(vscodeSettingsPath('darwin', { HOME: '/Users/u' }))
+      .toBe('/Users/u/Library/Application Support/Code/User/settings.json')
+  })
+
+  it('resolves XDG config on Linux and APPDATA on Windows', () => {
+    expect(vscodeSettingsPath('linux', { HOME: '/home/u' }))
+      .toBe('/home/u/.config/Code/User/settings.json')
+    // node:path joins with the HOST separator; compare the structure
+    // normalized so the win32 branch is verifiable from any dev platform.
+    expect(vscodeSettingsPath('win32', { APPDATA: 'C:\\Users\\u\\AppData\\Roaming' })?.replaceAll('\\', '/'))
+      .toBe('C:/Users/u/AppData/Roaming/Code/User/settings.json')
+  })
+
+  it('returns undefined without the platform base variable', () => {
+    expect(vscodeSettingsPath('darwin', {})).toBeUndefined()
+    expect(vscodeSettingsPath('win32', {})).toBeUndefined()
   })
 })
 
