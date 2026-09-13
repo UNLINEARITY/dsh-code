@@ -15,6 +15,7 @@ import { panelViewport } from './render/inspector.ts'
 import { displayText, singleLineText, truncateColumns } from './render/text.ts'
 import { panelAccent } from './panel-accent.ts'
 import { getPalette, inkColor } from './theme.ts'
+import { t } from './i18n.ts'
 
 interface PromptReply {
   readonly resolve: (value: string) => void
@@ -230,19 +231,19 @@ export function ProviderAuthorizationPanel(props: ProviderAuthorizationPanelProp
         rows.push({ key: 'draft', text: `  ${shown}▏`, color: inkColor(getPalette().text) })
       }
     } else {
-      rows.push({ key: 'waiting', text: '  waiting for provider…', color: inkColor(getPalette().dim) })
+      rows.push({ key: 'waiting', text: `  ${t('panel.auth.waiting')}`, color: inkColor(getPalette().dim) })
     }
     if (copyState !== undefined) rows.push({ key: 'copy', text: `  ${singleLineText(copyState)}`, color: inkColor(copyState === 'copied' ? getPalette().success : getPalette().error) })
   }
   const visible = rows.slice(Math.max(0, rows.length - viewport.bodyRows))
   const footer = phase === 'methods'
-    ? '↑↓ choose · enter continue · esc/q back'
-    : 'enter answer · c copy URL/code · esc cancel login'
+    ? t('panel.auth.methodsFooter')
+    : t('panel.auth.answerFooter')
   const accent = panelAccent('auth-login', getPalette().brand)
   return createElement(
     Box,
     { flexDirection: 'column', width: viewport.outerColumns, paddingX: 1, borderStyle: 'round', borderColor: inkColor(accent.border) },
-    createElement(Text, { color: inkColor(accent.title), bold: true, wrap: 'truncate-end' }, truncateColumns(`/model · login ${displayText(props.row.label)}`, viewport.contentColumns)),
+    createElement(Text, { color: inkColor(accent.title), bold: true, wrap: 'truncate-end' }, truncateColumns(t('panel.auth.title', { provider: displayText(props.row.label) }), viewport.contentColumns)),
     ...visible.map(row => createElement(Text, { key: row.key, color: row.color, bold: row.bold, wrap: 'truncate-end' }, truncateColumns(row.text, viewport.contentColumns))),
     createElement(Text, { color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns(footer, viewport.contentColumns)),
   )

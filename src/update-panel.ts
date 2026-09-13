@@ -16,6 +16,7 @@ import { clampScroll, panelViewport } from './render/inspector.ts'
 import { singleLineText, truncateColumns } from './render/text.ts'
 import { panelAccent } from './panel-accent.ts'
 import { getPalette, inkColor } from './theme.ts'
+import { t } from './i18n.ts'
 
 /** Retained apply-progress lines (ring tail; npm output is ephemeral). */
 export const UPDATE_OUTPUT_CAP = 800
@@ -99,12 +100,12 @@ export type UpdatePhase = 'probe' | 'error' | 'plan' | 'apply' | 'done'
 
 /** Footer hint line per phase; the plan phase names the confirm key only when runnable. */
 export function updateFooter(phase: UpdatePhase, runnable: boolean, upToDate: boolean): string {
-  if (phase === 'probe') return 'checking… · esc close'
-  if (phase === 'error') return 'r recheck · esc close'
-  if (phase === 'apply') return 'updating… · ↑↓ scroll · esc waits'
-  if (phase === 'done') return 'r recheck · esc close'
-  if (upToDate) return 'up to date · r recheck · esc close'
-  return runnable ? 'enter update · r recheck · esc close' : 'blocked · r recheck · esc close'
+  if (phase === 'probe') return t('panel.update.footer.probe')
+  if (phase === 'error') return t('panel.update.footer.error')
+  if (phase === 'apply') return t('panel.update.footer.apply')
+  if (phase === 'done') return t('panel.update.footer.error')
+  if (upToDate) return t('panel.update.footer.current')
+  return runnable ? t('panel.update.footer.update') : t('panel.update.footer.blocked')
 }
 
 /**
@@ -213,12 +214,12 @@ export function UpdatePanel({ probe, apply, close, notify }: {
     else if (key.downArrow) setAnchor(offset + 1)
   })
   if (viewport.maxHeight === 0 || viewport.compact) {
-    const summary = phase === 'probe' ? 'checking…'
-      : phase === 'error' ? 'probe failed'
-      : phase === 'apply' ? singleLineText(lines[lines.length - 1] ?? 'updating…')
-      : phase === 'done' ? (exit === 0 ? 'installed — restart to activate' : 'failed')
-      : status?.upToDate === true ? 'up to date' : planView?.runnable === true ? 'enter updates' : 'blocked'
-    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(singleLineText(`/update · ${summary}`), viewport.contentColumns))
+    const summary = phase === 'probe' ? t('panel.update.checking')
+      : phase === 'error' ? t('panel.update.probeFailed')
+      : phase === 'apply' ? singleLineText(lines[lines.length - 1] ?? t('panel.update.updating'))
+      : phase === 'done' ? (exit === 0 ? t('panel.update.installed') : t('panel.update.failed'))
+      : status?.upToDate === true ? t('panel.update.upToDate') : planView?.runnable === true ? t('panel.update.enter') : t('panel.update.blocked')
+    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(singleLineText(t('panel.update.compact', { summary })), viewport.contentColumns))
   }
   const visible = rows.slice(offset, offset + budget)
   const toneColor = (tone: UpdateRow['tone']): ReturnType<typeof inkColor> | undefined => tone === 'ok'
@@ -231,7 +232,7 @@ export function UpdatePanel({ probe, apply, close, notify }: {
     ? inkColor(getPalette().dim)
     : undefined
   const title = status === undefined
-    ? '/update · aligned upgrade'
+    ? t('panel.update.title')
     : `/update · dsh-code ${status.code.running}${status.code.latest !== null && status.code.latest !== status.code.running ? ` → ${status.code.latest}` : ''}`
   const accent = panelAccent('update', getPalette().dim, getPalette().brandBright)
   return createElement(

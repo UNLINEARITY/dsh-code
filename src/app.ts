@@ -1248,7 +1248,7 @@ function ApprovalBar({ snapshot, locked, notify, interrupt, summarize }: {
     }
     ask.answer('rejected')
     if (option.key === 'reject-note') {
-      notify('rejected — type below what it should do differently (it steers the next step)', 'warning')
+      notify(t('notice.rejected'), 'warning')
     }
   }
 
@@ -3649,7 +3649,7 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
 
   const registerDraftImage = (inspection: ImagePathInspection, marker: string): boolean => {
     if (draftImagesRef.current.some(image => sameImagePath(image.path, inspection.path))) {
-      notify(`${inspection.name} is already attached`, 'warning')
+      notify(t('notice.attachmentAlready', { name: inspection.name }), 'warning')
       return false
     }
     const next = [...draftImagesRef.current, { ...inspection, marker }]
@@ -3668,7 +3668,7 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
     const originalCursor = cursorRef.current
     const total = imagePaths.length + filePaths.length
     if (total === 0) return
-    notify(`checking ${total} attachment${total === 1 ? '' : 's'}…`)
+    notify(t('notice.attachmentsChecking', { count: total, plural: total === 1 ? '' : 's' }))
     void Promise.all([
       imagePaths.length === 0 ? Promise.resolve([]) : inspectImages(imagePaths),
       filePaths.length === 0 ? Promise.resolve([]) : inspectFiles(filePaths),
@@ -3689,13 +3689,13 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
         markers.push(marker)
       }
       if (imageAdditions.length === 0 && fileAdditions.length === 0) {
-        notify('those attachments are already attached', 'warning')
+        notify(t('notice.attachmentsAlready'), 'warning')
         return
       }
       const current = valueRef.current
       const anchor = remapStableRange(originalValue, current, { start: originalCursor, end: originalCursor })
       if (anchor === undefined) {
-        notify('draft changed at the attachment drop point; drop the files again', 'warning')
+        notify(t('notice.attachmentDraftChanged'), 'warning')
         return
       }
       const at = anchor.start
@@ -3716,9 +3716,9 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
       draftFilesRef.current = nextFiles
       setDraftFiles(nextFiles)
       const count = imageAdditions.length + fileAdditions.length
-      notify(`${count} attachment${count === 1 ? '' : 's'} ready for the next message`)
+      notify(t('notice.attachmentsReady', { count, plural: count === 1 ? '' : 's' }))
     }, (reason: unknown) => {
-      notify(`attachment failed: ${reason instanceof Error ? reason.message : String(reason)}`, 'error')
+      notify(t('notice.attachmentFailed', { message: reason instanceof Error ? reason.message : String(reason) }), 'error')
     })
   }
 
@@ -3803,7 +3803,7 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
             const current = valueRef.current
             const anchor = remapStableRange(originalValue, current, { start, end: start + tokenText.length })
             if (anchor === undefined || current.slice(anchor.start, anchor.end) !== tokenText) {
-              notify('draft changed around the image mention; select it again', 'warning')
+              notify(t('notice.imageDraftChanged'), 'warning')
               return
             }
             if (draftImagesRef.current.some(image => sameImagePath(image.path, inspection.path))) {
@@ -3814,7 +3814,7 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
               setCursor(edit.cursor)
               resetCursorBlink()
               setDismissedMenuValue(edit.value)
-              notify(`${inspection.name} is already attached`, 'warning')
+              notify(t('notice.attachmentAlready', { name: inspection.name }), 'warning')
               return
             }
             const marker = uniqueImageMarker(inspection.name, 'mention')
@@ -3826,9 +3826,9 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
             resetCursorBlink()
             setDismissedMenuValue(edit.value)
             registerDraftImage(inspection, marker)
-            notify(`${inspection.name} ready for the next message`)
+            notify(t('notice.imageReady', { name: inspection.name }))
           }, (reason: unknown) => {
-            notify(`image attachment failed: ${reason instanceof Error ? reason.message : String(reason)}`, 'error')
+            notify(t('notice.imageFailed', { message: reason instanceof Error ? reason.message : String(reason) }), 'error')
           })
           setCompletionIndex(0)
           setDismissedMenuValue(undefined)
@@ -3932,7 +3932,7 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
     prepareAbortRef.current = undefined
     setPreparingImages(false)
     dismissNotice()
-    notify('image submission cancelled', 'warning')
+    notify(t('notice.imageCancelled'), 'warning')
   }
 
   /** Cross history while an unchanged recalled draft rests its caret on
@@ -4007,7 +4007,7 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
         const label = cycleMode()
         if (label !== '') notify(label)
       } catch (error: unknown) {
-        notify(`permission change failed: ${error instanceof Error ? error.message : String(error)}`, 'error')
+        notify(t('notice.permissionChangeFailed', { message: error instanceof Error ? error.message : String(error) }), 'error')
       }
       return
     }
@@ -4056,7 +4056,7 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
         applyEdit(deleteForward(liveValue, liveCursor))
         return
       }
-      if (busy) notify('cancel the running turn before exiting (Esc or Ctrl+C)', 'warning')
+      if (busy) notify(t('notice.cancelBeforeExit'), 'warning')
       else quit()
       return
     }
@@ -4114,7 +4114,7 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
         // Slash semantics with attachments are unchanged: commands cannot
         // carry attachments, so the line goes to the model as a prompt —
         // warn instead of surprising the user with a literal "/export".
-        if (isSlashLine(text)) notify('commands cannot carry attachments; the line will be sent to the model as a prompt', 'warning')
+        if (isSlashLine(text)) notify(t('notice.commandAttachments'), 'warning')
         // Attachment prepares resolve asynchronously; the app remounts onto
         // another session in the meantime, and this (old) instance's unmount
         // cleanup runs too late on the microtask timeline. Tag the delivery
@@ -4308,13 +4308,14 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
         else if (argument === 'en' || argument === 'zh') {
           saveLanguage(parseLanguageName(argument))
           notify(t('notice.languageSaved', { name: argument }))
+          refresh()
         } else notify(t('notice.usage.language'), 'warning')
         return
       }
       if (text === '/animation' || text.startsWith('/animation ')) {
         const parsed = parseAnimationsArgument(text.slice('/animation'.length))
         if (parsed === 'toggle') applyAnimations(!animations)
-        else if (parsed === 'usage') notify('usage: /animation [on|off]', 'info')
+        else if (parsed === 'usage') notify(t('notice.usage.animation'), 'info')
         else applyAnimations(parsed.enabled)
         return
       }
@@ -4973,7 +4974,7 @@ export function App(props: AppProps): ReactElement {
   const applyAnimations = (enabled: boolean): void => {
     setAnimations(enabled)
     props.saveAnimations?.(enabled)
-    notify(`animations ${enabled ? 'on' : 'off'}`)
+    notify(t('notice.animationState', { state: enabled ? 'on' : 'off' }))
   }
   const previousModel = useRef<string | undefined>(undefined)
   const previousEffort = useRef<string | undefined>(props.effort)
@@ -5133,7 +5134,7 @@ export function App(props: AppProps): ReactElement {
       // from the list immediately, not look like a no-op.
       setDeleteReloadToken(token => token + 1)
     }, (reason: unknown) => {
-      notify(`delete failed: ${reason instanceof Error ? reason.message : String(reason)}`, 'error')
+      notify(t('notice.deleteFailed', { message: reason instanceof Error ? reason.message : String(reason) }), 'error')
     })
   }, [deleteConfirmId, props.deleteSession, notify])
   /** The /history panel's accepted entry: text plus its recall-space index. */
@@ -5471,9 +5472,9 @@ export function App(props: AppProps): ReactElement {
       setEffortLabel(effortId)
       const selected = `${label}${effortId === undefined || effortId === '' ? '' : `@${effortId}`}`
       if (sessionHasImages && row.inputModalities !== undefined && !row.inputModalities.includes('image')) {
-        notify(`model → ${selected} · image history will be sent as text placeholders`, 'warning')
+        notify(t('notice.modelChangedPlaceholder', { model: selected }), 'warning')
       } else {
-        notify(`model → next step uses ${selected}`)
+        notify(t('notice.modelNextStep', { model: selected }))
       }
       setModelOpen(false)
       setProviderOpen(false)
@@ -5613,42 +5614,42 @@ export function App(props: AppProps): ReactElement {
         authorizationError,
         onConfigure: (target: ProviderTargetView) => {
           if (props.saveModelProviderConfiguration === undefined) {
-            notify('provider configuration is unavailable in this profile', 'warning')
+            notify(t('notice.providerUnavailable'), 'warning')
             return
           }
           setProviderAction({ kind: 'configure', target })
         },
         onUnset: (target: ProviderTargetView) => {
           if (props.unsetModelProviderCredential === undefined) {
-            notify('API key removal is unavailable in this profile', 'warning')
+            notify(t('notice.apiKeyUnavailable'), 'warning')
             return
           }
           setProviderAction({ kind: 'unset', target })
         },
         onRemove: (target: ProviderTargetView) => {
           if (props.removeModelProvider === undefined) {
-            notify('provider removal is unavailable in this profile', 'warning')
+            notify(t('notice.providerRemovalUnavailable'), 'warning')
             return
           }
           setProviderAction({ kind: 'remove', target })
         },
         onLogin: (target: ProviderTargetView, authorization: ProviderAuthorizationRow) => {
           if (busy) {
-            notify('provider login is available only while the agent is idle', 'warning')
+            notify(t('notice.loginIdleOnly'), 'warning')
             return
           }
           if (props.beginProviderAuthorization === undefined
             || props.cancelProviderAuthorization === undefined
             || props.openAuthorizationUrl === undefined
             || props.copyTextValue === undefined) {
-            notify('provider login is unavailable in this profile', 'warning')
+            notify(t('notice.loginUnavailable'), 'warning')
             return
           }
           setProviderAction({ kind: 'login', target, authorization })
         },
         onLogout: (target: ProviderTargetView, authorization: ProviderAuthorizationRow) => {
           if (props.logoutProviderAuthorization === undefined) {
-            notify('provider logout is unavailable in this profile', 'warning')
+            notify(t('notice.logoutUnavailable'), 'warning')
             return
           }
           setProviderAction({ kind: 'logout', target, authorization })
@@ -5957,7 +5958,7 @@ export function App(props: AppProps): ReactElement {
         },
         inherit: () => {
           props.clearSubagentModel()
-          notify('subagents → inherit current model')
+          notify(t('notice.subagentsInherited'))
           setSubagentOpen(false)
         },
         close: () => setSubagentOpen(false),
@@ -6017,12 +6018,12 @@ export function App(props: AppProps): ReactElement {
               ?? loaded.rows.find(candidate => candidate.model === model && candidate.reasoning !== undefined)
               ?? loaded.rows.find(candidate => candidate.model === model)
             if (row === undefined) {
-              notify('current model is not in the catalog', 'warning')
+              notify(t('notice.modelMissing'), 'warning')
               return
             }
             const rowTag = `${row.provider}/${row.model}`
             if (loaded.reasoningFailures?.includes(rowTag) === true) {
-              notify('reasoning levels temporarily unavailable (capability lookup failed) — try again', 'warning')
+              notify(t('notice.effortUnavailable'), 'warning')
               return
             }
             if (row.reasoning === undefined || row.reasoning.efforts.length === 0) {
@@ -6048,7 +6049,7 @@ export function App(props: AppProps): ReactElement {
         openResume: () => { setResumeDelete({ mode: false }); setResumeOpen(true) },
         openSearch: (query: string) => {
           if (props.searchSessions === undefined) {
-            notify('session search is unavailable in this deployment', 'warning')
+            notify(t('notice.sessionSearchUnavailable'), 'warning')
             return
           }
           setSearchSeed(query)

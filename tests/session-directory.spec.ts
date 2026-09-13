@@ -1,6 +1,7 @@
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { SessionHeader } from '@deepseek-ai/dsh-session'
+import { setLanguage } from '../src/i18n.ts'
 import {
   collectDeletionSubtree,
   encodeProjectKey,
@@ -212,10 +213,24 @@ describe('session deletion plan', () => {
 describe('relative session time', () => {
   it('formats recent activity compactly and dates older entries', () => {
     const now = 1_700_000_000_000
+    setLanguage('en')
     expect(formatRelativeTime(now, now)).toBe('now')
     expect(formatRelativeTime(now - 5 * 60_000, now)).toBe('5m ago')
     expect(formatRelativeTime(now - 3 * 3_600_000, now)).toBe('3h ago')
     expect(formatRelativeTime(now - 2 * 86_400_000, now)).toBe('2d ago')
     expect(formatRelativeTime(now - 30 * 86_400_000, now)).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+  })
+
+  it('uses Chinese relative-time labels when the interface language is Chinese', () => {
+    const now = 1_700_000_000_000
+    try {
+      setLanguage('zh')
+      expect(formatRelativeTime(now, now)).toBe('刚刚')
+      expect(formatRelativeTime(now - 5 * 60_000, now)).toBe('5 分钟前')
+      expect(formatRelativeTime(now - 3 * 3_600_000, now)).toBe('3 小时前')
+      expect(formatRelativeTime(now - 2 * 86_400_000, now)).toBe('2 天前')
+    } finally {
+      setLanguage('en')
+    }
   })
 })
