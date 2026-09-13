@@ -958,6 +958,66 @@ describe('transcript projection', () => {
   })
 })
 
+describe('empty assistant settlements', () => {
+  function emptyAssistantEvent(seq: number, interrupted = false): SessionEvent {
+    return {
+      type: 'assistant/message',
+      seq,
+      time: 0,
+      data: {
+        turn: 1,
+        step: 1,
+        stream: [],
+        interrupted: interrupted || undefined,
+        message: createAssistantMessage({
+          content: [],
+          source: { provider: 'p', model: 'm' },
+        }),
+      },
+    } as SessionEvent
+  }
+
+  it('skips zero-line entries for tool-only steps in both fold paths', () => {
+    const events: readonly SessionEvent[] = [
+      { type: 'turn/start', seq: 1, time: 0, data: { turn: 1 } },
+      toolCallEvent('run_code', callId.current, 2),
+      emptyAssistantEvent(3),
+      toolResultEvent(callId.current, 'done', false, 4),
+      assistantEvent('final answer', 5),
+      { type: 'turn/end', seq: 6, time: 0, data: { turn: 1, reason: { kind: 'completed' } } } as SessionEvent,
+    ]
+    const view = projectEvents(events)
+    // No zero-line assistant card between the tool card and the reply.
+    expect(view.entries.filter(entry => entry.kind === 'assistant')).toHaveLength(1)
+    expect(view.entries.find(entry => entry.kind === 'assistant')?.kind === 'assistant' && (view.entries.find(entry => entry.kind === 'assistant') as { text: string }).text).toBe('final answer')
+    // Live and replay folds agree.
+    expect(projectEvents(events)).toStrictEqual(events.reduce(projectEvent, createTranscriptView()))
+  })
+
+  it('keeps interrupted empty settlements and timing/usage accounting', async () => {
+    const events: readonly SessionEvent[] = [
+      { type: 'turn/start', seq: 1, time: 0, data: { turn: 1 } },
+      { type: 'step/start', seq: 2, time: 100, data: { turn: 1, step: 1 } },
+      emptyAssistantEvent(3, true),
+    ]
+    const view = projectEvents(events)
+    const entries = view.entries.filter(entry => entry.kind === 'assistant')
+    expect(entries).toHaveLength(1)
+    // The interrupted marker keeps the card renderable even with no text.
+    const { transcriptEntryLines } = await import('../src/render/lines.ts')
+    const lines = transcriptEntryLines(entries[0]!, 80, true)
+    expect(lines.length).toBeGreaterThan(0)
+    expect(lines.some(line => line.segments.some(segment => segment.text.includes('interrupted')))).toBe(true)
+    // An empty settlement with usage still feeds the stats it carried.
+    const statsView = projectEvents([
+      { type: 'turn/start', seq: 1, time: 0, data: { turn: 1 } },
+      { type: 'step/start', seq: 2, time: 100, data: { turn: 1, step: 1 } },
+      { ...emptyAssistantEvent(3), data: { ...emptyAssistantEvent(3).data, usage: { inputTokens: 10, outputTokens: 0, cacheReadTokens: 0 } } },
+    ])
+    expect(statsView.stats.usage.inputTokens).toBe(10)
+  })
+})
+
 describe('PTC sub-dispatch projection', () => {
   function ptcStartEvent(root: string, sub: string, name: string, args: unknown, seq: number, time: number): SessionEvent {
     return {

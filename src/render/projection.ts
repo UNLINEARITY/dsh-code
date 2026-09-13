@@ -976,11 +976,17 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
       const totals = stats.usage
       const text = textOf(event.data.message.content)
       const reasoning = reasoningOf(event.data.message.content)
+      // A tool-only step settles with no text, no reasoning, and (unless the
+      // attempt was interrupted) nothing to render: appending an entry would
+      // create an invisible zero-line card that pads the inspector's ←→
+      // walk and an empty block in /export. The event still updates timing
+      // and usage above; only the transcript entry is skipped.
+      const renderable = text !== '' || reasoning !== '' || event.data.interrupted === true
       return {
         ...view,
         streaming: '',
         streamingReasoning: '',
-        entries: [...view.entries, { kind: 'assistant', text, reasoning, interrupted: event.data.interrupted === true ? true : undefined }],
+        ...(renderable ? { entries: [...view.entries, { kind: 'assistant', text, reasoning, interrupted: event.data.interrupted === true ? true : undefined }] } : {}),
         stats: {
           ...stats,
           llmMs: stats.llmMs + (started === undefined ? 0 : Math.max(0, event.time - started)),
@@ -1782,7 +1788,11 @@ export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent):
       const reasoning = reasoningOf(event.data.message.content)
       acc.streaming = ''
       acc.streamingReasoning = ''
-      appendReplayEntry(acc, { kind: 'assistant', text, reasoning, interrupted: event.data.interrupted === true ? true : undefined })
+      // Same zero-line guard as the live fold: tool-only settlements carry
+      // timing/usage but no renderable transcript entry.
+      if (text !== '' || reasoning !== '' || event.data.interrupted === true) {
+        appendReplayEntry(acc, { kind: 'assistant', text, reasoning, interrupted: event.data.interrupted === true ? true : undefined })
+      }
       acc.stats = {
         ...acc.stats,
         llmMs: acc.stats.llmMs + (started === undefined ? 0 : Math.max(0, event.time - started)),

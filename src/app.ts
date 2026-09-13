@@ -2999,6 +2999,25 @@ function ComposerWave(props: ComposerWaveProps): ReactElement {
   )
 }
 
+/** One-word kind label per entry, so the inspector's ←→ walk names what
+ * each step is instead of leaving the reader to infer it from the body. */
+function entryKindLabel(entry: TranscriptEntry | undefined): string {
+  switch (entry?.kind) {
+    case 'user': return 'user prompt'
+    case 'pending': return 'queued prompt'
+    case 'assistant': return 'reply'
+    case 'tool': return 'tool call'
+    case 'command': return 'command'
+    case 'error': return 'turn error'
+    case 'turn-marker': return 'turn end'
+    case 'compaction': return 'compaction'
+    case 'retry': return 'retry'
+    case 'files': return 'files changed'
+    case 'workflow': return 'workflow run'
+    default: return 'empty'
+  }
+}
+
 /**
  * The Ctrl+O transcript inspector: one selected durable entry at a time,
  * with independent history selection and content scrolling. The complete
@@ -3105,7 +3124,7 @@ function VerbosePanel({ entries, onClose }: { entries: readonly TranscriptEntry[
 
   const title = entries.length === 0
     ? 'history details · empty'
-    : `history details · entry ${cursor + 1}/${entries.length} · lines ${allLines.length === 0 ? 0 : visibleScroll + 1}-${Math.min(allLines.length, visibleScroll + viewport.bodyRows)}/${allLines.length}`
+    : `history details · entry ${cursor + 1}/${entries.length} · ${entryKindLabel(entry)} · lines ${allLines.length === 0 ? 0 : visibleScroll + 1}-${Math.min(allLines.length, visibleScroll + viewport.bodyRows)}/${allLines.length}`
   const visible = allLines.slice(visibleScroll, visibleScroll + viewport.bodyRows)
   const accent = panelAccent('history-inspector', getPalette().brand)
   return createElement(

@@ -1450,6 +1450,33 @@ describe('keyboard protocol and transcript alignment', () => {
 })
 
 describe('Ctrl+O history details', () => {
+  it('labels each inspected entry with its kind in the title', async () => {
+    const harness = createTty(100, 24)
+    const store = createTranscriptStore()
+    store.apply({
+      type: 'user/message',
+      seq: 1,
+      time: 1,
+      data: createUserMessage({
+        content: [{ type: 'text', text: 'draft' }],
+        source: { kind: 'user' },
+      }),
+    } as never)
+    const instance = renderApp(harness, appProps({ store }))
+    try {
+      await wait()
+      harness.stdin.write('\x0f')
+      await wait()
+      // The newest entry is the user prompt: its kind names it in the title.
+      expect(harness.output.text).toContain('user prompt')
+      // Step back to... the store only has one entry, so also confirm the
+      // label slot exists even when the walk rests on the only entry.
+      expect(harness.output.text).toMatch(/history details · entry 1\/1 · user prompt · lines/)
+    } finally {
+      instance.unmount()
+    }
+  })
+
   it('repaints the whole screen from the new palette when the theme changes', async () => {
     const harness = createTty(100, 24)
     let savedTheme = ''
