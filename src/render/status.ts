@@ -13,6 +13,7 @@
 import { visibleColumns } from './markdown.ts'
 import type { TranscriptStats } from './projection.ts'
 import { singleLineText, truncateColumns } from './text.ts'
+import { t } from '../i18n.ts'
 
 /**
  * Compact token count: 517 / 12.2K / 517K / 1.2M (one decimal under three
@@ -124,7 +125,13 @@ export const STATUS_GROUP_SEPARATOR = ' | '
 /** Separator between trailing state spans. */
 export const STATUS_ITEM_SEPARATOR = ' · '
 /** The Codex-style mode cycle hint appended to the permission badge. */
+/** English compatibility value for callers that only measure the default layout. */
 export const STATUS_CYCLE_HINT = ' (shift+tab to cycle)'
+
+/** Localized mode-cycle hint used by the live layout. */
+export function statusCycleHint(): string {
+  return ` ${t('status.cycleHint')}`
+}
 
 /**
  * Interior columns of the context bar. The layout starts every bar at this
@@ -612,7 +619,7 @@ export function layoutStatusBar(
       groupSeparator,
     )
     const rightWidth = joinWidth(rightKept.map(entry => visibleColumns(entry.span.text)), itemSeparator)
-      + (hint ? visibleColumns(STATUS_CYCLE_HINT) : 0)
+      + (hint ? visibleColumns(statusCycleHint()) : 0)
     return rightWidth > 0 ? leftWidth + LEFT_RIGHT_GAP + rightWidth : leftWidth
   }
 
@@ -641,7 +648,7 @@ export function layoutStatusBar(
       const identity = leftKept[0]
       const identityText = identity.group.spans.map(span => span.text).join('')
       const rightWidth = joinWidth(rightKept.map(entry => visibleColumns(entry.span.text)), itemSeparator)
-      const identityBudget = budget - rightWidth - LEFT_RIGHT_GAP - visibleColumns(STATUS_CYCLE_HINT)
+      const identityBudget = budget - rightWidth - LEFT_RIGHT_GAP - visibleColumns(statusCycleHint())
       if (identityBudget > 0 && visibleColumns(identityText) > identityBudget) {
         leftKept[0] = {
           ...identity,

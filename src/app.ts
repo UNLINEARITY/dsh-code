@@ -41,6 +41,8 @@ import {
 import { panelAccent } from './panel-accent.ts'
 import { rainbowRoll, rainbowSeedLabel } from './rainbow.ts'
 import { ThemePanel } from './theme-panel.ts'
+import { LanguagePanel } from './language-panel.ts'
+import { getLanguage, parseLanguageName, t, type LanguageName, type MessageKey } from './i18n.ts'
 import { UpdatePanel } from './update-panel.ts'
 import type { LauncherUpdateStatus } from './update.ts'
 import { WHALE_GLYPH, WHALE_GLYPH_COLUMNS } from './whale-glyph.ts'
@@ -156,7 +158,7 @@ const SYNCHRONIZED_UPDATE_END = '\x1b[?2026l'
 import {
   layoutStatusBar,
   parseStatuslineItems,
-  STATUS_CYCLE_HINT,
+  statusCycleHint,
   STATUS_GROUP_SEPARATOR,
   STATUS_ITEM_SEPARATOR,
   STATUS_ROW2_INDENT,
@@ -234,36 +236,40 @@ import {
 export type NoticeTone = 'info' | 'warning' | 'error'
 
 /** One source of truth for TUI-owned slash commands in completion and `/help`. */
-const LOCAL_COMMANDS = [
-  { label: '/help', description: 'show this overlay' },
-  { label: '/model', description: 'switch the model and manage providers' },
-  { label: '/effort', description: 'adjust reasoning effort for the current model' },
-  { label: '/mode', description: 'inspect or select the agent preset (/mode [preset])' },
-  { label: '/permission', description: 'inspect or select the permission preset (/permission [preset])' },
-  { label: '/new', description: 'create and switch to a fresh session (/new [preset])' },
-  { label: '/fork', description: 'fork at the latest completed turn (/fork [event-seq])' },
-  { label: '/resume', description: 'browse or switch root sessions (/resume [id|prefix])' },
-  { label: '/search', description: 'full-text search across persisted sessions (/search [query])' },
-  { label: '/plugin', description: 'inspect the live plugin composition' },
-  { label: '/update', description: 'update dsh-code, the harness host, and profile plugins in one aligned step' },
-  { label: '/jobs', description: 'inspect background jobs' },
-  { label: '/schedule', description: 'inspect active reminders (created through schedule tools)' },
-  { label: '/statusline', description: 'customize the status line items' },
-  { label: '/theme', description: 'switch the color theme' },
-  { label: '/animation', description: 'toggle timed animations (/animation [on|off])' },
-  { label: '/history', description: 'search and recall past prompts' },
-  { label: '/agents', description: 'inspect subagent sessions of this conversation' },
-  { label: '/todos', description: 'inspect the full todo list' },
-  { label: '/subagent', description: 'choose the model delegated subagents run on' },
-  { label: '/vscode-keys', description: 'pass ctrl+r through the vs code terminal' },
-  { label: '/delete', description: 'delete a session and its subagent threads' },
-  { label: '/clear', description: 'clear the screen' },
-  { label: '/export', description: 'export the transcript to markdown (/export [path])' },
-  { label: '/title', description: 'rename this session (/title <text>)' },
-  { label: '/copy', description: 'copy the latest assistant response' },
-  { label: '/diff', description: 'inspect Git changes (/diff [--staged|ref])' },
-  { label: '/review', description: 'review Git changes with the diff pasted in this session (/review [note])' },
-  { label: '/quit', description: 'exit' },
+/** One TUI-owned slash command: label plus its i18n description key. */
+interface LocalCommand { readonly label: string; readonly descriptionKey: MessageKey }
+
+const LOCAL_COMMANDS: readonly LocalCommand[] = [
+  { label: '/help', descriptionKey: 'cmd.help' },
+  { label: '/model', descriptionKey: 'cmd.model' },
+  { label: '/effort', descriptionKey: 'cmd.effort' },
+  { label: '/mode', descriptionKey: 'cmd.mode' },
+  { label: '/permission', descriptionKey: 'cmd.permission' },
+  { label: '/new', descriptionKey: 'cmd.new' },
+  { label: '/fork', descriptionKey: 'cmd.fork' },
+  { label: '/resume', descriptionKey: 'cmd.resume' },
+  { label: '/search', descriptionKey: 'cmd.search' },
+  { label: '/plugin', descriptionKey: 'cmd.plugin' },
+  { label: '/update', descriptionKey: 'cmd.update' },
+  { label: '/jobs', descriptionKey: 'cmd.jobs' },
+  { label: '/schedule', descriptionKey: 'cmd.schedule' },
+  { label: '/statusline', descriptionKey: 'cmd.statusline' },
+  { label: '/theme', descriptionKey: 'cmd.theme' },
+  { label: '/language', descriptionKey: 'cmd.language' },
+  { label: '/animation', descriptionKey: 'cmd.animation' },
+  { label: '/history', descriptionKey: 'cmd.history' },
+  { label: '/agents', descriptionKey: 'cmd.agents' },
+  { label: '/todos', descriptionKey: 'cmd.todos' },
+  { label: '/subagent', descriptionKey: 'cmd.subagent' },
+  { label: '/vscode-keys', descriptionKey: 'cmd.vscode-keys' },
+  { label: '/delete', descriptionKey: 'cmd.delete' },
+  { label: '/clear', descriptionKey: 'cmd.clear' },
+  { label: '/export', descriptionKey: 'cmd.export' },
+  { label: '/title', descriptionKey: 'cmd.title' },
+  { label: '/copy', descriptionKey: 'cmd.copy' },
+  { label: '/diff', descriptionKey: 'cmd.diff' },
+  { label: '/review', descriptionKey: 'cmd.review' },
+  { label: '/quit', descriptionKey: 'cmd.quit' },
 ] as const
 
 const LOCAL_COMMAND_NAMES = new Set(LOCAL_COMMANDS.map(command => command.label.slice(1)))
@@ -428,6 +434,8 @@ export interface AppProps {
   statusline: readonly string[]
   /** Persist a new statusline item set; the runner surfaces IO failures as notices. */
   saveStatusline(items: readonly string[]): void
+  /** Apply and persist one /language selection; the runner owns the language.json file. */
+  saveLanguage(name: LanguageName): void
   /** Apply and persist one /theme selection; the runner owns the theme.json file. */
   saveTheme?(name: ThemeName): void
   /** Whether timed animations run at startup (animations.json; on by default
@@ -756,16 +764,16 @@ function DiffPanel({ view, onClose }: { view: GitDiffView; onClose(): void }): R
     else if (key.pageUp) setScroll(current => moveScroll(current, -viewport.bodyRows, lines.length, viewport.bodyRows))
     else if (key.pageDown) setScroll(current => moveScroll(current, viewport.bodyRows, lines.length, viewport.bodyRows))
   })
-  if (viewport.compact) return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(`${view.title} · ${view.files.length} files · esc/q close`, viewport.contentColumns))
+  if (viewport.compact) return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(t('panel.diff.compact', { title: view.title, files: view.files.length }), viewport.contentColumns))
   const accent = panelAccent('diff', getPalette().dim, getPalette().brand)
   return createElement(
     Box,
     { flexDirection: 'column', borderStyle: 'round', borderColor: inkColor(accent.border), paddingX: 1 },
-    createElement(Text, { color: inkColor(accent.title), bold: true, wrap: 'truncate-end' }, truncateColumns(`${view.title} · ${view.files.length === 0 ? 'no files' : `${fileIndex + 1}/${view.files.length} ${file?.path ?? ''}`} · rows ${lines.length === 0 ? 0 : visibleScroll + 1}-${Math.min(lines.length, visibleScroll + viewport.bodyRows)}/${lines.length}`, viewport.contentColumns)),
+    createElement(Text, { color: inkColor(accent.title), bold: true, wrap: 'truncate-end' }, truncateColumns(`${view.title} · ${view.files.length === 0 ? t('panel.diff.noFiles') : `${fileIndex + 1}/${view.files.length} ${file?.path ?? ''}`} · rows ${lines.length === 0 ? 0 : visibleScroll + 1}-${Math.min(lines.length, visibleScroll + viewport.bodyRows)}/${lines.length}`, viewport.contentColumns)),
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
     createElement(StyledRows, { lines: lines.slice(visibleScroll, visibleScroll + viewport.bodyRows) }),
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
-    createElement(Text, { color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns('↑/↓ scroll · g/G ends · esc/q close', viewport.contentColumns)),
+    createElement(Text, { color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns(t('panel.diff.footer'), viewport.contentColumns)),
   )
 }
 
@@ -904,7 +912,7 @@ function TodoListPanel({ todos, onClose }: { todos: readonly TodoItem[]; onClose
   const inProgress = todos.filter(todo => todo.status === 'in_progress').length
   const pending = todos.length - completed - inProgress
   const rows = todos.length === 0
-    ? [createElement(Text, { key: 'empty', dimColor: true, wrap: 'truncate-end' }, '  no todos yet')]
+    ? [createElement(Text, { key: 'empty', dimColor: true, wrap: 'truncate-end' }, `  ${t('panel.todos.empty')}`)]
     : todos.map(todo => createElement(
       Text,
       { key: todo.content, dimColor: true, wrap: 'truncate-end' },
@@ -933,18 +941,18 @@ function TodoListPanel({ todos, onClose }: { todos: readonly TodoItem[]; onClose
   })
 
   if (viewport.maxHeight === 0 || viewport.compact) {
-    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns('todos · esc/q close', viewport.contentColumns))
+    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(t('panel.todos.compact'), viewport.contentColumns))
   }
 
   const accent = panelAccent('todos', getPalette().brand)
   return createElement(
     Box,
     { flexDirection: 'column', width: viewport.outerColumns, paddingX: 1, borderStyle: 'round', borderColor: inkColor(accent.border) },
-    createElement(Text, { color: inkColor(accent.title), bold: true, wrap: 'truncate-end' }, truncateColumns(`todos · ${completed}/${todos.length} done · ${inProgress} active · ${pending} pending · rows ${rows.length === 0 ? 0 : visibleScroll + 1}-${Math.min(rows.length, visibleScroll + viewport.bodyRows)}/${rows.length}`, viewport.contentColumns)),
+    createElement(Text, { color: inkColor(accent.title), bold: true, wrap: 'truncate-end' }, truncateColumns(t('panel.todos.title', { done: completed, total: todos.length, active: inProgress, pending, from: rows.length === 0 ? 0 : visibleScroll + 1, to: Math.min(rows.length, visibleScroll + viewport.bodyRows), rows: rows.length }), viewport.contentColumns)),
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
     ...rows.slice(visibleScroll, visibleScroll + viewport.bodyRows),
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
-    createElement(Text, { wrap: 'truncate-end' }, dim(truncateColumns('↑↓ scroll · pgup/pgdn page · g/G ends · esc/q close', viewport.contentColumns))),
+    createElement(Text, { wrap: 'truncate-end' }, dim(truncateColumns(t('panel.todos.footer'), viewport.contentColumns))),
   )
 }
 
@@ -1133,7 +1141,7 @@ function StatusLine({ facts, stats, busy, columns, items, onRows, animated }: {
       ))
     })
     if (row.hint) {
-      rightParts.push(createElement(Text, { key: key + 'hint', color: inkColor(getPalette().dim) }, STATUS_CYCLE_HINT))
+      rightParts.push(createElement(Text, { key: key + 'hint', color: inkColor(getPalette().dim) }, statusCycleHint()))
     }
     // Each row already fits the column budget; truncate-end stays as the
     // terminal-measurement backstop so a drifting cell count clips instead
@@ -1292,7 +1300,7 @@ function ApprovalBar({ snapshot, locked, notify, interrupt, summarize }: {
   if (pending === undefined) return undefined
   const queuedSuffix = snapshot.queued > 0 ? ` · +${snapshot.queued} queued` : ''
   if (viewport.maxHeight === 0 || viewport.compact || summarize === true) {
-    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(`approval${queuedSuffix} · enter/y allow · esc/n reject`, viewport.contentColumns))
+    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(t('approval.compact', { queued: queuedSuffix }), viewport.contentColumns))
   }
   // Body budget: title + options + footer consume fixed rows; the command
   // preview shrinks with an explicit overflow marker (Codex's "[… N lines]").
@@ -1311,7 +1319,7 @@ function ApprovalBar({ snapshot, locked, notify, interrupt, summarize }: {
     createElement(PanelGap, { visible: viewport.gapRows > 0 && body.length > 0 }),
     ...visibleBody.map((line, index) => createElement(StyledRows, { key: `body-${index}`, lines: [line] })),
     ...(overflow > 0
-      ? [createElement(Text, { key: 'overflow', color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns(`… +${overflow} more lines · ctrl+o shows the full call in the transcript`, viewport.contentColumns))]
+      ? [createElement(Text, { key: 'overflow', color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns(t('approval.overflow', { count: overflow }), viewport.contentColumns))]
       : []),
     ...(body.length > 0 ? [createElement(PanelGap, { visible: viewport.gapRows > 0 })] : []),
     ...APPROVAL_OPTIONS.map((option, index) => {
@@ -1328,8 +1336,8 @@ function ApprovalBar({ snapshot, locked, notify, interrupt, summarize }: {
       )
     }),
     createElement(Text, { color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns(snapshot.answered
-      ? 'submitted…'
-      : '↑↓ choose · enter confirm · y/n/d quick · esc reject', viewport.contentColumns)),
+      ? t('approval.submitted')
+      : t('approval.footer'), viewport.contentColumns)),
   )
 }
 
@@ -1702,21 +1710,21 @@ function QuestionBar({ store, snapshot, locked }: { store: QuestionStore; snapsh
 
   if (pending === undefined || question === undefined) return undefined
   if (viewport.maxHeight === 0 || viewport.compact) {
-    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(isPlan ? 'plan review · esc cancel' : 'question · esc cancel', viewport.contentColumns))
+    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(isPlan ? t('question.compact.plan') : t('question.compact.normal'), viewport.contentColumns))
   }
   const footerBase = submitted
-    ? 'submitted…'
+    ? t('question.submitted')
     : mode === 'custom'
       ? options.length === 0
-        ? '↑↓/pgup/pgdn scroll · type answer · enter submit · esc interrupt'
-        : '↑↓/pgup/pgdn scroll · type answer · enter submit · tab/esc or empty backspace: options'
+        ? t('question.customNoOptions')
+        : t('question.customOptions')
       : options.length === 0
-        ? '↑↓/pgup/pgdn scroll · type answer · enter submit · esc interrupt'
+        ? t('question.customNoOptions')
       : isMulti
-        ? '↑↓ choose · pgup/pgdn scroll · space/1-9 toggle · enter submit · c custom · esc interrupt'
-        : '↑↓ choose · pgup/pgdn scroll · 1-9 pick · enter submit · c custom · esc interrupt'
+        ? t('question.multiOptions')
+        : t('question.singleOptions')
   const footer = pending.request.questions.length > 1 && !submitted
-    ? `${footerBase} · ←→/ctrl+p/n switch question`
+    ? `${footerBase}${t('question.switch')}`
     : footerBase
   return createElement(
     Box,
@@ -1724,7 +1732,7 @@ function QuestionBar({ store, snapshot, locked }: { store: QuestionStore; snapsh
     createElement(
       Text,
       { color: inkColor(isPlan ? getPalette().brand : getPalette().brandDeep), bold: true, wrap: 'truncate-end' },
-      truncateColumns(`${isPlan ? '📋 plan review' : '❓ question'} ${index + 1}/${pending.request.questions.length} · lines ${rendered.lines.length === 0 ? 0 : visibleScroll + 1}-${Math.min(rendered.lines.length, visibleScroll + viewport.bodyRows)}/${rendered.lines.length}`, viewport.contentColumns),
+      truncateColumns(`${isPlan ? t('question.title.plan') : t('question.title.normal')} ${index + 1}/${pending.request.questions.length} · lines ${rendered.lines.length === 0 ? 0 : visibleScroll + 1}-${Math.min(rendered.lines.length, visibleScroll + viewport.bodyRows)}/${rendered.lines.length}`, viewport.contentColumns),
     ),
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
     createElement(StyledRows, { lines: rendered.lines.slice(visibleScroll, visibleScroll + viewport.bodyRows) }),
@@ -1850,7 +1858,7 @@ function ModelPanel({ directory, error, current, onSelect, onProviders, onRetry,
     const tail = query === ''
       ? 'type to filter · r retry · esc/q close'
       : 'backspace edits · esc close'
-    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(`/model · ${state}${providers} · ${tail}`, viewport.contentColumns))
+    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(t('panel.model.compact', { state, providers, tail }), viewport.contentColumns))
   }
 
   const stateRows: ReactElement[] = directory === undefined && error === undefined
@@ -1872,7 +1880,7 @@ function ModelPanel({ directory, error, current, onSelect, onProviders, onRetry,
         ...(rows.length === 0
           ? [createElement(Text, { key: 'empty', dimColor: true, wrap: 'truncate-end' }, '  no models available')]
           : filtered.length === 0
-            ? [createElement(Text, { key: 'no-match', dimColor: true, wrap: 'truncate-end' }, truncateColumns(`  no models match '${singleLineText(query)}'`, viewport.contentColumns))]
+            ? [createElement(Text, { key: 'no-match', dimColor: true, wrap: 'truncate-end' }, truncateColumns(`  ${t('panel.model.noMatch', { query: singleLineText(query) })}`, viewport.contentColumns))]
             : []),
       ]
   // Measurement and rendering share the same physical-row budget: state
@@ -2043,7 +2051,7 @@ function ProviderPanel({ directory, error, authorizations, authorizationError, o
   }, true)
 
   if (viewport.maxHeight === 0 || viewport.compact) {
-    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns('/model providers · enter configure · d remove key · esc back', viewport.contentColumns))
+    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(t('panel.providers.compact'), viewport.contentColumns))
   }
   const stateRows: ReactElement[] = directory === undefined && error === undefined
     ? [createElement(Text, { key: 'loading', color: inkColor(getPalette().dim), wrap: 'truncate-end' }, '  loading providers…')]
@@ -2111,7 +2119,7 @@ function ProviderPanel({ directory, error, authorizations, authorizationError, o
     ...visibleStateRows,
     ...itemRows,
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
-    createElement(Text, { color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns('↑↓ move · enter configure · l login · o logout · d remove key · x remove provider · r retry · esc back', viewport.contentColumns)),
+    createElement(Text, { color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns(t('panel.providers.footer'), viewport.contentColumns)),
   )
 }
 
@@ -2666,15 +2674,15 @@ function HelpPanel({ descriptors, skills, commandError, skillError, onClose }: {
     `  ${padColumns(label, nameWidth)}${truncateColumns(displayText(description), descBudget)}`,
   )
   const content: ReactElement[] = [
-    createElement(Text, { key: 'keys-title', bold: true, wrap: 'truncate-end' }, ' keys'),
-    createElement(Text, { key: 'key-submit', dimColor: true, wrap: 'truncate-end' }, '  enter submit · ctrl+j / alt+enter newline · up/down history · tab complete'),
-    createElement(Text, { key: 'key-mentions', dimColor: true, wrap: 'truncate-end' }, '  @ mentions workspace files and sessions'),
-    createElement(Text, { key: 'key-inspector', dimColor: true, wrap: 'truncate-end' }, '  ctrl+o history details · ctrl/alt+r thinking · shift+tab permission preset'),
-    createElement(Text, { key: 'key-cancel', dimColor: true, wrap: 'truncate-end' }, '  esc interrupt the running turn · ctrl+c cancel / clear / quit · ctrl+d exit'),
-    createElement(Text, { key: 'key-queue', dimColor: true, wrap: 'truncate-end' }, '  delete on the empty composer cancels the newest queued message'),
-    createElement(Text, { key: 'key-edit', dimColor: true, wrap: 'truncate-end' }, '  ctrl+k cut to end of line · ctrl+u clear line · ctrl+a / ctrl+e line ends'),
+    createElement(Text, { key: 'keys-title', bold: true, wrap: 'truncate-end' }, t('help.keysTitle')),
+    createElement(Text, { key: 'key-submit', dimColor: true, wrap: 'truncate-end' }, `  ${t('help.key.submit')}`),
+    createElement(Text, { key: 'key-mentions', dimColor: true, wrap: 'truncate-end' }, `  ${t('help.key.mentions')}`),
+    createElement(Text, { key: 'key-inspector', dimColor: true, wrap: 'truncate-end' }, `  ${t('help.key.inspector')}`),
+    createElement(Text, { key: 'key-cancel', dimColor: true, wrap: 'truncate-end' }, `  ${t('help.key.cancel')}`),
+    createElement(Text, { key: 'key-queue', dimColor: true, wrap: 'truncate-end' }, `  ${t('help.key.queue')}`),
+    createElement(Text, { key: 'key-edit', dimColor: true, wrap: 'truncate-end' }, `  ${t('help.key.edit')}`),
     createElement(Text, { key: 'commands-gap' }, ' '),
-    createElement(Text, { key: 'commands-title', bold: true, wrap: 'truncate-end' }, ' commands'),
+    createElement(Text, { key: 'commands-title', bold: true, wrap: 'truncate-end' }, t('help.commandsTitle')),
     ...(commandError === undefined
       ? []
       : [createElement(
@@ -2685,7 +2693,7 @@ function HelpPanel({ descriptors, skills, commandError, skillError, onClose }: {
     ...LOCAL_COMMANDS.map(command => createElement(
       Box,
       { key: `local-${command.label.slice(1)}` },
-      row(command.label, command.description),
+      row(command.label, t(command.descriptionKey)),
     )),
     ...descriptors.filter(descriptor => !LOCAL_COMMAND_NAMES.has(descriptor.name)).map(descriptor => createElement(
       Text,
@@ -2696,7 +2704,7 @@ function HelpPanel({ descriptors, skills, commandError, skillError, onClose }: {
       ? []
       : [
           createElement(Text, { key: 'skills-gap' }, ' '),
-          createElement(Text, { key: 'skills-title', bold: true, wrap: 'truncate-end' }, ' skills'),
+          createElement(Text, { key: 'skills-title', bold: true, wrap: 'truncate-end' }, t('help.skillsTitle')),
         ]),
     ...(skillError === undefined
       ? []
@@ -2734,7 +2742,7 @@ function HelpPanel({ descriptors, skills, commandError, skillError, onClose }: {
   })
 
   if (viewport.maxHeight === 0 || viewport.compact) {
-    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns('/help · esc/q close', viewport.contentColumns))
+    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(t('help.compact'), viewport.contentColumns))
   }
 
   const accent = panelAccent('help', getPalette().brand)
@@ -2745,7 +2753,7 @@ function HelpPanel({ descriptors, skills, commandError, skillError, onClose }: {
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
     ...content.slice(visibleScroll, visibleScroll + viewport.bodyRows),
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
-    createElement(Text, { wrap: 'truncate-end' }, dim(truncateColumns('↑↓ scroll · pgup/pgdn page · g/G ends · esc/q close', viewport.contentColumns))),
+    createElement(Text, { wrap: 'truncate-end' }, dim(truncateColumns(t('help.footer'), viewport.contentColumns))),
   )
 }
 
@@ -2755,7 +2763,7 @@ function verboseLine(text: string, columns: number): string {
 }
 
 /** The empty-composer placeholder text (shared by the static and wave paths). */
-const COMPOSER_PLACEHOLDER = 'type a message · / commands · @ mentions'
+const composerPlaceholder = (): string => t('composer.placeholder')
 
 /** One physical cell of the wave-painted composer row: a char plus styles. */
 interface ComposerCell {
@@ -2958,7 +2966,7 @@ function ComposerWave(props: ComposerWaveProps): ReactElement {
     }
     for (const span of splitGraphemes(parts.before)) push(span.text)
     if (parts.hasCaret) push(parts.caret, { inverse: props.caretVisible })
-    const tail = placeholder ? COMPOSER_PLACEHOLDER : parts.after
+    const tail = placeholder ? composerPlaceholder() : parts.after
     for (const span of splitGraphemes(tail)) push(span.text, placeholder ? { dim: true } : {})
     while (usedColumns < props.bandWidth) push(' ')
 
@@ -3118,7 +3126,7 @@ function VerbosePanel({ entries, onClose }: { entries: readonly TranscriptEntry[
     return createElement(
       Text,
       { wrap: 'truncate-end' },
-      truncateColumns('history details · ctrl+o / esc / q close', viewport.contentColumns),
+      truncateColumns(t('panel.verbose.compact'), viewport.contentColumns),
     )
   }
 
@@ -3153,7 +3161,7 @@ function VerbosePanel({ entries, onClose }: { entries: readonly TranscriptEntry[
     createElement(
       Text,
       { wrap: 'truncate-end' },
-      dim(truncateColumns('←→ entry · ↑↓ scroll · pgup/pgdn page · g/G ends · ctrl+o/esc/q close', viewport.contentColumns)),
+      dim(truncateColumns(t('panel.verbose.footer'), viewport.contentColumns)),
     ),
   )
 }
@@ -3200,7 +3208,7 @@ export function completionCandidates(
 ): readonly CompletionCandidate[] {
   if (!value.startsWith('/')) return []
   const prefix = value.slice(1).split(' ')[0] ?? ''
-  const local: CompletionCandidate[] = LOCAL_COMMANDS.map(command => ({ ...command, origin: 'command' }))
+  const local: CompletionCandidate[] = LOCAL_COMMANDS.map(command => ({ label: command.label, description: t(command.descriptionKey), origin: 'command' }))
   // Local commands shadow registry names (e.g. the TUI-local /permission works
   // before any session exists, while the registry child needs one), so
   // collisions cannot render two rows with the same key.
@@ -3348,7 +3356,7 @@ interface DraftFile extends FilePathInspection {
  * While a modal (approval / question / model panel) owns the keys, the
  * box passes every key through untouched.
  */
-function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openEffort, openHelp, openMode, openPermission, openResume, openSearch, openPlugin, openUpdate, openSchedule, openJobs, openStatusline, openTheme, openHistory, openAgents, openSubagent, openTodos, openDelete, openDiff, openReviewPicker, reviewChanges, deleteConfirm, confirmDelete, cancelDelete, createSession, forkSession, cancelSessionSwitch, notify, applyEditorKeys, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, inspectImages, prepareImages, inspectFiles, prepareFiles, cycleMode, exportTranscript, renameTitle, copyLastResponse, recallSpace, recordLocal, recordHistory, queued, cancelQueued, historyFill, historyConsumed, animations, applyAnimations, waveTier, waveStyle, maxRows, anchorRowsBelow, tabTitle, onEditorRows, onMenuRows, sessionKey }: {
+function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openEffort, openHelp, openMode, openPermission, openResume, openSearch, openPlugin, openUpdate, openSchedule, openJobs, openStatusline, openTheme, openLanguage, saveLanguage, openHistory, openAgents, openSubagent, openTodos, openDelete, openDiff, openReviewPicker, reviewChanges, deleteConfirm, confirmDelete, cancelDelete, createSession, forkSession, cancelSessionSwitch, notify, applyEditorKeys, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, inspectImages, prepareImages, inspectFiles, prepareFiles, cycleMode, exportTranscript, renameTitle, copyLastResponse, recallSpace, recordLocal, recordHistory, queued, cancelQueued, historyFill, historyConsumed, animations, applyAnimations, waveTier, waveStyle, maxRows, anchorRowsBelow, tabTitle, onEditorRows, onMenuRows, sessionKey }: {
   active: boolean
   frozen: boolean
   /** Frozen-band hint naming the surface that owns the keyboard; an empty
@@ -3379,6 +3387,10 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
   openJobs(): void
   openStatusline(): void
   openTheme(): void
+  /** Open the /language picker (bare /language). */
+  openLanguage(): void
+  /** Apply and persist a language chosen by argument. */
+  saveLanguage(name: LanguageName): void
   openHistory(): void
   /** Open the /agents panel (live subagent feed + transcript entry). */
   openAgents(): void
@@ -4290,6 +4302,15 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
         openTheme()
         return
       }
+      if (text === '/language' || text.startsWith('/language ')) {
+        const argument = text.slice('/language'.length).trim()
+        if (argument === '') openLanguage()
+        else if (argument === 'en' || argument === 'zh') {
+          saveLanguage(parseLanguageName(argument))
+          notify(t('notice.languageSaved', { name: argument }))
+        } else notify(t('notice.usage.language'), 'warning')
+        return
+      }
       if (text === '/animation' || text.startsWith('/animation ')) {
         const parsed = parseAnimationsArgument(text.slice('/animation'.length))
         if (parsed === 'toggle') applyAnimations(!animations)
@@ -4617,7 +4638,7 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
     const row = editorViewModel.rows[index]!
     const parts = editorRowParts(row, index, caret.row, clampedCursor, !preparingImages)
     const placeholder = index === 0 && value === '' && !busy && !preparingImages
-    const tail = placeholder ? COMPOSER_PLACEHOLDER : parts.after
+    const tail = placeholder ? composerPlaceholder() : parts.after
     const consumed = 2 + visibleColumns(parts.before) + visibleColumns(parts.caret) + visibleColumns(tail)
     editorRows.push(createElement(
       Text,
@@ -4634,7 +4655,7 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
         ? createElement(Text, { key: 'caret', inverse: cursorVisible || undefined }, parts.caret)
         : null,
       placeholder
-        ? createElement(Text, { dimColor: true }, COMPOSER_PLACEHOLDER)
+        ? createElement(Text, { dimColor: true }, composerPlaceholder())
         : parts.after,
       bandFill(consumed),
     ))
@@ -5084,6 +5105,7 @@ export function App(props: AppProps): ReactElement {
   const [statuslineOpen, setStatuslineOpen] = useState(false)
   const [statuslineItems, setStatuslineItems] = useState<readonly StatusItemId[]>(() => parseStatuslineItems(props.statusline))
   const [themeOpen, setThemeOpen] = useState(false)
+  const [languageOpen, setLanguageOpen] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
   const [agentsOpen, setAgentsOpen] = useState(false)
   const [subagentOpen, setSubagentOpen] = useState(false)
@@ -5159,7 +5181,7 @@ export function App(props: AppProps): ReactElement {
   // panel keypress.
   const inputActive = deleteConfirmId !== undefined
     ? !approvalPending && !questionPending
-    : !modelOpen && !helpOpen && !modeOpen && !permissionOpen && !resumeOpen && !pluginOpen && !updateOpen && !scheduleOpen && !jobsOpen && !statuslineOpen && !themeOpen && !historyOpen && !agentsOpen && !subagentOpen && !todosOpen && !verboseOpen && diffView === undefined && !reviewPickerOpen && !approvalPending && !questionPending
+    : !modelOpen && !helpOpen && !modeOpen && !permissionOpen && !resumeOpen && !pluginOpen && !updateOpen && !scheduleOpen && !jobsOpen && !statuslineOpen && !themeOpen && !languageOpen && !historyOpen && !agentsOpen && !subagentOpen && !todosOpen && !verboseOpen && diffView === undefined && !reviewPickerOpen && !approvalPending && !questionPending
 
   // Human questions outrank local inspectors. Close the lower modal instead
   // of leaving an approval/question visible but keyboard-locked behind it.
@@ -5351,9 +5373,9 @@ export function App(props: AppProps): ReactElement {
     : visibleLiveLines.slice(-liveAudit.allocation.live)
   const auditedReasoningRows = liveAudit.allocation.reasoning
   const auditedAnswerRows = liveAudit.allocation.answer
-  const transcriptVisible = !modelOpen && !helpOpen && !modeOpen && !permissionOpen && !resumeOpen && !pluginOpen && !updateOpen && !scheduleOpen && !jobsOpen && !statuslineOpen && !themeOpen && !historyOpen && !agentsOpen && !subagentOpen && !todosOpen && !verboseOpen && diffView === undefined && !reviewPickerOpen && !approvalPending && !questionPending
+  const transcriptVisible = !modelOpen && !helpOpen && !modeOpen && !permissionOpen && !resumeOpen && !pluginOpen && !updateOpen && !scheduleOpen && !jobsOpen && !statuslineOpen && !themeOpen && !languageOpen && !historyOpen && !agentsOpen && !subagentOpen && !todosOpen && !verboseOpen && diffView === undefined && !reviewPickerOpen && !approvalPending && !questionPending
   const inspectorVisible = verboseOpen && !approvalPending && !questionPending
-  const modalVisible = modelOpen || helpOpen || modeOpen || permissionOpen || resumeOpen || pluginOpen || updateOpen || scheduleOpen || jobsOpen || statuslineOpen || themeOpen || historyOpen || agentsOpen || subagentOpen || todosOpen || inspectorVisible || diffView !== undefined || reviewPickerOpen || approvalPending || questionPending
+  const modalVisible = modelOpen || helpOpen || modeOpen || permissionOpen || resumeOpen || pluginOpen || updateOpen || scheduleOpen || jobsOpen || statuslineOpen || themeOpen || languageOpen || historyOpen || agentsOpen || subagentOpen || todosOpen || inspectorVisible || diffView !== undefined || reviewPickerOpen || approvalPending || questionPending
   // The surface that currently owns the keyboard, named in the frozen band:
   // an empty composer under a panel must not advertise typing it cannot
   // accept — every key actually feeds the panel (which may or may not
@@ -5388,6 +5410,8 @@ export function App(props: AppProps): ReactElement {
                           ? '/statusline'
                           : themeOpen
                             ? '/theme'
+                            : languageOpen
+                              ? '/language'
                             : historyOpen
                               ? '/history'
                               : agentsOpen
@@ -5884,6 +5908,20 @@ export function App(props: AppProps): ReactElement {
         close: () => setThemeOpen(false),
       })
       : undefined,
+    languageOpen && !approvalPending && !questionPending
+      ? createElement(LanguagePanel, {
+        current: getLanguage(),
+        select: (name: LanguageName) => {
+          props.saveLanguage(name)
+          notify(t('notice.languageSaved', { name }))
+          setLanguageOpen(false)
+          // The Static region renders once; the same source-backed rebuild
+          // the theme switch uses repaints translated text everywhere.
+          refreshScreen()
+        },
+        close: () => setLanguageOpen(false),
+      })
+      : undefined,
     historyOpen && !approvalPending && !questionPending
       ? createElement(HistoryPanel, {
         entries: recallSpace,
@@ -6022,6 +6060,8 @@ export function App(props: AppProps): ReactElement {
         openJobs: () => setJobsOpen(true),
         openStatusline: () => setStatuslineOpen(true),
         openTheme: () => setThemeOpen(true),
+        openLanguage: () => setLanguageOpen(true),
+        saveLanguage: props.saveLanguage,
         openHistory: () => setHistoryOpen(true),
         openAgents: () => setAgentsOpen(true),
         openSubagent: () => setSubagentOpen(true),

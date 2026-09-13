@@ -18,6 +18,7 @@ import { stripPasteMarkers } from './keyboard.ts'
 import { DEFAULT_STATUSLINE_ITEMS, STATUS_ITEMS, type StatusItemId } from './render/status.ts'
 import { singleLineText, truncateColumns } from './render/text.ts'
 import { panelAccent } from './panel-accent.ts'
+import { t } from './i18n.ts'
 import { getPalette, inkColor } from './theme.ts'
 
 interface ListFrameProps {
@@ -42,9 +43,9 @@ function isSearchToggle(input: string, key: { ctrl?: boolean }): boolean {
 /** The search-state line: gated panels show only an ACTIVE filter (the ctrl+f
  * toggle lives in the footer), direct-typing panels keep the plain prompt. */
 function searchLine(searching: boolean | undefined, query: string): string {
-  if (searching === true) return `search: ${query === '' ? 'type to filter · esc stops' : query}`
-  if (searching === false) return query === '' ? '' : `search: ${query}`
-  return `search: ${query === '' ? 'type to filter' : query}`
+  if (searching === true) return query === '' ? t('panel.searchIdleStop') : `${t('panel.searchPrefix')}${query}`
+  if (searching === false) return query === '' ? '' : `${t('panel.searchPrefix')}${query}`
+  return query === '' ? t('panel.searchIdle') : `${t('panel.searchPrefix')}${query}`
 }
 
 function ListFrame(props: ListFrameProps): ReactElement {
@@ -141,9 +142,9 @@ export function ModePanel({ current, load, select, close }: {
     if (next !== undefined) { setQuery(next); setCursor(0) }
   })
   return createElement(ListFrame, {
-    title: `/mode · current ${current}`,
+    title: t('panel.mode.title', { current }),
     rows: visible.map(row => ({ key: row.id, disabled: row.broken !== undefined, text: `${row.id === current ? '●' : '○'} ${row.name ?? row.id} · ${row.description ?? row.trust}${row.broken === undefined ? '' : ` · broken: ${row.broken}`}` })),
-    cursor, loading, error, query, footer: '↑↓ choose · enter switch · r refresh · esc close',
+    cursor, loading, error, query, footer: t('panel.footer.chooseSwitch'),
   })
 }
 
@@ -179,9 +180,9 @@ export function PermissionPanel({ current, load, select, close }: {
     if (next !== undefined) { setQuery(next); setCursor(0) }
   })
   return createElement(ListFrame, {
-    title: `/permission · current ${current}`,
+    title: t('panel.permission.title', { current }),
     rows: visible.map(row => ({ key: row.id, text: `${row.id === current ? '●' : '○'} ${row.id}${row.description === undefined ? '' : ` · ${row.description}`}` })),
-    cursor, loading, error, query, footer: '↑↓ choose · enter select · r refresh · esc close',
+    cursor, loading, error, query, footer: t('panel.footer.chooseSelect'),
   })
 }
 
@@ -204,12 +205,12 @@ export function PluginPanel({ load, close, initialQuery = '' }: { load(): readon
     if (next !== undefined) { setQuery(next); setCursor(0) }
   })
   return createElement(ListFrame, {
-    title: '/plugin · loader inspector',
+    title: t('panel.plugin.title'),
     rows: rows.map((row, index) => ({
       key: row.entryId,
       disabled: !row.enabled,
       text: `${row.enabled ? '●' : '○'} ${row.entryId} · ${row.phase ?? 'not mounted'}${expanded && index === cursor ? ` · ${row.moduleName}` : ''}`,
-    })), cursor, loading: false, query, footer: '↑↓ inspect · enter details · r refresh · esc close',
+    })), cursor, loading: false, query, footer: t('panel.footer.inspectDetails'),
   })
 }
 
@@ -272,12 +273,12 @@ export function JobsPanel({ load, close }: { load(): readonly JobRow[]; close():
   })
   useEffect(() => setCursor(value => Math.min(value, Math.max(0, rows.length - 1))), [rows.length])
   return createElement(ListFrame, {
-    title: `/jobs · background tasks · ${rows.length}`,
+    title: t('panel.jobs.title', { count: rows.length }),
     rows: rows.map(row => ({
       key: row.id,
       text: `${JOB_MARK[row.status]} ${row.id} · ${singleLineText(row.label)} · ${runClock((row.finishedAt ?? Date.now()) - row.startedAt)}${row.detail === undefined ? '' : ` · ${singleLineText(row.detail)}`}`,
     })),
-    cursor, loading: false, query: '', searching: false, footer: '↑↓ inspect · r refresh · esc close',
+    cursor, loading: false, query: '', searching: false, footer: t('panel.footer.inspectRefresh'),
   })
 }
 
@@ -381,7 +382,7 @@ export function ResumePanel({ currentCwd, load, readTranscript, select, requestD
   }, { isActive: transcript === undefined })
   if (transcript !== undefined) {
     return createElement(DocumentPanel, {
-      title: `transcript · ${transcript.id}`,
+      title: t('panel.document.title', { id: transcript.id }),
       text: transcript.text,
       error: transcript.error,
       close: () => { transcriptLoad.current?.abort(); setTranscript(undefined) },
@@ -398,7 +399,7 @@ export function ResumePanel({ currentCwd, load, readTranscript, select, requestD
       disabled: !row.resumable,
       text: `${row.subagent ? '↳' : '○'} ${row.title ?? row.id.slice(-12)}${density === 'comfortable' ? ` · ${formatRelativeTime(row.updatedAt ?? row.createdAt, now)} · ${row.workspace} · ${row.preset}` : ''}${row.live ? ' · live' : ''}${expanded === row.id ? ` · ${row.id} · ${row.cwd}${row.parent === undefined ? '' : ` · parent ${row.parent}`}` : ''}`,
     })), cursor, loading, error, query: options.query, searching,
-    footer: 'tab/←→ filters · ↑↓/pg navigate · ctrl+f search · e details · t transcript · d delete · enter resume',
+    footer: t('panel.footer.resume'),
   })
 }
 
@@ -458,11 +459,11 @@ function DocumentPanel({ title, text, error, close }: {
     if (input === 'g') return setScroll(0)
     if (input === 'G') return setScroll(Math.max(0, lines.length - viewport.bodyRows))
   })
-  if (viewport.compact) return createElement(Text, { wrap: 'truncate-end' }, truncateColumns('transcript · esc close', viewport.contentColumns))
+  if (viewport.compact) return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(t('document.compact'), viewport.contentColumns))
   const body: readonly StyledLine[] = error !== undefined
     ? textLines(`error: ${singleLineText(error)}`, viewport.contentColumns, 'error')
     : text === undefined
-      ? textLines('loading transcript…', viewport.contentColumns, 'dim')
+      ? textLines(t('document.loading'), viewport.contentColumns, 'dim')
       : lines.slice(scroll, scroll + viewport.bodyRows)
   const accent = panelAccent('kernel-transcript', getPalette().dim, getPalette().brandBright)
   return createElement(
@@ -470,7 +471,7 @@ function DocumentPanel({ title, text, error, close }: {
     { width: viewport.outerColumns, borderStyle: 'round', borderColor: inkColor(accent.border), flexDirection: 'column', paddingX: 1 },
     createElement(Text, { color: inkColor(accent.title), wrap: 'truncate-end' }, truncateColumns(singleLineText(title), viewport.contentColumns)),
     createElement(DocumentRows, { lines: body }),
-    createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns(`lines ${lines.length === 0 ? 0 : scroll + 1}-${Math.min(lines.length, scroll + viewport.bodyRows)}/${lines.length} · ↑↓/pg/g/G · t/esc close`, viewport.contentColumns)),
+    createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns(t('document.footer', { from: lines.length === 0 ? 0 : scroll + 1, to: Math.min(lines.length, scroll + viewport.bodyRows), total: lines.length }), viewport.contentColumns)),
   )
 }
 
@@ -524,22 +525,22 @@ export function HistoryPanel({ entries, fill, close }: {
   const viewport = panelViewport(stdout?.columns ?? 80, stdout?.rows ?? 30)
   if (viewport.maxHeight === 0 || viewport.compact) {
     const picked = matches[cursor]
-    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns('/history · ' + (picked === undefined ? 'no matching prompts' : singleLineText(picked)) + ' · esc close', viewport.contentColumns))
+    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(`/history · ${picked === undefined ? t('history.compact.none') : singleLineText(picked)} · ${t('panel.close')}`, viewport.contentColumns))
   }
   const bodyRows = Math.max(1, viewport.bodyRows - 1)
   const offset = revealRow(0, cursor, matches.length, bodyRows)
   const visible = matches.slice(offset, offset + bodyRows)
   const header = query === ''
-    ? `/history · ${entries.length} prompts · type to filter`
-    : `/history · ${matches.length} of ${entries.length} match '${truncateColumns(singleLineText(query), viewport.contentColumns - 30)}'`
+    ? t('history.title.prompts', { count: entries.length })
+    : t('history.title.match', { matches: matches.length, count: entries.length, query: truncateColumns(singleLineText(query), Math.max(6, viewport.contentColumns - 34)) })
   const accent = panelAccent('history', getPalette().dim, getPalette().brandBright)
   return createElement(
     Box,
     { width: viewport.outerColumns, borderStyle: 'round', borderColor: inkColor(accent.border), flexDirection: 'column', paddingX: 1 },
     createElement(Text, { color: inkColor(accent.title), wrap: 'truncate-end' }, truncateColumns(header, viewport.contentColumns)),
-    createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns(`  filter ${query === '' ? '· type to search prompts' : '· ' + singleLineText(query)}, enter fills the composer`, viewport.contentColumns)),
+    createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns(t('history.filterHint', { state: query === '' ? t('history.filterEmpty') : t('history.filterQuery', { query: singleLineText(query) }) }), viewport.contentColumns)),
     ...(visible.length === 0
-      ? [createElement(Text, { key: 'empty', dimColor: true, wrap: 'truncate-end' }, truncateColumns('  no matching prompts', viewport.contentColumns))]
+      ? [createElement(Text, { key: 'empty', dimColor: true, wrap: 'truncate-end' }, truncateColumns(t('history.empty'), viewport.contentColumns))]
       : visible.map((entry, index) => {
         const absolute = offset + index
         const selected = absolute === cursor
@@ -553,7 +554,7 @@ export function HistoryPanel({ entries, fill, close }: {
           truncateColumns((selected ? '› ' : '  ') + singleLineText(entry), viewport.contentColumns),
         )
       })),
-    createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns('↑↓ move · g/G ends · enter fill · esc close', viewport.contentColumns)),
+    createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns(t('history.footer'), viewport.contentColumns)),
   )
 }
 
@@ -664,17 +665,17 @@ export function ReviewPickerPanel({ loadBranches, loadCommits, choose, close }: 
   const viewport = panelViewport(stdout?.columns ?? 80, stdout?.rows ?? 30)
   if (viewport.maxHeight === 0 || viewport.compact) {
     const state = phase === 'preset' ? 'pick a review target' : loading ? 'loading…' : error !== undefined ? `error: ${error}` : `${filtered.length} candidates`
-    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(`/review · ${state} · esc close`, viewport.contentColumns))
+    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(`/review · ${state} · ${t('panel.close')}`, viewport.contentColumns))
   }
   const bodyRows = Math.max(1, viewport.bodyRows - 1)
   const offset = revealRow(0, cursor, phase === 'preset' ? 4 : filtered.length, bodyRows)
   const header = phase === 'preset'
-    ? '/review · choose a target'
+    ? t('review.picker.title')
     : phase === 'branches'
-      ? `/review · ${loading ? 'loading branches…' : error !== undefined ? `error: ${truncateColumns(singleLineText(error), viewport.contentColumns - 12)}` : `${filtered.length} of ${rows.length} branches`}`
+      ? loading ? t('review.picker.loadingBranches') : error !== undefined ? t('search.compact.error', { message: truncateColumns(singleLineText(error), Math.max(6, viewport.contentColumns - 14)) }) : t('review.picker.branches', { filtered: filtered.length, total: rows.length })
       : phase === 'commits'
-        ? `/review · ${loading ? 'loading commits…' : error !== undefined ? `error: ${truncateColumns(singleLineText(error), viewport.contentColumns - 12)}` : `${filtered.length} of ${rows.length} commits`}`
-        : '/review · type your review focus'
+        ? loading ? t('review.picker.loadingCommits') : error !== undefined ? t('search.compact.error', { message: truncateColumns(singleLineText(error), Math.max(6, viewport.contentColumns - 14)) }) : t('review.picker.commits', { filtered: filtered.length, total: rows.length })
+        : t('review.picker.customHint')
   const accent = panelAccent('review-picker', getPalette().dim, getPalette().brandBright)
   return createElement(
     Box,
@@ -682,10 +683,10 @@ export function ReviewPickerPanel({ loadBranches, loadCommits, choose, close }: 
     createElement(Text, { color: inkColor(accent.title), wrap: 'truncate-end' }, truncateColumns(header, viewport.contentColumns)),
     ...(phase === 'preset'
       ? [
-        '审查未提交的改动（staged / unstaged / 新文件）',
-        '选择基线分支对比（列出本地分支）',
-        '审查当前分支的某个提交（列出近期提交）',
-        '自定义审查关注点（输入文字）',
+        t('review.picker.uncommitted'),
+        t('review.picker.branch'),
+        t('review.picker.commit'),
+        t('review.picker.custom'),
       ].map((label, index) => {
         const absolute = offset + index
         const selected = absolute === cursor
@@ -696,9 +697,9 @@ export function ReviewPickerPanel({ loadBranches, loadCommits, choose, close }: 
         )
       })
       : phase === 'custom'
-        ? [createElement(Text, { key: 'custom-input', dimColor: true, wrap: 'truncate-end' }, truncateColumns(`  ${query === '' ? '输入关注点后回车开始审查' : singleLineText(query)}`, viewport.contentColumns))]
+        ? [createElement(Text, { key: 'custom-input', dimColor: true, wrap: 'truncate-end' }, truncateColumns(`  ${query === '' ? t('review.picker.customHint') : singleLineText(query)}`, viewport.contentColumns))]
         : filtered.length === 0
-          ? [createElement(Text, { key: 'empty', dimColor: true, wrap: 'truncate-end' }, truncateColumns(`  ${loading ? '加载中…' : error !== undefined ? '加载失败' : query === '' ? '没有候选' : '没有匹配项'}`, viewport.contentColumns))]
+          ? [createElement(Text, { key: 'empty', dimColor: true, wrap: 'truncate-end' }, truncateColumns(`  ${loading ? t('review.picker.loading') : error !== undefined ? t('review.picker.loadFailed') : query === '' ? t('review.picker.empty') : t('review.picker.noMatch')}`, viewport.contentColumns))]
           : filtered.slice(offset, offset + bodyRows).map((row, index) => {
             const absolute = offset + index
             const selected = absolute === cursor
@@ -709,7 +710,7 @@ export function ReviewPickerPanel({ loadBranches, loadCommits, choose, close }: 
               truncateColumns(`${selected ? '› ' : '  '}${singleLineText(label)}`, viewport.contentColumns),
             )
           })),
-    createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns('↑↓ move · enter select · esc back · q close', viewport.contentColumns)),
+    createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns(t('review.picker.footer'), viewport.contentColumns)),
   )
 }
 
@@ -816,26 +817,28 @@ export function SearchPanel({ load, select, initialQuery = '', close }: {
   const now = useMemo(() => Date.now(), [rows, searched])
   if (viewport.maxHeight === 0 || viewport.compact) {
     const state = loading ? 'searching…' : error !== undefined ? `error: ${error}` : rows.length === 0 ? 'no results yet' : `❯ ${rows[cursor]?.label ?? ''}`
-    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(`/search · ${state} · esc close`, viewport.contentColumns))
+    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(`/search · ${state} · ${t('panel.close')}`, viewport.contentColumns))
   }
   const bodyRows = Math.max(1, viewport.bodyRows - 1)
   const offset = revealRow(0, cursor, rows.length, bodyRows)
   const visible = rows.slice(offset, offset + bodyRows)
   const header = error !== undefined
-    ? `/search · error: ${truncateColumns(singleLineText(error), viewport.contentColumns - 12)}`
+    ? t('search.compact.error', { message: truncateColumns(singleLineText(error), Math.max(6, viewport.contentColumns - 14)) })
     : loading
-      ? `/search · searching…`
+      ? t('search.compact.searching')
       : searched === ''
-        ? '/search · type a query and press enter'
-        : `/search · ${rows.length} hit${rows.length === 1 ? '' : 's'} for '${truncateColumns(singleLineText(searched), viewport.contentColumns - 30)}'`
+        ? t('search.title.type')
+        : rows.length === 1
+          ? t('search.title.hits', { count: rows.length, query: truncateColumns(singleLineText(searched), Math.max(6, viewport.contentColumns - 30)) })
+          : t('search.title.hitsPlural', { count: rows.length, query: truncateColumns(singleLineText(searched), Math.max(6, viewport.contentColumns - 30)) })
   const accent = panelAccent('search', getPalette().dim, getPalette().brandBright)
   return createElement(
     Box,
     { width: viewport.outerColumns, borderStyle: 'round', borderColor: inkColor(accent.border), flexDirection: 'column', paddingX: 1 },
     createElement(Text, { color: inkColor(accent.title), wrap: 'truncate-end' }, truncateColumns(header, viewport.contentColumns)),
-    createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns(`  ${query === '' ? 'type to search sessions' : singleLineText(query)} · enter searches or resumes`, viewport.contentColumns)),
+    createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns(t('search.hint', { state: query === '' ? t('search.hintEmpty') : singleLineText(query) }), viewport.contentColumns)),
     ...(visible.length === 0
-      ? [createElement(Text, { key: 'empty', dimColor: true, wrap: 'truncate-end' }, truncateColumns(searched === '' ? '  full-text search across every persisted session' : `  no matching sessions${loading ? '…' : ''}`, viewport.contentColumns))]
+      ? [createElement(Text, { key: 'empty', dimColor: true, wrap: 'truncate-end' }, truncateColumns(searched === '' ? `  ${t('search.empty.idle')}` : `  ${t('search.empty.noHits', { loading: loading ? '…' : '' })}`, viewport.contentColumns))]
       : visible.flatMap((row, index) => {
         const absolute = offset + index
         const selected = absolute === cursor
@@ -857,7 +860,7 @@ export function SearchPanel({ load, select, initialQuery = '', close }: {
           ),
         ]
       })),
-    createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns('↑↓ move · enter search/resume · esc close', viewport.contentColumns)),
+    createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns(t('search.footer'), viewport.contentColumns)),
   )
 }
 
@@ -920,7 +923,7 @@ export function StatuslinePanel({ enabled, change, close }: {
   const stdout = useStdout().stdout
   const viewport = panelViewport(stdout?.columns ?? 80, stdout?.rows ?? 30)
   if (viewport.maxHeight === 0 || viewport.compact) {
-    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns('/statusline · esc close', viewport.contentColumns))
+    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(t('panel.statusline.compact'), viewport.contentColumns))
   }
   const bodyRows = Math.max(1, viewport.bodyRows - 1)
   const offset = revealRow(0, cursor, order.length, bodyRows)
@@ -930,7 +933,7 @@ export function StatuslinePanel({ enabled, change, close }: {
   return createElement(
     Box,
     { width: viewport.outerColumns, borderStyle: 'round', borderColor: inkColor(accent.border), flexDirection: 'column', paddingX: 1 },
-    createElement(Text, { color: inkColor(accent.title), wrap: 'truncate-end' }, truncateColumns('/statusline · items apply to the live status line below', viewport.contentColumns)),
+    createElement(Text, { color: inkColor(accent.title), wrap: 'truncate-end' }, truncateColumns(t('statusline.title'), viewport.contentColumns)),
     ...visible.map((id, index) => {
       const absolute = offset + index
       const selected = absolute === cursor
@@ -946,7 +949,7 @@ export function StatuslinePanel({ enabled, change, close }: {
         truncateColumns((selected ? '› ' : '  ') + (on.has(id) ? '● ' : '○ ') + (info?.label ?? id) + (info === undefined ? '' : ' · ' + info.description + ' · ' + info.side), viewport.contentColumns),
       )
     }),
-    createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns('↑↓ move · space toggle · ←→ reorder · d default · esc close', viewport.contentColumns)),
+    createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns(t('panel.footer.statusline'), viewport.contentColumns)),
   )
 }
 
@@ -1024,17 +1027,17 @@ export function EffortPanel({ row, current, select, back, onExit }: {
     }
   })
   return createElement(ListFrame, {
-    title: `/model — effort for ${row.providerName} · ${row.modelName}`,
+    title: t('panel.effort.title', { provider: row.providerName, model: row.modelName }),
     rows: empty
-      ? [{ key: 'empty', disabled: true, text: 'this model advertises no reasoning effort levels — the provider default applies' }]
+      ? [{ key: 'empty', disabled: true, text: t('panel.effort.empty') }]
       : rows.map(effort => ({
         key: effort.id,
-        text: `${effort.id === effective ? '●' : '○'} ${effort.name}${effort.id === row.reasoning?.defaultEffort ? ' · default' : ''}${effort.description === undefined ? '' : ` · ${effort.description}`}`,
+        text: `${effort.id === effective ? '●' : '○'} ${effort.name}${effort.id === row.reasoning?.defaultEffort ? ` · ${t('panel.default')}` : ''}${effort.description === undefined ? '' : ` · ${effort.description}`}`,
       })),
     cursor,
     loading: false,
     query: '',
-    footer: empty ? 'esc back' : '↑↓ choose · enter apply · esc/q back',
+    footer: empty ? t('panel.footer.effortEmpty') : t('panel.footer.effort'),
   })
 }
 
@@ -1133,7 +1136,7 @@ export function AgentsPanel({ live, load, readTranscript, close }: {
   }, { isActive: transcript === undefined })
   if (transcript !== undefined) {
     return createElement(DocumentPanel, {
-      title: `subagent · ${transcript.id.slice(-12)}`,
+      title: t('panel.subagent.transcriptTitle', { id: transcript.id.slice(-12) }),
       text: transcript.text,
       error: transcript.error,
       close: () => {
@@ -1143,7 +1146,7 @@ export function AgentsPanel({ live, load, readTranscript, close }: {
     })
   }
   return createElement(ListFrame, {
-    title: `/agents · ${live.length} live · ${rows.length} total`,
+    title: t('panel.agents.title', { live: live.length, total: rows.length }),
     rows: rows.map(row => ({
       key: row.id,
       text: `${row.running ? '●' : row.done ? '✓' : row.live ? '⏸' : '○'} ${row.label} · ${row.activity}${row.live ? ' · live' : ''}`,
@@ -1152,7 +1155,7 @@ export function AgentsPanel({ live, load, readTranscript, close }: {
     loading,
     ...error === undefined ? {} : { error },
     query: '',
-    footer: '↑↓ choose · enter/t transcript · r refresh · esc close',
+    footer: t('panel.footer.agents'),
   })
 }
 
@@ -1234,9 +1237,9 @@ export function SubagentPanel({ current, load, pick, inherit, close }: {
     })
   }
   return createElement(ListFrame, {
-    title: `/subagent — model for delegated agents${current === '' ? '' : ` · override ${current}`}`,
+    title: `${t('panel.subagent.title')}${current === '' ? '' : t('panel.subagent.override', { value: current })}`,
     rows: [
-      { key: '__inherit__', text: `${current === '' ? '●' : '○'} inherit — follow the current model (/model switches apply)` },
+      { key: '__inherit__', text: `${current === '' ? '●' : '○'} ${t('panel.subagent.inherit')}` },
       ...rows.map(row => ({
         key: `${row.provider}/${row.model}`,
         text: `${current.startsWith(`${row.provider}/${row.model}`) ? '●' : '○'} ${row.providerName} · ${row.modelName}`,
@@ -1246,7 +1249,7 @@ export function SubagentPanel({ current, load, pick, inherit, close }: {
     loading,
     ...error === undefined ? {} : { error },
     query: '',
-    footer: '↑↓ choose · enter apply · r refresh · esc close',
+    footer: t('panel.footer.subagent'),
   })
 }
 
@@ -1308,7 +1311,7 @@ export function SchedulePanel({ rows, close }: { rows(): readonly ScheduleRow[];
     if (key.escape || input === 'q') return close()
   })
   if (viewport.maxHeight === 0 || viewport.compact) {
-    const summary = display.length === 0 ? 'no active reminders' : singleLineText(display[0]!.text)
+    const summary = display.length === 0 ? t('panel.schedule.none') : singleLineText(display[0]!.text)
     return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(`/schedule · ${summary}`, viewport.contentColumns))
   }
   const budget = Math.max(1, viewport.bodyRows)
@@ -1318,14 +1321,14 @@ export function SchedulePanel({ rows, close }: { rows(): readonly ScheduleRow[];
   return createElement(
     Box,
     { width: viewport.outerColumns, borderStyle: 'round', borderColor: inkColor(accent.border), flexDirection: 'column', paddingX: 1 },
-    createElement(Text, { color: inkColor(accent.title), wrap: 'truncate-end' }, truncateColumns(`/schedule · ${display.length} active reminder${display.length === 1 ? '' : 's'}`, viewport.contentColumns)),
+    createElement(Text, { color: inkColor(accent.title), wrap: 'truncate-end' }, truncateColumns(display.length === 1 ? t('schedule.title', { count: display.length }) : t('schedule.titlePlural', { count: display.length }), viewport.contentColumns)),
     ...(display.length === 0
-      ? [createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns('  no active reminders — the model creates them with schedule_create', viewport.contentColumns))]
+      ? [createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns(`  ${t('schedule.empty')}`, viewport.contentColumns))]
       : visible.map(row => createElement(Text, {
         key: row.key,
         color: row.tone === 'error' ? inkColor(getPalette().error) : undefined,
         wrap: 'truncate-end',
       }, truncateColumns(`  ${singleLineText(row.text)}`, viewport.contentColumns)))),
-    createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns(`esc/q close${hidden > 0 ? ` · +${hidden} more` : ''} · the model schedules via schedule_create`, viewport.contentColumns)),
+    createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns(t('panel.schedule.footer', { more: hidden > 0 ? t('panel.schedule.more', { count: hidden }) : '' }), viewport.contentColumns)),
   )
 }

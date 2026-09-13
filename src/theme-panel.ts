@@ -13,6 +13,7 @@ import { clampScroll, panelViewport } from './render/inspector.ts'
 import { truncateColumns } from './render/text.ts'
 import { panelAccent } from './panel-accent.ts'
 import { getPalette, inkColor, THEMES, type ThemeName } from './theme.ts'
+import { t } from './i18n.ts'
 
 /**
  * The /theme list: one row per theme, the current one marked with ●, the
@@ -41,7 +42,7 @@ export function ThemePanel({ current, select, close }: {
     if (key.return) return select(THEMES[cursor]!.id)
   })
   if (viewport.maxHeight === 0 || viewport.compact) {
-    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns('/theme · esc close', viewport.contentColumns))
+    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(t('theme.compact'), viewport.contentColumns))
   }
   // The theme rows share the panel's body budget like every other panel: an
   // unsliced three-row list reached terminal-height equality on short
@@ -55,7 +56,7 @@ export function ThemePanel({ current, select, close }: {
   return createElement(
     Box,
     { width: viewport.outerColumns, borderStyle: 'round', borderColor: inkColor(accent.border), flexDirection: 'column', paddingX: 1 },
-    createElement(Text, { color: inkColor(accent.title), wrap: 'truncate-end' }, truncateColumns('/theme — color palette', viewport.contentColumns)),
+    createElement(Text, { color: inkColor(accent.title), wrap: 'truncate-end' }, truncateColumns(t('theme.title'), viewport.contentColumns)),
     ...visibleThemes.map((theme, index) => {
       const selected = first + index === cursor
       const active = theme.id === current
@@ -66,7 +67,7 @@ export function ThemePanel({ current, select, close }: {
           color: selected ? inkColor(getPalette().brandBright) : undefined,
           wrap: 'truncate-end',
         },
-        truncateColumns(`${selected ? '› ' : '  '}${active ? '● ' : '○ '}${theme.label}${active ? ' · current' : ''} · ${theme.description}`, viewport.contentColumns),
+        truncateColumns(`${selected ? '› ' : '  '}${active ? '● ' : '○ '}${t(`theme.${theme.id}.label`)}${active ? ` · ${t('theme.current')}` : ''} · ${t(`theme.${theme.id}.description`)}`, viewport.contentColumns),
       )
     }),
     createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns(`↑↓ choose · enter apply · esc/q close${hiddenThemes > 0 ? ` · +${hiddenThemes} more` : ''}`, viewport.contentColumns)),

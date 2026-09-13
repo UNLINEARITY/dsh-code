@@ -6,6 +6,7 @@
  */
 
 import { execFile } from 'node:child_process'
+import { t } from './i18n.ts'
 
 export interface GitDiffSpec {
   readonly label: string
@@ -321,15 +322,15 @@ export function reviewSummaryLine(conclusion: ReviewConclusion): string {
   for (let level = 0; level <= 3; level += 1) {
     if (counts[level]! > 0) parts.push(`P${level}×${counts[level]}`)
   }
-  if (untagged > 0) parts.push(`未分级×${untagged}`)
+  if (untagged > 0) parts.push(t('review.summary.untagged', { n: untagged }))
   const verdict = conclusion.overall === 'incorrect'
-    ? 'patch 不正确'
+    ? t('review.summary.incorrect')
     : conclusion.overall === 'correct'
-      ? (total === 0 ? '未发现问题' : 'patch 正确')
+      ? (total === 0 ? t('review.summary.correctClean') : t('review.summary.correct'))
       : undefined
   if (total === 0) {
-    return verdict === undefined ? '审查完成：没有结构化结论' : `审查完成：0 项发现 · ${verdict}`
+    return verdict === undefined ? t('review.summary.noConclusion') : t('review.summary.zero', { verdict })
   }
-  const summary = `审查完成：${total} 项发现（${parts.join(' ')}）`
-  return verdict === undefined ? summary : `${summary} · ${verdict}`
+  const params = { count: total, parts: parts.join(' ') }
+  return verdict === undefined ? t('review.summary.count', params) : t('review.summary.countVerdict', { ...params, verdict })
 }

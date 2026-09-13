@@ -3,6 +3,7 @@
 import { basename, dirname, resolve } from 'node:path'
 import { realpathSync } from 'node:fs'
 import { SESSION_FORMAT_VERSION, type SessionEvent, type SessionHeader } from '@deepseek-ai/dsh-session'
+import { t } from './i18n.ts'
 
 export interface SessionRecord {
   readonly header: SessionHeader
@@ -384,14 +385,13 @@ export function planSessionDeletion(records: readonly SessionRecord[], id: strin
  */
 export function formatRelativeTime(timestamp: number, now: number): string {
   const seconds = Math.round((now - timestamp) / 1000)
-  if (seconds < 0) return 'now'
-  if (seconds < 60) return 'now'
+  if (seconds < 60) return t('time.justNow')
   const minutes = Math.round(seconds / 60)
-  if (minutes < 60) return `${minutes}m ago`
+  if (minutes < 60) return t('time.minutesAgo', { n: minutes })
   const hours = Math.round(minutes / 60)
-  if (hours < 24) return `${hours}h ago`
+  if (hours < 24) return t('time.hoursAgo', { n: hours })
   const days = Math.round(hours / 24)
-  if (days < 7) return `${days}d ago`
+  if (days < 7) return t('time.daysAgo', { n: days })
   const date = new Date(timestamp)
   const month = `${date.getMonth() + 1}`.padStart(2, '0')
   const day = `${date.getDate()}`.padStart(2, '0')

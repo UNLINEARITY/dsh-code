@@ -93,6 +93,7 @@ import { listPluginRows } from './plugin-inventory.ts'
 import { applyLauncherUpdate, probeLauncherUpdate } from './update.ts'
 import { parseAnimationsPref } from './render/animations.ts'
 import { parseThemeName, setTheme, type ThemeName } from './theme.ts'
+import { parseLanguageName, setLanguage, t, type LanguageName } from './i18n.ts'
 import {
   isSubagentSession,
   matchSessionId,
@@ -847,7 +848,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     statuslineItems = [...items]
     void settingsPersistence.save(statuslinePath, JSON.stringify({ items }, null, 2) + '\n')
       .catch((writeError: unknown) => {
-        bridge.notify('statusline save failed: ' + (writeError instanceof Error ? writeError.message : String(writeError)), 'error')
+        bridge.notify(t('notice.statuslineSaveFailed', { message: writeError instanceof Error ? writeError.message : String(writeError) }), 'error')
       })
   }
 
@@ -883,7 +884,27 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     setTheme(name)
     void settingsPersistence.save(themePath, JSON.stringify({ theme: name }, null, 2) + '\n')
       .catch((writeError: unknown) => {
-        bridge.notify('theme save failed: ' + (writeError instanceof Error ? writeError.message : String(writeError)), 'error')
+        bridge.notify(t('notice.themeSaveFailed', { message: writeError instanceof Error ? writeError.message : String(writeError) }), 'error')
+      })
+  }
+
+  // /language persistence: one user-level JSON file beside theme.json. A
+  // missing file means English; a corrupt file degrades to English with a
+  // surfaced warning.
+  const languagePath = join(homedir(), '.dsh', 'dsh-code', 'language.json')
+  let languageWarning: string | undefined
+  try {
+    setLanguage(parseLanguageName(JSON.parse(readFileSync(languagePath, 'utf8')).language))
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      languageWarning = error instanceof Error ? error.message : String(error)
+    }
+  }
+  const saveLanguage = (name: LanguageName): void => {
+    setLanguage(name)
+    void settingsPersistence.save(languagePath, JSON.stringify({ language: name }, null, 2) + '\n')
+      .catch((writeError: unknown) => {
+        bridge.notify(t('notice.languageSaveFailed', { message: writeError instanceof Error ? writeError.message : String(writeError) }), 'error')
       })
   }
 
@@ -906,7 +927,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   const saveAnimations = (enabled: boolean): void => {
     void settingsPersistence.save(animationsPath, JSON.stringify({ animations: enabled }, null, 2) + '\n')
       .catch((writeError: unknown) => {
-        bridge.notify('animations save failed: ' + (writeError instanceof Error ? writeError.message : String(writeError)), 'error')
+        bridge.notify(t('notice.animationsSaveFailed', { message: writeError instanceof Error ? writeError.message : String(writeError) }), 'error')
       })
   }
 
@@ -950,7 +971,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       .then(() => mkdir(dirname(historyPath), { recursive: true }))
       .then(() => appendFileAsync(historyPath, historyLine(text), 'utf8'))
       .catch((writeError: unknown) => {
-        bridge.notify('history save failed: ' + (writeError instanceof Error ? writeError.message : String(writeError)), 'error')
+        bridge.notify(t('notice.historySaveFailed', { message: writeError instanceof Error ? writeError.message : String(writeError) }), 'error')
       })
   }
 
@@ -959,10 +980,10 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     if (agent === undefined) return
     try {
       if (agent.inbox.remove(MessageId(messageId))) {
-        bridge.notify('queued message cancelled')
+        bridge.notify(t('notice.queueCancelled'))
       }
     } catch (error: unknown) {
-      bridge.notify('queue cancel failed: ' + (error instanceof Error ? error.message : String(error)), 'error')
+      bridge.notify(t('notice.queueCancelFailed', { message: error instanceof Error ? error.message : String(error) }), 'error')
     }
   }
 
@@ -1027,7 +1048,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     }
     const registry = ctx.get('commands')
     if (registry === undefined) {
-      bridge.notify('no command registry is mounted in this composition', 'error')
+      bridge.notify(t('notice.commandRegistryMissing'), 'error')
       return
     }
     const controller = new AbortController()
@@ -1055,7 +1076,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
             source: { kind: 'user' },
           }))
         } catch (error: unknown) {
-          bridge.notify(`command fallback failed: ${error instanceof Error ? error.message : String(error)}`, 'error')
+          bridge.notify(t('notice.commandFallbackFailed', { message: error instanceof Error ? error.message : String(error) }), 'error')
         }
       }
     }, (error: unknown) => {
@@ -1065,7 +1086,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       // intent retirement waits for, so the in-flight choice dies here too —
       // otherwise every later Shift+Tab reads a phantom plan state.
       if (line === '/plan' || line === '/plan off') planIntent = undefined
-      bridge.notify(`command failed: ${error instanceof Error ? error.message : String(error)}`, 'error')
+      bridge.notify(t('notice.commandFailed', { message: error instanceof Error ? error.message : String(error) }), 'error')
     })
   }
 
@@ -1850,15 +1871,15 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       try {
         setPermissionAction('read-only')
       } catch (error: unknown) {
-        bridge.notify(`review unavailable: ${error instanceof Error ? error.message : String(error)}`, 'error')
+        bridge.notify(t('notice.reviewUnavailable', { message: error instanceof Error ? error.message : String(error) }), 'error')
         return
       }
       send(buildReviewPrompt(files.flatMap(file => file.lines).join('\n'), title, note), 'followup')
-      bridge.notify('review started under read-only permissions')
+      bridge.notify(t('notice.reviewStarted'))
     }, (error: unknown) => {
       finish()
       if (controller.signal.aborted || epoch !== atEpoch) return
-      bridge.notify(`review failed: ${error instanceof Error ? error.message : String(error)}`, 'error')
+      bridge.notify(t('notice.reviewFailed', { message: error instanceof Error ? error.message : String(error) }), 'error')
     })
   }
 
@@ -2036,6 +2057,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       saveStatusline,
       applyEditorKeys,
       saveTheme,
+      saveLanguage,
       animations: animationsEnabled,
       saveAnimations,
       history: inputHistory,
@@ -2083,6 +2105,11 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     }, 50)
   }
   // Same one-shot surface for a corrupt theme file (dark fallback stays live).
+  if (languageWarning !== undefined) {
+    setTimeout(() => {
+      bridge.notify(t('notice.languageConfigUnreadable', { message: languageWarning }), 'warning')
+    }, 0)
+  }
   if (themeWarning !== undefined) {
     setTimeout(() => {
       bridge.notify('theme config unreadable, using dark: ' + themeWarning, 'warning')
