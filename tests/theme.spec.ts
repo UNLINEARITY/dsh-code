@@ -3,20 +3,22 @@
 import chalk from 'chalk'
 import { describe, expect, it } from 'vitest'
 import {
-  TUI_RGB, brand, brandBright, brandDeep, dim, error, success, warn,
-  DARK_PALETTE, LIGHT_PALETTE, PALETTES, THEME_NAMES, diffBackground, getPalette, getTheme,
-  inkColor, parseThemeName, resolveTheme, setTheme,
+  brand, brandBright, brandDeep, dim, error, success, warn,
+  DARK_PALETTE, LIGHT_PALETTE, PALETTES, THEMES, THEME_NAMES, diffBackground, getPalette, getTheme,
+  inkColor, parseThemeName, resolveTheme, setTheme, type RgbTriple,
 } from '../src/theme.ts'
 
 describe('tui theme', () => {
   it('pins the DeepSeek brand blues from the design platform', () => {
-    expect(TUI_RGB.brand).toEqual([65, 118, 230])
-    expect(TUI_RGB.brandBright).toEqual([103, 158, 254])
-    expect(TUI_RGB.brandDeep).toEqual([72, 104, 178])
+    expect(DARK_PALETTE.brand).toEqual([65, 118, 230])
+    expect(DARK_PALETTE.brandBright).toEqual([103, 158, 254])
+    expect(DARK_PALETTE.brandDeep).toEqual([72, 104, 178])
+    expect(PALETTES.dark).toEqual(DARK_PALETTE)
+    expect(DARK_PALETTE.brandMid).toEqual([86, 134, 254])
   })
 
   it('keeps every token an RGB triple', () => {
-    for (const value of Object.values(TUI_RGB)) {
+    for (const value of Object.values(DARK_PALETTE)) {
       expect(value).toHaveLength(3)
       for (const channel of value) {
         expect(Number.isInteger(channel)).toBe(true)
@@ -43,12 +45,6 @@ describe('tui theme', () => {
     } finally {
       chalk.level = level
     }
-  })
-
-  it('keeps TUI_RGB as the dark palette under its original export name', () => {
-    expect(TUI_RGB).toEqual(DARK_PALETTE)
-    expect(PALETTES.dark).toEqual(DARK_PALETTE)
-    expect(TUI_RGB.brandMid).toEqual([86, 134, 254])
   })
 
   it('pins the light palette to the white-background contrast values', () => {
@@ -78,6 +74,14 @@ describe('tui theme', () => {
     expect(Object.keys(PALETTES).sort()).toEqual(['dark', 'light'])
     expect(Object.keys(LIGHT_PALETTE).sort()).toEqual(Object.keys(DARK_PALETTE).sort())
     expect(THEME_NAMES).toEqual(['dark', 'light', 'auto'])
+  })
+
+  it('exposes one picker registry matching the canonical names', () => {
+    expect(THEMES.map(theme => theme.id)).toEqual(THEME_NAMES)
+    for (const theme of THEMES) {
+      expect(theme.label).toBe(theme.id)
+      expect(theme.description.length).toBeGreaterThan(0)
+    }
   })
 
   it('defaults to dark and switches palettes through setTheme', () => {
@@ -115,7 +119,7 @@ describe('tui theme', () => {
   it('formats Ink color strings from a triple', () => {
     expect(inkColor([65, 118, 230])).toBe('rgb(65, 118, 230)')
     expect(inkColor(LIGHT_PALETTE.code)).toBe('rgb(14, 116, 144)')
-    expect(inkColor(TUI_RGB.brandDeep)).toBe('rgb(72, 104, 178)')
+    expect(inkColor(DARK_PALETTE.brandDeep)).toBe('rgb(72, 104, 178)')
   })
 
   it('resolves auto to dark until terminal detection lands', () => {
@@ -137,6 +141,13 @@ describe('tui theme', () => {
     expect(DARK_PALETTE.diffDel).toEqual([74, 34, 29])
     expect(LIGHT_PALETTE.diffAdd).toEqual([218, 251, 225])
     expect(LIGHT_PALETTE.diffDel).toEqual([255, 235, 233])
+    // AA-tuned diff foregrounds: the status greens/reds sink below 4.5:1 on
+    // their own tints (dark error-on-diffDel was 3.6:1), so diff rows carry
+    // dedicated foreground tokens instead of borrowing success/error.
+    expect(DARK_PALETTE.diffAddFg).toEqual([34, 197, 94])
+    expect(DARK_PALETTE.diffDelFg).toEqual([248, 113, 113])
+    expect(LIGHT_PALETTE.diffAddFg).toEqual([22, 101, 52])
+    expect(LIGHT_PALETTE.diffDelFg).toEqual([185, 28, 28])
 
     // Rich terminals get the active theme's tint as an Ink background.
     const level = chalk.level
@@ -164,5 +175,52 @@ describe('tui theme', () => {
     expect(parseThemeName(undefined)).toBe('dark')
     expect(parseThemeName('sepia')).toBe('dark')
     expect(parseThemeName(42)).toBe('dark')
+  })
+})
+
+describe('tui theme contrast (WCAG 2.x)', () => {
+  // Terminal background assumptions: the dark palette paints on a black
+  // terminal, the light palette on a white one. Body-size tokens must clear
+  // AA 4.5:1; accent/status tokens (bold labels, borders, dots) clear the
+  // 3:1 UI-component threshold — the light brand blue deliberately keeps the
+  // design-platform value at ≈4.2:1 for bold/accent spans only.
+  const channel = (value: number): number => {
+    const s = value / 255
+    return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4
+  }
+  const luminance = (rgb: RgbTriple): number =>
+    0.2126 * channel(rgb[0]) + 0.7152 * channel(rgb[1]) + 0.0722 * channel(rgb[2])
+  const ratio = (fg: RgbTriple, bg: RgbTriple): number => {
+    const [light, dark] = [luminance(fg), luminance(bg)].sort((a, b) => b - a)
+    return (light + 0.05) / (dark + 0.05)
+  }
+  const BLACK: RgbTriple = [0, 0, 0]
+  const WHITE: RgbTriple = [255, 255, 255]
+
+  it('keeps body-text tokens at AA on their terminal backgrounds', () => {
+    for (const token of ['text', 'dim', 'brandBright', 'code'] as const) {
+      expect(ratio(DARK_PALETTE[token], BLACK)).toBeGreaterThanOrEqual(4.5)
+      expect(ratio(LIGHT_PALETTE[token], WHITE)).toBeGreaterThanOrEqual(4.5)
+    }
+  })
+
+  it('keeps accent and status tokens at the 3:1 UI-component threshold', () => {
+    for (const token of ['brand', 'brandMid', 'brandDeep', 'success', 'error', 'warn'] as const) {
+      expect(ratio(DARK_PALETTE[token], BLACK)).toBeGreaterThanOrEqual(3)
+      expect(ratio(LIGHT_PALETTE[token], WHITE)).toBeGreaterThanOrEqual(3)
+    }
+  })
+
+  it('keeps diff foregrounds AA-legible on their row tints and on plain backgrounds', () => {
+    // Row path: the tint rides along as a background.
+    expect(ratio(DARK_PALETTE.diffAddFg, DARK_PALETTE.diffAdd)).toBeGreaterThanOrEqual(4.5)
+    expect(ratio(DARK_PALETTE.diffDelFg, DARK_PALETTE.diffDel)).toBeGreaterThanOrEqual(4.5)
+    expect(ratio(LIGHT_PALETTE.diffAddFg, LIGHT_PALETTE.diffAdd)).toBeGreaterThanOrEqual(4.5)
+    expect(ratio(LIGHT_PALETTE.diffDelFg, LIGHT_PALETTE.diffDel)).toBeGreaterThanOrEqual(4.5)
+    // Markdown span path: the same tokens paint with no background at all.
+    expect(ratio(DARK_PALETTE.diffAddFg, BLACK)).toBeGreaterThanOrEqual(4.5)
+    expect(ratio(DARK_PALETTE.diffDelFg, BLACK)).toBeGreaterThanOrEqual(4.5)
+    expect(ratio(LIGHT_PALETTE.diffAddFg, WHITE)).toBeGreaterThanOrEqual(4.5)
+    expect(ratio(LIGHT_PALETTE.diffDelFg, WHITE)).toBeGreaterThanOrEqual(4.5)
   })
 })

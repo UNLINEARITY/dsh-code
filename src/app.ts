@@ -642,9 +642,11 @@ function segmentProps(style: MdSegment['style']): {
     case 'diffAdd':
     case 'diffDel':
       // Inline-markdown twin of lineStyleProps' diff cases: tinted rows for
-      // ```diff fences rendered through the markdown span path.
+      // ```diff fences rendered through the markdown span path. The diff
+      // foreground tokens stay AA-legible both on the row tints (when the
+      // background rides along) and on the plain terminal background.
       return {
-        color: inkColor(style === 'diffAdd' ? getPalette().success : getPalette().error),
+        color: inkColor(style === 'diffAdd' ? getPalette().diffAddFg : getPalette().diffDelFg),
         bold: undefined,
         italic: undefined,
         strikethrough: undefined,
@@ -675,12 +677,13 @@ function lineStyleProps(style: LineStyle): {
     case 'dimItalic':
       return { color: inkColor(getPalette().dim), bold: undefined, italic: true, strikethrough: undefined, dimColor: undefined, backgroundColor: undefined }
     // Codex diff rendering: added/removed lines carry a theme tint behind
-    // the sign and text; the depth gate turns this into plain foreground
-    // styling on 16-color terminals.
+    // the sign and text, with the AA-tuned diff foreground tokens on top; the
+    // depth gate turns this into plain foreground styling on 16-color
+    // terminals.
     case 'diffAdd':
-      return { color: inkColor(getPalette().success), bold: undefined, italic: undefined, strikethrough: undefined, dimColor: undefined, backgroundColor: diffBackground('diffAdd') }
+      return { color: inkColor(getPalette().diffAddFg), bold: undefined, italic: undefined, strikethrough: undefined, dimColor: undefined, backgroundColor: diffBackground('diffAdd') }
     case 'diffDel':
-      return { color: inkColor(getPalette().error), bold: undefined, italic: undefined, strikethrough: undefined, dimColor: undefined, backgroundColor: diffBackground('diffDel') }
+      return { color: inkColor(getPalette().diffDelFg), bold: undefined, italic: undefined, strikethrough: undefined, dimColor: undefined, backgroundColor: diffBackground('diffDel') }
     default:
       return { ...segmentProps(style), dimColor: undefined, backgroundColor: undefined }
   }
@@ -919,7 +922,7 @@ function TodoListPanel({ todos, onClose }: { todos: readonly TodoItem[]; onClose
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
     ...rows.slice(visibleScroll, visibleScroll + viewport.bodyRows),
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
-    createElement(Text, { dimColor: true, wrap: 'truncate-end' }, dim(truncateColumns('↑↓ scroll · pgup/pgdn page · g/G ends · esc/q close', viewport.contentColumns))),
+    createElement(Text, { wrap: 'truncate-end' }, dim(truncateColumns('↑↓ scroll · pgup/pgdn page · g/G ends · esc/q close', viewport.contentColumns))),
   )
 }
 
@@ -1673,7 +1676,7 @@ function QuestionBar({ store, snapshot, locked }: { store: QuestionStore; snapsh
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
     createElement(StyledRows, { lines: rendered.lines.slice(visibleScroll, visibleScroll + viewport.bodyRows) }),
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
-    createElement(Text, { dimColor: true, wrap: 'truncate-end' }, dim(truncateColumns(footer, viewport.contentColumns))),
+    createElement(Text, { wrap: 'truncate-end' }, dim(truncateColumns(footer, viewport.contentColumns))),
   )
 }
 
@@ -1849,7 +1852,7 @@ function ModelPanel({ directory, error, current, onSelect, onProviders, onRetry,
       )
     }),
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
-    createElement(Text, { dimColor: true, wrap: 'truncate-end' }, dim(truncateColumns(query === ''
+    createElement(Text, { wrap: 'truncate-end' }, dim(truncateColumns(query === ''
       ? `type to filter · ↑↓ move · pgup/pgdn page · enter select${onProviders === undefined ? '' : ' · tab providers'} · r retry · esc/q close`
       : `↑↓ move · pgup/pgdn page · enter select · backspace edits · esc close`, viewport.contentColumns))),
   )
@@ -2601,8 +2604,8 @@ function HelpPanel({ descriptors, skills, commandError, skillError, onClose }: {
   const descBudget = Math.max(0, viewport.contentColumns - nameWidth - 2)
   const row = (label: string, description: string): ReactElement => createElement(
     Text,
-    { dimColor: true, wrap: 'truncate-end' },
-    `  ${padColumns(label, nameWidth)}${dim(truncateColumns(displayText(description), descBudget))}`,
+    { color: inkColor(getPalette().dim), wrap: 'truncate-end' },
+    `  ${padColumns(label, nameWidth)}${truncateColumns(displayText(description), descBudget)}`,
   )
   const content: ReactElement[] = [
     createElement(Text, { key: 'keys-title', bold: true, wrap: 'truncate-end' }, ' keys'),
@@ -2628,8 +2631,8 @@ function HelpPanel({ descriptors, skills, commandError, skillError, onClose }: {
     )),
     ...descriptors.filter(descriptor => !LOCAL_COMMAND_NAMES.has(descriptor.name)).map(descriptor => createElement(
       Text,
-      { key: `command-${descriptor.name}`, dimColor: true, wrap: 'truncate-end' },
-      `  ${padColumns(`/${descriptor.name}`, nameWidth)}${dim(truncateColumns(displayText(descriptor.description), descBudget))}`,
+      { key: `command-${descriptor.name}`, color: inkColor(getPalette().dim), wrap: 'truncate-end' },
+      `  ${padColumns(`/${descriptor.name}`, nameWidth)}${truncateColumns(displayText(descriptor.description), descBudget)}`,
     )),
     ...(skills.length === 0 && skillError === undefined
       ? []
@@ -2646,8 +2649,8 @@ function HelpPanel({ descriptors, skills, commandError, skillError, onClose }: {
       )]),
     ...skills.map(skill => createElement(
       Text,
-      { key: `skill-${skill.name}`, dimColor: true, wrap: 'truncate-end' },
-      `  ${padColumns(`/${skill.name}`, nameWidth)}${dim(truncateColumns(displayText(skill.description), descBudget))}`,
+      { key: `skill-${skill.name}`, color: inkColor(getPalette().dim), wrap: 'truncate-end' },
+      `  ${padColumns(`/${skill.name}`, nameWidth)}${truncateColumns(displayText(skill.description), descBudget)}`,
     )),
   ]
   const visibleScroll = clampScroll(scroll, content.length, viewport.bodyRows)
@@ -2683,7 +2686,7 @@ function HelpPanel({ descriptors, skills, commandError, skillError, onClose }: {
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
     ...content.slice(visibleScroll, visibleScroll + viewport.bodyRows),
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
-    createElement(Text, { dimColor: true, wrap: 'truncate-end' }, dim(truncateColumns('↑↓ scroll · pgup/pgdn page · g/G ends · esc/q close', viewport.contentColumns))),
+    createElement(Text, { wrap: 'truncate-end' }, dim(truncateColumns('↑↓ scroll · pgup/pgdn page · g/G ends · esc/q close', viewport.contentColumns))),
   )
 }
 
@@ -3070,7 +3073,7 @@ function VerbosePanel({ entries, onClose }: { entries: readonly TranscriptEntry[
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
     createElement(
       Text,
-      { dimColor: true, wrap: 'truncate-end' },
+      { wrap: 'truncate-end' },
       dim(truncateColumns('←→ entry · ↑↓ scroll · pgup/pgdn page · g/G ends · ctrl+o/esc/q close', viewport.contentColumns)),
     ),
   )
@@ -3244,7 +3247,7 @@ function CompletionMenu({ active, mention, index, rows, error }: {
     // Scroll affordance: with the full merged catalog (commands + registry +
     // skills) the six-row window rarely shows the tail — count and hint keep
     // the rest discoverable without inflating the menu budget.
-    hidden > 0 ? createElement(Text, { key: 'more', color: inkColor(getPalette().dim), wrap: 'truncate-end' }, dim(`  … +${hidden} more`)) : undefined,
+    hidden > 0 ? createElement(Text, { key: 'more', color: inkColor(getPalette().dim), wrap: 'truncate-end' }, `  … +${hidden} more`) : undefined,
     showFooter ? createElement(Text, { color: inkColor(getPalette().dim), wrap: 'truncate-end' }, dim(mention ? `↑↓ choose · ${rows.length} items · tab insert` : `↑↓ choose · ${rows.length} items · tab complete`)) : undefined,
   )
 }

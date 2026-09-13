@@ -7,10 +7,8 @@
  * Two palettes — `dark` (the default) and `light` — share the same token keys
  * with different values. Painters and the palette accessor read the ACTIVE
  * palette selected through {@link setTheme}, so a theme switch recolors every
- * painted surface on the next render without touching call sites. Raw token
- * consumers keep reading {@link TUI_RGB} (the dark values) until the
- * theme-aware integration replaces those call sites with
- * `inkColor(getPalette().token)`.
+ * painted surface on the next render without touching call sites; consumers
+ * read colors through {@link getPalette} or the painters below only.
  *
  * @module @deepseek-ai/dsh-tui/theme
  */
@@ -35,6 +33,8 @@ export type ThemeToken =
   | 'composerBand'
   | 'diffAdd'
   | 'diffDel'
+  | 'diffAddFg'
+  | 'diffDelFg'
 
 /** One full color palette: every token key mapped to an RGB triple. */
 export type ThemePalette = Readonly<Record<ThemeToken, RgbTriple>>
@@ -44,6 +44,27 @@ export type ThemeName = 'dark' | 'light' | 'auto'
 
 /** Valid theme names in canonical picker order. */
 export const THEME_NAMES: readonly ThemeName[] = ['dark', 'light', 'auto']
+
+/** One /theme picker row: the theme id plus its display copy. */
+export interface ThemeDescriptor {
+  /** The selectable theme name. */
+  readonly id: ThemeName
+  /** Short row label shown in the picker. */
+  readonly label: string
+  /** One-line description shown after the label. */
+  readonly description: string
+}
+
+/**
+ * Every theme's picker metadata in canonical order — the single source the
+ * /theme panel rows derive from; {@link THEME_NAMES} stays the validation
+ * list. Adding a theme means adding its palette plus one row here.
+ */
+export const THEMES: readonly ThemeDescriptor[] = [
+  { id: 'dark', label: 'dark', description: 'DeepSeek dark palette (default)' },
+  { id: 'light', label: 'light', description: 'light palette for bright terminals' },
+  { id: 'auto', label: 'auto', description: 'follow the terminal; dark until detection lands' },
+]
 
 /**
  * DeepSeek dark palette: the original TUI colors, one entry per
@@ -77,16 +98,21 @@ export const DARK_PALETTE = {
   diffAdd: [33, 58, 43],
   /** Diff removed-line background — Codex's muted dark red tint (#4A221D). */
   diffDel: [74, 34, 29],
+  /** Diff added-line foreground — green-500, 5.4:1 on the diffAdd tint. */
+  diffAddFg: [34, 197, 94],
+  /** Diff removed-line foreground — red-400, 4.9:1 on the diffDel tint (error's red-500 sinks to 3.6:1 on it). */
+  diffDelFg: [248, 113, 113],
 } as const satisfies ThemePalette
 
 /**
  * Light palette tuned for white terminals: the same token keys as dark with
  * contrast-driven values (AA on a white background). Brand keeps its dark
- * value (≈4.9:1); the bright/mid/deep blues, muted grays, and status colors
- * deepen so they stay legible on bright backgrounds.
+ * value (≈4.2:1 on white — reserved for bold/accent spans; body-size brand
+ * text uses brandBright at ≈5.4:1); the bright/mid/deep blues, muted grays,
+ * and status colors deepen so they stay legible on bright backgrounds.
  */
 export const LIGHT_PALETTE = {
-  /** Primary brand blue — unchanged, ≈4.9:1 AA on white. */
+  /** Primary brand blue — unchanged design-platform value; ≈4.2:1 on white, so bold/accent spans only (body-size brand text uses brandBright). */
   brand: [65, 118, 230],
   /** Brighter brand blue deepened for white backgrounds (was 2.7:1). */
   brandBright: [72, 104, 178],
@@ -112,6 +138,10 @@ export const LIGHT_PALETTE = {
   diffAdd: [218, 251, 225],
   /** Diff removed-line background — GitHub's pastel red (#ffebe9), Codex's light pick. */
   diffDel: [255, 235, 233],
+  /** Diff added-line foreground — green-800, 6.4:1 on the pastel tint (green-700 clears 4.5:1 by a hair). */
+  diffAddFg: [22, 101, 52],
+  /** Diff removed-line foreground — red-700, 5.6:1 on the pastel tint (error's red-600 is 3.9:1). */
+  diffDelFg: [185, 28, 28],
 } as const satisfies ThemePalette
 
 /** Every palette by theme name; auto resolves through {@link resolveTheme}. */
@@ -119,17 +149,6 @@ export const PALETTES = {
   dark: DARK_PALETTE,
   light: LIGHT_PALETTE,
 } as const satisfies Record<Exclude<ThemeName, 'auto'>, ThemePalette>
-
-/**
- * The dark palette under its original name: call sites that predate the
- * two-palette switch keep compiling and painting identically (the default
- * theme IS dark). New code should read the active palette through
- * {@link getPalette} so a theme switch reaches it.
- *
- * @deprecated Read the active palette through {@link getPalette}; this
- * compatibility alias is removed in the next minor release.
- */
-export const TUI_RGB = DARK_PALETTE
 
 /** The theme name in force (the requested name; 'auto' included). */
 let activeName: ThemeName = 'dark'
@@ -174,13 +193,15 @@ export function getPalette(): ThemePalette {
 }
 
 /**
- * Parse a persisted theme name: only 'light' and 'auto' survive; anything
- * else (missing, corrupt, or unknown) falls back to the dark default.
+ * Parse a persisted theme name: only names in {@link THEME_NAMES} survive;
+ * anything else (missing, corrupt, or unknown) falls back to the dark default.
  * @param value - the raw parsed JSON value (expected string).
  * @returns a valid theme name.
  */
 export function parseThemeName(value: unknown): ThemeName {
-  return value === 'light' || value === 'auto' ? value : 'dark'
+  return typeof value === 'string' && (THEME_NAMES as readonly string[]).includes(value)
+    ? (value as ThemeName)
+    : 'dark'
 }
 
 /** Ink `color` string for one RGB triple. */

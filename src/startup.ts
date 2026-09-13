@@ -69,7 +69,7 @@ export function resolveTuiStartup(options: TuiStartupOptions): TuiStartup {
     throw new Error('--mode applies only to a new session; it cannot be combined with --resume or --continue')
   }
   if (options.theme !== undefined && !THEME_NAMES.includes(options.theme)) {
-    throw new Error('--theme must be dark, light, or auto')
+    throw new Error(`--theme must be one of: ${THEME_NAMES.join(', ')}`)
   }
   const input = {
     ...(options.theme === undefined ? {} : { theme: options.theme }),

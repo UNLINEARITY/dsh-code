@@ -11,14 +11,7 @@ import { createElement, useState, type ReactElement } from 'react'
 import { Box, Text, useInput, useStdout } from 'ink'
 import { clampScroll, panelViewport } from './render/inspector.ts'
 import { truncateColumns } from './render/text.ts'
-import { getPalette, inkColor, type ThemeName } from './theme.ts'
-
-/** The three theme rows in canonical order (the /theme selection surface). */
-const THEME_ROWS: readonly { id: ThemeName; label: string; description: string }[] = [
-  { id: 'dark', label: 'dark', description: 'DeepSeek dark palette (default)' },
-  { id: 'light', label: 'light', description: 'light palette for bright terminals' },
-  { id: 'auto', label: 'auto', description: 'follow the terminal; dark until detection lands' },
-]
+import { getPalette, inkColor, THEMES, type ThemeName } from './theme.ts'
 
 /**
  * The /theme list: one row per theme, the current one marked with ●, the
@@ -35,16 +28,16 @@ export function ThemePanel({ current, select, close }: {
   close(): void
 }): ReactElement {
   const [cursor, setCursor] = useState(() => {
-    const index = THEME_ROWS.findIndex(theme => theme.id === current)
+    const index = THEMES.findIndex(theme => theme.id === current)
     return index < 0 ? 0 : index
   })
   const stdout = useStdout().stdout
   const viewport = panelViewport(stdout?.columns ?? 80, stdout?.rows ?? 30)
   useInput((input, key) => {
     if (key.escape || input === 'q') return close()
-    if (key.upArrow) return setCursor(value => (value + THEME_ROWS.length - 1) % THEME_ROWS.length)
-    if (key.downArrow) return setCursor(value => (value + 1) % THEME_ROWS.length)
-    if (key.return) return select(THEME_ROWS[cursor]!.id)
+    if (key.upArrow) return setCursor(value => (value + THEMES.length - 1) % THEMES.length)
+    if (key.downArrow) return setCursor(value => (value + 1) % THEMES.length)
+    if (key.return) return select(THEMES[cursor]!.id)
   })
   if (viewport.maxHeight === 0 || viewport.compact) {
     return createElement(Text, { wrap: 'truncate-end' }, truncateColumns('/theme · esc close', viewport.contentColumns))
@@ -54,9 +47,9 @@ export function ThemePanel({ current, select, close }: {
   // terminals, where Ink rewrites the whole Static region every frame.
   // Reveal-cursor slicing keeps the focused row visible instead.
   const rowBudget = Math.max(1, viewport.bodyRows)
-  const first = clampScroll(cursor, THEME_ROWS.length, rowBudget)
-  const visibleThemes = THEME_ROWS.slice(first, first + rowBudget)
-  const hiddenThemes = THEME_ROWS.length - visibleThemes.length
+  const first = clampScroll(cursor, THEMES.length, rowBudget)
+  const visibleThemes = THEMES.slice(first, first + rowBudget)
+  const hiddenThemes = THEMES.length - visibleThemes.length
   return createElement(
     Box,
     { width: viewport.outerColumns, borderStyle: 'round', borderColor: inkColor(getPalette().dim), flexDirection: 'column', paddingX: 1 },
