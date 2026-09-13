@@ -334,17 +334,26 @@ export type ModeCycleDecision =
  * parked on read-only), and leaving it lands on the next preset after the
  * most restrictive one. Without the /plan command the cycle is exactly the
  * preset table.
+ *
+ * `planIntent` covers the committed fold's commit lag: upstream queues a
+ * plan switch during an open turn (and the command pipeline is async even
+ * idle), so the durable plan/mode event lands AFTER the press that chose
+ * it. While an intent from an earlier press is in flight it — not the
+ * stale committed fold — decides the station, so repeated presses advance
+ * the cycle instead of re-issuing the same plan transition (the stuck
+ * plan-on/plan-off toggle). Undefined falls back to the committed fold.
  */
 export function planCycleDecision(input: {
   readonly names: readonly string[]
   readonly current: string
   readonly inPlan: boolean
   readonly planAvailable: boolean
+  readonly planIntent?: boolean
 }): ModeCycleDecision | undefined {
   const names = input.names
   if (names.length === 0) return undefined
   const first = names[0]!
-  if (input.inPlan) return { kind: 'plan-off', preset: names[1] ?? first }
+  if ((input.planIntent ?? input.inPlan) === true) return { kind: 'plan-off', preset: names[1] ?? first }
   const at = names.indexOf(input.current)
   if (at === 0 && input.planAvailable) return { kind: 'plan-on' }
   return { kind: 'permission', preset: names[(at + 1) % names.length] ?? first }
@@ -616,6 +625,14 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
    */
   let pendingPlan = false
   /**
+   * In-flight mid-session plan choice from the Shift+Tab cycle. Upstream
+   * queues a plan switch during an open turn (and the command pipeline is
+   * async even idle), so the committed plan/mode fold lags the press that
+   * chose it; the cycle reads this intent until the durable event lands,
+   * then the session/event funnel clears it.
+   */
+  let planIntent: boolean | undefined
+  /**
    * Whether the pre-session effective preset composes plan mode, answered by
    * the presets service composition inventory (minimal does not). Cached and
    * refreshed whenever the pending mode moves; unknown reads as unavailable
@@ -695,6 +712,10 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     if (session === undefined) return
     if (subject.id === session.id) {
       store.apply(event)
+      // The committed plan fold caught up (or diverged via a typed /plan or
+      // an approved plan review): the durable event is the live truth again,
+      // so the cycle's in-flight intent retires.
+      if (event.type === 'plan/mode') planIntent = undefined
       // The parent-owned subagent catalog rides the ROOT log (0.1.5); each
       // fact describes one child, so it feeds that child's live row.
       if (event.type === 'subagent/catalog' && event.data.childId !== '') subagents.apply(event.data.childId, event)
@@ -1040,6 +1061,10 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     }, (error: unknown) => {
       finish()
       if (epoch !== atEpoch || agent !== currentAgent) return
+      // A failed plan switch never appends the plan/mode event the cycle's
+      // intent retirement waits for, so the in-flight choice dies here too —
+      // otherwise every later Shift+Tab reads a phantom plan state.
+      if (line === '/plan' || line === '/plan off') planIntent = undefined
       bridge.notify(`command failed: ${error instanceof Error ? error.message : String(error)}`, 'error')
     })
   }
@@ -1303,7 +1328,11 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
    * so minimal sessions and the pre-session state cycle permissions only).
    * Plan transitions submit the upstream registry command — it stays the
    * single owner of plan state; the TUI renders the durable plan/mode event
-   * it appends. Returns the notice label, or '' when nothing changed.
+   * it appends. Because that event lags the press (upstream queues the
+   * switch during an open turn), each mid-session plan decision records the
+   * choice in `planIntent` and the next press reads it back, so the cycle
+   * advances stations instead of re-issuing one transition. Returns the
+   * notice label, or '' when nothing changed.
    */
   const cycleMode = (): string => {
     if (permissionPresets === undefined || permissionPresets.names.length === 0) {
@@ -1320,6 +1349,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
         names: permissionPresets.names,
         current: effectivePermission(permissionPresets, session, pendingPermission),
         inPlan: preSession ? pendingPlan : store.getView().plan === true,
+        ...(preSession ? {} : { planIntent }),
         planAvailable: preSession ? preSessionPlanAvailable : commands.descriptors.some(descriptor => descriptor.name === 'plan'),
       })
       if (decision === undefined) return ''
@@ -1340,6 +1370,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
           renderCurrent()
           return 'plan → on (applies to the first session)'
         }
+        planIntent = true
         send('/plan', 'followup')
         return 'plan → on'
       }
@@ -1351,6 +1382,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
         renderCurrent()
         return `plan → off · permission → ${decision.preset}`
       }
+      planIntent = false
       send('/plan off', 'followup')
       selectPermission(permissionPresets, session, decision.preset)
       return `plan → off · permission → ${decision.preset}`
@@ -1660,10 +1692,13 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
         // surfaces: a rolled-back switch keeps the previous session's
         // subagent feed plus the user's pre-session /mode and permission
         // picks (the bare-launch promise: explicit choices survive until
-        // composition takes them).
+        // composition takes them). The in-flight cycle intent belonged to
+        // the previous session's presses; the new session's committed fold
+        // decides from here.
         pendingMode = undefined
         pendingPermission = undefined
         pendingPlan = false
+        planIntent = undefined
       } catch (error: unknown) {
         active = previous
         agent = previous?.agent
@@ -1676,6 +1711,10 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
         if (previous !== undefined) {
           for (const event of previous.catalogSeed) subagents.apply(event.data.childId, event)
         }
+        // The failed handoff disposed the incoming session; the restored
+        // store's committed plan fold is the truth, so any cycle intent
+        // collected against the switch churn retires too.
+        planIntent = undefined
         await next.handle.dispose()
         if (!quitting) renderCurrent()
         throw error

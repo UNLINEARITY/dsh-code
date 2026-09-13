@@ -34,4 +34,22 @@ describe('planCycleDecision', () => {
     expect(planCycleDecision({ names: [], current: 'read-only', inPlan: false, planAvailable: true }))
       .toBeUndefined()
   })
+
+  it('covers the plan-commit lag: an in-flight on-intent reads as in-plan', () => {
+    // /plan went out during an open turn: upstream queued the switch and the
+    // committed plan/mode fold is still false. The next press must see the
+    // user's choice, not the stale fold — otherwise it re-issues plan-on and
+    // the cycle never leaves the plan station.
+    expect(planCycleDecision({ names, current: 'read-only', inPlan: false, planIntent: true, planAvailable: true }))
+      .toEqual({ kind: 'plan-off', preset: 'workspace-write' })
+  })
+
+  it('covers the plan-commit lag: an in-flight off-intent advances permissions', () => {
+    // /plan off went out while busy: the fold still says plan, but the press
+    // already switched permission durably to the station after plan. The next
+    // press must advance the preset cycle instead of re-issuing plan-off (the
+    // reported stuck toggle).
+    expect(planCycleDecision({ names, current: 'workspace-write', inPlan: true, planIntent: false, planAvailable: true }))
+      .toEqual({ kind: 'permission', preset: 'danger-full-access' })
+  })
 })
