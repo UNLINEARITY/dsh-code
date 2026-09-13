@@ -199,7 +199,7 @@ export function ProviderAuthorizationPanel(props: ProviderAuthorizationPanelProp
   })
 
   if (viewport.maxHeight === 0 || viewport.compact) {
-    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns('provider login · esc cancel', viewport.contentColumns))
+    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(t('panel.auth.compact'), viewport.contentColumns))
   }
 
   const rows: Array<{ key: string; text: string; color?: string; bold?: boolean }> = []
@@ -273,14 +273,14 @@ export function ProviderAuthorizationLogoutPanel({ row, confirm, done, back }: {
       setError(reason instanceof Error ? reason.message : String(reason))
     })
   })
-  if (viewport.maxHeight === 0 || viewport.compact) return createElement(Text, { wrap: 'truncate-end' }, truncateColumns('y logout · n/esc back', viewport.contentColumns))
+  if (viewport.maxHeight === 0 || viewport.compact) return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(t('panel.auth.logoutCompact'), viewport.contentColumns))
   return createElement(
     Box,
     { flexDirection: 'column', width: viewport.outerColumns, paddingX: 1, borderStyle: 'round', borderColor: inkColor(getPalette().warn) },
-    createElement(Text, { color: inkColor(getPalette().warn), bold: true, wrap: 'truncate-end' }, truncateColumns('/model · logout provider', viewport.contentColumns)),
-    createElement(Text, { wrap: 'truncate-end' }, truncateColumns(`  remove ${displayText(row.label)} login record`, viewport.contentColumns)),
-    createElement(Text, { color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns('  provider endpoint and model configuration stay unchanged', viewport.contentColumns)),
+    createElement(Text, { color: inkColor(getPalette().warn), bold: true, wrap: 'truncate-end' }, truncateColumns(t('panel.auth.logoutTitle'), viewport.contentColumns)),
+    createElement(Text, { wrap: 'truncate-end' }, truncateColumns(`  ${t('panel.auth.removeRecord', { provider: displayText(row.label) })}`, viewport.contentColumns)),
+    createElement(Text, { color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns(`  ${t('panel.auth.unchanged')}`, viewport.contentColumns)),
     error === undefined ? undefined : createElement(Text, { color: inkColor(getPalette().error), wrap: 'truncate-end' }, truncateColumns(`  ${singleLineText(error)}`, viewport.contentColumns)),
-    createElement(Text, { color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns(busy ? 'working…' : 'y confirm · n/esc back', viewport.contentColumns)),
+    createElement(Text, { color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns(busy ? t('panel.auth.working') : t('panel.auth.logoutFooter'), viewport.contentColumns)),
   )
 }

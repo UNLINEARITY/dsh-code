@@ -51,6 +51,20 @@ describe('i18n catalog', () => {
     expect(LANGUAGE_NAMES).toEqual(['en', 'zh'])
     expect(LANGUAGES.map(language => language.id)).toEqual(['en', 'zh'])
   })
+
+  it('translates model/provider chrome while preserving technical values', () => {
+    try {
+      setLanguage('zh')
+      expect(t('panel.model.titleMatches', { filtered: 1, total: 3, query: 'deepseek-chat' }))
+        .toContain('deepseek-chat')
+      expect(t('panel.model.titleMatches', { filtered: 1, total: 3, query: 'deepseek-chat' }))
+        .toContain('1/3')
+      expect(t('panel.provider.failure', { providers: 'openai' })).toContain('openai')
+      expect(t('panel.setup.title', { provider: 'custom-api' })).toContain('custom-api')
+    } finally {
+      setLanguage('en')
+    }
+  })
 })
 
 describe('LanguagePanel', () => {

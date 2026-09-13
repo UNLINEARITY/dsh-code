@@ -1850,19 +1850,19 @@ function ModelPanel({ directory, error, current, onSelect, onProviders, onRetry,
     const providers = onProviders === undefined ? '' : ' · tab providers'
     const state = filtered.length === 0
       ? directory === undefined && error === undefined
-        ? 'loading…'
+        ? t('panel.model.loading')
         : error !== undefined
-          ? 'error'
-          : query === '' ? 'no models' : `no match for '${singleLineText(query)}'`
+          ? t('panel.model.error')
+          : query === '' ? t('panel.model.noModels') : t('panel.model.compactNoMatch', { query: singleLineText(query) })
       : `❯ ${filtered[cursor]?.modelName ?? filtered[cursor]?.model ?? ''}`
     const tail = query === ''
-      ? 'type to filter · r retry · esc/q close'
-      : 'backspace edits · esc close'
+      ? t('panel.model.footer.filter')
+      : t('panel.model.footer.filtered')
     return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(t('panel.model.compact', { state, providers, tail }), viewport.contentColumns))
   }
 
   const stateRows: ReactElement[] = directory === undefined && error === undefined
-    ? [createElement(Text, { key: 'loading', dimColor: true, wrap: 'truncate-end' }, '  loading models…')]
+    ? [createElement(Text, { key: 'loading', dimColor: true, wrap: 'truncate-end' }, `  ${t('panel.model.loading')}`)]
     : error !== undefined
       ? [createElement(
         Text,
@@ -1875,10 +1875,10 @@ function ModelPanel({ directory, error, current, onSelect, onProviders, onRetry,
           : [createElement(
             Text,
             { key: 'failures', color: inkColor(getPalette().warn), wrap: 'truncate-end' },
-            truncateColumns(`  unavailable providers: ${directory?.failures.join(', ')}`, viewport.contentColumns),
+            truncateColumns(`  ${t('panel.provider.failure', { providers: directory?.failures.join(', ') ?? '' })}`, viewport.contentColumns),
           )]),
         ...(rows.length === 0
-          ? [createElement(Text, { key: 'empty', dimColor: true, wrap: 'truncate-end' }, '  no models available')]
+          ? [createElement(Text, { key: 'empty', dimColor: true, wrap: 'truncate-end' }, `  ${t('panel.model.noModels')}`)]
           : filtered.length === 0
             ? [createElement(Text, { key: 'no-match', dimColor: true, wrap: 'truncate-end' }, truncateColumns(`  ${t('panel.model.noMatch', { query: singleLineText(query) })}`, viewport.contentColumns))]
             : []),
@@ -1895,8 +1895,8 @@ function ModelPanel({ directory, error, current, onSelect, onProviders, onRetry,
     Box,
     { flexDirection: 'column', width: viewport.outerColumns, paddingX: 1, borderStyle: 'round', borderColor: inkColor(accent.border) },
     createElement(Text, { color: inkColor(accent.title), bold: true, wrap: 'truncate-end' }, truncateColumns(query === ''
-      ? `/model — select model${rows.length === 0 ? '' : ` · ${cursor + 1}/${rows.length}`}`
-      : `/model — select model · ${filtered.length} of ${rows.length} match '${singleLineText(query)}'`, viewport.contentColumns)),
+      ? rows.length === 0 ? t('panel.model.title') : t('panel.model.titleCount', { index: cursor + 1, total: rows.length })
+      : t('panel.model.titleMatches', { filtered: filtered.length, total: rows.length, query: singleLineText(query) }), viewport.contentColumns)),
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
     ...visibleStateRows,
     ...visible.map((row) => {
@@ -1915,22 +1915,22 @@ function ModelPanel({ directory, error, current, onSelect, onProviders, onRetry,
     }),
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
     createElement(Text, { wrap: 'truncate-end' }, dim(truncateColumns(query === ''
-      ? `type to filter · ↑↓ move · pgup/pgdn page · enter select${onProviders === undefined ? '' : ' · tab providers'} · r retry · esc/q close`
-      : `↑↓ move · pgup/pgdn page · enter select · backspace edits · esc close`, viewport.contentColumns))),
+      ? t('panel.model.footer.select', { providers: onProviders === undefined ? '' : ` · ${t('panel.model.providers')}` })
+      : t('panel.model.footer.filteredSelect'), viewport.contentColumns))),
   )
 }
 
 /** Compact provider-state copy; only value-free credential facts cross this boundary. */
 function providerStateLabel(row: ProviderTargetView): string {
-  const route = row.active ? 'active' : 'dormant'
+  const route = row.active ? t('panel.provider.active') : t('panel.provider.dormant')
   const credential = row.credential
-  if (credential?.kind === 'error') return `${route} · key status unavailable`
+  if (credential?.kind === 'error') return t('panel.provider.state', { route, value: t('panel.provider.keyStatusUnavailable') })
   if (credential?.kind === 'facts') {
-    if (!credential.configured) return `${route} · key missing`
-    const source = credential.source === undefined ? 'configured' : singleLineText(credential.source)
-    return `${route} · key ${source}${credential.writable ? '' : ' · read-only'}`
+    if (!credential.configured) return t('panel.provider.state', { route, value: t('panel.provider.noKey') })
+    const source = credential.source === undefined ? t('panel.provider.configured') : singleLineText(credential.source)
+    return t('panel.provider.state', { route, value: `${t('panel.provider.key', { value: source })}${credential.writable ? '' : ` · ${t('panel.provider.readOnly')}`}` })
   }
-  return `${route} · ${row.configured ? 'provider auth' : 'not configured'}`
+  return t('panel.provider.state', { route, value: row.configured ? t('panel.provider.authConfigured') : t('panel.provider.noLogin') })
 }
 
 /** The provider-management stage reached from /model with `a`. */
@@ -2009,9 +2009,9 @@ function ProviderPanel({ directory, error, authorizations, authorizationError, o
     if (input === 'd') {
       const facts = target.credential
       if (facts?.kind !== 'facts' || !facts.configured) {
-        setActionError('this provider has no configured API key to remove')
+        setActionError(t('panel.provider.noConfiguredKey'))
       } else if (!facts.writable) {
-        setActionError('this API key is supplied read-only by the environment')
+        setActionError(t('panel.provider.readOnlyKey'))
       } else {
         onUnset(target)
       }
@@ -2019,7 +2019,7 @@ function ProviderPanel({ directory, error, authorizations, authorizationError, o
     }
     if (input === 'x') {
       if (!target.removable) {
-        setActionError('this provider profile is not removable')
+        setActionError(t('panel.provider.notRemovable'))
       } else {
         onRemove(target)
       }
@@ -2027,14 +2027,14 @@ function ProviderPanel({ directory, error, authorizations, authorizationError, o
     }
     const authorization = authorizationForProvider(authorizations, target.provider)
     if (input === 'l' || input === 'L') {
-      if (authorization === undefined) setActionError('this provider offers no interactive login flow')
-      else if (authorization.inFlight) setActionError('a login attempt is already running for this provider')
+      if (authorization === undefined) setActionError(t('panel.provider.noLoginFlow'))
+      else if (authorization.inFlight) setActionError(t('panel.provider.loginRunning'))
       else onLogin(target, authorization)
       return
     }
     if (input === 'o' || input === 'O') {
-      if (authorization === undefined || !authorization.record.configured) setActionError('this provider has no login record to remove')
-      else if (!authorization.record.writable) setActionError('this login record is read-only')
+      if (authorization === undefined || !authorization.record.configured) setActionError(t('panel.provider.noLoginRecord'))
+      else if (!authorization.record.writable) setActionError(t('panel.provider.readOnlyLogin'))
       else onLogout(target, authorization)
       return
     }
@@ -2043,7 +2043,7 @@ function ProviderPanel({ directory, error, authorizations, authorizationError, o
     // the configuration surface behind an undiscoverable chord.
     if (key.return) {
       if (target.settingsNs.length === 0) {
-        setActionError('this provider is not managed by Harness settings')
+        setActionError(t('panel.provider.notManaged'))
       } else {
         onConfigure(target)
       }
@@ -2054,7 +2054,7 @@ function ProviderPanel({ directory, error, authorizations, authorizationError, o
     return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(t('panel.providers.compact'), viewport.contentColumns))
   }
   const stateRows: ReactElement[] = directory === undefined && error === undefined
-    ? [createElement(Text, { key: 'loading', color: inkColor(getPalette().dim), wrap: 'truncate-end' }, '  loading providers…')]
+    ? [createElement(Text, { key: 'loading', color: inkColor(getPalette().dim), wrap: 'truncate-end' }, `  ${t('panel.provider.loading')}`)]
     : error !== undefined
       ? [createElement(Text, { key: 'error', color: inkColor(getPalette().error), wrap: 'truncate-end' }, truncateColumns(`  ${singleLineText(error)}`, viewport.contentColumns))]
       : [
@@ -2068,14 +2068,14 @@ function ProviderPanel({ directory, error, authorizations, authorizationError, o
         )),
         ...(authorizationError === undefined
           ? []
-          : [createElement(Text, { key: 'authorization-error', color: inkColor(getPalette().warn), wrap: 'truncate-end' }, truncateColumns(`  login status unavailable: ${singleLineText(authorizationError)}`, viewport.contentColumns))]),
+          : [createElement(Text, { key: 'authorization-error', color: inkColor(getPalette().warn), wrap: 'truncate-end' }, truncateColumns(`  ${t('panel.provider.loginStatusUnavailable', { message: singleLineText(authorizationError) })}`, viewport.contentColumns))]),
         ...(authorizations?.failures ?? []).map((failure, index) => createElement(
           Text,
           { key: `authorization-failure-${index}`, color: inkColor(getPalette().warn), wrap: 'truncate-end' },
           truncateColumns(`  ${singleLineText(failure)}`, viewport.contentColumns),
         )),
         ...(rows.length === 0
-          ? [createElement(Text, { key: 'empty', color: inkColor(getPalette().dim), wrap: 'truncate-end' }, '  no configurable providers')]
+          ? [createElement(Text, { key: 'empty', color: inkColor(getPalette().dim), wrap: 'truncate-end' }, `  ${t('panel.provider.empty')}`)]
           : []),
       ]
   const visibleStateRows = stateRows.slice(0, viewport.bodyRows)
@@ -2086,7 +2086,7 @@ function ProviderPanel({ directory, error, authorizations, authorizationError, o
   const itemRows: ReactElement[] = []
   for (let display = first; display < first + rowBudget && display < displayLength; display += 1) {
     if (hasSeparator && display === configuredCount) {
-      itemRows.push(createElement(Text, { key: 'separator', color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns('  ── not configured ──', viewport.contentColumns)))
+      itemRows.push(createElement(Text, { key: 'separator', color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns(`  ${t('panel.provider.notConfiguredDivider')}`, viewport.contentColumns)))
       continue
     }
     const index = hasSeparator && display > configuredCount ? display - 1 : display
@@ -2114,7 +2114,7 @@ function ProviderPanel({ directory, error, authorizations, authorizationError, o
   return createElement(
     Box,
     { flexDirection: 'column', width: viewport.outerColumns, paddingX: 1, borderStyle: 'round', borderColor: inkColor(accent.border) },
-    createElement(Text, { color: inkColor(accent.title), bold: true, wrap: 'truncate-end' }, truncateColumns(`/model — providers${rows.length === 0 ? '' : ` · ${cursor + 1}/${rows.length}`}`, viewport.contentColumns)),
+    createElement(Text, { color: inkColor(accent.title), bold: true, wrap: 'truncate-end' }, truncateColumns(rows.length === 0 ? t('panel.provider.title') : t('panel.provider.titleCount', { index: cursor + 1, total: rows.length }), viewport.contentColumns)),
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
     ...visibleStateRows,
     ...itemRows,
@@ -2389,12 +2389,12 @@ function ProviderSetupPanel({ target, save, saveCredential, discover, effortDono
     // Never hide a live input surface: one visible row keeps the escape
     // route honest on extremely short terminals (the three fixed rows - key,
     // url, add-by-id - cannot fit below a three-row body).
-    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns('provider setup · terminal too small · esc back', viewport.contentColumns))
+    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(t('panel.setup.compact'), viewport.contentColumns))
   }
   if (page === 'donor') {
     const stateRow = donorRows.length === 0
-      ? createElement(Text, { key: 'empty', color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns('  no model with declared efforts yet; declare one with e, or hand-write settings', viewport.contentColumns))
-      : createElement(Text, { key: 'hint', color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns('  copy verbatim into ' + displayText(selected?.id ?? ''), viewport.contentColumns))
+      ? createElement(Text, { key: 'empty', color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns(`  ${t('panel.setup.noDonors')}`, viewport.contentColumns))
+      : createElement(Text, { key: 'hint', color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns(`  ${t('panel.setup.copyInto', { id: displayText(selected?.id ?? '') })}`, viewport.contentColumns))
     const donorBudget = Math.max(0, viewport.bodyRows - 2)
     const donorFirst = selectionWindow(donorIndex, donorRows.length, donorBudget)
     const donorVisible = donorRows.slice(donorFirst, donorFirst + donorBudget)
@@ -2402,7 +2402,7 @@ function ProviderSetupPanel({ target, save, saveCredential, discover, effortDono
     return createElement(
       Box,
       { flexDirection: 'column', width: viewport.outerColumns, paddingX: 1, borderStyle: 'round', borderColor: inkColor(accent.border) },
-      createElement(Text, { color: inkColor(accent.title), bold: true, wrap: 'truncate-end' }, truncateColumns('/model — copy efforts', viewport.contentColumns)),
+      createElement(Text, { color: inkColor(accent.title), bold: true, wrap: 'truncate-end' }, truncateColumns(t('panel.setup.copyTitle'), viewport.contentColumns)),
       createElement(PanelGap, { visible: viewport.gapRows > 0 }),
       stateRow,
       ...donorVisible.map((donor, index) => {
@@ -2411,7 +2411,7 @@ function ProviderSetupPanel({ target, save, saveCredential, discover, effortDono
         return createElement(Text, { key: donor.provider + '/' + donor.id, color: active ? inkColor(getPalette().brandBright) : inkColor(getPalette().text), wrap: 'truncate-end' }, truncateColumns(label, viewport.contentColumns))
       }),
       createElement(PanelGap, { visible: viewport.gapRows > 0 }),
-      createElement(Text, { color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns('↑↓ move · enter copy · esc back', viewport.contentColumns)),
+      createElement(Text, { color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns(t('panel.setup.copyFooter'), viewport.contentColumns)),
     )
   }
   if (page === 'discover') {
@@ -2467,7 +2467,7 @@ function ProviderSetupPanel({ target, save, saveCredential, discover, effortDono
   return createElement(
     Box,
     { flexDirection: 'column', width: viewport.outerColumns, paddingX: 1, borderStyle: 'round', borderColor: inkColor(accent.border) },
-    createElement(Text, { color: inkColor(accent.title), bold: true, wrap: 'truncate-end' }, truncateColumns('/model — configure ' + target.displayName, viewport.contentColumns)),
+    createElement(Text, { color: inkColor(accent.title), bold: true, wrap: 'truncate-end' }, truncateColumns(t('panel.setup.title', { provider: target.displayName }), viewport.contentColumns)),
     // The adapter's configuration diagnostic heads the editor: the provider
     // is here precisely because it stayed listed for repair.
     ...(target.diagnostic === undefined ? [] : [createElement(
@@ -2481,7 +2481,7 @@ function ProviderSetupPanel({ target, save, saveCredential, discover, effortDono
     ...stateRows,
     ...modelRows,
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
-    createElement(Text, { color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns('↑↓ move · ←→ in/out · space remove · e efforts · c copy efforts · tab discover · enter save · esc back', viewport.contentColumns)),
+    createElement(Text, { color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns(t('panel.setup.footer'), viewport.contentColumns)),
   )
 }
 
@@ -2562,15 +2562,15 @@ function ProviderDiscoveryPanel({ target, baseURL, apiKey, configured, discover,
     }
   }, true)
   if (viewport.maxHeight === 0) {
-    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns('model discovery · terminal too small · esc back', viewport.contentColumns))
+    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(t('panel.discovery.compact'), viewport.contentColumns))
   }
   const stateRows = loading
-    ? [createElement(Text, { key: 'loading', color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns('  discovering models…', viewport.contentColumns))]
+    ? [createElement(Text, { key: 'loading', color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns(`  ${t('panel.discovery.loading')}`, viewport.contentColumns))]
     : error !== undefined
       ? [createElement(Text, { key: 'error', color: inkColor(getPalette().error), wrap: 'truncate-end' }, truncateColumns('  ' + error, viewport.contentColumns))]
       : rows.length === 0
-        ? [createElement(Text, { key: 'empty', color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns('  the endpoint advertised no models; add ids by hand on the setup page', viewport.contentColumns))]
-        : [createElement(Text, { key: 'summary', color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns('  ' + rows.length + ' advertised · ' + rows.filter(model => !known.has(model.id)).length + ' new · ' + checked.size + ' checked', viewport.contentColumns))]
+        ? [createElement(Text, { key: 'empty', color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns(`  ${t('panel.discovery.empty')}`, viewport.contentColumns))]
+        : [createElement(Text, { key: 'summary', color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns(`  ${t('panel.discovery.summary', { advertised: rows.length, newCount: rows.filter(model => !known.has(model.id)).length, checked: checked.size })}`, viewport.contentColumns))]
   // One spare row keeps the panel strictly below maxHeight even with the
   // gap collapsed (the at-equality regime makes Ink rewrite Static).
   const rowBudget = Math.max(0, viewport.bodyRows - stateRows.length - 1)
@@ -2580,7 +2580,7 @@ function ProviderDiscoveryPanel({ target, baseURL, apiKey, configured, discover,
   return createElement(
     Box,
     { flexDirection: 'column', width: viewport.outerColumns, paddingX: 1, borderStyle: 'round', borderColor: inkColor(accent.border) },
-    createElement(Text, { color: inkColor(accent.title), bold: true, wrap: 'truncate-end' }, truncateColumns('/model — discover ' + target.displayName, viewport.contentColumns)),
+    createElement(Text, { color: inkColor(accent.title), bold: true, wrap: 'truncate-end' }, truncateColumns(t('panel.discovery.title', { provider: target.displayName }), viewport.contentColumns)),
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
     ...stateRows,
     ...visible.map((model, index) => {
@@ -2592,7 +2592,7 @@ function ProviderDiscoveryPanel({ target, baseURL, apiKey, configured, discover,
       return createElement(Text, { key: model.id, color: added ? inkColor(getPalette().dim) : active ? inkColor(getPalette().brandBright) : inkColor(getPalette().text), wrap: 'truncate-end' }, truncateColumns(label, viewport.contentColumns))
     }),
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
-    createElement(Text, { color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns('↑↓ move · space check · enter adopt · f refetch · esc back', viewport.contentColumns)),
+    createElement(Text, { color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns(t('panel.discovery.footer'), viewport.contentColumns)),
   )
 }
 
@@ -5481,7 +5481,7 @@ export function App(props: AppProps): ReactElement {
       setProviderAction(undefined)
       setEffortFor(undefined)
     } catch (error: unknown) {
-      notify(`model switch failed: ${error instanceof Error ? error.message : String(error)}`, 'error')
+      notify(t('notice.modelSwitchFailed', { message: error instanceof Error ? error.message : String(error) }), 'error')
     }
   }
 
@@ -5540,7 +5540,7 @@ export function App(props: AppProps): ReactElement {
           setProviderAction(undefined)
           setProviderOpen(false)
           reloadModelSurfaces()
-          notify(`logged in to ${authorization.label}; select a model`)
+          notify(t('notice.loggedIn', { provider: authorization.label }))
         },
         back: () => {
           setProviderAction(undefined)
@@ -5556,7 +5556,7 @@ export function App(props: AppProps): ReactElement {
           setProviderAction(undefined)
           setProviderOpen(true)
           reloadModelSurfaces()
-          notify(`logged out from ${authorization.label}`)
+          notify(t('notice.loggedOut', { provider: authorization.label }))
         },
         back: () => setProviderAction(undefined),
       })
@@ -5573,7 +5573,7 @@ export function App(props: AppProps): ReactElement {
           setProviderAction(undefined)
           setProviderOpen(true)
           reloadModelSurfaces()
-          notify(`provider configuration saved: ${target.displayName}` + (result.key ? ' · API key updated' : ''))
+          notify(t('notice.providerSaved', { provider: target.displayName, suffix: result.key ? ' · API key updated' : '' }))
         },
         back: () => setProviderAction(undefined),
         onExit: closeModelSurface,
@@ -5588,7 +5588,7 @@ export function App(props: AppProps): ReactElement {
           setProviderAction(undefined)
           setProviderOpen(true)
           reloadModelSurfaces()
-          notify(`API key removed for ${target.displayName}`)
+          notify(t('notice.apiKeyRemoved', { provider: target.displayName }))
         },
         back: () => setProviderAction(undefined),
       })
@@ -5602,7 +5602,7 @@ export function App(props: AppProps): ReactElement {
           setProviderAction(undefined)
           setProviderOpen(true)
           reloadModelSurfaces()
-          notify(`provider removed: ${target.displayName}`)
+          notify(t('notice.providerRemoved', { provider: target.displayName }))
         },
         back: () => setProviderAction(undefined),
       })
@@ -5800,9 +5800,9 @@ export function App(props: AppProps): ReactElement {
         load: props.loadPresets,
         select: (id: string) => {
           void props.switchMode(id).then(label => {
-            notify(`mode → ${label}`)
+            notify(t('notice.modeChangedSimple', { value: label }))
             setModeOpen(false)
-          }, (reason: unknown) => notify(`mode switch failed: ${reason instanceof Error ? reason.message : String(reason)}`, 'error'))
+          }, (reason: unknown) => notify(t('notice.modeSwitchFailed', { message: reason instanceof Error ? reason.message : String(reason) }), 'error'))
         },
         close: () => setModeOpen(false),
       })
@@ -5814,7 +5814,7 @@ export function App(props: AppProps): ReactElement {
         select: (id: string) => {
           try {
             const selected = props.setPermission(id)
-            notify(`permission → ${selected}`)
+            notify(t('notice.permissionChangedSimple', { value: selected }))
             setPermissionOpen(false)
           } catch (reason: unknown) {
             notify(`permission change failed: ${reason instanceof Error ? reason.message : String(reason)}`, 'error')
@@ -5950,10 +5950,10 @@ export function App(props: AppProps): ReactElement {
             // The runner's label already carries the effort suffix
             // (`provider/model@effort`), so no second append here.
             const label = props.setSubagentModel(row, effortId)
-            notify(`subagents → ${label}`)
+            notify(t('notice.subagentsChanged', { value: label }))
             setSubagentOpen(false)
           } catch (reason: unknown) {
-            notify(`subagent model change failed: ${reason instanceof Error ? reason.message : String(reason)}`, 'error')
+            notify(t('notice.subagentChangeFailed', { message: reason instanceof Error ? reason.message : String(reason) }), 'error')
           }
         },
         inherit: () => {
