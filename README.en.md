@@ -165,7 +165,7 @@ The following built-in commands are available inside the TUI. Additional Harness
 | Command | Purpose |
 | --- | --- |
 | `/diff [--staged\|ref]` | Inspect the working-tree, staged, or specified-ref Git diff by file |
-| `/review [--staged\|ref]` | Review Git changes with read-only permissions |
+| `/review [note]` | Bare /review opens a candidate picker (uncommitted changes / pick a branch / pick a commit / custom focus); any argument becomes a review note over the uncommitted diff (`/review in Chinese`). The diff is pasted into the current session under read-only permissions, and findings arrive with P0-P3 priorities and file anchors |
 | `/todos` | View the complete todo list for the current session |
 | `/agents` | View subagent sessions created by the current session |
 | `/jobs` | View background jobs and their runtime status |

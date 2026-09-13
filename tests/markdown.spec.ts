@@ -79,6 +79,19 @@ describe('renderMarkdown', () => {
     expect(lines[1]?.segments[0]?.style).toBe('code')
   })
 
+  it('tints added and removed lines inside diff fences', () => {
+    const lines = renderMarkdown('```diff\n+++ b/a.ts\n+added line\n-removed line\n context\n```', 80)
+    expect(text(lines)).toEqual(['  diff', '  +++ b/a.ts', '  +added line', '  -removed line', '   context'])
+    // File headers and context stay code; +/- rows carry the diff tints.
+    expect(lines[1]?.segments[0]?.style).toBe('code')
+    expect(lines[2]?.segments[0]?.style).toBe('diffAdd')
+    expect(lines[3]?.segments[0]?.style).toBe('diffDel')
+    expect(lines[4]?.segments[0]?.style).toBe('code')
+    // A plain fence with plus-prefixed lines stays untouched.
+    const plain = renderMarkdown('```txt\n+not a diff\n```', 80)
+    expect(plain[1]?.segments[0]?.style).toBe('code')
+  })
+
   it('parses inline code, bold, italic, strike, and links', () => {
     const lines = renderMarkdown('run `npm i`, **bold**, *italic*, ~~gone~~ and [dsh](https://x.dev)', 120)
     const segments = lines[0]!.segments

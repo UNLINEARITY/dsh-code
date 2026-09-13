@@ -70,7 +70,15 @@ import {
   subscribeProviderAuthorizations,
 } from './authorization.ts'
 import { selectForkSeed } from './fork.ts'
-import { buildReviewPrompt, loadGitDiff } from './git-workflow.ts'
+import {
+  buildReviewPrompt,
+  listReviewBranches,
+  listReviewCommits,
+  loadCommitDiff,
+  loadGitDiff,
+  mergeBaseWith,
+  type ReviewSelection,
+} from './git-workflow.ts'
 import type { TuiStartup } from './startup.ts'
 import { SessionSwitchQueue } from './session-switch.ts'
 import { agentPresetsFrom, normalizePresetId, resolvePreset, selectPreset } from './presets.ts'
@@ -190,6 +198,8 @@ interface Target {
   cwd?: string
   seed?: readonly SessionEvent[]
   parentSession?: SessionId
+  /** Marks the session as a subagent conversation in the durable header. */
+  origin?: 'subagent'
   seedLength?: number
 }
 
@@ -543,6 +553,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
           cwd: nextCwd,
           agentPreset: mode,
           ...(next.parentSession === undefined ? {} : { parentSession: next.parentSession }),
+          ...(next.origin === undefined ? {} : { origin: next.origin }),
           // 0.1.5 fork lineage: the seed marker lives on the metadata and the
           // inherited prefix length on the top-level option (the v0 header's
           // numeric `seedLength` field is gone from the create contract).
@@ -1764,7 +1775,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     requestSwitch({ target: { sessionId: id, resume: false, mode, cwd: nextCwd }, label: id.slice(-12) })
   }
 
-  const reviewChanges = (argument: string): void => {
+  const reviewChanges = (selection: ReviewSelection): void => {
     // Works from a bare launch too: with no session yet the read-only
     // choice goes to pendingPermission (materialized when the first
     // session composes) and the review prompt queues behind that
@@ -1784,7 +1795,17 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     const finish = (): void => {
       pendingControllers.delete(controller)
     }
-    void loadGitDiff(reviewCwd, argument, controller.signal).then(({ title, files }) => {
+    // Branch reviews diff from the precomputed merge base (what would
+    // actually land), commit reviews the commit's own patch, everything
+    // else reviews the uncommitted working tree.
+    const load = selection.kind === 'commit'
+      ? loadCommitDiff(reviewCwd, selection.sha, controller.signal)
+      : selection.kind === 'base-branch'
+        ? mergeBaseWith(reviewCwd, selection.branch, controller.signal)
+          .then(base => loadGitDiff(reviewCwd, base ?? selection.branch, controller.signal))
+        : loadGitDiff(reviewCwd, '', controller.signal)
+    const note = selection.kind === 'custom' ? selection.instructions : undefined
+    void load.then(({ title, files }) => {
       finish()
       if (controller.signal.aborted || epoch !== atEpoch || agent !== currentAgent) return
       try {
@@ -1793,7 +1814,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
         bridge.notify(`review unavailable: ${error instanceof Error ? error.message : String(error)}`, 'error')
         return
       }
-      send(buildReviewPrompt(files.flatMap(file => file.lines).join('\n'), title), 'followup')
+      send(buildReviewPrompt(files.flatMap(file => file.lines).join('\n'), title, note), 'followup')
       bridge.notify('review started under read-only permissions')
     }, (error: unknown) => {
       finish()
@@ -1945,6 +1966,8 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       renameTitle,
       copyLastResponse,
       loadGitDiff: (argument: string) => loadGitDiff(session?.header.cwd ?? cwd, argument),
+      listReviewBranches: (signal?: AbortSignal) => listReviewBranches(session?.header.cwd ?? cwd, signal),
+      listReviewCommits: (signal?: AbortSignal) => listReviewCommits(session?.header.cwd ?? cwd, signal),
       reviewChanges,
       loadPresets: () => presets.list(),
       switchMode: switchModeAction,

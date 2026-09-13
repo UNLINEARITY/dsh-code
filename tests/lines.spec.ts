@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest'
 import { visibleColumns } from '../src/render/markdown.ts'
 import { stringWidth } from '../src/render/width.ts'
-import { clampLiveAllocation, diffLineStyle, fillDiffLineBars, settledEntryLines, styledLines, lineSegment, reasoningLines, transcriptEntryLines } from '../src/render/lines.ts'
+import { clampLiveAllocation, diffLineStyle, fillDiffLineBars, markdownLines, settledEntryLines, styledLines, lineSegment, reasoningLines, transcriptEntryLines, userPromptSegments } from '../src/render/lines.ts'
 import type { TranscriptEntry } from '../src/render/projection.ts'
 import type { StyledLine } from '../src/render/lines.ts'
 
@@ -131,6 +131,38 @@ describe('styled terminal lines', () => {
     expect(fillDiffLineBars(mixed, columns)).toBe(mixed)
     const plain: StyledLine[] = [{ segments: [lineSegment('plain', 'plain')] }]
     expect(fillDiffLineBars(plain, columns)).toBe(plain)
+  })
+
+  it('paints full-row bars for diff fences in user prompts and markdown', () => {
+    const entry: TranscriptEntry = {
+      kind: 'user', text: '```diff\n+added line\n```', notice: false,
+    }
+    const lines = transcriptEntryLines(entry, 40)
+    const bar = lines.find(line => line.segments.some(segment => segment.text.includes('added line')))
+    // The whole row (❯ gutter included) carries one tint and fills 40 columns.
+    expect(bar?.segments.every(segment => segment.style === 'diffAdd')).toBe(true)
+    expect(visibleColumns(bar?.segments.map(segment => segment.text).join('') ?? '')).toBe(40)
+    // Markdown fences fill too (label and fence rows stay dim/plain).
+    const md = markdownLines('```diff\n-removed\n```', 40)
+    const mdBar = md.find(line => line.segments.some(segment => segment.text.includes('removed')))
+    expect(mdBar?.segments.every(segment => segment.style === 'diffDel')).toBe(true)
+    expect(visibleColumns(mdBar?.segments.map(segment => segment.text).join('') ?? '')).toBe(40)
+  })
+
+  it('tints diff fences inside user prompts while keeping plain text verbatim', () => {
+    const text = 'review this:\n```diff\n+++ b/a.ts\n+added\n-removed\n ctx\n```\nthanks'
+    const segments = userPromptSegments(text)
+    // Rows keep their newlines for the row splitter; styles ride per line.
+    const byText = new Map(segments.map(segment => [segment.text.replace(/\n$/u, ''), segment.style]))
+    expect(byText.get('review this:')).toBe('plain')
+    expect(byText.get('```diff')).toBe('plain')
+    expect(byText.get('+++ b/a.ts')).toBe('plain')
+    expect(byText.get('+added')).toBe('diffAdd')
+    expect(byText.get('-removed')).toBe('diffDel')
+    expect(byText.get(' ctx')).toBe('plain')
+    expect(byText.get('thanks')).toBe('plain')
+    // No fences at all: one plain segment, byte-identical.
+    expect(userPromptSegments('just a normal prompt')).toEqual([{ text: 'just a normal prompt', style: 'plain' }])
   })
 
   it('classifies unified-diff rows for the /diff panel', () => {

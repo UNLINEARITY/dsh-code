@@ -200,10 +200,12 @@ export function markdownLines(text: string, columns: number): readonly StyledLin
   // narrower terminal silently pushed rows past the budget (styledLines
   // re-hardens long words at `width` either way).
   const parsed = renderMarkdown(displayText(text), width)
-  return parsed.flatMap(line => styledLines(
+  const rows = parsed.flatMap(line => styledLines(
     line.segments.map(segment => lineSegment(segment.text, segment.style)),
     width,
   ))
+  // ```diff fence rows fill their full width so pasted diffs read as bars.
+  return fillDiffLineBars(rows, width)
 }
 
 /**
@@ -280,6 +282,61 @@ function toolDetailLines(detail: ToolDetail, columns: number): readonly StyledLi
   }
 }
 
+/**
+ * Style the lines of one user prompt for display: plain verbatim, except
+ * inside ```diff / ```patch fences where added and removed lines take the
+ * shared diff tints (the review prompt pastes its diff this way, and the
+ * user row does not go through the markdown renderer). The fence markers
+ * and file headers stay plain.
+ */
+export function userPromptSegments(text: string): readonly StyledSegment[] {
+  if (!text.includes('```')) return [lineSegment(text, 'plain')]
+  const segments: StyledSegment[] = []
+  const lines = text.split('\n')
+  let diffFence = false
+  let inFence = false
+  for (let at = 0; at < lines.length; at += 1) {
+    const line = lines[at]!
+    const suffix = at === lines.length - 1 ? '' : '\n'
+    if (line.trimStart().startsWith('```')) {
+      const language = line.trim().slice(3).trim()
+      inFence = !inFence
+      diffFence = inFence && (language === 'diff' || language === 'patch')
+      segments.push(lineSegment(line + suffix, 'plain'))
+      continue
+    }
+    const style: LineStyle = !diffFence
+      ? 'plain'
+      : line.startsWith('+') && !line.startsWith('+++')
+        ? 'diffAdd'
+        : line.startsWith('-') && !line.startsWith('---')
+          ? 'diffDel'
+          : 'plain'
+    segments.push(lineSegment(line + suffix, style))
+  }
+  return segments
+}
+
+/**
+ * Full-row diff bars for mixed-gutter rows (user prompts): any row carrying
+ * a diff tint takes it over entirely — gutter included — and pads to the
+ * full width, so a pasted review diff reads as unbroken bars like the /diff
+ * panel. Rows without a diff tint pass through untouched.
+ */
+function paintDiffRowBars(lines: readonly StyledLine[], columns: number): readonly StyledLine[] {
+  const width = Math.max(1, Math.floor(columns))
+  let changed = false
+  const painted = lines.map(line => {
+    const tint = line.segments.find(segment => segment.style === 'diffAdd' || segment.style === 'diffDel')?.style
+    if (tint === undefined) return line
+    changed = true
+    const used = visibleColumns(line.segments.map(segment => segment.text).join(''))
+    const pad = Math.max(0, width - used)
+    return { segments: [...line.segments.map(segment => ({ text: segment.text, style: tint })), lineSegment(' '.repeat(pad), tint)] }
+  })
+  return changed ? painted : lines
+}
+
 /** Default compact tool-card window used while the Ctrl+R fold is closed. */
 const DEFAULT_TOOL_ROWS = 3
 
@@ -337,7 +394,7 @@ export function transcriptEntryLines(
     case 'user':
       return entry.notice
         ? hangingStyledLines([lineSegment(promptDisplayText(entry), 'dim')], width, '⤷ ', 'dim', '  ', 'dim')
-        : hangingStyledLines([lineSegment(promptDisplayText(entry), 'plain')], width, '❯ ', 'brand', '  ', 'plain')
+        : paintDiffRowBars(hangingStyledLines(userPromptSegments(promptDisplayText(entry)), width, '❯ ', 'brand', '  ', 'plain'), width)
     case 'pending':
       // Codex PendingSteer: a queued prompt renders exactly like an ordinary
       // user row, so the durable user/message retires it without any flicker.

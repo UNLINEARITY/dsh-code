@@ -10,6 +10,7 @@ import type { PresetRow } from './presets.ts'
 import type { PluginRow } from './plugin-inventory.ts'
 import type { SessionDirectoryOptions, SessionRow } from './session-directory.ts'
 import { formatRelativeTime } from './session-directory.ts'
+import type { ReviewBranch, ReviewCommit, ReviewSelection } from './git-workflow.ts'
 import { panelViewport, revealRow } from './render/inspector.ts'
 import { markdownLines, textLines, type LineStyle, type StyledLine } from './render/lines.ts'
 import { deleteLastGrapheme } from './render/editor.ts'
@@ -549,6 +550,161 @@ export function HistoryPanel({ entries, fill, close }: {
         )
       })),
     createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns('↑↓ move · g/G ends · enter fill · esc close', viewport.contentColumns)),
+  )
+}
+
+/**
+ * The /review candidate picker (Codex's preset popup): bare /review opens a
+ * four-way preset — review uncommitted changes, pick a base branch, pick a
+ * recent commit, or type a custom focus. Branch and commit phases are
+ * type-to-filter lists; every selection resolves to the same /review
+ * argument string the direct command accepts.
+ */
+export function ReviewPickerPanel({ loadBranches, loadCommits, choose, close }: {
+  loadBranches(signal?: AbortSignal): Promise<readonly ReviewBranch[]>
+  loadCommits(signal?: AbortSignal): Promise<readonly ReviewCommit[]>
+  /** Run the review for one picker selection. */
+  choose(selection: ReviewSelection): void
+  close(): void
+}): ReactElement {
+  const [phase, setPhase] = useState<'preset' | 'branches' | 'commits' | 'custom'>('preset')
+  const [cursor, setCursor] = useState(0)
+  const [query, setQuery] = useState('')
+  const [rows, setRows] = useState<readonly (ReviewBranch | ReviewCommit)[]>([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string>()
+  const loadRef = useRef<AbortController>()
+  const now = useMemo(() => Date.now(), [rows])
+
+  useEffect(() => {
+    if (phase !== 'branches' && phase !== 'commits') return undefined
+    loadRef.current?.abort()
+    const controller = new AbortController()
+    loadRef.current = controller
+    setLoading(true)
+    setError(undefined)
+    const load = phase === 'branches'
+      ? (signal?: AbortSignal) => loadBranches(signal) as Promise<readonly (ReviewBranch | ReviewCommit)[]>
+      : (signal?: AbortSignal) => loadCommits(signal) as Promise<readonly (ReviewBranch | ReviewCommit)[]>
+    void Promise.resolve().then(() => load(controller.signal)).then(list => {
+      if (controller.signal.aborted) return
+      setLoading(false)
+      setRows(list)
+      setCursor(0)
+    }, reason => {
+      if (controller.signal.aborted) return
+      setLoading(false)
+      setRows([])
+      setError(reason instanceof Error ? reason.message : String(reason))
+    })
+    return () => controller.abort()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase])
+
+  const filtered = useMemo(() => {
+    if (phase !== 'branches' && phase !== 'commits') return []
+    const needle = query.toLowerCase()
+    if (needle === '') return rows
+    return rows.filter(row => {
+      const hay = 'name' in row ? row.name : `${row.sha} ${row.title}`
+      return hay.toLowerCase().includes(needle)
+    })
+  }, [phase, rows, query])
+
+  const submit = (selection: ReviewSelection): void => {
+    choose(selection)
+  }
+
+  useInput((input, key) => {
+    if (key.escape || (input === 'q' && query === '' && phase !== 'custom')) {
+      if (phase !== 'preset') {
+        setPhase('preset')
+        setQuery('')
+        setCursor(0)
+        return
+      }
+      return close()
+    }
+    if (key.ctrl && input === 'c') return close()
+    if (phase === 'custom' || ((phase === 'branches' || phase === 'commits') && query !== '')) {
+      const next = editQuery(query, input, key)
+      if (next !== undefined) {
+        setQuery(next)
+        setCursor(0)
+        return
+      }
+    }
+    // The row budget per phase: the preset list is fixed at four rows, the
+    // branch/commit lists clamp to their filtered length.
+    const rowCount = phase === 'preset' ? 4 : filtered.length
+    if (key.upArrow) return setCursor(value => Math.max(0, value - 1))
+    if (key.downArrow) return setCursor(value => Math.min(Math.max(0, rowCount - 1), value + 1))
+    if (key.return) {
+      if (phase === 'preset') {
+        if (cursor === 0) return submit({ kind: 'uncommitted' })
+        if (cursor === 1) return setPhase('branches')
+        if (cursor === 2) return setPhase('commits')
+        return setPhase('custom')
+      }
+      if (phase === 'branches' || phase === 'commits') {
+        const row = filtered[cursor]
+        if (row !== undefined) submit('name' in row ? { kind: 'base-branch', branch: row.name } : { kind: 'commit', sha: row.sha })
+        return
+      }
+      if (query.trim() !== '') submit({ kind: 'custom', instructions: query.trim() })
+      return
+    }
+  })
+
+  const stdout = useStdout().stdout
+  const viewport = panelViewport(stdout?.columns ?? 80, stdout?.rows ?? 30)
+  if (viewport.maxHeight === 0 || viewport.compact) {
+    const state = phase === 'preset' ? 'pick a review target' : loading ? 'loading…' : error !== undefined ? `error: ${error}` : `${filtered.length} candidates`
+    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(`/review · ${state} · esc close`, viewport.contentColumns))
+  }
+  const bodyRows = Math.max(1, viewport.bodyRows - 1)
+  const offset = revealRow(0, cursor, phase === 'preset' ? 4 : filtered.length, bodyRows)
+  const header = phase === 'preset'
+    ? '/review · choose a target'
+    : phase === 'branches'
+      ? `/review · ${loading ? 'loading branches…' : error !== undefined ? `error: ${truncateColumns(singleLineText(error), viewport.contentColumns - 12)}` : `${filtered.length} of ${rows.length} branches`}`
+      : phase === 'commits'
+        ? `/review · ${loading ? 'loading commits…' : error !== undefined ? `error: ${truncateColumns(singleLineText(error), viewport.contentColumns - 12)}` : `${filtered.length} of ${rows.length} commits`}`
+        : '/review · type your review focus'
+  return createElement(
+    Box,
+    { width: viewport.outerColumns, borderStyle: 'round', borderColor: inkColor(getPalette().dim), flexDirection: 'column', paddingX: 1 },
+    createElement(Text, { color: inkColor(getPalette().brandBright), wrap: 'truncate-end' }, truncateColumns(header, viewport.contentColumns)),
+    ...(phase === 'preset'
+      ? [
+        '审查未提交的改动（staged / unstaged / 新文件）',
+        '选择基线分支对比（列出本地分支）',
+        '审查当前分支的某个提交（列出近期提交）',
+        '自定义审查关注点（输入文字）',
+      ].map((label, index) => {
+        const absolute = offset + index
+        const selected = absolute === cursor
+        return createElement(
+          Text,
+          { key: `preset-${index}`, color: selected ? inkColor(getPalette().brandBright) : undefined, wrap: 'truncate-end' },
+          truncateColumns(`${selected ? '› ' : '  '}${label}`, viewport.contentColumns),
+        )
+      })
+      : phase === 'custom'
+        ? [createElement(Text, { key: 'custom-input', dimColor: true, wrap: 'truncate-end' }, truncateColumns(`  ${query === '' ? '输入关注点后回车开始审查' : singleLineText(query)}`, viewport.contentColumns))]
+        : filtered.length === 0
+          ? [createElement(Text, { key: 'empty', dimColor: true, wrap: 'truncate-end' }, truncateColumns(`  ${loading ? '加载中…' : error !== undefined ? '加载失败' : query === '' ? '没有候选' : '没有匹配项'}`, viewport.contentColumns))]
+          : filtered.slice(offset, offset + bodyRows).map((row, index) => {
+            const absolute = offset + index
+            const selected = absolute === cursor
+            const label = 'name' in row ? row.name : `${row.sha.slice(0, 7)} · ${formatRelativeTime(row.at, now)} · ${row.title}`
+            return createElement(
+              Text,
+              { key: `row-${absolute}`, color: selected ? inkColor(getPalette().brandBright) : undefined, wrap: 'truncate-end' },
+              truncateColumns(`${selected ? '› ' : '  '}${singleLineText(label)}`, viewport.contentColumns),
+            )
+          })),
+    createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns('↑↓ move · enter select · esc back · q close', viewport.contentColumns)),
   )
 }
 

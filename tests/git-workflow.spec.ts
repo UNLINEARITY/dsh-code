@@ -1,9 +1,19 @@
 import { execFile } from 'node:child_process'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { buildReviewPrompt, loadGitDiff, parseGitDiffFiles, parseGitDiffSpec } from '../src/git-workflow.ts'
+import {
+  buildReviewPrompt,
+  listReviewBranches,
+  listReviewCommits,
+  loadGitDiff,
+  mergeBaseWith,
+  parseGitDiffFiles,
+  parseGitDiffSpec,
+  parseReviewArgument,
+} from '../src/git-workflow.ts'
 
 /** Run git in one directory, rejecting with git's own message on failure. */
 function runGit(cwd: string, ...args: string[]): Promise<void> {
@@ -36,11 +46,85 @@ describe('Git workflow', () => {
     expect(() => parseGitDiffSpec('main other')).toThrow('usage')
   })
 
-  it('builds an explicitly read-only, bounded review prompt', () => {
-    const prompt = buildReviewPrompt('x'.repeat(20), 'working tree', 8)
-    expect(prompt).toContain('Do not modify files')
-    expect(prompt).toContain('diff truncated by CLI')
-    expect(prompt).toContain('xxxxxxxx\n```')
+  describe('/review targets', () => {
+    it('treats every argument as a note over the uncommitted working tree', () => {
+      expect(parseReviewArgument('')).toEqual({ kind: 'uncommitted' })
+      expect(parseReviewArgument('  ')).toEqual({ kind: 'uncommitted' })
+      expect(parseReviewArgument('使用中文')).toEqual({ kind: 'custom', instructions: '使用中文' })
+      expect(parseReviewArgument('focus on concurrency safety')).toEqual({ kind: 'custom', instructions: 'focus on concurrency safety' })
+      expect(() => parseReviewArgument('--staged')).toThrow(/usage/)
+      expect(() => parseReviewArgument('x'.repeat(4001))).toThrow(/too long/)
+    })
+
+    it('pastes the diff with priorities, anchors, truncation marker, and the note', () => {
+      const prompt = buildReviewPrompt('+one line', 'working tree vs HEAD', '使用中文', 4)
+      expect(prompt).toContain('```diff')
+      expect(prompt).toContain('+one')
+      expect(prompt).toContain('Scope: working tree vs HEAD')
+      expect(prompt).toContain('diff truncated by CLI')
+      expect(prompt).toContain('User note: 使用中文')
+      expect(prompt).toContain('[P0]')
+      expect(prompt).toContain('[P3]')
+      // No note, no truncation: the markers stay out.
+      const plain = buildReviewPrompt('+one', 'x')
+      expect(plain).not.toContain('User note')
+      expect(plain).not.toContain('truncated')
+    })
+
+    it('resolves merge bases against a real repository and degrades cleanly', async () => {
+      const root = mkdtempSync(join(tmpdir(), 'dsh-review-'))
+      await runGit(root, 'init', '--initial-branch=main')
+      await runGit(root, 'config', 'user.email', 't@t')
+      await runGit(root, 'config', 'user.name', 't')
+      writeFileSync(join(root, 'a.txt'), 'one\n')
+      await runGit(root, 'add', 'a.txt')
+      await runGit(root, 'commit', '-m', 'first')
+      const base = await mergeBaseWith(root, 'main')
+      expect(base).toMatch(/^[0-9a-f]{40}$/u)
+      expect(await mergeBaseWith(root, 'no-such-branch')).toBeUndefined()
+    })
+    it('lists picker branches and commits from a real repository', async () => {
+      const root = mkdtempSync(join(tmpdir(), 'dsh-review-lists-'))
+      await runGit(root, 'init', '--initial-branch=main')
+      await runGit(root, 'config', 'user.email', 't@t')
+      await runGit(root, 'config', 'user.name', 't')
+      writeFileSync(join(root, 'a.txt'), 'one\n')
+      await runGit(root, 'add', 'a.txt')
+      await runGit(root, 'commit', '-m', 'first commit')
+      writeFileSync(join(root, 'b.txt'), 'two\n')
+      await runGit(root, 'add', 'b.txt')
+      await runGit(root, 'commit', '-m', 'second commit')
+      await runGit(root, 'branch', 'feature-x')
+      await runGit(root, 'checkout', '-b', 'feature-y')
+      writeFileSync(join(root, 'c.txt'), 'three\n')
+      await runGit(root, 'add', 'c.txt')
+      await runGit(root, 'commit', '-m', 'third commit')
+
+      // The current branch never offers reviewing against itself.
+      const branches = await listReviewBranches(root)
+      expect(branches.map(branch => branch.name)).toContain('main')
+      expect(branches.map(branch => branch.name)).toContain('feature-x')
+      expect(branches.map(branch => branch.name)).not.toContain('feature-y')
+
+      // Commits on the current branch, newest first, with titles and times.
+      const commits = await listReviewCommits(root)
+      expect(commits.map(commit => commit.title)).toEqual(['third commit', 'second commit', 'first commit'])
+      expect(commits[0]!.sha).toMatch(/^[0-9a-f]{40}$/u)
+      expect(commits[0]!.at).toBeGreaterThanOrEqual(commits[1]!.at)
+    })
+
+    it('resolves merge bases against a real repository and degrades cleanly', async () => {
+      const root = mkdtempSync(join(tmpdir(), 'dsh-review-'))
+      await runGit(root, 'init', '--initial-branch=main')
+      await runGit(root, 'config', 'user.email', 't@t')
+      await runGit(root, 'config', 'user.name', 't')
+      writeFileSync(join(root, 'a.txt'), 'one\n')
+      await runGit(root, 'add', 'a.txt')
+      await runGit(root, 'commit', '-m', 'first')
+      const base = await mergeBaseWith(root, 'main')
+      expect(base).toMatch(/^[0-9a-f]{40}$/u)
+      expect(await mergeBaseWith(root, 'no-such-branch')).toBeUndefined()
+    })
   })
 
   it('keeps unified patches grouped by file for the terminal diff picker', () => {

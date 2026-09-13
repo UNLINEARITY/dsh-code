@@ -743,6 +743,177 @@ describe('queued messages and global recall', () => {
     }
   })
 
+  it('opens the /review picker and resolves every candidate kind', async () => {
+    const stdin = Object.assign(new PassThrough(), {
+      isTTY: true,
+      isRaw: false,
+      setRawMode(value: boolean) {
+        this.isRaw = value
+        return this
+      },
+      ref() {},
+      unref() {},
+    }) as unknown as NodeJS.ReadStream
+    const stdout = Object.assign(new PassThrough(), {
+      isTTY: true,
+      columns: 100,
+      rows: 24,
+    }) as unknown as NodeJS.WriteStream
+    let output = ''
+    stdout.on('data', chunk => {
+      output += chunk.toString()
+    })
+    const noop = (): void => {}
+    const reviews: string[] = []
+    const approvalListeners = new Set<() => void>()
+    const questionListeners = new Set<() => void>()
+    const instance = render(createElement(App, {
+      store: createTranscriptStore(),
+      subagents: { subscribe: () => () => {}, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
+      approval: {
+        subscribe: (listener: () => void) => {
+          approvalListeners.add(listener)
+          return () => approvalListeners.delete(listener)
+        },
+        getSnapshot: () => approvalSnapshot,
+      },
+      questions: {
+        subscribe: (listener: () => void) => {
+          questionListeners.add(listener)
+          return () => questionListeners.delete(listener)
+        },
+        getSnapshot: () => questionSnapshot,
+        submit: noop,
+        cancel: noop,
+      },
+      commands: { descriptors: [], subscribe: () => noop },
+      skills: { rows: [], subscribe: () => noop },
+      model: 'test/model',
+      cwd: 'dsh-cli',
+      workspaceRoot: 'C:\\repo\\dsh-cli',
+      branch: 'main',
+      sessionId: '12345678',
+      resumed: false,
+      mode: 'standard',
+      permission: 'workspace-write',
+      dispatch: noop,
+      steer: noop,
+      interrupt: () => false,
+      quit: noop,
+      loadModels: async () => ({ rows: [], failures: [] }),
+      loadMentions: async () => [],
+      selectModel: () => 'test/model',
+      subagentModel: '',
+      setSubagentModel: () => '',
+      clearSubagentModel: noop,
+      deleteSession: async () => '',
+      cycleMode: () => '',
+      setPermission: id => id,
+      exportTranscript: async () => {},
+      renameTitle: () => '',
+      loadPresets: async () => [],
+      loadPermissions: async () => [],
+      switchMode: async id => id,
+      createSession: noop,
+      loadSessions: async () => [],
+      listReviewBranches: async () => [{ name: 'develop' }, { name: 'release' }],
+      listReviewCommits: async () => [{ sha: 'abc123def456', title: 'fix the login bug', at: Date.now() }],
+      reviewChanges: selection => {
+        reviews.push(selection)
+      },
+      loadSubagents: async () => [],
+      loadSessionTranscript: async () => '',
+      switchSession: noop,
+      cancelSessionSwitch: () => false,
+      loadPlugins: () => [],
+      loadJobs: () => [],
+      statusline: DEFAULT_STATUSLINE_ITEMS,
+      saveStatusline: noop,
+      history: [],
+      recordHistory: noop,
+      cancelQueued: noop,
+      onBridgeReady: noop,
+    }), {
+      stdin,
+      stdout,
+      stderr: stdout,
+      exitOnCtrlC: false,
+      patchConsole: false,
+    })
+
+    try {
+      await wait()
+      stdin.write('/review')
+      await wait()
+      stdin.write('\r')
+      await wait()
+      expect(output).toContain('choose a target')
+
+      // Preset 1 (cursor rests on it): the uncommitted review.
+      stdin.write('\r')
+      await wait()
+      expect(reviews).toEqual([{ kind: 'uncommitted' }])
+
+      // Reopen, walk to the branch preset, pick the loaded branch.
+      output = ''
+      stdin.write('/review')
+      await wait()
+      stdin.write('\r')
+      await wait()
+      stdin.write('\x1b[B')
+      await wait()
+      stdin.write('\r')
+      await wait()
+      for (let i = 0; i < 20 && !output.includes('develop'); i += 1) await wait()
+      expect(output).toContain('develop')
+      stdin.write('\r')
+      await wait()
+      expect(reviews).toEqual([{ kind: 'uncommitted' }, { kind: 'base-branch', branch: 'develop' }])
+
+      // Reopen, commit preset, filter by typing, pick the commit.
+      output = ''
+      stdin.write('/review')
+      await wait()
+      stdin.write('\r')
+      await wait()
+      stdin.write('\x1b[B')
+      await wait()
+      stdin.write('\x1b[B')
+      await wait()
+      stdin.write('\r')
+      await wait()
+      for (let i = 0; i < 20 && !output.includes('fix the login bug'); i += 1) await wait()
+      expect(output).toContain('abc123d')
+      stdin.write('\r')
+      await wait()
+      expect(reviews).toEqual([{ kind: 'uncommitted' }, { kind: 'base-branch', branch: 'develop' }, { kind: 'commit', sha: 'abc123def456' }])
+
+      // Reopen, custom focus: type and submit.
+      output = ''
+      stdin.write('/review')
+      await wait()
+      stdin.write('\r')
+      await wait()
+      stdin.write('\x1b[B')
+      await wait()
+      stdin.write('\x1b[B')
+      await wait()
+      stdin.write('\x1b[B')
+      await wait()
+      stdin.write('\r')
+      await wait()
+      stdin.write('concurrency only')
+      await wait()
+      stdin.write('\r')
+      await wait()
+      expect(reviews).toEqual([{ kind: 'uncommitted' }, { kind: 'base-branch', branch: 'develop' }, { kind: 'commit', sha: 'abc123def456' }, { kind: 'custom', instructions: 'concurrency only' }])
+    } finally {
+      instance.unmount()
+      stdin.destroy()
+      stdout.destroy()
+    }
+  })
+
   it('opens /search with a seed query and searches immediately', async () => {
     const stdin = Object.assign(new PassThrough(), {
       isTTY: true,

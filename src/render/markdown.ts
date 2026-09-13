@@ -12,7 +12,7 @@
 import { graphemeWidth, splitGraphemes, stringWidth } from './width.ts'
 
 /** Style classes the renderer emits; the app maps them to colors/props. */
-export type MdStyle = 'plain' | 'bold' | 'italic' | 'boldItalic' | 'code' | 'accent' | 'accentBold' | 'dim' | 'strike'
+export type MdStyle = 'plain' | 'bold' | 'italic' | 'boldItalic' | 'code' | 'accent' | 'accentBold' | 'dim' | 'strike' | 'diffAdd' | 'diffDel'
 
 /** One styled run of text. */
 export interface MdSegment {
@@ -563,12 +563,24 @@ export function renderMarkdown(
     }
 
     // Fenced code block: verbatim lines in code style, language label first.
+    // A ```diff fence keeps the same classification the /diff panel uses
+    // (shared rule: lines.ts diffLineStyle) so pasted review diffs render
+    // with the added/removed tints everywhere markdown does.
     const fence = FENCE.exec(line)
     if (fence !== null) {
       const language = fence[1] ?? ''
+      const diffFence = language === 'diff' || language === 'patch'
       if (language !== '') push([seg(`  ${language}`, 'dim')])
       while (index < source.length && !FENCE.test(source[index] ?? '')) {
-        push([seg(`  ${source[index] ?? ''}`, 'code')])
+        const source_ = source[index] ?? ''
+        const style: MdStyle = !diffFence
+          ? 'code'
+          : source_.startsWith('+') && !source_.startsWith('+++')
+            ? 'diffAdd'
+            : source_.startsWith('-') && !source_.startsWith('---')
+              ? 'diffDel'
+              : 'code'
+        push([seg(`  ${source_}`, style)])
         index += 1
       }
       index += 1 // closing fence

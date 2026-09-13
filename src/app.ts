@@ -85,7 +85,7 @@ import type { QuestionSnapshot, QuestionStore } from './questions.ts'
 import type { SkillsView, SkillRow } from './skills.ts'
 import { isPathLikeMentionQuery, type MentionCandidate } from './mentions.ts'
 import type { SubagentFeedView, SubagentRow } from './subagents.ts'
-import { AgentsPanel, editQuery, EffortPanel, HistoryPanel, JobsPanel, ModePanel, PermissionPanel, PluginPanel, ResumePanel, SchedulePanel, SearchPanel, StatuslinePanel, runClock, SubagentPanel, type JobRow, type SearchRow } from './kernel-panels.ts'
+import { AgentsPanel, editQuery, EffortPanel, HistoryPanel, JobsPanel, ModePanel, PermissionPanel, PluginPanel, ResumePanel, ReviewPickerPanel, SchedulePanel, SearchPanel, StatuslinePanel, runClock, SubagentPanel, type JobRow, type SearchRow } from './kernel-panels.ts'
 import type { PresetRow } from './presets.ts'
 import type { PermissionRow } from './permissions.ts'
 import type { PluginRow } from './plugin-inventory.ts'
@@ -98,7 +98,7 @@ import {
   type RecallState,
 } from './history.ts'
 import type { SessionDirectoryOptions, SessionRow } from './session-directory.ts'
-import type { GitDiffView } from './git-workflow.ts'
+import { parseReviewArgument, type GitDiffView, type ReviewBranch, type ReviewCommit, type ReviewSelection } from './git-workflow.ts'
 import {
   authorizationForProvider,
   providerAuthorizationStatus,
@@ -255,7 +255,7 @@ const LOCAL_COMMANDS = [
   { label: '/title', description: 'rename this session (/title <text>)' },
   { label: '/copy', description: 'copy the latest assistant response' },
   { label: '/diff', description: 'inspect Git changes (/diff [--staged|ref])' },
-  { label: '/review', description: 'review Git changes under read-only permissions' },
+  { label: '/review', description: 'review Git changes with the diff pasted in this session (/review [note])' },
   { label: '/quit', description: 'exit' },
 ] as const
 
@@ -382,8 +382,12 @@ export interface AppProps {
   copyLastResponse(): Promise<string>
   /** Load a complete read-only Git diff for the file-oriented viewport. */
   loadGitDiff(argument: string): Promise<GitDiffView>
+  /** Local branches for the /review picker (absent: the picker hides the branch phase's list). */
+  listReviewBranches?(signal?: AbortSignal): Promise<readonly ReviewBranch[]>
+  /** Recent commits on the current branch for the /review picker. */
+  listReviewCommits?(signal?: AbortSignal): Promise<readonly ReviewCommit[]>
   /** Start a model review after applying the read-only permission preset. */
-  reviewChanges(argument: string): void
+  reviewChanges(selection: ReviewSelection): void
   /** Preset/session/plugin kernel operations. */
   loadPresets(): Promise<readonly PresetRow[]>
   switchMode(id: string): Promise<string>
@@ -635,6 +639,16 @@ function segmentProps(style: MdSegment['style']): {
       return { color: undefined, bold: true, italic: true, strikethrough: undefined }
     case 'strike':
       return { color: inkColor(getPalette().dim), bold: undefined, italic: undefined, strikethrough: true }
+    case 'diffAdd':
+    case 'diffDel':
+      // Inline-markdown twin of lineStyleProps' diff cases: tinted rows for
+      // ```diff fences rendered through the markdown span path.
+      return {
+        color: inkColor(style === 'diffAdd' ? getPalette().success : getPalette().error),
+        bold: undefined,
+        italic: undefined,
+        strikethrough: undefined,
+      }
     default:
       return { color: undefined, bold: undefined, italic: undefined, strikethrough: undefined }
   }
@@ -3252,7 +3266,7 @@ interface DraftFile extends FilePathInspection {
  * While a modal (approval / question / model panel) owns the keys, the
  * box passes every key through untouched.
  */
-function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openEffort, openHelp, openMode, openPermission, openResume, openSearch, openPlugin, openUpdate, openSchedule, openJobs, openStatusline, openTheme, openHistory, openAgents, openSubagent, openTodos, openDelete, openDiff, reviewChanges, deleteConfirm, confirmDelete, cancelDelete, createSession, forkSession, cancelSessionSwitch, notify, applyEditorKeys, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, inspectImages, prepareImages, inspectFiles, prepareFiles, cycleMode, exportTranscript, renameTitle, copyLastResponse, recallSpace, recordLocal, recordHistory, queued, cancelQueued, historyFill, historyConsumed, animations, applyAnimations, waveTier, waveStyle, maxRows, anchorRowsBelow, tabTitle, onEditorRows, onMenuRows, sessionKey }: {
+function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openEffort, openHelp, openMode, openPermission, openResume, openSearch, openPlugin, openUpdate, openSchedule, openJobs, openStatusline, openTheme, openHistory, openAgents, openSubagent, openTodos, openDelete, openDiff, openReviewPicker, reviewChanges, deleteConfirm, confirmDelete, cancelDelete, createSession, forkSession, cancelSessionSwitch, notify, applyEditorKeys, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, inspectImages, prepareImages, inspectFiles, prepareFiles, cycleMode, exportTranscript, renameTitle, copyLastResponse, recallSpace, recordLocal, recordHistory, queued, cancelQueued, historyFill, historyConsumed, animations, applyAnimations, waveTier, waveStyle, maxRows, anchorRowsBelow, tabTitle, onEditorRows, onMenuRows, sessionKey }: {
   active: boolean
   frozen: boolean
   /** Frozen-band hint naming the surface that owns the keyboard; an empty
@@ -3293,7 +3307,9 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
   /** Open the /resume picker in delete mode, optionally pre-armed on one id. */
   openDelete(id?: string): void
   openDiff(argument: string): void
-  reviewChanges(argument: string): void
+  reviewChanges(selection: ReviewSelection): void
+  /** Open the /review candidate picker (bare /review). */
+  openReviewPicker(): void
   /** The row id awaiting y/n in this box, when a deletion is pending. */
   deleteConfirm?: string
   /** Confirm the pending deletion (y in the box). */
@@ -4112,7 +4128,16 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
         return
       }
       if (text === '/review' || text.startsWith('/review ')) {
-        reviewChanges(text.slice(7))
+        const argument = text.slice(7).trim()
+        if (argument === '') {
+          openReviewPicker()
+          return
+        }
+        try {
+          reviewChanges(parseReviewArgument(argument))
+        } catch (error: unknown) {
+          notify(error instanceof Error ? error.message : String(error), 'warning')
+        }
         return
       }
       if (text === '/model' || text.startsWith('/model ')) {
@@ -4961,6 +4986,7 @@ export function App(props: AppProps): ReactElement {
   const budgetWarnRef = useRef<string | undefined>(undefined)
   const [verboseOpen, setVerboseOpen] = useState(false)
   const [diffView, setDiffView] = useState<GitDiffView | undefined>(undefined)
+  const [reviewPickerOpen, setReviewPickerOpen] = useState(false)
   const [helpOpen, setHelpOpen] = useState(false)
   const [modeOpen, setModeOpen] = useState(false)
   const [permissionOpen, setPermissionOpen] = useState(false)
@@ -5051,7 +5077,7 @@ export function App(props: AppProps): ReactElement {
   // panel keypress.
   const inputActive = deleteConfirmId !== undefined
     ? !approvalPending && !questionPending
-    : !modelOpen && !helpOpen && !modeOpen && !permissionOpen && !resumeOpen && !pluginOpen && !updateOpen && !scheduleOpen && !jobsOpen && !statuslineOpen && !themeOpen && !historyOpen && !agentsOpen && !subagentOpen && !todosOpen && !verboseOpen && diffView === undefined && !approvalPending && !questionPending
+    : !modelOpen && !helpOpen && !modeOpen && !permissionOpen && !resumeOpen && !pluginOpen && !updateOpen && !scheduleOpen && !jobsOpen && !statuslineOpen && !themeOpen && !historyOpen && !agentsOpen && !subagentOpen && !todosOpen && !verboseOpen && diffView === undefined && !reviewPickerOpen && !approvalPending && !questionPending
 
   // Human questions outrank local inspectors. Close the lower modal instead
   // of leaving an approval/question visible but keyboard-locked behind it.
@@ -5243,9 +5269,9 @@ export function App(props: AppProps): ReactElement {
     : visibleLiveLines.slice(-liveAudit.allocation.live)
   const auditedReasoningRows = liveAudit.allocation.reasoning
   const auditedAnswerRows = liveAudit.allocation.answer
-  const transcriptVisible = !modelOpen && !helpOpen && !modeOpen && !permissionOpen && !resumeOpen && !pluginOpen && !updateOpen && !scheduleOpen && !jobsOpen && !statuslineOpen && !themeOpen && !historyOpen && !agentsOpen && !subagentOpen && !todosOpen && !verboseOpen && diffView === undefined && !approvalPending && !questionPending
+  const transcriptVisible = !modelOpen && !helpOpen && !modeOpen && !permissionOpen && !resumeOpen && !pluginOpen && !updateOpen && !scheduleOpen && !jobsOpen && !statuslineOpen && !themeOpen && !historyOpen && !agentsOpen && !subagentOpen && !todosOpen && !verboseOpen && diffView === undefined && !reviewPickerOpen && !approvalPending && !questionPending
   const inspectorVisible = verboseOpen && !approvalPending && !questionPending
-  const modalVisible = modelOpen || helpOpen || modeOpen || permissionOpen || resumeOpen || pluginOpen || updateOpen || scheduleOpen || jobsOpen || statuslineOpen || themeOpen || historyOpen || agentsOpen || subagentOpen || todosOpen || inspectorVisible || diffView !== undefined || approvalPending || questionPending
+  const modalVisible = modelOpen || helpOpen || modeOpen || permissionOpen || resumeOpen || pluginOpen || updateOpen || scheduleOpen || jobsOpen || statuslineOpen || themeOpen || historyOpen || agentsOpen || subagentOpen || todosOpen || inspectorVisible || diffView !== undefined || reviewPickerOpen || approvalPending || questionPending
   // The surface that currently owns the keyboard, named in the frozen band:
   // an empty composer under a panel must not advertise typing it cannot
   // accept — every key actually feeds the panel (which may or may not
@@ -5256,6 +5282,8 @@ export function App(props: AppProps): ReactElement {
       ? 'the question'
       : diffView !== undefined
         ? 'the diff review'
+        : reviewPickerOpen
+          ? 'the review picker'
         : modelOpen
           ? '/model'
           : helpOpen
@@ -5642,6 +5670,17 @@ export function App(props: AppProps): ReactElement {
         onClose: () => setDiffView(undefined),
       })
       : undefined,
+    reviewPickerOpen && !approvalPending && !questionPending && props.listReviewBranches !== undefined && props.listReviewCommits !== undefined
+      ? createElement(ReviewPickerPanel, {
+        loadBranches: props.listReviewBranches,
+        loadCommits: props.listReviewCommits,
+        choose: argument => {
+          setReviewPickerOpen(false)
+          props.reviewChanges(argument)
+        },
+        close: () => setReviewPickerOpen(false),
+      })
+      : undefined,
     verboseOpen && !approvalPending && !questionPending
       ? createElement(MemoVerbosePanel, {
         entries: view.entries,
@@ -5908,6 +5947,7 @@ export function App(props: AppProps): ReactElement {
           })
         },
         reviewChanges: props.reviewChanges,
+        openReviewPicker: () => setReviewPickerOpen(true),
         deleteConfirm: deleteConfirmId,
         confirmDelete,
         cancelDelete,
