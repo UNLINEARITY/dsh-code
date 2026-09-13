@@ -30,6 +30,8 @@ import {
   easeInOut,
   effortAboveHigh,
   envelope,
+  flowColor,
+  FLOW_PERIOD_MS,
   isOfficialDeepSeekLabel,
   parseAnimationsArgument,
   PULSE_ALPHA_CAP,
@@ -642,5 +644,41 @@ describe('three ignition styles', () => {
     expect(deepseekWaveColumnBg(25, center + 12, width, 'flash', 'pulse', flashHues, WAVE_BASE_DARK)).not.toBeNull()
     // …and null only once the base duration closes (flash 0.9s ≈ tick 34).
     expect(deepseekWaveColumnBg(34, center, width, 'flash', 'pulse', flashHues, WAVE_BASE_DARK)).toBeNull()
+  })
+})
+
+describe('prismatic flow', () => {
+  const [violet, fuchsia, cyan]: readonly RgbTriple[] = [[139, 92, 246], [232, 121, 249], [34, 211, 238]]
+  const anchors: readonly RgbTriple[] = [violet, fuchsia, cyan]
+
+  it('hits each anchor exactly at its segment boundary', () => {
+    expect(flowColor(0, anchors)).toEqual(violet)
+    expect(flowColor(FLOW_PERIOD_MS / 3, anchors)).toEqual(fuchsia)
+    expect(flowColor(2 * FLOW_PERIOD_MS / 3, anchors)).toEqual(cyan)
+  })
+
+  it('wraps continuously at the period and across negative elapsed time', () => {
+    expect(flowColor(FLOW_PERIOD_MS, anchors)).toEqual(violet)
+    expect(flowColor(FLOW_PERIOD_MS + 1, anchors)).toEqual(flowColor(1, anchors))
+    expect(flowColor(-2 * FLOW_PERIOD_MS / 3, anchors)).toEqual(fuchsia)
+  })
+
+  it('interpolates with the smoothstep curve between anchors', () => {
+    // Segment midpoint: eased 0.5 → the plain average of the two anchors.
+    expect(flowColor(FLOW_PERIOD_MS / 6, anchors)).toEqual([186, 107, 248])
+    const early = flowColor(200, anchors)
+    const mid = flowColor(FLOW_PERIOD_MS / 6, anchors)
+    const late = flowColor(600, anchors)
+    // The red channel rises monotonically from violet toward fuchsia…
+    expect(early[0]).toBeGreaterThan(violet[0])
+    expect(mid[0]).toBeGreaterThan(early[0])
+    expect(late[0]).toBeGreaterThan(mid[0])
+    // …and the eased step at the quarter point stays under linear.
+    expect(early[0]).toBeLessThan(violet[0] + (fuchsia[0] - violet[0]) * 0.25)
+  })
+
+  it('passes a single anchor through and rejects an empty triangle', () => {
+    expect(flowColor(123, [violet])).toEqual(violet)
+    expect(() => flowColor(0, [])).toThrow()
   })
 })

@@ -14,6 +14,7 @@ import { Box, Text, useInput, useStdout } from 'ink'
 import type { LauncherUpdateStatus } from './update.ts'
 import { clampScroll, panelViewport } from './render/inspector.ts'
 import { singleLineText, truncateColumns } from './render/text.ts'
+import { panelAccent } from './panel-accent.ts'
 import { getPalette, inkColor } from './theme.ts'
 
 /** Retained apply-progress lines (ring tail; npm output is ephemeral). */
@@ -232,10 +233,11 @@ export function UpdatePanel({ probe, apply, close, notify }: {
   const title = status === undefined
     ? '/update · aligned upgrade'
     : `/update · dsh-code ${status.code.running}${status.code.latest !== null && status.code.latest !== status.code.running ? ` → ${status.code.latest}` : ''}`
+  const accent = panelAccent('update', getPalette().dim, getPalette().brandBright)
   return createElement(
     Box,
-    { width: viewport.outerColumns, borderStyle: 'round', borderColor: inkColor(getPalette().dim), flexDirection: 'column', paddingX: 1 },
-    createElement(Text, { color: inkColor(getPalette().brandBright), wrap: 'truncate-end' }, truncateColumns(singleLineText(title), viewport.contentColumns)),
+    { width: viewport.outerColumns, borderStyle: 'round', borderColor: inkColor(accent.border), flexDirection: 'column', paddingX: 1 },
+    createElement(Text, { color: inkColor(accent.title), wrap: 'truncate-end' }, truncateColumns(singleLineText(title), viewport.contentColumns)),
     ...visible.map(row => createElement(Text, {
       key: row.key,
       color: toneColor(row.tone),

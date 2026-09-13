@@ -13,6 +13,7 @@ import type { CredentialKey } from '@deepseek-ai/dsh-credentials'
 import type { ProviderAuthorizationRow } from './authorization.ts'
 import { panelViewport } from './render/inspector.ts'
 import { displayText, singleLineText, truncateColumns } from './render/text.ts'
+import { panelAccent } from './panel-accent.ts'
 import { getPalette, inkColor } from './theme.ts'
 
 interface PromptReply {
@@ -237,10 +238,11 @@ export function ProviderAuthorizationPanel(props: ProviderAuthorizationPanelProp
   const footer = phase === 'methods'
     ? '↑↓ choose · enter continue · esc/q back'
     : 'enter answer · c copy URL/code · esc cancel login'
+  const accent = panelAccent('auth-login', getPalette().brand)
   return createElement(
     Box,
-    { flexDirection: 'column', width: viewport.outerColumns, paddingX: 1, borderStyle: 'round', borderColor: inkColor(getPalette().brand) },
-    createElement(Text, { color: inkColor(getPalette().brand), bold: true, wrap: 'truncate-end' }, truncateColumns(`/model · login ${displayText(props.row.label)}`, viewport.contentColumns)),
+    { flexDirection: 'column', width: viewport.outerColumns, paddingX: 1, borderStyle: 'round', borderColor: inkColor(accent.border) },
+    createElement(Text, { color: inkColor(accent.title), bold: true, wrap: 'truncate-end' }, truncateColumns(`/model · login ${displayText(props.row.label)}`, viewport.contentColumns)),
     ...visible.map(row => createElement(Text, { key: row.key, color: row.color, bold: row.bold, wrap: 'truncate-end' }, truncateColumns(row.text, viewport.contentColumns))),
     createElement(Text, { color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns(footer, viewport.contentColumns)),
   )

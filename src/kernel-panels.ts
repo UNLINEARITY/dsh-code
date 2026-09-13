@@ -17,6 +17,7 @@ import { deleteLastGrapheme } from './render/editor.ts'
 import { stripPasteMarkers } from './keyboard.ts'
 import { DEFAULT_STATUSLINE_ITEMS, STATUS_ITEMS, type StatusItemId } from './render/status.ts'
 import { singleLineText, truncateColumns } from './render/text.ts'
+import { panelAccent } from './panel-accent.ts'
 import { getPalette, inkColor } from './theme.ts'
 
 interface ListFrameProps {
@@ -73,10 +74,11 @@ function ListFrame(props: ListFrameProps): ReactElement {
   const bodyRows = Math.max(1, viewport.bodyRows - 1)
   const offset = revealRow(0, props.cursor, stateRows.length, bodyRows)
   const visible = stateRows.slice(offset, offset + bodyRows)
+  const accent = panelAccent('kernel-list', getPalette().dim, getPalette().brandBright)
   return createElement(
     Box,
-    { width: viewport.outerColumns, borderStyle: 'round', borderColor: inkColor(getPalette().dim), flexDirection: 'column', paddingX: 1 },
-    createElement(Text, { color: inkColor(getPalette().brandBright), wrap: 'truncate-end' }, truncateColumns(singleLineText(props.title), viewport.contentColumns)),
+    { width: viewport.outerColumns, borderStyle: 'round', borderColor: inkColor(accent.border), flexDirection: 'column', paddingX: 1 },
+    createElement(Text, { color: inkColor(accent.title), wrap: 'truncate-end' }, truncateColumns(singleLineText(props.title), viewport.contentColumns)),
     createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns(singleLineText(searchLine(props.searching, props.query)), viewport.contentColumns)),
     ...visible.map((row, index) => {
       const absolute = offset + index
@@ -462,10 +464,11 @@ function DocumentPanel({ title, text, error, close }: {
     : text === undefined
       ? textLines('loading transcript…', viewport.contentColumns, 'dim')
       : lines.slice(scroll, scroll + viewport.bodyRows)
+  const accent = panelAccent('kernel-transcript', getPalette().dim, getPalette().brandBright)
   return createElement(
     Box,
-    { width: viewport.outerColumns, borderStyle: 'round', borderColor: inkColor(getPalette().dim), flexDirection: 'column', paddingX: 1 },
-    createElement(Text, { color: inkColor(getPalette().brandBright), wrap: 'truncate-end' }, truncateColumns(singleLineText(title), viewport.contentColumns)),
+    { width: viewport.outerColumns, borderStyle: 'round', borderColor: inkColor(accent.border), flexDirection: 'column', paddingX: 1 },
+    createElement(Text, { color: inkColor(accent.title), wrap: 'truncate-end' }, truncateColumns(singleLineText(title), viewport.contentColumns)),
     createElement(DocumentRows, { lines: body }),
     createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns(`lines ${lines.length === 0 ? 0 : scroll + 1}-${Math.min(lines.length, scroll + viewport.bodyRows)}/${lines.length} · ↑↓/pg/g/G · t/esc close`, viewport.contentColumns)),
   )
@@ -529,10 +532,11 @@ export function HistoryPanel({ entries, fill, close }: {
   const header = query === ''
     ? `/history · ${entries.length} prompts · type to filter`
     : `/history · ${matches.length} of ${entries.length} match '${truncateColumns(singleLineText(query), viewport.contentColumns - 30)}'`
+  const accent = panelAccent('history', getPalette().dim, getPalette().brandBright)
   return createElement(
     Box,
-    { width: viewport.outerColumns, borderStyle: 'round', borderColor: inkColor(getPalette().dim), flexDirection: 'column', paddingX: 1 },
-    createElement(Text, { color: inkColor(getPalette().brandBright), wrap: 'truncate-end' }, truncateColumns(header, viewport.contentColumns)),
+    { width: viewport.outerColumns, borderStyle: 'round', borderColor: inkColor(accent.border), flexDirection: 'column', paddingX: 1 },
+    createElement(Text, { color: inkColor(accent.title), wrap: 'truncate-end' }, truncateColumns(header, viewport.contentColumns)),
     createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns(`  filter ${query === '' ? '· type to search prompts' : '· ' + singleLineText(query)}, enter fills the composer`, viewport.contentColumns)),
     ...(visible.length === 0
       ? [createElement(Text, { key: 'empty', dimColor: true, wrap: 'truncate-end' }, truncateColumns('  no matching prompts', viewport.contentColumns))]
@@ -671,10 +675,11 @@ export function ReviewPickerPanel({ loadBranches, loadCommits, choose, close }: 
       : phase === 'commits'
         ? `/review · ${loading ? 'loading commits…' : error !== undefined ? `error: ${truncateColumns(singleLineText(error), viewport.contentColumns - 12)}` : `${filtered.length} of ${rows.length} commits`}`
         : '/review · type your review focus'
+  const accent = panelAccent('review-picker', getPalette().dim, getPalette().brandBright)
   return createElement(
     Box,
-    { width: viewport.outerColumns, borderStyle: 'round', borderColor: inkColor(getPalette().dim), flexDirection: 'column', paddingX: 1 },
-    createElement(Text, { color: inkColor(getPalette().brandBright), wrap: 'truncate-end' }, truncateColumns(header, viewport.contentColumns)),
+    { width: viewport.outerColumns, borderStyle: 'round', borderColor: inkColor(accent.border), flexDirection: 'column', paddingX: 1 },
+    createElement(Text, { color: inkColor(accent.title), wrap: 'truncate-end' }, truncateColumns(header, viewport.contentColumns)),
     ...(phase === 'preset'
       ? [
         '审查未提交的改动（staged / unstaged / 新文件）',
@@ -823,10 +828,11 @@ export function SearchPanel({ load, select, initialQuery = '', close }: {
       : searched === ''
         ? '/search · type a query and press enter'
         : `/search · ${rows.length} hit${rows.length === 1 ? '' : 's'} for '${truncateColumns(singleLineText(searched), viewport.contentColumns - 30)}'`
+  const accent = panelAccent('search', getPalette().dim, getPalette().brandBright)
   return createElement(
     Box,
-    { width: viewport.outerColumns, borderStyle: 'round', borderColor: inkColor(getPalette().dim), flexDirection: 'column', paddingX: 1 },
-    createElement(Text, { color: inkColor(getPalette().brandBright), wrap: 'truncate-end' }, truncateColumns(header, viewport.contentColumns)),
+    { width: viewport.outerColumns, borderStyle: 'round', borderColor: inkColor(accent.border), flexDirection: 'column', paddingX: 1 },
+    createElement(Text, { color: inkColor(accent.title), wrap: 'truncate-end' }, truncateColumns(header, viewport.contentColumns)),
     createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns(`  ${query === '' ? 'type to search sessions' : singleLineText(query)} · enter searches or resumes`, viewport.contentColumns)),
     ...(visible.length === 0
       ? [createElement(Text, { key: 'empty', dimColor: true, wrap: 'truncate-end' }, truncateColumns(searched === '' ? '  full-text search across every persisted session' : `  no matching sessions${loading ? '…' : ''}`, viewport.contentColumns))]
@@ -920,10 +926,11 @@ export function StatuslinePanel({ enabled, change, close }: {
   const offset = revealRow(0, cursor, order.length, bodyRows)
   const visible = order.slice(offset, offset + bodyRows)
   const meta = new Map(STATUS_ITEMS.map(item => [item.id, item]))
+  const accent = panelAccent('statusline', getPalette().dim, getPalette().brandBright)
   return createElement(
     Box,
-    { width: viewport.outerColumns, borderStyle: 'round', borderColor: inkColor(getPalette().dim), flexDirection: 'column', paddingX: 1 },
-    createElement(Text, { color: inkColor(getPalette().brandBright), wrap: 'truncate-end' }, truncateColumns('/statusline · items apply to the live status line below', viewport.contentColumns)),
+    { width: viewport.outerColumns, borderStyle: 'round', borderColor: inkColor(accent.border), flexDirection: 'column', paddingX: 1 },
+    createElement(Text, { color: inkColor(accent.title), wrap: 'truncate-end' }, truncateColumns('/statusline · items apply to the live status line below', viewport.contentColumns)),
     ...visible.map((id, index) => {
       const absolute = offset + index
       const selected = absolute === cursor
@@ -1307,10 +1314,11 @@ export function SchedulePanel({ rows, close }: { rows(): readonly ScheduleRow[];
   const budget = Math.max(1, viewport.bodyRows)
   const visible = display.slice(0, budget)
   const hidden = display.length - visible.length
+  const accent = panelAccent('schedule', getPalette().dim, getPalette().brandBright)
   return createElement(
     Box,
-    { width: viewport.outerColumns, borderStyle: 'round', borderColor: inkColor(getPalette().dim), flexDirection: 'column', paddingX: 1 },
-    createElement(Text, { color: inkColor(getPalette().brandBright), wrap: 'truncate-end' }, truncateColumns(`/schedule · ${display.length} active reminder${display.length === 1 ? '' : 's'}`, viewport.contentColumns)),
+    { width: viewport.outerColumns, borderStyle: 'round', borderColor: inkColor(accent.border), flexDirection: 'column', paddingX: 1 },
+    createElement(Text, { color: inkColor(accent.title), wrap: 'truncate-end' }, truncateColumns(`/schedule · ${display.length} active reminder${display.length === 1 ? '' : 's'}`, viewport.contentColumns)),
     ...(display.length === 0
       ? [createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns('  no active reminders — the model creates them with schedule_create', viewport.contentColumns))]
       : visible.map(row => createElement(Text, {

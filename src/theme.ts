@@ -4,8 +4,9 @@
  * (`packages/client/ui-theme/src/styles/design-platform.css`). Truecolor RGB
  * rides chalk, which degrades automatically on terminals without truecolor.
  *
- * Two palettes — `dark` (the default) and `light` — share the same token keys
- * with different values. Painters and the palette accessor read the ACTIVE
+ * Three palettes — `dark` (the default), `light`, and `prismatic` (the
+ * neon synthwave skin) — share the same token keys with different values.
+ * Painters and the palette accessor read the ACTIVE
  * palette selected through {@link setTheme}, so a theme switch recolors every
  * painted surface on the next render without touching call sites; consumers
  * read colors through {@link getPalette} or the painters below only.
@@ -39,11 +40,11 @@ export type ThemeToken =
 /** One full color palette: every token key mapped to an RGB triple. */
 export type ThemePalette = Readonly<Record<ThemeToken, RgbTriple>>
 
-/** Selectable theme names: dark, light, or auto (terminal-sensed). */
-export type ThemeName = 'dark' | 'light' | 'auto'
+/** Selectable theme names: dark, light, prismatic, or auto (terminal-sensed). */
+export type ThemeName = 'dark' | 'light' | 'prismatic' | 'auto'
 
 /** Valid theme names in canonical picker order. */
-export const THEME_NAMES: readonly ThemeName[] = ['dark', 'light', 'auto']
+export const THEME_NAMES: readonly ThemeName[] = ['dark', 'light', 'prismatic', 'auto']
 
 /** One /theme picker row: the theme id plus its display copy. */
 export interface ThemeDescriptor {
@@ -63,6 +64,7 @@ export interface ThemeDescriptor {
 export const THEMES: readonly ThemeDescriptor[] = [
   { id: 'dark', label: 'dark', description: 'DeepSeek dark palette (default)' },
   { id: 'light', label: 'light', description: 'light palette for bright terminals' },
+  { id: 'prismatic', label: 'prismatic', description: 'neon synthwave palette (violet/magenta/cyan)' },
   { id: 'auto', label: 'auto', description: 'follow the terminal; dark until detection lands' },
 ]
 
@@ -144,10 +146,53 @@ export const LIGHT_PALETTE = {
   diffDelFg: [185, 28, 28],
 } as const satisfies ThemePalette
 
+/**
+ * Prismatic palette — the neon synthwave skin (docs/prismatic-theme-design.md):
+ * electric violet replaces the brand blues, neon fuchsia carries live
+ * emphasis, neon cyan paints code, and a lavender gray dims captions. Paints
+ * on a black terminal; every value meets the same WCAG thresholds as the
+ * other palettes (body tokens ≥4.5:1, accents ≥3:1 on pure black). Semantic
+ * colors — success/error/warn and the four diff tokens — reuse the dark
+ * values verbatim so green still means added and red still means removed.
+ */
+export const PRISMATIC_PALETTE = {
+  /** Primary electric purple — violet-500 (#8B5CF6), 5.0:1 on black. */
+  brand: [139, 92, 246],
+  /** Live/streaming emphasis — neon fuchsia-300 (#F0ABFC), 11.9:1 on black. */
+  brandBright: [240, 171, 252],
+  /** Intermediate violet — violet-400 (#A78BFA), 7.7:1 on black. */
+  brandMid: [167, 139, 250],
+  /** Deep secondary chrome — violet-600 (#7C3AED), 3.7:1 on black (violet-700 misses 3:1). */
+  brandDeep: [124, 58, 237],
+  /** Muted captions — lavender gray (#A6A3B8), 8.6:1 on black. */
+  dim: [166, 163, 184],
+  /** Success green — unchanged from dark. */
+  success: [34, 197, 94],
+  /** Error red — unchanged from dark. */
+  error: [239, 68, 68],
+  /** Warning amber — unchanged from dark. */
+  warn: [245, 158, 11],
+  /** Default foreground text — white with a lavender cast (#F0EEF9). */
+  text: [240, 238, 249],
+  /** Inline/fenced code — neon cyan-300 (#67E8F9), 14.5:1 on black. */
+  code: [103, 232, 249],
+  /** Composer three-row band base — neutral dark gray, hue-free so wave tints read on it. */
+  composerBand: [46, 46, 52],
+  /** Diff added-line background — unchanged from dark. */
+  diffAdd: [33, 58, 43],
+  /** Diff removed-line background — unchanged from dark. */
+  diffDel: [74, 34, 29],
+  /** Diff added-line foreground — unchanged from dark. */
+  diffAddFg: [34, 197, 94],
+  /** Diff removed-line foreground — unchanged from dark. */
+  diffDelFg: [248, 113, 113],
+} as const satisfies ThemePalette
+
 /** Every palette by theme name; auto resolves through {@link resolveTheme}. */
 export const PALETTES = {
   dark: DARK_PALETTE,
   light: LIGHT_PALETTE,
+  prismatic: PRISMATIC_PALETTE,
 } as const satisfies Record<Exclude<ThemeName, 'auto'>, ThemePalette>
 
 /** The theme name in force (the requested name; 'auto' included). */
@@ -159,12 +204,13 @@ let activePalette: ThemePalette = DARK_PALETTE
 /**
  * Resolve a theme name to the palette actually in use. `auto` detection
  * (OSC 11 terminal background query) is a later enhancement; until it lands,
- * auto falls back to the dark palette.
+ * auto falls back to the dark palette (prismatic is always an explicit
+ * choice, never auto-resolved).
  * @param name - the requested theme name.
- * @returns 'dark' or 'light' — the palette key to paint with.
+ * @returns 'dark', 'light', or 'prismatic' — the palette key to paint with.
  */
-export function resolveTheme(name: ThemeName): 'dark' | 'light' {
-  return name === 'light' ? 'light' : 'dark'
+export function resolveTheme(name: ThemeName): 'dark' | 'light' | 'prismatic' {
+  return name === 'light' ? 'light' : name === 'prismatic' ? 'prismatic' : 'dark'
 }
 
 /**
@@ -221,6 +267,51 @@ export function inkColor(triple: RgbTriple): string {
 export function diffBackground(token: 'diffAdd' | 'diffDel'): string | undefined {
   if (chalk.level < 2) return undefined
   return inkColor(activePalette[token])
+}
+
+/**
+ * The prismatic surface ring: four neon accents panels cycle through by
+ * mount order (cyan → fuchsia → violet → lime), all ≥3:1 on black. Dark and
+ * light ignore the ring — {@link surfaceAccent} falls back to the passed-in
+ * base color so those themes stay pixel-identical.
+ */
+export const ACCENT_RING: readonly RgbTriple[] = [
+  [34, 211, 238],
+  [232, 121, 249],
+  [167, 139, 250],
+  [163, 230, 53],
+]
+
+/**
+ * The prismatic flow anchors: brand violet → neon fuchsia → neon cyan. All
+ * three clear 4.5:1 on black, so a flowing foreground stays AA throughout
+ * the oscillation (render/animations.ts walks the triangle).
+ */
+export const FLOW_ANCHORS: readonly RgbTriple[] = [
+  [139, 92, 246],
+  [232, 121, 249],
+  [34, 211, 238],
+]
+
+/**
+ * Whether the active theme is prismatic (the neon skin with surface rings
+ * and flowing accents).
+ */
+export function isPrismatic(): boolean {
+  return activeName === 'prismatic'
+}
+
+/**
+ * The accent for one surface slot: prismatic rotates the {@link ACCENT_RING}
+ * by slot index; every other theme gets the caller's base color back.
+ * @param index - the slot's position in the mount-order sequence.
+ * @param base - the color to use outside prismatic (the surface's usual one).
+ * @returns the accent to paint the surface's border/title with.
+ */
+export function surfaceAccent(index: number, base: RgbTriple): RgbTriple {
+  if (!isPrismatic()) return base
+  const ring = ACCENT_RING
+  return ring[((index % ring.length) + ring.length) % ring.length]!
 }
 
 /** Paint with the primary brand blue: whale, wordmark, tool names, accents. */

@@ -91,6 +91,31 @@ export function deepDivingSparkColor(tick: number, base: RgbTriple, highlight: R
   return blendRgb(highlight, base, deepDivingSparkIntensity(tick))
 }
 
+/** One full prismatic flow lap — lively: violet → fuchsia → cyan → violet in 2.4s. */
+export const FLOW_PERIOD_MS = 2_400
+
+/**
+ * The prismatic flow color at one elapsed-time sample: a smoothstep walk
+ * around the anchor triangle, one full lap per {@link FLOW_PERIOD_MS}. Pure —
+ * the Ink layer owns the timer and passes its tick scaled by its own cadence
+ * (tick × tickMs). Callers gate on the animations preference and fall back to
+ * a static palette color when animation is off.
+ * @param elapsedMs - milliseconds since the flow started (any sign or size).
+ * @param anchors - the colors to walk, in order (theme.ts FLOW_ANCHORS).
+ * @returns the interpolated anchor color at this instant.
+ */
+export function flowColor(elapsedMs: number, anchors: readonly RgbTriple[]): RgbTriple {
+  if (anchors.length === 0) throw new Error('flowColor needs at least one anchor')
+  if (anchors.length === 1) return anchors[0]!
+  const lap = ((elapsedMs % FLOW_PERIOD_MS) + FLOW_PERIOD_MS) % FLOW_PERIOD_MS
+  const span = FLOW_PERIOD_MS / anchors.length
+  const at = lap / span
+  const index = Math.floor(at)
+  const phase = at - index
+  const eased = phase * phase * (3 - 2 * phase)
+  return blendRgb(anchors[(index + 1) % anchors.length]!, anchors[index % anchors.length]!, eased)
+}
+
 /** Caret blink cadence: one blink step (on or off) per tick. */
 export const CARET_BLINK_TICK_MS = 530
 

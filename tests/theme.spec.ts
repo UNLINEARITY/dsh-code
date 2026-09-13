@@ -4,8 +4,9 @@ import chalk from 'chalk'
 import { describe, expect, it } from 'vitest'
 import {
   brand, brandBright, brandDeep, dim, error, success, warn,
-  DARK_PALETTE, LIGHT_PALETTE, PALETTES, THEMES, THEME_NAMES, diffBackground, getPalette, getTheme,
-  inkColor, parseThemeName, resolveTheme, setTheme, type RgbTriple,
+  ACCENT_RING, DARK_PALETTE, FLOW_ANCHORS, LIGHT_PALETTE, PALETTES, PRISMATIC_PALETTE,
+  THEMES, THEME_NAMES, diffBackground, getPalette, getTheme, inkColor, isPrismatic,
+  parseThemeName, resolveTheme, setTheme, surfaceAccent, type RgbTriple,
 } from '../src/theme.ts'
 
 describe('tui theme', () => {
@@ -70,10 +71,67 @@ describe('tui theme', () => {
     expect(LIGHT_PALETTE.composerBand[0]).toBeGreaterThan(200)
   })
 
+  it('pins the prismatic synthwave palette', () => {
+    expect(PRISMATIC_PALETTE.brand).toEqual([139, 92, 246])
+    expect(PRISMATIC_PALETTE.brandBright).toEqual([240, 171, 252])
+    expect(PRISMATIC_PALETTE.brandMid).toEqual([167, 139, 250])
+    expect(PRISMATIC_PALETTE.brandDeep).toEqual([124, 58, 237])
+    expect(PRISMATIC_PALETTE.dim).toEqual([166, 163, 184])
+    expect(PRISMATIC_PALETTE.text).toEqual([240, 238, 249])
+    expect(PRISMATIC_PALETTE.code).toEqual([103, 232, 249])
+    // Semantic colors ride the dark values verbatim: green still means added.
+    expect(PRISMATIC_PALETTE.success).toEqual(DARK_PALETTE.success)
+    expect(PRISMATIC_PALETTE.error).toEqual(DARK_PALETTE.error)
+    expect(PRISMATIC_PALETTE.warn).toEqual(DARK_PALETTE.warn)
+    expect(PRISMATIC_PALETTE.diffAdd).toEqual(DARK_PALETTE.diffAdd)
+    expect(PRISMATIC_PALETTE.diffDel).toEqual(DARK_PALETTE.diffDel)
+    expect(PRISMATIC_PALETTE.diffAddFg).toEqual(DARK_PALETTE.diffAddFg)
+    expect(PRISMATIC_PALETTE.diffDelFg).toEqual(DARK_PALETTE.diffDelFg)
+    // The band stays hue-free under the neon skin too.
+    expect(PRISMATIC_PALETTE.composerBand).toEqual([46, 46, 52])
+    expect(Math.max(...PRISMATIC_PALETTE.composerBand) - Math.min(...PRISMATIC_PALETTE.composerBand)).toBeLessThanOrEqual(6)
+  })
+
+  it('activates prismatic through setTheme and reports it via isPrismatic', () => {
+    const level = chalk.level
+    chalk.level = 3
+    try {
+      setTheme('prismatic')
+      expect(getTheme()).toBe('prismatic')
+      expect(getPalette()).toBe(PRISMATIC_PALETTE)
+      expect(resolveTheme('prismatic')).toBe('prismatic')
+      expect(isPrismatic()).toBe(true)
+      expect(brandBright('x')).toContain('240')
+      setTheme('dark')
+      expect(isPrismatic()).toBe(false)
+      expect(getPalette()).toBe(DARK_PALETTE)
+    } finally {
+      chalk.level = level
+      setTheme('dark')
+    }
+  })
+
+  it('rotates the surface ring only under prismatic', () => {
+    try {
+      setTheme('dark')
+      expect(surfaceAccent(0, DARK_PALETTE.brand)).toBe(DARK_PALETTE.brand)
+      expect(surfaceAccent(7, LIGHT_PALETTE.dim)).toBe(LIGHT_PALETTE.dim)
+      setTheme('prismatic')
+      for (const [index, ring] of [0, 1, 2, 3, 4, 5, 6, 7].map(i => [i, ACCENT_RING[i % ACCENT_RING.length]!] as const)) {
+        expect(surfaceAccent(index, DARK_PALETTE.brand)).toBe(ring)
+      }
+      // Negative indices wrap like a modulo should.
+      expect(surfaceAccent(-1, DARK_PALETTE.brand)).toBe(ACCENT_RING[3]!)
+    } finally {
+      setTheme('dark')
+    }
+  })
+
   it('keeps both palettes on the same token keys and the canonical names', () => {
-    expect(Object.keys(PALETTES).sort()).toEqual(['dark', 'light'])
+    expect(Object.keys(PALETTES).sort()).toEqual(['dark', 'light', 'prismatic'])
     expect(Object.keys(LIGHT_PALETTE).sort()).toEqual(Object.keys(DARK_PALETTE).sort())
-    expect(THEME_NAMES).toEqual(['dark', 'light', 'auto'])
+    expect(Object.keys(PRISMATIC_PALETTE).sort()).toEqual(Object.keys(DARK_PALETTE).sort())
+    expect(THEME_NAMES).toEqual(['dark', 'light', 'prismatic', 'auto'])
   })
 
   it('exposes one picker registry matching the canonical names', () => {
@@ -170,6 +228,7 @@ describe('tui theme', () => {
 
   it('parses persisted theme names with a dark fallback', () => {
     expect(parseThemeName('light')).toBe('light')
+    expect(parseThemeName('prismatic')).toBe('prismatic')
     expect(parseThemeName('auto')).toBe('auto')
     expect(parseThemeName('dark')).toBe('dark')
     expect(parseThemeName(undefined)).toBe('dark')
@@ -201,6 +260,8 @@ describe('tui theme contrast (WCAG 2.x)', () => {
     for (const token of ['text', 'dim', 'brandBright', 'code'] as const) {
       expect(ratio(DARK_PALETTE[token], BLACK)).toBeGreaterThanOrEqual(4.5)
       expect(ratio(LIGHT_PALETTE[token], WHITE)).toBeGreaterThanOrEqual(4.5)
+      // Prismatic paints on a black terminal like dark.
+      expect(ratio(PRISMATIC_PALETTE[token], BLACK)).toBeGreaterThanOrEqual(4.5)
     }
   })
 
@@ -208,6 +269,19 @@ describe('tui theme contrast (WCAG 2.x)', () => {
     for (const token of ['brand', 'brandMid', 'brandDeep', 'success', 'error', 'warn'] as const) {
       expect(ratio(DARK_PALETTE[token], BLACK)).toBeGreaterThanOrEqual(3)
       expect(ratio(LIGHT_PALETTE[token], WHITE)).toBeGreaterThanOrEqual(3)
+      expect(ratio(PRISMATIC_PALETTE[token], BLACK)).toBeGreaterThanOrEqual(3)
+    }
+  })
+
+  it('keeps the prismatic ring and flow anchors legible on black', () => {
+    // Panel borders/titles cycle the ring — accent threshold.
+    for (const accent of ACCENT_RING) {
+      expect(ratio(accent, BLACK)).toBeGreaterThanOrEqual(3)
+    }
+    // Flow anchors paint streaming/busy foregrounds while oscillating, so
+    // every anchor must clear the body threshold on its own.
+    for (const anchor of FLOW_ANCHORS) {
+      expect(ratio(anchor, BLACK)).toBeGreaterThanOrEqual(4.5)
     }
   })
 

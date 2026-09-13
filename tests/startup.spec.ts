@@ -26,8 +26,8 @@ describe('TUI startup modes', () => {
   })
 
   it('rejects unknown --theme values', () => {
-    expect(() => resolveTuiStartup({ theme: 'sepia' as ThemeName })).toThrow('--theme must be one of: dark, light, auto')
-    expect(() => resolveTuiStartup({ theme: '' as ThemeName })).toThrow('--theme must be one of: dark, light, auto')
+    expect(() => resolveTuiStartup({ theme: 'sepia' as ThemeName })).toThrow('--theme must be one of: dark, light, prismatic, auto')
+    expect(() => resolveTuiStartup({ theme: '' as ThemeName })).toThrow('--theme must be one of: dark, light, prismatic, auto')
   })
 
   it('carries an initial prompt and repeated image paths into every mode', () => {

@@ -11,6 +11,7 @@ import { createElement, useState, type ReactElement } from 'react'
 import { Box, Text, useInput, useStdout } from 'ink'
 import { clampScroll, panelViewport } from './render/inspector.ts'
 import { truncateColumns } from './render/text.ts'
+import { panelAccent } from './panel-accent.ts'
 import { getPalette, inkColor, THEMES, type ThemeName } from './theme.ts'
 
 /**
@@ -50,10 +51,11 @@ export function ThemePanel({ current, select, close }: {
   const first = clampScroll(cursor, THEMES.length, rowBudget)
   const visibleThemes = THEMES.slice(first, first + rowBudget)
   const hiddenThemes = THEMES.length - visibleThemes.length
+  const accent = panelAccent('theme', getPalette().dim, getPalette().brandBright)
   return createElement(
     Box,
-    { width: viewport.outerColumns, borderStyle: 'round', borderColor: inkColor(getPalette().dim), flexDirection: 'column', paddingX: 1 },
-    createElement(Text, { color: inkColor(getPalette().brandBright), wrap: 'truncate-end' }, truncateColumns('/theme — color palette', viewport.contentColumns)),
+    { width: viewport.outerColumns, borderStyle: 'round', borderColor: inkColor(accent.border), flexDirection: 'column', paddingX: 1 },
+    createElement(Text, { color: inkColor(accent.title), wrap: 'truncate-end' }, truncateColumns('/theme — color palette', viewport.contentColumns)),
     ...visibleThemes.map((theme, index) => {
       const selected = first + index === cursor
       const active = theme.id === current

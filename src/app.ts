@@ -27,13 +27,16 @@ import type { AuthorizationInteraction, AuthorizationStatus } from '@deepseek-ai
 import {
   dim,
   diffBackground,
+  FLOW_ANCHORS,
   getPalette,
   getTheme,
   inkColor,
+  isPrismatic,
   setTheme,
   type RgbTriple,
   type ThemeName,
 } from './theme.ts'
+import { panelAccent } from './panel-accent.ts'
 import { ThemePanel } from './theme-panel.ts'
 import { UpdatePanel } from './update-panel.ts'
 import type { LauncherUpdateStatus } from './update.ts'
@@ -60,6 +63,7 @@ import {
   deepseekWaveWordVisible,
   deepDivingGradientColor,
   deepDivingSparkColor,
+  flowColor,
   effortAboveHigh,
   isOfficialDeepSeekLabel,
   parseAnimationsArgument,
@@ -489,7 +493,10 @@ function useStableInput(handler: (input: string, key: Key) => void, active: bool
  */
 function BusyChase({ animated = true }: { animated?: boolean }): ReactElement {
   const tick = useFrames(BUSY_CHASE_TICK_MS, animated)
-  return createElement(Text, { color: inkColor(getPalette().brandBright) }, busyChaseFrame(tick) + ' ')
+  // Prismatic rides the flow triangle while busy; every other theme (and the
+  // frozen state) keeps the palette's live accent.
+  const marker = isPrismatic() && animated ? flowColor(tick * BUSY_CHASE_TICK_MS, FLOW_ANCHORS) : getPalette().brandBright
+  return createElement(Text, { color: inkColor(marker) }, busyChaseFrame(tick) + ' ')
 }
 
 /** Blinking block caret appended to streaming text; solid when frozen. */
@@ -528,6 +535,9 @@ function useCursorBlink(active: boolean): { visible: boolean; reset(): void } {
 function ShimmerLine({ text, animated = true }: { text: string; animated?: boolean }): ReactElement {
   const tick = useFrames(DEEP_DIVING_SHIMMER_TICK_MS, animated)
   const palette = getPalette()
+  // Prismatic walks the flow triangle for the shimmer highlight so streaming
+  // text glows violet→fuchsia→cyan; other themes keep the bright accent.
+  const highlight = isPrismatic() && animated ? flowColor(tick * DEEP_DIVING_SHIMMER_TICK_MS, FLOW_ANCHORS) : palette.brandBright
   const graphemes = splitGraphemes(text)
   return createElement(
     Text,
@@ -541,8 +551,8 @@ function ShimmerLine({ text, animated = true }: { text: string; animated?: boole
           color: inkColor(!animated
             ? (sparkle ? palette.brandBright : palette.brandDeep)
             : sparkle
-              ? deepDivingSparkColor(tick, palette.brandDeep, palette.brandBright)
-              : deepDivingGradientColor(index, tick, graphemes.length, palette.brandDeep, palette.brandBright)),
+              ? deepDivingSparkColor(tick, palette.brandDeep, highlight)
+              : deepDivingGradientColor(index, tick, graphemes.length, palette.brandDeep, highlight)),
           bold: sparkle || undefined,
         },
         grapheme.text,
@@ -737,10 +747,11 @@ function DiffPanel({ view, onClose }: { view: GitDiffView; onClose(): void }): R
     else if (key.pageDown) setScroll(current => moveScroll(current, viewport.bodyRows, lines.length, viewport.bodyRows))
   })
   if (viewport.compact) return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(`${view.title} · ${view.files.length} files · esc/q close`, viewport.contentColumns))
+  const accent = panelAccent('diff', getPalette().dim, getPalette().brand)
   return createElement(
     Box,
-    { flexDirection: 'column', borderStyle: 'round', borderColor: inkColor(getPalette().dim), paddingX: 1 },
-    createElement(Text, { color: inkColor(getPalette().brand), bold: true, wrap: 'truncate-end' }, truncateColumns(`${view.title} · ${view.files.length === 0 ? 'no files' : `${fileIndex + 1}/${view.files.length} ${file?.path ?? ''}`} · rows ${lines.length === 0 ? 0 : visibleScroll + 1}-${Math.min(lines.length, visibleScroll + viewport.bodyRows)}/${lines.length}`, viewport.contentColumns)),
+    { flexDirection: 'column', borderStyle: 'round', borderColor: inkColor(accent.border), paddingX: 1 },
+    createElement(Text, { color: inkColor(accent.title), bold: true, wrap: 'truncate-end' }, truncateColumns(`${view.title} · ${view.files.length === 0 ? 'no files' : `${fileIndex + 1}/${view.files.length} ${file?.path ?? ''}`} · rows ${lines.length === 0 ? 0 : visibleScroll + 1}-${Math.min(lines.length, visibleScroll + viewport.bodyRows)}/${lines.length}`, viewport.contentColumns)),
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
     createElement(StyledRows, { lines: lines.slice(visibleScroll, visibleScroll + viewport.bodyRows) }),
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
@@ -915,10 +926,11 @@ function TodoListPanel({ todos, onClose }: { todos: readonly TodoItem[]; onClose
     return createElement(Text, { wrap: 'truncate-end' }, truncateColumns('todos · esc/q close', viewport.contentColumns))
   }
 
+  const accent = panelAccent('todos', getPalette().brand)
   return createElement(
     Box,
-    { flexDirection: 'column', width: viewport.outerColumns, paddingX: 1, borderStyle: 'round', borderColor: inkColor(getPalette().brand) },
-    createElement(Text, { color: inkColor(getPalette().brand), bold: true, wrap: 'truncate-end' }, truncateColumns(`todos · ${completed}/${todos.length} done · ${inProgress} active · ${pending} pending · rows ${rows.length === 0 ? 0 : visibleScroll + 1}-${Math.min(rows.length, visibleScroll + viewport.bodyRows)}/${rows.length}`, viewport.contentColumns)),
+    { flexDirection: 'column', width: viewport.outerColumns, paddingX: 1, borderStyle: 'round', borderColor: inkColor(accent.border) },
+    createElement(Text, { color: inkColor(accent.title), bold: true, wrap: 'truncate-end' }, truncateColumns(`todos · ${completed}/${todos.length} done · ${inProgress} active · ${pending} pending · rows ${rows.length === 0 ? 0 : visibleScroll + 1}-${Math.min(rows.length, visibleScroll + viewport.bodyRows)}/${rows.length}`, viewport.contentColumns)),
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
     ...rows.slice(visibleScroll, visibleScroll + viewport.bodyRows),
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
@@ -934,7 +946,7 @@ const MemoTodoListPanel = memo(TodoListPanel)
  * degrees of blue (deep accent, primary figures, model identity, sky
  * paths and done states), with amber/red reserved for warnings and errors.
  */
-function statusToneProps(tone: StatusTone): {
+function statusToneProps(tone: StatusTone, flowMs?: number): {
   color: string | undefined
   bold: boolean | undefined
   dimColor: boolean | undefined
@@ -945,7 +957,9 @@ function statusToneProps(tone: StatusTone): {
       // a path fact, not a brand accent.
       return { color: inkColor(getPalette().code), bold: true, dimColor: undefined }
     case 'live':
-      return { color: inkColor(getPalette().brandBright), bold: undefined, dimColor: undefined }
+      // With a flow sample (prismatic busy), the live dot rides the anchor
+      // triangle; otherwise the palette's live accent.
+      return { color: inkColor(flowMs === undefined ? getPalette().brandBright : flowColor(flowMs, FLOW_ANCHORS)), bold: undefined, dimColor: undefined }
     case 'path':
       return { color: inkColor(getPalette().code), bold: undefined, dimColor: undefined }
     case 'branch':
@@ -1007,12 +1021,15 @@ function statusToneProps(tone: StatusTone): {
  * the prompt keeps is always hues[0]. */
 function deepseekWaveHues(tier: DeepseekWaveTier): readonly [RgbTriple, RgbTriple, RgbTriple] {
   const palette = getPalette()
+  // Prismatic waves ride the flow anchors for both tiers — the model-switch
+  // easter egg becomes a violet→fuchsia→cyan sweep.
+  if (isPrismatic()) return [FLOW_ANCHORS[0]!, FLOW_ANCHORS[1]!, FLOW_ANCHORS[2]!]
   return tier === 'flash'
     ? [palette.brandBright, palette.brand, palette.brandMid]
     : [palette.brandBright, palette.code, palette.brandMid]
 }
 
-function StatusLine({ facts, stats, busy, columns, items, onRows }: {
+function StatusLine({ facts, stats, busy, columns, items, onRows, animated }: {
   facts: StatusFacts
   stats: Parameters<typeof layoutStatusBar>[1]
   busy: boolean
@@ -1021,7 +1038,14 @@ function StatusLine({ facts, stats, busy, columns, items, onRows }: {
   /** Reports the footer's exact physical row count (1 or 2) so the IME
    * anchor ledger below the composer stays exact. */
   onRows?: (rows: 1 | 2) => void
+  /** Whether timed animations run (the persisted preference). */
+  animated: boolean
 }): ReactElement {
+  // Prismatic busy flow: the identity cluster's live dot cycles the anchor
+  // triangle while a turn runs; every other theme never starts the timer.
+  const flowActive = animated && busy && isPrismatic()
+  const flowTick = useFrames(BUSY_CHASE_TICK_MS, flowActive)
+  const flowMs = flowActive ? flowTick * BUSY_CHASE_TICK_MS : undefined
   const layout = useMemo(() => layoutStatusBar(facts, stats, Math.max(8, columns - 2), {
     busy,
     items,
@@ -1063,7 +1087,7 @@ function StatusLine({ facts, stats, busy, columns, items, onRows }: {
       group.spans.forEach((span, spanIndex) => {
         leftParts.push(createElement(
           Text,
-          { key: key + 'g' + groupIndex + 's' + spanIndex, wrap: 'truncate-end', ...statusToneProps(span.tone) },
+          { key: key + 'g' + groupIndex + 's' + spanIndex, wrap: 'truncate-end', ...statusToneProps(span.tone, flowMs) },
           span.text,
         ))
       })
@@ -1075,7 +1099,7 @@ function StatusLine({ facts, stats, busy, columns, items, onRows }: {
       }
       rightParts.push(createElement(
         Text,
-        { key: key + 'r' + index, wrap: 'truncate-end', ...statusToneProps(span.tone) },
+        { key: key + 'r' + index, wrap: 'truncate-end', ...statusToneProps(span.tone, flowMs) },
         span.text,
       ))
     })
@@ -1829,10 +1853,11 @@ function ModelPanel({ directory, error, current, onSelect, onProviders, onRetry,
   const rowBudget = Math.max(0, viewport.bodyRows - visibleStateRows.length)
   const first = selectionWindow(cursor, filtered.length, rowBudget)
   const visible = rowBudget === 0 ? [] : filtered.slice(first, first + rowBudget)
+  const accent = panelAccent('model', getPalette().brand)
   return createElement(
     Box,
-    { flexDirection: 'column', width: viewport.outerColumns, paddingX: 1, borderStyle: 'round', borderColor: inkColor(getPalette().brand) },
-    createElement(Text, { color: inkColor(getPalette().brand), bold: true, wrap: 'truncate-end' }, truncateColumns(query === ''
+    { flexDirection: 'column', width: viewport.outerColumns, paddingX: 1, borderStyle: 'round', borderColor: inkColor(accent.border) },
+    createElement(Text, { color: inkColor(accent.title), bold: true, wrap: 'truncate-end' }, truncateColumns(query === ''
       ? `/model — select model${rows.length === 0 ? '' : ` · ${cursor + 1}/${rows.length}`}`
       : `/model — select model · ${filtered.length} of ${rows.length} match '${singleLineText(query)}'`, viewport.contentColumns)),
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
@@ -2048,10 +2073,11 @@ function ProviderPanel({ directory, error, authorizations, authorizationError, o
       truncateColumns((index === cursor ? '❯ ' : '  ') + displayText(label), viewport.contentColumns),
     ))
   }
+  const accent = panelAccent('model-providers', getPalette().brand)
   return createElement(
     Box,
-    { flexDirection: 'column', width: viewport.outerColumns, paddingX: 1, borderStyle: 'round', borderColor: inkColor(getPalette().brand) },
-    createElement(Text, { color: inkColor(getPalette().brand), bold: true, wrap: 'truncate-end' }, truncateColumns(`/model — providers${rows.length === 0 ? '' : ` · ${cursor + 1}/${rows.length}`}`, viewport.contentColumns)),
+    { flexDirection: 'column', width: viewport.outerColumns, paddingX: 1, borderStyle: 'round', borderColor: inkColor(accent.border) },
+    createElement(Text, { color: inkColor(accent.title), bold: true, wrap: 'truncate-end' }, truncateColumns(`/model — providers${rows.length === 0 ? '' : ` · ${cursor + 1}/${rows.length}`}`, viewport.contentColumns)),
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
     ...visibleStateRows,
     ...itemRows,
@@ -2335,10 +2361,11 @@ function ProviderSetupPanel({ target, save, saveCredential, discover, effortDono
     const donorBudget = Math.max(0, viewport.bodyRows - 2)
     const donorFirst = selectionWindow(donorIndex, donorRows.length, donorBudget)
     const donorVisible = donorRows.slice(donorFirst, donorFirst + donorBudget)
+    const accent = panelAccent('model-efforts', getPalette().brand)
     return createElement(
       Box,
-      { flexDirection: 'column', width: viewport.outerColumns, paddingX: 1, borderStyle: 'round', borderColor: inkColor(getPalette().brand) },
-      createElement(Text, { color: inkColor(getPalette().brand), bold: true, wrap: 'truncate-end' }, truncateColumns('/model — copy efforts', viewport.contentColumns)),
+      { flexDirection: 'column', width: viewport.outerColumns, paddingX: 1, borderStyle: 'round', borderColor: inkColor(accent.border) },
+      createElement(Text, { color: inkColor(accent.title), bold: true, wrap: 'truncate-end' }, truncateColumns('/model — copy efforts', viewport.contentColumns)),
       createElement(PanelGap, { visible: viewport.gapRows > 0 }),
       stateRow,
       ...donorVisible.map((donor, index) => {
@@ -2399,10 +2426,11 @@ function ProviderSetupPanel({ target, save, saveCredential, discover, effortDono
       : '  in:' + (active && field === 'ctx' ? '[' + context + ']' : context) + ' out:' + (active && field === 'out' ? '[' + output + ']' : output) + ' eff:' + effortsSummary(model)
     modelRows.push(createElement(Text, { key: model.id, color: active ? inkColor(getPalette().brandBright) : inkColor(getPalette().success), wrap: 'truncate-end' }, truncateColumns('  ' + (active ? '>' : ' ') + ' [x] ' + displayText(model.id) + tail, viewport.contentColumns)))
   }
+  const accent = panelAccent('model-configure', getPalette().brand)
   return createElement(
     Box,
-    { flexDirection: 'column', width: viewport.outerColumns, paddingX: 1, borderStyle: 'round', borderColor: inkColor(getPalette().brand) },
-    createElement(Text, { color: inkColor(getPalette().brand), bold: true, wrap: 'truncate-end' }, truncateColumns('/model — configure ' + target.displayName, viewport.contentColumns)),
+    { flexDirection: 'column', width: viewport.outerColumns, paddingX: 1, borderStyle: 'round', borderColor: inkColor(accent.border) },
+    createElement(Text, { color: inkColor(accent.title), bold: true, wrap: 'truncate-end' }, truncateColumns('/model — configure ' + target.displayName, viewport.contentColumns)),
     // The adapter's configuration diagnostic heads the editor: the provider
     // is here precisely because it stayed listed for repair.
     ...(target.diagnostic === undefined ? [] : [createElement(
@@ -2511,10 +2539,11 @@ function ProviderDiscoveryPanel({ target, baseURL, apiKey, configured, discover,
   const rowBudget = Math.max(0, viewport.bodyRows - stateRows.length - 1)
   const first = selectionWindow(cursor, rows.length, rowBudget)
   const visible = rows.slice(first, first + rowBudget)
+  const accent = panelAccent('model-discover', getPalette().brand)
   return createElement(
     Box,
-    { flexDirection: 'column', width: viewport.outerColumns, paddingX: 1, borderStyle: 'round', borderColor: inkColor(getPalette().brand) },
-    createElement(Text, { color: inkColor(getPalette().brand), bold: true, wrap: 'truncate-end' }, truncateColumns('/model — discover ' + target.displayName, viewport.contentColumns)),
+    { flexDirection: 'column', width: viewport.outerColumns, paddingX: 1, borderStyle: 'round', borderColor: inkColor(accent.border) },
+    createElement(Text, { color: inkColor(accent.title), bold: true, wrap: 'truncate-end' }, truncateColumns('/model — discover ' + target.displayName, viewport.contentColumns)),
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
     ...stateRows,
     ...visible.map((model, index) => {
@@ -2679,10 +2708,11 @@ function HelpPanel({ descriptors, skills, commandError, skillError, onClose }: {
     return createElement(Text, { wrap: 'truncate-end' }, truncateColumns('/help · esc/q close', viewport.contentColumns))
   }
 
+  const accent = panelAccent('help', getPalette().brand)
   return createElement(
     Box,
-    { flexDirection: 'column', width: viewport.outerColumns, paddingX: 1, borderStyle: 'round', borderColor: inkColor(getPalette().brand) },
-    createElement(Text, { color: inkColor(getPalette().brand), bold: true, wrap: 'truncate-end' }, truncateColumns(`/help — keys and commands · rows ${content.length === 0 ? 0 : visibleScroll + 1}-${Math.min(content.length, visibleScroll + viewport.bodyRows)}/${content.length}`, viewport.contentColumns)),
+    { flexDirection: 'column', width: viewport.outerColumns, paddingX: 1, borderStyle: 'round', borderColor: inkColor(accent.border) },
+    createElement(Text, { color: inkColor(accent.title), bold: true, wrap: 'truncate-end' }, truncateColumns(`/help — keys and commands · rows ${content.length === 0 ? 0 : visibleScroll + 1}-${Math.min(content.length, visibleScroll + viewport.bodyRows)}/${content.length}`, viewport.contentColumns)),
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
     ...content.slice(visibleScroll, visibleScroll + viewport.bodyRows),
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
@@ -3048,6 +3078,7 @@ function VerbosePanel({ entries, onClose }: { entries: readonly TranscriptEntry[
     ? 'history details · empty'
     : `history details · entry ${cursor + 1}/${entries.length} · lines ${allLines.length === 0 ? 0 : visibleScroll + 1}-${Math.min(allLines.length, visibleScroll + viewport.bodyRows)}/${allLines.length}`
   const visible = allLines.slice(visibleScroll, visibleScroll + viewport.bodyRows)
+  const accent = panelAccent('history-inspector', getPalette().brand)
   return createElement(
     Box,
     {
@@ -3055,11 +3086,11 @@ function VerbosePanel({ entries, onClose }: { entries: readonly TranscriptEntry[
       width: viewport.outerColumns,
       paddingX: 1,
       borderStyle: 'round',
-      borderColor: inkColor(getPalette().brand),
+      borderColor: inkColor(accent.border),
     },
     createElement(
       Text,
-      { color: inkColor(getPalette().brand), bold: true, wrap: 'truncate-end' },
+      { color: inkColor(accent.title), bold: true, wrap: 'truncate-end' },
       truncateColumns(title, viewport.contentColumns),
     ),
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
@@ -6022,6 +6053,7 @@ export function App(props: AppProps): ReactElement {
         },
         stats: view.stats,
         busy,
+        animated: animations,
         columns: terminalColumns,
         items: statuslineItems,
         onRows: handleStatusRows,
