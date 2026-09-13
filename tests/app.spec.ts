@@ -1450,6 +1450,38 @@ describe('keyboard protocol and transcript alignment', () => {
 })
 
 describe('Ctrl+O history details', () => {
+  it('repaints the whole screen from the new palette when the theme changes', async () => {
+    const harness = createTty(100, 24)
+    let savedTheme = ''
+    const instance = renderApp(harness, appProps({
+      saveTheme: name => {
+        savedTheme = name
+      },
+    }))
+    try {
+      await wait()
+      // Open the theme picker and pick the second row (light).
+      harness.stdin.write('/theme')
+      await wait()
+      harness.stdin.write('\r')
+      await wait()
+      expect(harness.output.text).toContain('/theme — color palette')
+      harness.stdin.write('\x1b[B')
+      await wait()
+      harness.output.text = ''
+      harness.stdin.write('\r')
+      await wait()
+      expect(savedTheme).toBe('light')
+      // The Static region (whale header + settled rows) renders once, so the
+      // theme switch must ride the same source-backed rebuild resize uses:
+      // one clear sequence, then the header repaints under the new palette.
+      expect(harness.output.text.match(/\x1b\[r\x1b\[0m\x1b\[H\x1b\[2J\x1b\[3J\x1b\[H/g)).toHaveLength(1)
+      expect(harness.output.text.slice(harness.output.text.lastIndexOf(resizeClear) + resizeClear.length)).toContain('DeepSeek Harness')
+    } finally {
+      instance.unmount()
+    }
+  })
+
   it('uses an exclusive bounded screen without clearing scrollback and preserves the draft', async () => {
     const stdin = Object.assign(new PassThrough(), {
       isTTY: true,

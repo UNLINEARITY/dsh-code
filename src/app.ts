@@ -5823,6 +5823,11 @@ export function App(props: AppProps): ReactElement {
           props.saveTheme?.(name)
           notify(`theme → ${name}`)
           setThemeOpen(false)
+          // The header whale and settled history live in the Static region,
+          // which renders once and would keep the old palette's colors; the
+          // same source-backed rebuild resize and Ctrl+L use repaints the
+          // whole screen (scrollback included) from the new palette.
+          refreshScreen()
         },
         close: () => setThemeOpen(false),
       })
