@@ -9,6 +9,8 @@ import {
   installedGlobalDshVersion,
   localCheckoutRefusal,
   npmInvocation,
+  parsePinnedPlan,
+  specVersion,
   packageVersion,
   dshCommand,
   completionScript,
@@ -314,7 +316,9 @@ describe('update orchestration', () => {
     expect(refusal[3]).toContain('dsh plugin --profile cli add dsh-code@1.0.6')
     // An up-to-date checkout or no checkout at all lets the upgrade proceed.
     expect(localCheckoutRefusal('1.0.6', '1.0.6', 'dsh-code@1.0.6')).toBeUndefined()
-    expect(localCheckoutRefusal(undefined, '1.0.6', 'dsh-code@1.0.6')).toBeUndefined()
+    const unread = localCheckoutRefusal(undefined, '1.0.6', 'dsh-code@1.0.6')!
+    expect(unread[0]).toContain('version could not be read')
+    expect(unread[3]).toContain('dsh plugin --profile cli add dsh-code@1.0.6')
   })
 
   it('orders harness lines so a downgrade plan is detectable', () => {
@@ -401,10 +405,7 @@ describe('update orchestration', () => {
       expect(status.upToDate).toBe(false)
     })
 
-    it('treats a launcher ahead of the registry as up to date', () => {
-      // A GitHub-release install while npm publish is delayed: npm's older
-      // latest is not a pending update, it is a downgrade applyUpdate must
-      // refuse — the status reports up to date instead of offering it.
+    it('flags a launcher ahead of npm without offering a downgrade', () => {
       const status = buildUpdateStatus({
         view: subjectParts => subjectParts[0] === 'dsh-code'
           ? '1.0.7'
@@ -415,6 +416,7 @@ describe('update orchestration', () => {
         ...readers,
       })
       expect(status.upToDate).toBe(true)
+      expect(status.aheadOfRegistry).toBe(true)
       expect(status.blockers.downgrade).toBe(false)
     })
 
@@ -423,6 +425,22 @@ describe('update orchestration', () => {
       expect(status.blockers.registry).toContain('could not read the latest dsh-code version')
       expect(status.code.latest).toBeNull()
       expect(status.upToDate).toBe(false)
+    })
+  })
+
+  it('parses a pinned apply plan from --dsh/--code/--plugin flags', () => {
+    expect(specVersion('@deepseek-ai/dsh@0.1.5-rc.2')).toBe('0.1.5-rc.2')
+    expect(specVersion('dsh-code@1.0.8')).toBe('1.0.8')
+    expect(parsePinnedPlan(['update', '--apply'])).toBeUndefined()
+    expect(parsePinnedPlan([
+      'update', '--apply',
+      '--dsh', '@deepseek-ai/dsh@0.1.5-rc.2',
+      '--code', 'dsh-code@1.0.8',
+      '--plugin', '@deepseek-ai/dsh-web-search-exa@0.1.5-rc.2',
+    ])).toEqual({
+      dshSpec: '@deepseek-ai/dsh@0.1.5-rc.2',
+      codeSpec: 'dsh-code@1.0.8',
+      pluginSpecs: ['@deepseek-ai/dsh-web-search-exa@0.1.5-rc.2'],
     })
   })
 

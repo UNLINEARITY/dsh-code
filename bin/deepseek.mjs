@@ -152,13 +152,59 @@ export function bundleDowngradeRefusal(latest, running = packageVersion) {
  * matches the release). The caller prints the lines verbatim.
  */
 export function localCheckoutRefusal(mounted, latestCode, codeSpec) {
-  if (mounted === undefined || mounted === latestCode) return undefined
+  if (mounted === latestCode) return undefined
+  if (mounted === undefined) {
+    return [
+      'dsh-code: the cli profile mounts a local checkout, but its version could not be read',
+      'dsh-code: refusing to upgrade the global host beside an unread checkout',
+      'dsh-code: update the checkout first (git pull, pnpm install, pnpm build), or switch the profile to the published package:',
+      `dsh-code:   dsh plugin --profile cli remove dsh-code && dsh plugin --profile cli add ${codeSpec}`,
+    ]
+  }
   return [
     `dsh-code: the cli profile mounts a local checkout of dsh-code ${mounted}, while this upgrade would install ${latestCode} globally`,
     'dsh-code: upgrading the host beside an older local checkout pairs incompatible code; refusing to install',
     'dsh-code: update the checkout first (git pull, pnpm install, pnpm build), or switch the profile to the published package:',
     `dsh-code:   dsh plugin --profile cli remove dsh-code && dsh plugin --profile cli add ${codeSpec}`,
   ]
+}
+
+/** Version after the last @ in an npm spec (`dsh-code@1.0.8`). */
+export function specVersion(spec) {
+  if (typeof spec !== 'string') return undefined
+  const at = spec.lastIndexOf('@')
+  if (at <= 0 || at === spec.length - 1) return undefined
+  return spec.slice(at + 1)
+}
+
+/**
+ * Exact install plan passed to `update --apply` after a probe. Missing
+ * `--code` means apply should query npm itself (CLI one-shot).
+ */
+export function parsePinnedPlan(args) {
+  let dshSpec
+  let codeSpec
+  const pluginSpecs = []
+  for (let index = 0; index < args.length; index += 1) {
+    const flag = args[index]
+    const value = args[index + 1]
+    if (flag === '--dsh' && value !== undefined) {
+      dshSpec = value
+      index += 1
+      continue
+    }
+    if (flag === '--code' && value !== undefined) {
+      codeSpec = value
+      index += 1
+      continue
+    }
+    if (flag === '--plugin' && value !== undefined) {
+      pluginSpecs.push(value)
+      index += 1
+    }
+  }
+  if (codeSpec === undefined || dshSpec === undefined) return undefined
+  return { dshSpec, codeSpec, pluginSpecs }
 }
 
 /**
@@ -546,6 +592,7 @@ export function buildUpdateStatus({
     // key drift into a truthy comparison.
     blockers: { registry: registry ?? null, downgrade, localCheckout: localCheckout ?? null },
     upToDate,
+    aheadOfRegistry: bundleAhead,
   }
 }
 
@@ -559,13 +606,43 @@ async function applyUpdate({
   view = viewJson,
   resolveCommand = rawDshCommand,
   spawnProcess = spawn,
+  pinned,
 } = {}) {
   const npm = npmInvocation()
-  const latestCode = view(['dsh-code', 'version'], undefined, npm)
-  if (latestCode === undefined) {
-    console.error('dsh-code: could not read the latest dsh-code version from npm')
-    process.exitCode = 1
-    return
+  const profileSpec = profileDependencySpec()
+  const profilePlugins = profilePluginDependencies()
+  let latestCode
+  let plan
+  if (pinned !== undefined) {
+    latestCode = specVersion(pinned.codeSpec)
+    if (latestCode === undefined) {
+      console.error(`dsh-code: could not read a version from ${pinned.codeSpec}`)
+      process.exitCode = 1
+      return
+    }
+    const line = specVersion(pinned.dshSpec)
+    plan = {
+      dshSpec: pinned.dshSpec,
+      line,
+      lineLocked: line !== undefined,
+      codeSpec: pinned.codeSpec,
+      profileStep: !(typeof profileSpec === 'string' && /^(link|file):/iu.test(profileSpec)),
+      pluginSpecs: pinned.pluginSpecs,
+    }
+  } else {
+    latestCode = view(['dsh-code', 'version'], undefined, npm)
+    if (latestCode === undefined) {
+      console.error('dsh-code: could not read the latest dsh-code version from npm')
+      process.exitCode = 1
+      return
+    }
+    const peers = view([`dsh-code@${latestCode}`, 'peerDependencies'], undefined, npm)
+    plan = updatePlan({
+      latestCode,
+      peers,
+      profileSpec,
+      profilePlugins,
+    })
   }
   // A launcher installed from a GitHub release (or any source ahead of the
   // registry) must not be walked back by an apply targeting npm's older
@@ -576,13 +653,6 @@ async function applyUpdate({
     process.exitCode = 1
     return
   }
-  const peers = view([`dsh-code@${latestCode}`, 'peerDependencies'], undefined, npm)
-  const plan = updatePlan({
-    latestCode,
-    peers,
-    profileSpec: profileDependencySpec(),
-    profilePlugins: profilePluginDependencies(),
-  })
   if (!plan.lineLocked) {
     console.log('dsh-code: could not read the compatible harness line; installing @deepseek-ai/dsh@latest')
   }
@@ -669,7 +739,7 @@ export function launchOperation(args = process.argv.slice(2)) {
       return true
     }
     if (args.includes('--apply')) {
-      void applyUpdate()
+      void applyUpdate({ pinned: parsePinnedPlan(args) })
       return true
     }
     printUpdateStatus()

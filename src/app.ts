@@ -433,7 +433,7 @@ export interface AppProps {
   /** Probe the launcher's aligned update plan (read-only; never installs). */
   probeUpdate(): Promise<LauncherUpdateStatus>
   /** Run the launcher's aligned update; streams sanitized lines; resolves with the exit code. */
-  applyUpdate(onLine: (line: string) => void): Promise<number>
+  applyUpdate(onLine: (line: string) => void, plan?: { readonly dshSpec: string; readonly codeSpec: string; readonly pluginSpecs: readonly string[] }): Promise<number>
   /** Registers the app's notice channel with the runner (called once on mount). */
   onBridgeReady(bridge: { notify(text: string, tone?: NoticeTone): void }): void
   /** Ordered enabled status items (/statusline config); the runner owns persistence. */
@@ -837,7 +837,7 @@ function Header({ resumed }: { resumed: boolean }): ReactElement {
   const copyWidths = [visibleColumns(title), visibleColumns(slogan), visibleColumns(hint)]
   if (kernelLine !== undefined) copyWidths.push(visibleColumns(kernelLine))
   const copyColumns = Math.max(...copyWidths)
-  const compact = `${title} · ${hint}`
+  const compact = kernelLine === undefined ? `${title} · ${hint}` : `${title} · ${kernelLine} · ${hint}`
   if (rows < 20 || columns < WHALE_GLYPH_COLUMNS + copyColumns + 10) {
     return createElement(
       Box,

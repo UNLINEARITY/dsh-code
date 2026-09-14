@@ -2051,7 +2051,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       // The launcher owns every update decision; the TUI only drives its
       // read-only probe and streamed apply as child processes.
       probeUpdate: () => probeLauncherUpdate(),
-      applyUpdate: onLine => applyLauncherUpdate(onLine),
+      applyUpdate: (onLine, plan) => applyLauncherUpdate(onLine, undefined, plan),
       loadJobs: () => listJobs(ctx, active?.agent),
       statusline: statuslineItems,
       saveStatusline,

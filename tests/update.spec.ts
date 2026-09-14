@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events'
 import { describe, expect, it } from 'vitest'
 import type { ChildProcess } from 'node:child_process'
-import { applyLauncherUpdate, createLineSplitter, launcherUpdateCommand, probeLauncherUpdate } from '../src/update.ts'
+import { applyLauncherUpdate, applyPlanArgs, createLineSplitter, launcherUpdateCommand, probeLauncherUpdate } from '../src/update.ts'
 
 /** A spawn double: an EventEmitter with stdout/stderr emitters and exit. */
 function fakeChild(): ChildProcess {
@@ -80,6 +80,21 @@ describe('probeLauncherUpdate', () => {
   })
 })
 
+describe('applyPlanArgs', () => {
+  it('pins the confirmed specs onto update --apply', () => {
+    expect(applyPlanArgs({
+      dshSpec: '@deepseek-ai/dsh@0.1.5-rc.2',
+      codeSpec: 'dsh-code@1.0.8',
+      pluginSpecs: ['@deepseek-ai/dsh-web-search-exa@0.1.5-rc.2'],
+    })).toEqual([
+      'update', '--apply',
+      '--dsh', '@deepseek-ai/dsh@0.1.5-rc.2',
+      '--code', 'dsh-code@1.0.8',
+      '--plugin', '@deepseek-ai/dsh-web-search-exa@0.1.5-rc.2',
+    ])
+  })
+})
+
 describe('applyLauncherUpdate', () => {
   it('streams stdout and stderr lines to the callback and resolves the exit code', async () => {
     const child = fakeChild()
@@ -105,5 +120,25 @@ describe('applyLauncherUpdate', () => {
     const promise = applyLauncherUpdate(() => {}, () => child)
     child.emit('error', new Error('spawn blocked'))
     await expect(promise).rejects.toThrow('update failed to start: spawn blocked')
+  })
+
+  it('spawns the pinned plan instead of a bare --apply', async () => {
+    const child = fakeChild()
+    let spawned: string[] | undefined
+    const promise = applyLauncherUpdate(() => {}, (command, args) => {
+      spawned = [command, ...args]
+      return child
+    }, {
+      dshSpec: '@deepseek-ai/dsh@0.1.5-rc.2',
+      codeSpec: 'dsh-code@1.0.8',
+      pluginSpecs: [],
+    })
+    child.emit('close', 0)
+    await promise
+    expect(spawned?.slice(-6)).toEqual([
+      'update', '--apply',
+      '--dsh', '@deepseek-ai/dsh@0.1.5-rc.2',
+      '--code', 'dsh-code@1.0.8',
+    ])
   })
 })

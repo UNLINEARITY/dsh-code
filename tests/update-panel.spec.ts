@@ -56,6 +56,18 @@ describe('updatePlanView', () => {
     expect(view.runnable).toBe(true)
   })
 
+  it('names an install newer than npm without an upgrade arrow', () => {
+    const view = updatePlanView(upgradeStatus({
+      code: { running: '1.0.8', latest: '1.0.7' },
+      upToDate: true,
+      aheadOfRegistry: true,
+    }))
+    expect(view.rows.map(row => row.text).join('\n')).toContain('1.0.8 (newer than npm 1.0.7)')
+    expect(view.rows.map(row => row.text).join('\n')).toContain('refusing to downgrade')
+    expect(view.rows.map(row => row.text).join('\n')).not.toContain('1.0.8 → 1.0.7')
+    expect(view.runnable).toBe(false)
+  })
+
   it('marks the up-to-date state and drops runnability', () => {
     const view = updatePlanView(upgradeStatus({
       code: { running: '1.0.6', latest: '1.0.6' },

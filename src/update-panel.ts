@@ -43,9 +43,11 @@ export interface UpdatePlanView {
 export function updatePlanView(status: LauncherUpdateStatus): UpdatePlanView {
   const rows: UpdateRow[] = []
   const latest = status.code.latest ?? 'unknown'
-  rows.push(status.code.latest !== null && status.code.latest === status.code.running
-    ? { key: 'code', text: `dsh-code    ${status.code.running} (latest)` }
-    : { key: 'code', text: `dsh-code    ${status.code.running} → ${latest}` })
+  rows.push(status.aheadOfRegistry === true
+    ? { key: 'code', text: `dsh-code    ${status.code.running} (newer than npm ${latest})` }
+    : status.code.latest !== null && status.code.latest === status.code.running
+      ? { key: 'code', text: `dsh-code    ${status.code.running} (latest)` }
+      : { key: 'code', text: `dsh-code    ${status.code.running} → ${latest}` })
   if (status.host.targetLine === null) {
     rows.push({ key: 'host', text: 'harness     pinned line unreadable — update would install @deepseek-ai/dsh@latest', tone: 'warn' })
   } else if (status.host.installed === null) {
@@ -85,7 +87,9 @@ export function updatePlanView(status: LauncherUpdateStatus): UpdatePlanView {
       rows.push({ key: `blocker:checkout:${index}`, text: line, tone: 'error' })
     }
   }
-  if (status.upToDate) {
+  if (status.aheadOfRegistry === true) {
+    rows.push({ key: 'ahead', text: 'this install is newer than npm latest — refusing to downgrade', tone: 'warn' })
+  } else if (status.upToDate) {
     rows.push({ key: 'uptodate', text: 'everything is already on the pinned line — nothing to update', tone: 'ok' })
   }
   const runnable = status.upToDate !== true
@@ -99,11 +103,12 @@ export function updatePlanView(status: LauncherUpdateStatus): UpdatePlanView {
 export type UpdatePhase = 'probe' | 'error' | 'plan' | 'apply' | 'done'
 
 /** Footer hint line per phase; the plan phase names the confirm key only when runnable. */
-export function updateFooter(phase: UpdatePhase, runnable: boolean, upToDate: boolean): string {
+export function updateFooter(phase: UpdatePhase, runnable: boolean, upToDate: boolean, aheadOfRegistry = false): string {
   if (phase === 'probe') return t('panel.update.footer.probe')
   if (phase === 'error') return t('panel.update.footer.error')
   if (phase === 'apply') return t('panel.update.footer.apply')
   if (phase === 'done') return t('panel.update.footer.error')
+  if (aheadOfRegistry) return t('panel.update.footer.ahead')
   if (upToDate) return t('panel.update.footer.current')
   return runnable ? t('panel.update.footer.update') : t('panel.update.footer.blocked')
 }
@@ -118,7 +123,7 @@ export function UpdatePanel({ probe, apply, close, notify }: {
   /** Read-only probe of the launcher update status (never installs). */
   probe(): Promise<LauncherUpdateStatus>
   /** Run the aligned update; streams sanitized progress lines. */
-  apply(onLine: (line: string) => void): Promise<number>
+  apply(onLine: (line: string) => void, plan: LauncherUpdateStatus['plan']): Promise<number>
   /** Close the panel (App keeps ownership of the flag). */
   close(): void
   /** One bounded cross-surface notice (phase completions). */
@@ -163,7 +168,7 @@ export function UpdatePanel({ probe, apply, close, notify }: {
     setAnchor('tail')
     apply(line => {
       setLines(previous => clipUpdateLines([...previous, singleLineText(line)]))
-    }).then(code => {
+    }, status.plan).then(code => {
       setExit(code)
       setPhase('done')
       notify(code === 0 ? 'update installed — restart dsh to activate' : `update failed (exit ${code})`, code === 0 ? 'info' : 'error')
@@ -218,7 +223,7 @@ export function UpdatePanel({ probe, apply, close, notify }: {
       : phase === 'error' ? t('panel.update.probeFailed')
       : phase === 'apply' ? singleLineText(lines[lines.length - 1] ?? t('panel.update.updating'))
       : phase === 'done' ? (exit === 0 ? t('panel.update.installed') : t('panel.update.failed'))
-      : status?.upToDate === true ? t('panel.update.upToDate') : planView?.runnable === true ? t('panel.update.enter') : t('panel.update.blocked')
+      : status?.aheadOfRegistry === true ? t('panel.update.aheadOfNpm') : status?.upToDate === true ? t('panel.update.upToDate') : planView?.runnable === true ? t('panel.update.enter') : t('panel.update.blocked')
     return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(singleLineText(t('panel.update.compact', { summary })), viewport.contentColumns))
   }
   const visible = rows.slice(offset, offset + budget)
@@ -233,7 +238,9 @@ export function UpdatePanel({ probe, apply, close, notify }: {
     : undefined
   const title = status === undefined
     ? t('panel.update.title')
-    : `/update · dsh-code ${status.code.running}${status.code.latest !== null && status.code.latest !== status.code.running ? ` → ${status.code.latest}` : ''}`
+    : status.aheadOfRegistry === true
+      ? `/update · dsh-code ${status.code.running}`
+      : `/update · dsh-code ${status.code.running}${status.code.latest !== null && status.code.latest !== status.code.running ? ` → ${status.code.latest}` : ''}`
   const accent = panelAccent('update', getPalette().dim, getPalette().brandBright)
   return createElement(
     Box,
@@ -244,6 +251,6 @@ export function UpdatePanel({ probe, apply, close, notify }: {
       color: toneColor(row.tone),
       wrap: 'truncate-end',
     }, truncateColumns(`  ${singleLineText(row.text)}`, viewport.contentColumns))),
-    createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns(singleLineText(updateFooter(phase, planView?.runnable ?? false, status?.upToDate === true)), viewport.contentColumns)),
+    createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns(singleLineText(updateFooter(phase, planView?.runnable ?? false, status?.upToDate === true, status?.aheadOfRegistry === true)), viewport.contentColumns)),
   )
 }

@@ -20,6 +20,15 @@ export interface LauncherUpdateStatus {
   readonly plan: { readonly dshSpec: string; readonly codeSpec: string; readonly pluginSpecs: readonly string[] }
   readonly blockers: { readonly registry: string | null; readonly downgrade: boolean; readonly localCheckout: readonly string[] | null }
   readonly upToDate: boolean
+  /** True when this install is newer than npm latest (apply would downgrade). */
+  readonly aheadOfRegistry?: boolean
+}
+
+/** Exact specs the TUI confirmed; apply must install these, not re-query latest. */
+export interface LauncherUpdatePlan {
+  readonly dshSpec: string
+  readonly codeSpec: string
+  readonly pluginSpecs: readonly string[]
 }
 
 /** The launcher entrypoint that ships beside this bundle (lib/../bin). */
@@ -89,10 +98,17 @@ export async function probeLauncherUpdate(spawnProcess: SpawnLike = spawn as Spa
  * exit code (0 success); rejects only when the process could not start.
  * No timeout: an npm install may legitimately take minutes.
  */
-export function applyLauncherUpdate(onLine: (line: string) => void, spawnProcess: SpawnLike = spawn as SpawnLike): Promise<number> {
-  const command = launcherUpdateCommand(['update', '--apply'])
+export function applyPlanArgs(plan: LauncherUpdatePlan): string[] {
+  const args = ['update', '--apply', '--dsh', plan.dshSpec, '--code', plan.codeSpec]
+  for (const plugin of plan.pluginSpecs) args.push('--plugin', plugin)
+  return args
+}
+
+export function applyLauncherUpdate(onLine: (line: string) => void, spawnProcess?: SpawnLike, plan?: LauncherUpdatePlan): Promise<number> {
+  const spawnFn = spawnProcess ?? (spawn as SpawnLike)
+  const command = launcherUpdateCommand(plan === undefined ? ['update', '--apply'] : applyPlanArgs(plan))
   return new Promise((resolve, reject) => {
-    const child = spawnProcess(command.command, command.args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
+    const child = spawnFn(command.command, command.args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
     const split = createLineSplitter(onLine)
     child.stdout?.on('data', (chunk: Buffer) => { split(chunk.toString()) })
     child.stderr?.on('data', (chunk: Buffer) => { split(chunk.toString()) })
