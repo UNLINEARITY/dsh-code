@@ -1,11 +1,11 @@
 name: Release
 
-# A tag push builds the publish artifact and attaches it to a GitHub
-# Release, so the bundle stays installable straight from GitHub
-# (`npm install -g <release asset url>`) when the npm registry path is
-# unavailable. The artifact is the same `pnpm pack` tarball npm would
-# serve; lib/ is built before packing, so no build toolchain is needed on
-# the installing machine.
+# Only a tag push builds the tarball and attaches it to a GitHub Release.
+# Pushing main runs CI tests only — it never creates a release or publishes
+# to npm. npm publish stays a manual step after the registry channel is
+# restored. Re-pushing the same tag, if GitHub allows it, uploads the
+# tarball onto the existing release (`gh release upload --clobber`) and
+# does not create a second release.
 
 on:
   push:

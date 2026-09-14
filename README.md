@@ -29,30 +29,28 @@ DeepSeek Harness 将模型、工具、存储、策略和界面作为插件，通
 
 ### 1. 安装与更新
 
-初次安装和更新走 npm（`/update` 与 `deepseek update --apply` 也只查询 npm）：
-
-```sh
-npm install -g @deepseek-ai/dsh@0.1.5-rc.2 pnpm
-npm install -g dsh-code@1.1.0
-dsh plugin --profile cli add dsh-code@1.1.0
-```
-
-> 提示：pnpm 会忽略发布不足 24 小时的包。发布首日请使用精确版本，24 小时后可省略版本号。
->
-> npm 脚本提示：npm 11.6+ 可能在全局安装时提示 `npm warn install-scripts`（node-pty、koffi 等原生依赖的构建脚本未获批准）。宿主随包自带预编译产物，常规平台可直接忽略；若安装后出现原生模块报错，按 npm 提示执行 `npm install -g --allow-scripts=<包名列表>` 后重装。
->
-> 版本对齐：dsh-code 面向 dsh `0.1.5-rc.2` 构建，全部 Harness 依赖均精确锁定为 `0.1.5-rc.2`。已安装的用户运行 `deepseek update --apply` 或 TUI 里的 `/update`，即可按同一条版本线一起升级全局宿主与 cli profile 中的插件。本地 `link:` 挂载会拒绝升级，避免新主机配上旧 checkout；请先 `git pull && pnpm install && pnpm build`，或改挂发布包。
->
-> 升级说明：旧会话与旧参数中记录的 `code` 预设会自动映射到上游已改名的 `ptc`，无需手动迁移。会话日志读取端随上游升级到格式 v3：旧格式日志在读取时由内核自动迁移，磁盘上的原始文件保持不变。
->
-> 当前安装比 npm 上的版本新时，更新器会拒绝降级，并写明原因，而不会显示成「已是最新」。
-
-开发或紧急安装可用 GitHub Release tarball（CI 在打 tag 时构建并校验，lib 已预构建）：
+初次安装和更新使用 GitHub Release tarball（打 tag 时 CI 构建并挂到 Release，lib 已预构建，安装机无需工具链）。npm 渠道仍暂停；`/update` 与 `deepseek update --apply` 只查询 npm，此时请不要用它们升级，按下面的 URL 重装即可：
 
 ```sh
 npm install -g @deepseek-ai/dsh@0.1.5-rc.2 pnpm
 npm install -g https://github.com/unlinearity/dsh-code/releases/download/1.1.0/dsh-code-1.1.0.tgz
 dsh plugin --profile cli add https://github.com/unlinearity/dsh-code/releases/download/1.1.0/dsh-code-1.1.0.tgz
+```
+
+> npm 脚本提示：npm 11.6+ 可能在全局安装时提示 `npm warn install-scripts`（node-pty、koffi 等原生依赖的构建脚本未获批准）。宿主随包自带预编译产物，常规平台可直接忽略；若安装后出现原生模块报错，按 npm 提示执行 `npm install -g --allow-scripts=<包名列表>` 后重装。
+>
+> 版本对齐：dsh-code 面向 dsh `0.1.5-rc.2` 构建，全部 Harness 依赖均精确锁定为 `0.1.5-rc.2`。本地 `link:` 挂载请先 `git pull && pnpm install && pnpm build`，不要对开发挂载跑更新器。
+>
+> 升级说明：旧会话与旧参数中记录的 `code` 预设会自动映射到上游已改名的 `ptc`，无需手动迁移。会话日志读取端随上游升级到格式 v3：旧格式日志在读取时由内核自动迁移，磁盘上的原始文件保持不变。
+>
+> 通过 GitHub 安装的版本会领先 npm。更新器只认 npm，因此会显示「新于 npm，不降级」，而不是「已是最新」。npm 恢复后再用 `/update`。
+
+npm 渠道恢复后可改用：
+
+```sh
+npm install -g @deepseek-ai/dsh@0.1.5-rc.2 pnpm
+npm install -g dsh-code@1.1.0
+dsh plugin --profile cli add dsh-code@1.1.0
 ```
 
 ### 2. 启动指令
@@ -186,7 +184,7 @@ dsh --profile cli --session my-id    # 使用指定 id 新建会话
 | 命令 | 用途 |
 | --- | --- |
 | `/plugin [query]` | 查看已加载扩展及其状态 |
-| `/update` | 按 npm 查询升级计划并确认安装刚才看到的版本（不二次查 latest）；当前比 npm 新时写明不降级；本地 `link:` 会拒绝。完成后需重启 |
+| `/update` | 只查询 npm。npm 暂停期间请用上面的 GitHub tarball 安装；当前比 npm 新时会写明不降级 |
 | `/statusline` | 选择状态栏显示的项目 |
 | `/vscode-keys` | 将 Ctrl+R 放行进 VS Code 系终端（幂等写入用户级 keybindings.json） |
 | `/theme` | 切换配色：`dark` / `light` / `prismatic` / `rainbow` / `auto` |

@@ -146,13 +146,19 @@ pnpm 在 `dsh-code_tmp_*` 目录中报 `ENOENT`，例如无法扫描 `node_modul
 
 ### 原因
 
-1.1.0 起安装与内置更新都以 npm 为正式渠道。GitHub Release 或本地构建若领先注册表，更新器不会装更旧的 npm 包。`link:` 挂载时升级全局宿主会把新主机配上旧 checkout，因此直接拒绝。
+npm 渠道仍暂停。`/update` 只查询 npm；从 GitHub Release 安装的 1.1.0 会领先注册表，更新器拒绝降级。`link:` 挂载时升级全局宿主会把新主机配上旧 checkout，因此也直接拒绝。
 
 ### 解决
 
-- 等 npm 上出现更新版本后再 `/update`。
-- 开发挂载请先 `git pull && pnpm install && pnpm build`，或改挂发布包：`dsh plugin --profile cli remove dsh-code && dsh plugin --profile cli add dsh-code@1.1.0`。
-- 命令行 `deepseek update --apply` 无参数时会现查再装；终端里确认后安装的是面板上刚展示的版本。
+- npm 恢复前请用 GitHub tarball 安装，不要依赖 `/update`：
+
+  ```sh
+  npm install -g https://github.com/unlinearity/dsh-code/releases/download/1.1.0/dsh-code-1.1.0.tgz
+  dsh plugin --profile cli add https://github.com/unlinearity/dsh-code/releases/download/1.1.0/dsh-code-1.1.0.tgz
+  ```
+
+- 开发挂载请先 `git pull && pnpm install && pnpm build`。
+- npm 恢复后，等注册表出现更新版本再 `/update`。
 
 若只是使用 DSH-Code，而非参与源码开发，推荐改用 npm 发布包：
 

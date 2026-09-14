@@ -27,28 +27,26 @@ Requires Node `^22.19 || >=24` and the preview `dsh` CLI (current release line: 
 
 ### 1. Install and update
 
-Install and update from npm (`/update` and `deepseek update --apply` query npm only):
-
-```sh
-npm install -g @deepseek-ai/dsh@0.1.5-rc.2 pnpm
-npm install -g dsh-code@1.1.0
-dsh plugin --profile cli add dsh-code@1.1.0
-```
-
-> Note: pnpm ignores packages published less than 24 hours ago. Use the exact version on release day; omit the version after 24 hours.
->
-> npm script prompts: npm 11.6+ may print `npm warn install-scripts` during a global install (unapproved build scripts for node-pty, koffi, and friends). The host ships prebuilt artifacts, so common platforms can ignore the warning; if a native-module error appears after installing, follow npm's own hint and rerun with `npm install -g --allow-scripts=<package list>`.
->
-> Version alignment: dsh-code targets dsh `0.1.5-rc.2`, with every Harness dependency pinned exactly to `0.1.5-rc.2`. Installed users can run `deepseek update --apply` or `/update` in the TUI to move the global host and cli profile plugins together. A local `link:` mount refuses the upgrade so a new host is not paired with an old checkout; `git pull && pnpm install && pnpm build`, or switch the profile to the published package.
->
-> When this install is newer than npm latest, the updater refuses to downgrade and says so, instead of claiming everything is up to date.
-
-For development or emergency installs, a GitHub Release tarball works (CI builds and verifies the artifact on each tag; lib is prebuilt):
+Install and update from the GitHub Release tarball (CI builds it on each tag and attaches it; lib is prebuilt, so the installing machine needs no toolchain). The npm channel is still paused; `/update` and `deepseek update --apply` query npm only, so do not use them until the registry is back — reinstall from the URL below:
 
 ```sh
 npm install -g @deepseek-ai/dsh@0.1.5-rc.2 pnpm
 npm install -g https://github.com/unlinearity/dsh-code/releases/download/1.1.0/dsh-code-1.1.0.tgz
 dsh plugin --profile cli add https://github.com/unlinearity/dsh-code/releases/download/1.1.0/dsh-code-1.1.0.tgz
+```
+
+> npm script prompts: npm 11.6+ may print `npm warn install-scripts` during a global install (unapproved build scripts for node-pty, koffi, and friends). The host ships prebuilt artifacts, so common platforms can ignore the warning; if a native-module error appears after installing, follow npm's own hint and rerun with `npm install -g --allow-scripts=<package list>`.
+>
+> Version alignment: dsh-code targets dsh `0.1.5-rc.2`, with every Harness dependency pinned exactly to `0.1.5-rc.2`. A local `link:` mount should be rebuilt with `git pull && pnpm install && pnpm build`; do not run the updater against a checkout.
+>
+> A GitHub install sits ahead of npm. The updater only reads npm, so it reports that this install is newer and refuses to downgrade, instead of claiming everything is up to date. Use `/update` again after the registry is restored.
+
+Once npm is restored:
+
+```sh
+npm install -g @deepseek-ai/dsh@0.1.5-rc.2 pnpm
+npm install -g dsh-code@1.1.0
+dsh plugin --profile cli add dsh-code@1.1.0
 ```
 
 ### 2. Launch commands
@@ -178,7 +176,7 @@ The following built-in commands are available inside the TUI. Additional Harness
 | Command | Purpose |
 | --- | --- |
 | `/plugin [query]` | Inspect loaded extensions and their status |
-| `/update` | Probe npm for an upgrade plan and install the versions just shown (does not re-query latest); says so and refuses when this install is newer than npm; a local `link:` mount is refused. Restart after it finishes |
+| `/update` | Queries npm only. While npm is paused, install from the GitHub tarball above; says so and refuses when this install is newer than npm |
 | `/statusline` | Select the items displayed in the status bar |
 | `/vscode-keys` | Pass Ctrl+R through VS Code-family terminals (idempotent user-level keybindings.json write) |
 | `/theme` | Switch colors: `dark` / `light` / `prismatic` / `rainbow` / `auto` |
