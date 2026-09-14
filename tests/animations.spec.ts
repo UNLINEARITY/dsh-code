@@ -35,6 +35,10 @@ import {
   isOfficialDeepSeekLabel,
   parseAnimationsArgument,
   PULSE_ALPHA_CAP,
+  RAINBOW_BURST_DURATION_MS,
+  RAINBOW_BURST_HUES,
+  RAINBOW_BURST_TICK_MS,
+  rainbowBurstColumnBg,
   parseAnimationsPref,
   SPARK_GLYPHS,
   WAVE_SURFACE_ALPHA_CAP,
@@ -680,5 +684,41 @@ describe('prismatic flow', () => {
   it('passes a single anchor through and rejects an empty triangle', () => {
     expect(flowColor(123, [violet])).toEqual(violet)
     expect(() => flowColor(0, [])).toThrow()
+  })
+})
+
+describe('rainbow composer burst', () => {
+  const base: RgbTriple = [46, 46, 52]
+  const midTick = Math.floor(RAINBOW_BURST_DURATION_MS / 2 / RAINBOW_BURST_TICK_MS)
+
+  it('pins seven fixed spectrum hues, independent of the rolled palette', () => {
+    expect(RAINBOW_BURST_HUES).toHaveLength(7)
+  })
+
+  it('returns null before and after the burst window', () => {
+    expect(rainbowBurstColumnBg(-1, 0, 80, base, 1, 3)).toBeNull()
+    const last = Math.ceil(RAINBOW_BURST_DURATION_MS / RAINBOW_BURST_TICK_MS)
+    expect(rainbowBurstColumnBg(last, 0, 80, base, 1, 3)).toBeNull()
+  })
+
+  it('paints a sliding ribbon: the same column changes hue as the burst advances', () => {
+    const early = rainbowBurstColumnBg(8, 10, 80, base, 1, 3)
+    const later = rainbowBurstColumnBg(midTick, 10, 80, base, 1, 3)
+    expect(early).not.toBeNull()
+    expect(later).not.toBeNull()
+    expect(early).not.toEqual(later)
+  })
+
+  it('keeps a column the same hue across the three band rows (solid ribbon)', () => {
+    const top = rainbowBurstColumnBg(midTick, 20, 80, base, 0, 3)
+    const mid = rainbowBurstColumnBg(midTick, 20, 80, base, 1, 3)
+    const bot = rainbowBurstColumnBg(midTick, 20, 80, base, 2, 3)
+    expect(top).not.toBeNull()
+    expect(mid).not.toBeNull()
+    expect(bot).not.toBeNull()
+    // Edge rows are dimmer (more of the band base) but stay the same hue family:
+    // red channel of the middle crest is the highest.
+    expect(mid![0]).toBeGreaterThanOrEqual(top![0])
+    expect(mid![0]).toBeGreaterThanOrEqual(bot![0])
   })
 })

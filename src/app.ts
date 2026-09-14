@@ -72,6 +72,9 @@ import {
   effortAboveHigh,
   isOfficialDeepSeekLabel,
   parseAnimationsArgument,
+  RAINBOW_BURST_DURATION_MS,
+  RAINBOW_BURST_TICK_MS,
+  rainbowBurstColumnBg,
   type DeepseekWaveStyle,
   type DeepseekWaveTier,
 } from './render/animations.ts'
@@ -185,6 +188,7 @@ import {
   followInspectorCursor,
   inspectorViewport,
   layoutGutterRows,
+  liveRegionBudget,
   moveScroll,
   panelViewport,
   revealRow,
@@ -3008,6 +3012,78 @@ function ComposerWave(props: ComposerWaveProps): ReactElement {
   )
 }
 
+/**
+ * The /rainbow celebration leaf: a FIXED seven-color ribbon that slides
+ * across the three-row composer band. Same cell model as ComposerWave so
+ * CJK/emoji stay atomic; no wordmark, no sparkles — the spectrum is the
+ * show. Strictly one-shot per burst id (Input latches onSettled).
+ */
+function ComposerRainbowBurst(props: Omit<ComposerWaveProps, 'tier' | 'style'>): ReactElement {
+  const durationMs = RAINBOW_BURST_DURATION_MS
+  const { tick, done } = useWaveFrames(props.active, durationMs)
+  const settledRef = useRef(false)
+  const onSettledRef = useRef(props.onSettled)
+  onSettledRef.current = props.onSettled
+  const settle = (): void => {
+    if (settledRef.current) return
+    settledRef.current = true
+    onSettledRef.current()
+  }
+  useEffect(() => {
+    if (done) settle()
+  }, [done])
+  useEffect(() => () => {
+    settle()
+  }, [])
+  if (!props.active || done || tick * RAINBOW_BURST_TICK_MS >= durationMs) return props.fallback
+  const bandRgb = getPalette().composerBand
+  const totalBandRows = props.rows.length + 2
+  const burstBg = (row: number, column: number): string => {
+    const rgb = rainbowBurstColumnBg(tick, column, props.bandWidth, bandRgb, row, totalBandRows)
+    return rgb === null ? props.bandBg : inkColor(rgb)
+  }
+  const blankBandRow = (row: number): ReactElement => {
+    const blanks: ComposerCell[] = []
+    for (let column = 0; column < props.bandWidth; column += 1) {
+      blanks.push({ char: ' ', width: 1, backgroundColor: burstBg(row, column) })
+    }
+    return createElement(Text, { key: `blank-${row}` }, ...waveRowSpans(blanks))
+  }
+  const editorBurstRows = props.rows.map((row, visibleIndex) => {
+    const sourceIndex = props.windowStart + visibleIndex
+    const bandRow = visibleIndex + 1
+    const parts = editorRowParts(row, sourceIndex, props.caretRow, props.cursor)
+    const placeholder = sourceIndex === 0 && props.value === ''
+    const cells: ComposerCell[] = []
+    let usedColumns = 0
+    const push = (char: string, extra: Omit<ComposerCell, 'char' | 'width' | 'backgroundColor'> = {}): void => {
+      const width = visibleColumns(char)
+      cells.push({ char, width, backgroundColor: burstBg(bandRow, usedColumns), ...extra })
+      usedColumns += width
+    }
+    if (sourceIndex === 0) {
+      push(props.promptGlyph, { color: props.promptColor, bold: true })
+      push(' ', { color: props.promptColor })
+    } else {
+      push(' ')
+      push(' ')
+    }
+    for (const span of splitGraphemes(parts.before)) push(span.text)
+    if (parts.hasCaret) push(parts.caret, { inverse: props.caretVisible })
+    const tail = placeholder ? composerPlaceholder() : parts.after
+    for (const span of splitGraphemes(tail)) push(span.text, placeholder ? { dim: true } : {})
+    while (usedColumns < props.bandWidth) push(' ')
+    return createElement(Text, { key: `editor-${sourceIndex}`, wrap: 'truncate-end' }, ...waveRowSpans(cells))
+  })
+  return createElement(
+    Box,
+    { flexDirection: 'column', width: props.bandWidth },
+    blankBandRow(0),
+    ...editorBurstRows,
+    blankBandRow(totalBandRows - 1),
+  )
+}
+
 /** One-word kind label per entry, so the inspector's ←→ walk names what
  * each step is instead of leaving the reader to infer it from the body. */
 function entryKindLabel(entry: TranscriptEntry | undefined): string {
@@ -3274,10 +3350,10 @@ function completionMenuRowCount(terminalRows: number, rowCount: number): number 
 
 /**
  * The completion menu, rendered inside the composer's subtree directly above
- * the composer band — attached the way Claude-Code anchors its dropdown. Opening
- * it grows the stack downward: the composer stays the last element on screen
- * and everything above (the flushed static transcript, the status line) never
- * moves. Props-only (no lifted state): the menu is a pure view of the input
+ * the composer band — attached the way Claude-Code anchors its dropdown.
+ * Its height is deducted from the live transcript budget so the menu covers
+ * live rows instead of growing the tree and moving the composer/status.
+ * Props-only (no lifted state): the menu is a pure view of the input
  * editor's live completion state, so no cross-component effect ever resyncs
  * it (a state lift here previously deadlocked the menu after a resize).
  */
@@ -3357,7 +3433,7 @@ interface DraftFile extends FilePathInspection {
  * While a modal (approval / question / model panel) owns the keys, the
  * box passes every key through untouched.
  */
-function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openEffort, openHelp, openMode, openPermission, openResume, openSearch, openPlugin, openUpdate, openSchedule, openJobs, openStatusline, openTheme, openLanguage, saveLanguage, openHistory, openAgents, openSubagent, openTodos, openDelete, openDiff, openReviewPicker, reviewChanges, deleteConfirm, confirmDelete, cancelDelete, createSession, forkSession, cancelSessionSwitch, notify, applyEditorKeys, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, inspectImages, prepareImages, inspectFiles, prepareFiles, cycleMode, exportTranscript, renameTitle, copyLastResponse, recallSpace, recordLocal, recordHistory, queued, cancelQueued, historyFill, historyConsumed, animations, applyAnimations, applyRainbow, waveTier, waveStyle, maxRows, anchorRowsBelow, tabTitle, onEditorRows, onMenuRows, sessionKey }: {
+function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openEffort, openHelp, openMode, openPermission, openResume, openSearch, openPlugin, openUpdate, openSchedule, openJobs, openStatusline, openTheme, openLanguage, saveLanguage, openHistory, openAgents, openSubagent, openTodos, openDelete, openDiff, openReviewPicker, reviewChanges, deleteConfirm, confirmDelete, cancelDelete, createSession, forkSession, cancelSessionSwitch, notify, applyEditorKeys, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, inspectImages, prepareImages, inspectFiles, prepareFiles, cycleMode, exportTranscript, renameTitle, copyLastResponse, recallSpace, recordLocal, recordHistory, queued, cancelQueued, historyFill, historyConsumed, animations, applyAnimations, applyRainbow, rainbowBurstId, waveTier, waveStyle, maxRows, anchorRowsBelow, tabTitle, onEditorRows, onMenuRows, sessionKey }: {
   active: boolean
   frozen: boolean
   /** Frozen-band hint naming the surface that owns the keyboard; an empty
@@ -3452,6 +3528,8 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
   applyAnimations(enabled: boolean): void
   /** Reroll or pin the rainbow palette (switches to rainbow if needed). */
   applyRainbow(seed?: number): void
+  /** Monotonic id of the in-flight /rainbow composer burst; 0 means none. */
+  rainbowBurstId: number
   /** DeepSeek easter-egg wave tier of the applied route (null otherwise):
    * official DeepSeek models drive their flash/pro tiers, non-DeepSeek
    * models running an effort above high drive the "Into the Unknown"
@@ -4547,6 +4625,12 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
     if (!animations && waveKey !== null && waveKey !== wavePlayedKey) setWavePlayedKey(waveKey)
   }, [animations, waveKey, wavePlayedKey])
   const waveArmed = waveKey !== null && waveKey !== wavePlayedKey
+  const burstKey = rainbowBurstId > 0 ? `rainbow:${rainbowBurstId}` : null
+  const [burstPlayedKey, setBurstPlayedKey] = useState<string | null>(null)
+  useEffect(() => {
+    if (!animations && burstKey !== null && burstKey !== burstPlayedKey) setBurstPlayedKey(burstKey)
+  }, [animations, burstKey, burstPlayedKey])
+  const burstArmed = burstKey !== null && burstKey !== burstPlayedKey
 
   // Every exclusive panel keeps the composer as a stable visual anchor, but
   // freezes it to one row: no menu, multiline wrap, or animation.
@@ -4681,26 +4765,45 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
     Box,
     { flexDirection: 'column' },
     menu,
-    createElement(ComposerWave, {
-      key: waveKey ?? 'static',
-      tier: waveTier ?? 'deepseek',
-      style: waveStyle ?? 'wave',
-      active: waveTier !== null && waveStyle !== null && !busy && !preparingImages && animations && waveArmed,
-      onSettled: () => {
-        if (waveKey !== null) setWavePlayedKey(waveKey)
-      },
-      fallback: band(staticEditor),
-      bandWidth,
-      bandBg,
-      rows: editorViewModel.rows.slice(editorWindowStart, editorWindowStart + editorWindowRows),
-      windowStart: editorWindowStart,
-      caretRow: caret.row,
-      cursor: clampedCursor,
-      caretVisible: cursorVisible,
-      value,
-      promptGlyph,
-      promptColor,
-    }),
+    burstArmed
+      ? createElement(ComposerRainbowBurst, {
+        key: burstKey,
+        active: !busy && !preparingImages && animations,
+        onSettled: () => {
+          if (burstKey !== null) setBurstPlayedKey(burstKey)
+        },
+        fallback: band(staticEditor),
+        bandWidth,
+        bandBg,
+        rows: editorViewModel.rows.slice(editorWindowStart, editorWindowStart + editorWindowRows),
+        windowStart: editorWindowStart,
+        caretRow: caret.row,
+        cursor: clampedCursor,
+        caretVisible: cursorVisible,
+        value,
+        promptGlyph,
+        promptColor,
+      })
+      : createElement(ComposerWave, {
+        key: waveKey ?? 'static',
+        tier: waveTier ?? 'deepseek',
+        style: waveStyle ?? 'wave',
+        active: waveTier !== null && waveStyle !== null && !busy && !preparingImages && animations && waveArmed,
+        onSettled: () => {
+          if (waveKey !== null) setWavePlayedKey(waveKey)
+        },
+        fallback: band(staticEditor),
+        bandWidth,
+        bandBg,
+        rows: editorViewModel.rows.slice(editorWindowStart, editorWindowStart + editorWindowRows),
+        windowStart: editorWindowStart,
+        caretRow: caret.row,
+        cursor: clampedCursor,
+        caretVisible: cursorVisible,
+        value,
+        promptGlyph,
+        promptColor,
+      }),
   )
 }
 
@@ -4977,6 +5080,10 @@ export function App(props: AppProps): ReactElement {
    * (ordinary turns, image preparation, /animation toggles) never replays. */
   const [waveTier, setWaveTier] = useState<DeepseekWaveTier | null>(null)
   const [waveStyle, setWaveStyle] = useState<DeepseekWaveStyle | null>(null)
+  const [rainbowBurstId, setRainbowBurstId] = useState(0)
+  const fireRainbowBurst = (): void => {
+    setRainbowBurstId(id => id + 1)
+  }
   // /animation toggle: applies immediately, persists through the runner, and
   // gates every timed leaf (shimmer, chase, blink, wave) for this render.
   const [animations, setAnimations] = useState(props.animations ?? true)
@@ -5192,6 +5299,7 @@ export function App(props: AppProps): ReactElement {
   const inputActive = deleteConfirmId !== undefined
     ? !approvalPending && !questionPending
     : !modelOpen && !helpOpen && !modeOpen && !permissionOpen && !resumeOpen && !pluginOpen && !updateOpen && !scheduleOpen && !jobsOpen && !statuslineOpen && !themeOpen && !languageOpen && !historyOpen && !agentsOpen && !subagentOpen && !todosOpen && !verboseOpen && diffView === undefined && !reviewPickerOpen && !approvalPending && !questionPending
+  const transcriptVisible = !modelOpen && !helpOpen && !modeOpen && !permissionOpen && !resumeOpen && !pluginOpen && !updateOpen && !scheduleOpen && !jobsOpen && !statuslineOpen && !themeOpen && !languageOpen && !historyOpen && !agentsOpen && !subagentOpen && !todosOpen && !verboseOpen && diffView === undefined && !reviewPickerOpen && !approvalPending && !questionPending
 
   // Human questions outrank local inspectors. Close the lower modal instead
   // of leaving an approval/question visible but keyboard-locked behind it.
@@ -5260,6 +5368,7 @@ export function App(props: AppProps): ReactElement {
   // One pending synchronized frame covers a debounced resize or explicit
   // source-backed replay. It is closed after the corresponding React commit.
   const synchronizedReplayPending = useRef(false)
+  const resizeBurstHeld = useRef(false)
   useEffect(() => {
     if (appStdout === undefined) return
     let replayTimer: ReturnType<typeof setTimeout> | undefined
@@ -5271,24 +5380,31 @@ export function App(props: AppProps): ReactElement {
       if (next.columns === terminalSizeRef.current.columns && next.rows === terminalSizeRef.current.rows) return
       terminalSizeRef.current = next
 
-      // Ink 5 erases by the old logical line count. Once the terminal reflows
-      // a full-width border at a new width, that count is no longer enough and
-      // stale frames remain visible. Follow Codex's source-backed reflow
-      // policy: update live geometry immediately, but wait for the resize
-      // burst to settle before one hard reset and one transcript replay at the
-      // final width. Replaying Static on every event appends duplicate history.
+      // Hold the visible frame for the whole burst so intermediate Ink
+      // relayouts (new width against still-old Static rows) never flash as
+      // doubled borders. One clear + Static remount still runs after the
+      // burst settles.
+      if (!resizeBurstHeld.current) {
+        resizeBurstHeld.current = true
+        appStdout.write(SYNCHRONIZED_UPDATE_BEGIN)
+      }
       setTerminalSize(next)
       if (replayTimer !== undefined) clearTimeout(replayTimer)
       replayTimer = setTimeout(() => {
         synchronizedReplayPending.current = true
-        appStdout.write(SYNCHRONIZED_UPDATE_BEGIN + RESIZE_REFLOW_CLEAR)
+        appStdout.write(RESIZE_REFLOW_CLEAR)
         setRefreshEpoch(epoch => epoch + 1)
+        resizeBurstHeld.current = false
       }, RESIZE_REFLOW_DELAY_MS)
     }
     appStdout.on('resize', handleResize)
     return () => {
       appStdout.off('resize', handleResize)
       if (replayTimer !== undefined) clearTimeout(replayTimer)
+      if (resizeBurstHeld.current) {
+        appStdout.write(SYNCHRONIZED_UPDATE_END)
+        resizeBurstHeld.current = false
+      }
     }
   }, [appStdout])
   const terminalRows = terminalSize.rows
@@ -5321,14 +5437,19 @@ export function App(props: AppProps): ReactElement {
   }, [])
   const imeRowsBelowComposer = statusBarRows + 1
   const composerEditorCap = composerMaxRows(terminalRows)
-  // Bottom chrome is composer (2 borders + composerRows) + status (up to 2
-  // rows) + todo/agents/notice (3) = 8 resting rows, plus the historical
-  // 5-row menu reserve: small menus still fit without shrinking the live
-  // area (unchanged behavior), and menu rows beyond the reserve are budgeted
-  // exactly so the live/streaming area stays strictly below the terminal
-  // height as the editor or the menu grows.
-  const MENU_RESERVE_ROWS = 5
-  const dynamicRows = Math.max(1, terminalRows - 8 - MENU_RESERVE_ROWS - composerGutterRows - (composerRows - 1) - Math.max(0, menuRows - MENU_RESERVE_ROWS))
+  // Pin the composer and status at the bottom: every extra chrome row
+  // (completion menu, notice, todos, agents, extra editor/status rows)
+  // covers live transcript instead of growing the tree.
+  const dynamicRows = liveRegionBudget({
+    terminalRows,
+    composerRows,
+    statusBarRows,
+    menuRows,
+    gutterRows: composerGutterRows,
+    notice: notice !== undefined,
+    todo: transcriptVisible && view.todos.length > 0,
+    agents: transcriptVisible && agentRows.length > 0,
+  })
   const streamingActive = view.streaming !== '' || view.streamingReasoning !== ''
   const deepDivingVisible = busy && !streamingActive
   // Terminal tab label: "deepseek" until the session carries a name, then the
@@ -5383,7 +5504,6 @@ export function App(props: AppProps): ReactElement {
     : visibleLiveLines.slice(-liveAudit.allocation.live)
   const auditedReasoningRows = liveAudit.allocation.reasoning
   const auditedAnswerRows = liveAudit.allocation.answer
-  const transcriptVisible = !modelOpen && !helpOpen && !modeOpen && !permissionOpen && !resumeOpen && !pluginOpen && !updateOpen && !scheduleOpen && !jobsOpen && !statuslineOpen && !themeOpen && !languageOpen && !historyOpen && !agentsOpen && !subagentOpen && !todosOpen && !verboseOpen && diffView === undefined && !reviewPickerOpen && !approvalPending && !questionPending
   const inspectorVisible = verboseOpen && !approvalPending && !questionPending
   const modalVisible = modelOpen || helpOpen || modeOpen || permissionOpen || resumeOpen || pluginOpen || updateOpen || scheduleOpen || jobsOpen || statuslineOpen || themeOpen || languageOpen || historyOpen || agentsOpen || subagentOpen || todosOpen || inspectorVisible || diffView !== undefined || reviewPickerOpen || approvalPending || questionPending
   // The surface that currently owns the keyboard, named in the frozen band:
@@ -5460,6 +5580,7 @@ export function App(props: AppProps): ReactElement {
     setTheme('rainbow')
     props.saveTheme?.('rainbow')
     notify(t('notice.rainbowRolled', { seed: rainbowSeedLabel() }))
+    fireRainbowBurst()
     refreshScreen()
   }
   useEffect(() => {
@@ -5924,6 +6045,7 @@ export function App(props: AppProps): ReactElement {
           // which renders once and would keep the old palette's colors; the
           // same source-backed rebuild resize and Ctrl+L use repaints the
           // whole screen (scrollback included) from the new palette.
+          if (name === 'rainbow') fireRainbowBurst()
           refreshScreen()
         },
         close: () => setThemeOpen(false),
@@ -6149,6 +6271,7 @@ export function App(props: AppProps): ReactElement {
         animations,
         applyAnimations,
         applyRainbow,
+        rainbowBurstId,
         waveTier,
         waveStyle,
         maxRows: composerEditorCap,

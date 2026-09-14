@@ -357,6 +357,75 @@ export function envelope(elapsed: number, total: number, fadeIn: number, fadeOut
   return Math.min(Math.max(Math.min(rise, fall), 0), 1)
 }
 
+/**
+ * The /rainbow celebration on the three-row composer band: a FIXED
+ * seven-color spectrum (not the rolled palette) that slides across every
+ * row as one ribbon. Triggered when switching to rainbow or rerolling the
+ * seed; independent of RAINBOW_SEED so the burst always reads as a prism.
+ */
+export const RAINBOW_BURST_TICK_MS = 33
+export const RAINBOW_BURST_DURATION_MS = 1_800
+export const RAINBOW_BURST_HUES: readonly RgbTriple[] = [
+  [255, 59, 48],
+  [255, 149, 0],
+  [255, 204, 0],
+  [52, 199, 89],
+  [0, 199, 190],
+  [10, 132, 255],
+  [175, 82, 222],
+]
+
+/** Smoothstep in 0..1, then wrap-lerp around the seven burst hues. */
+function rainbowBurstHue(position: number): RgbTriple {
+  const hues = RAINBOW_BURST_HUES
+  const x = ((position % 1) + 1) % 1
+  const scaled = x * hues.length
+  const index = Math.floor(scaled)
+  const t = scaled - index
+  const eased = t * t * (3 - 2 * t)
+  const a = hues[index % hues.length]!
+  const b = hues[(index + 1) % hues.length]!
+  return [
+    Math.round(a[0] + (b[0] - a[0]) * eased),
+    Math.round(a[1] + (b[1] - a[1]) * eased),
+    Math.round(a[2] + (b[2] - a[2]) * eased),
+  ]
+}
+
+/**
+ * Background tint for one composer-band cell during the rainbow burst.
+ * Every row of a column shares the same hue (a solid ribbon); edge rows
+ * are slightly dimmer so the middle editor row reads as the crest. The
+ * spectrum slides ~1.2 widths over the burst, then fades to the band base.
+ * @param tick - frame index at {@link RAINBOW_BURST_TICK_MS}.
+ * @param column - band column (0..width-1).
+ * @param width - band width in columns.
+ * @param base - the theme's composerBand color to blend toward.
+ * @param row - band row (0..rows-1).
+ * @param rows - band height (composer is three rows: pad, editor, pad).
+ * @returns the blended RGB, or null after the burst (or at zero alpha).
+ */
+export function rainbowBurstColumnBg(
+  tick: number,
+  column: number,
+  width: number,
+  base: RgbTriple,
+  row = 0,
+  rows = 1,
+): RgbTriple | null {
+  const elapsed = tick * RAINBOW_BURST_TICK_MS / 1000
+  const total = RAINBOW_BURST_DURATION_MS / 1000
+  const fade = envelope(elapsed, total, 0.18, 0.45)
+  if (fade <= 0) return null
+  const span = Math.max(1, width - 1)
+  const slide = elapsed / total * 1.2
+  const mixed = rainbowBurstHue(column / span + slide)
+  const edge = rows > 1 && (row === 0 || row === rows - 1)
+  const alpha = Math.min(0.72 * fade * (edge ? 0.78 : 1), 0.70)
+  if (alpha < 0.02) return null
+  return blendRgb(mixed, base, alpha)
+}
+
 /** Per-band sampling context: everything geometry needs beyond the timeline. */
 interface BandContext {
   /** Aspect-weighted row offset from the band's center row (Pulse 2-D ring). */
