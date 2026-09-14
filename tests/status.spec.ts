@@ -1,6 +1,7 @@
 /** Status-bar formatting, tone layout, and two-row width degradation. */
 
 import { describe, expect, it } from 'vitest'
+import { setLanguage } from '../src/i18n.ts'
 import type { TranscriptStats } from '../src/render/projection.ts'
 import { visibleColumns } from '../src/render/markdown.ts'
 import {
@@ -325,6 +326,40 @@ describe('status layout', () => {
       'model 45.2s · latency 0.6s · 20 tokens/s · tool 2m42s',
       's',
     ])
+  })
+
+  it('translates row-2 meters and /mode context labels in Chinese', () => {
+    try {
+      setLanguage('zh')
+      const layout = layoutStatusBar(
+        { ...baseFacts, mode: 'standard' },
+        {
+          ...emptyStats,
+          turns: 93,
+          steps: 1655,
+          llmMs: 45_233,
+          ttftMs: 2_400,
+          ttftSteps: 4,
+          decodeMs: 60_000,
+          decodeTokens: 1_200,
+          toolMs: 162_000,
+          lastPromptTokens: 32_000,
+          contextWindow: 128_000,
+          usage: { inputTokens: 12_160, outputTokens: 2_400, cacheReadTokens: 9_728 },
+        },
+        200,
+      )
+      expect(groupText(layout.row1).some(group => group.includes('/mode standard'))).toBe(true)
+      expect(groupText(layout.row1).some(group => group.startsWith('上下文 '))).toBe(true)
+      expect(groupText(layout.row2)).toEqual(expect.arrayContaining([
+        '回合 93 · 步骤 1655',
+        '模型 45.2s · 延迟 0.6s · 20 tokens/秒 · 工具 2m42s',
+        '缓存 80%',
+        '入 12.2K · 出 2.4K',
+      ]))
+    } finally {
+      setLanguage('en')
+    }
   })
 
   it('shows context occupancy as a progress bar once capacity and a report exist', () => {

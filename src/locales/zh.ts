@@ -177,6 +177,17 @@ export const zh: MessageCatalog = {
   // Composer and status chrome
   'composer.placeholder': '输入消息 · / 命令 · @ 引用',
   'status.shiftTabHint': '（shift+tab 切换）',
+  'status.label.turns': '回合',
+  'status.label.steps': '步骤',
+  'status.label.modelTime': '模型',
+  'status.label.latency': '延迟',
+  'status.label.tokensPerSec': ' tokens/秒',
+  'status.label.tool': '工具',
+  'status.label.cache': '缓存',
+  'status.label.in': '入',
+  'status.label.out': '出',
+  'status.label.mode': '/mode',
+  'status.label.context': '上下文',
 
   // Frozen band
   'frozen.keysGoTo': '按键交给{owner} · esc {action}',

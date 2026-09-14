@@ -1118,6 +1118,7 @@ function StatusLine({ facts, stats, busy, columns, items, onRows, animated }: {
   const flowActive = animated && busy && flow !== undefined
   const flowTick = useFrames(BUSY_CHASE_TICK_MS, flowActive)
   const flowMs = flowActive ? flowTick * BUSY_CHASE_TICK_MS + (flow?.phaseMs ?? 0) : undefined
+  const language = getLanguage()
   const layout = useMemo(() => layoutStatusBar(facts, stats, Math.max(8, columns - 2), {
     busy,
     items,
@@ -1141,6 +1142,8 @@ function StatusLine({ facts, stats, busy, columns, items, onRows, animated }: {
     busy,
     columns,
     items,
+    // Labels come from t(); a language switch must rebuild the rows.
+    language,
   ])
   // The IME anchor below the composer counts every row between the caret and
   // Ink's parked cursor, so the footer reports its exact row count one-way

@@ -175,6 +175,17 @@ export const en = {
   // Composer and status chrome
   'composer.placeholder': 'type a message · / commands · @ mentions',
   'status.shiftTabHint': '(shift+tab to cycle)',
+  'status.label.turns': 'turns',
+  'status.label.steps': 'steps',
+  'status.label.modelTime': 'model',
+  'status.label.latency': 'latency',
+  'status.label.tokensPerSec': ' tokens/s',
+  'status.label.tool': 'tool',
+  'status.label.cache': 'cache',
+  'status.label.in': 'in',
+  'status.label.out': 'out',
+  'status.label.mode': '/mode',
+  'status.label.context': 'context',
 
   // Frozen band
   'frozen.keysGoTo': 'keys go to {owner} · esc {action}',

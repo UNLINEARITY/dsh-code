@@ -192,7 +192,7 @@ export function contextGroupSpans(
   barWidth: number,
   readout: ContextReadoutMode,
 ): readonly StatusSpan[] {
-  const spans: StatusSpan[] = [{ text: 'context ', tone: 'label' }]
+  const spans: StatusSpan[] = [{ text: t('status.label.context') + ' ', tone: 'label' }]
   spans.push(...contextBar(usedTokens, contextWindow, barWidth))
   if (readout === 'none' || barWidth <= 0 || contextWindow <= 0) return spans
   const used = Math.max(0, usedTokens)
@@ -415,7 +415,7 @@ function buildCandidates(
   if (cwd !== '' && enabled.has('cwd')) push({ text: cwd, tone: 'path' })
   const mode = safe(facts.mode ?? '')
   if (mode !== '' && enabled.has('mode')) {
-    push({ text: '/mode ', tone: 'label' })
+    push({ text: t('status.label.mode') + ' ', tone: 'label' })
     identity.push({ text: mode, tone: 'accent' })
   }
   const branch = safe(facts.branch)
@@ -437,8 +437,8 @@ function buildCandidates(
         if (counts.length > 0) counts.push(sep())
         counts.push({ text: label + ' ', tone: 'label' }, { text: value, tone: 'value' })
       }
-      pair('turns', String(stats.turns))
-      pair('steps', String(stats.steps))
+      pair(t('status.label.turns'), String(stats.turns))
+      pair(t('status.label.steps'), String(stats.steps))
       row2.push({ group: { spans: counts }, rank: RANK_COUNTS, id: 'turns' })
     }
     if (enabled.has('durations')) {
@@ -450,16 +450,16 @@ function buildCandidates(
         if (durations.length > 0) durations.push(sep())
         durations.push({ text: label + ' ', tone: 'label' }, { text: value, tone: 'value' })
       }
-      if (stats.llmMs > 0) pair('model', formatDuration(stats.llmMs))
-      if (stats.ttftSteps > 0) pair('latency', formatDuration(stats.ttftMs / stats.ttftSteps))
+      if (stats.llmMs > 0) pair(t('status.label.modelTime'), formatDuration(stats.llmMs))
+      if (stats.ttftSteps > 0) pair(t('status.label.latency'), formatDuration(stats.ttftMs / stats.ttftSteps))
       if (stats.decodeMs > 0 && stats.decodeTokens > 0) {
         if (durations.length > 0) durations.push(sep())
         durations.push(
           { text: formatRate(stats.decodeTokens / (stats.decodeMs / 1_000)), tone: 'value' },
-          { text: ' tokens/s', tone: 'label' },
+          { text: t('status.label.tokensPerSec'), tone: 'label' },
         )
       }
-      if (stats.toolMs > 0) pair('tool', formatDuration(stats.toolMs))
+      if (stats.toolMs > 0) pair(t('status.label.tool'), formatDuration(stats.toolMs))
       if (durations.length > 0) {
         row2.push({ group: { spans: durations }, rank: RANK2_DURATIONS, id: 'durations' })
       }
@@ -469,7 +469,7 @@ function buildCandidates(
   const cacheHit = cacheHitPercent(stats.usage)
   if (cacheHit !== null && enabled.has('cache')) {
     row2.push({
-      group: { spans: [{ text: 'cache ', tone: 'label' }, { text: cacheHit + '%', tone: 'value' }] },
+      group: { spans: [{ text: t('status.label.cache') + ' ', tone: 'label' }, { text: cacheHit + '%', tone: 'value' }] },
       rank: RANK2_CACHE,
       id: 'cache',
     })
@@ -492,8 +492,8 @@ function buildCandidates(
       if (tokens.length > 0) tokens.push(sep())
       tokens.push({ text: label + ' ', tone: 'label' }, { text: value, tone: 'value' })
     }
-    pair('in', formatTokens(stats.usage.inputTokens))
-    pair('out', formatTokens(stats.usage.outputTokens))
+    pair(t('status.label.in'), formatTokens(stats.usage.inputTokens))
+    pair(t('status.label.out'), formatTokens(stats.usage.outputTokens))
     row2.push({ group: { spans: tokens }, rank: RANK_TOKENS, id: 'tokens' })
   }
 
