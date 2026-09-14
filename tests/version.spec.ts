@@ -1,6 +1,6 @@
 /** Kernel-version resolver rules: the manifest walk must only trust the real host package. */
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
@@ -62,6 +62,30 @@ describe('resolveDshHostVersion', () => {
   it('returns undefined for missing or empty entries', () => {
     expect(resolveDshHostVersion(undefined)).toBeUndefined()
     expect(resolveDshHostVersion('')).toBeUndefined()
+  })
+
+  it('follows a global bin symlink into the host package', () => {
+    const root = makeFixture(
+      join('lib', 'node_modules', '@deepseek-ai', 'dsh', 'package.json'),
+      { name: '@deepseek-ai/dsh', version: '0.1.5-rc.2' },
+    )
+    const real = join(root, 'lib', 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js')
+    mkdirSync(dirname(real), { recursive: true })
+    writeFileSync(real, '')
+    const bin = join(root, 'bin', 'dsh')
+    mkdirSync(dirname(bin), { recursive: true })
+    symlinkSync(real, bin)
+    expect(resolveDshHostVersion(bin)).toBe('0.1.5-rc.2')
+  })
+
+  it('resolves the host package through Node lookup from a PATH shim', () => {
+    const root = makeFixture(
+      join('node_modules', '@deepseek-ai', 'dsh', 'package.json'),
+      { name: '@deepseek-ai/dsh', version: '0.1.5-rc.2' },
+    )
+    const shim = join(root, 'shim.js')
+    writeFileSync(shim, '')
+    expect(resolveDshHostVersion(shim)).toBe('0.1.5-rc.2')
   })
 })
 
