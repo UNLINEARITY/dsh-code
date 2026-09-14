@@ -7,7 +7,7 @@
 <p align="center"><img alt="Typing SVG" src="https://readme-typing-svg.herokuapp.com?font=JetBrains+Mono&amp;weight=500&amp;size=22&amp;duration=4000&amp;pause=700&amp;color=4176E6&amp;center=true&amp;vCenter=true&amp;width=680&amp;lines=DeepSeek+Harness+Code;DSH+%E5%86%85%E6%A0%B8%E7%9A%84%E7%BB%88%E7%AB%AF%E7%BC%96%E7%A0%81%E7%95%8C%E9%9D%A2"></p>
 <p align="center">
   <a href="https://github.com/deepseek-ai/deepseek-harness"><img alt="DeepSeek Harness" src="https://img.shields.io/badge/DeepSeek-Harness-4176E6?style=for-the-badge&amp;logo=deepseek&amp;logoColor=white&amp;labelColor=1c1917"></a>
-  <a href="https://www.npmjs.com/package/@deepseek-ai/dsh"><img alt="dsh version" src="https://img.shields.io/badge/dsh-0.1.5--rc.1-4176E6?style=for-the-badge&amp;logo=deepseek&amp;logoColor=white&amp;labelColor=1c1917"></a>
+  <a href="https://www.npmjs.com/package/@deepseek-ai/dsh"><img alt="dsh version" src="https://img.shields.io/badge/dsh-0.1.5--rc.2-4176E6?style=for-the-badge&amp;logo=deepseek&amp;logoColor=white&amp;labelColor=1c1917"></a>
   <a href="https://github.com/UNLINEARITY/dsh-code/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/UNLINEARITY/dsh-code?label=Stars&amp;style=for-the-badge&amp;logo=github&amp;logoColor=white&amp;color=4176E6&amp;labelColor=1c1917"></a>
   <a href="https://www.npmjs.com/package/dsh-code"><img alt="npm version" src="https://img.shields.io/npm/v/dsh-code?label=npm&amp;style=for-the-badge&amp;logo=npm&amp;color=cb3837&amp;labelColor=1c1917"></a>
   <a href="https://github.com/UNLINEARITY/dsh-code/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/github/license/UNLINEARITY/dsh-code?label=License&amp;style=for-the-badge&amp;logo=opensourceinitiative&amp;color=4176E6&amp;labelColor=1c1917"></a>
@@ -33,8 +33,8 @@ DeepSeek Harness 将模型、工具、存储、策略和界面作为插件，通
 
 ```sh
 npm install -g @deepseek-ai/dsh@0.1.5-rc.2 pnpm
-npm install -g dsh-code@1.0.8
-dsh plugin --profile cli add dsh-code@1.0.8
+npm install -g dsh-code@1.1.0
+dsh plugin --profile cli add dsh-code@1.1.0
 ```
 
 > 提示：pnpm 会忽略发布不足 24 小时的包。发布首日请使用精确版本，24 小时后可省略版本号。
@@ -51,8 +51,8 @@ dsh plugin --profile cli add dsh-code@1.0.8
 
 ```sh
 npm install -g @deepseek-ai/dsh@0.1.5-rc.2 pnpm
-npm install -g https://github.com/unlinearity/dsh-code/releases/download/1.0.8/dsh-code-1.0.8.tgz
-dsh plugin --profile cli add https://github.com/unlinearity/dsh-code/releases/download/1.0.8/dsh-code-1.0.8.tgz
+npm install -g https://github.com/unlinearity/dsh-code/releases/download/1.1.0/dsh-code-1.1.0.tgz
+dsh plugin --profile cli add https://github.com/unlinearity/dsh-code/releases/download/1.1.0/dsh-code-1.1.0.tgz
 ```
 
 ### 2. 启动指令
@@ -82,7 +82,7 @@ DSH-Code 的重点是让 DSH 的 Agent、模型、工具和持久会话可以直
 - 按当前目录、更新时间和会话范围搜索历史记录
 - 使用 Up/Down 召回输入历史（含 / 指令），或通过 `/history` 搜索过去的提示词与指令
 - 支持持久标题、Markdown 导出、上下文占用、token、缓存、TTFT 和耗时统计
-- 恢复会话时同步恢复该会话使用的 Agent Preset 和模型选择
+- 恢复会话时同步恢复该会话使用的 Agent Preset、模型选择和子代理列表；欢迎页同时显示 dsh 与 dsh-code 版本
 
 <p align="center"><img src="docs/pictures/dsh-3.png" width="95%" alt="可搜索的会话恢复选择器"></p>
 
@@ -124,7 +124,8 @@ DSH-Code 的重点是让 DSH 的 Agent、模型、工具和持久会话可以直
 
 - 使用 `@` 引用工作区文件或已有会话；选择 PNG、JPEG、WebP、GIF 时会自动作为真实图片附件
 - 支持启动 prompt、多个 `--image` 参数，以及从终端拖入或粘贴附件：图片按图片附件发送，其他文件按原样文件附件发送（单文件 8 MiB、每条消息 8 个以内）
-- 使用 `/diff` 按文件检查改动，使用 `/review` 发起只读代码审查
+- 使用 `/diff` 按文件检查改动，使用 `/review` 发起只读代码审查（弹出范围选择，diff 整行红绿着色）
+- `run_code` 会列出正在执行的子工具调用；workflow 会列出各成员直到结束
 - 使用 `/copy` 复制最近一条完整回复，使用 Ctrl+O 查看完整历史和工具详情
 - 支持工具审批、结构化提问、plan review、多选和自定义答案
 - 使用权限 Preset 和 sandbox 控制 Agent 可以执行的操作；任务运行中仍可补充指令或中断
@@ -185,10 +186,12 @@ dsh --profile cli --session my-id    # 使用指定 id 新建会话
 | 命令 | 用途 |
 | --- | --- |
 | `/plugin [query]` | 查看已加载扩展及其状态 |
-| `/update` | 一键对齐升级：按目标版本的 peers 锁定宿主 Harness 线，同步升级 dsh-code、全局宿主与 profile 内伴生插件，升级前展示完整计划与拒绝条件，完成后提示重启生效 |
+| `/update` | 按 npm 查询升级计划并确认安装刚才看到的版本（不二次查 latest）；当前比 npm 新时写明不降级；本地 `link:` 会拒绝。完成后需重启 |
 | `/statusline` | 选择状态栏显示的项目 |
 | `/vscode-keys` | 将 Ctrl+R 放行进 VS Code 系终端（幂等写入用户级 keybindings.json） |
-| `/theme` | 切换终端配色主题 |
+| `/theme` | 切换配色：`dark` / `light` / `prismatic` / `rainbow` / `auto` |
+| `/rainbow [seed]` | 重掷或指定 rainbow 主题的配色种子；无参数换一颗并切到 rainbow |
+| `/language [en\|zh]` | 切换界面语言，默认英文；模型提示词和状态栏事实数据仍为英文 |
 | `/animation` | 开关计时动画（shimmer/追逐/闪烁/切换波浪），`/animation [on\|off]` |
 | `/help` | 查看快捷键、内置命令、Harness 命令和用户技能 |
 | `/quit` | 退出 DSH-Code |
@@ -202,9 +205,9 @@ dsh --profile cli --session my-id    # 使用指定 id 新建会话
 | `Up` / `Down` | 召回上一条或下一条输入记录 |
 | `Tab` | 补全命令、技能或 `@` 引用 |
 | `@` | 引用工作区文件或已有会话；图片文件自动作为附件发送 |
-| `Ctrl+O` | 查看完整历史与工具详情 |
+| `Ctrl+O` | 查看完整历史与工具详情，每条带种类标签（user prompt / reply / tool call 等） |
 | `Ctrl/Alt+R` | 折叠或展开思考过程；VS Code 系终端先运行 /vscode-keys 放行 Ctrl+R |
-| `Shift+Tab` | 循环切换权限 Preset |
+| `Shift+Tab` | 循环权限 Preset，并在提供 `/plan` 时经过 plan 档 |
 | `Delete` | 输入框为空时，取消最新一条排队消息 |
 | `Ctrl+K` | 删除光标到行尾的内容 |
 | `Ctrl+U` | 清空当前输入行 |

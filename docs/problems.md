@@ -138,6 +138,22 @@ pnpm 在 `dsh-code_tmp_*` 目录中报 `ENOENT`，例如无法扫描 `node_modul
 2. 确认使用的是包含 Git 安装修复的 DSH-Code 提交。
 3. 重新执行 GitHub 安装命令。
 
+## `/update` 显示「新于 npm」或不更新
+
+### 现象
+
+`/update` 或 `deepseek update` 显示当前版本比 npm 新，并拒绝降级；或本地 `link:` 开发挂载被拒绝。
+
+### 原因
+
+1.1.0 起安装与内置更新都以 npm 为正式渠道。GitHub Release 或本地构建若领先注册表，更新器不会装更旧的 npm 包。`link:` 挂载时升级全局宿主会把新主机配上旧 checkout，因此直接拒绝。
+
+### 解决
+
+- 等 npm 上出现更新版本后再 `/update`。
+- 开发挂载请先 `git pull && pnpm install && pnpm build`，或改挂发布包：`dsh plugin --profile cli remove dsh-code && dsh plugin --profile cli add dsh-code@1.1.0`。
+- 命令行 `deepseek update --apply` 无参数时会现查再装；终端里确认后安装的是面板上刚展示的版本。
+
 若只是使用 DSH-Code，而非参与源码开发，推荐改用 npm 发布包：
 
 ```sh

@@ -7,7 +7,7 @@ English | [中文](README.md)
 <p align="center"><img alt="Typing SVG" src="https://readme-typing-svg.herokuapp.com?font=JetBrains+Mono&amp;weight=500&amp;size=22&amp;duration=4000&amp;pause=700&amp;color=4176E6&amp;center=true&amp;vCenter=true&amp;width=680&amp;lines=DeepSeek+Harness+Code;Terminal+Coding+Interface+for+the+DSH+Core"></p>
 <p align="center">
   <a href="https://github.com/deepseek-ai/deepseek-harness"><img alt="DeepSeek Harness" src="https://img.shields.io/badge/DeepSeek-Harness-4176E6?style=for-the-badge&amp;logo=deepseek&amp;logoColor=white&amp;labelColor=1c1917"></a>
-  <a href="https://www.npmjs.com/package/@deepseek-ai/dsh"><img alt="dsh version" src="https://img.shields.io/badge/dsh-0.1.5--rc.1-4176E6?style=for-the-badge&amp;logo=deepseek&amp;logoColor=white&amp;labelColor=1c1917"></a>
+  <a href="https://www.npmjs.com/package/@deepseek-ai/dsh"><img alt="dsh version" src="https://img.shields.io/badge/dsh-0.1.5--rc.2-4176E6?style=for-the-badge&amp;logo=deepseek&amp;logoColor=white&amp;labelColor=1c1917"></a>
   <a href="https://github.com/UNLINEARITY/dsh-code/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/UNLINEARITY/dsh-code?label=Stars&amp;style=for-the-badge&amp;logo=github&amp;logoColor=white&amp;color=4176E6&amp;labelColor=1c1917"></a>
   <a href="https://www.npmjs.com/package/dsh-code"><img alt="npm version" src="https://img.shields.io/npm/v/dsh-code?label=npm&amp;style=for-the-badge&amp;logo=npm&amp;color=cb3837&amp;labelColor=1c1917"></a>
   <a href="https://github.com/UNLINEARITY/dsh-code/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/github/license/UNLINEARITY/dsh-code?label=License&amp;style=for-the-badge&amp;logo=opensourceinitiative&amp;color=4176E6&amp;labelColor=1c1917"></a>
@@ -31,8 +31,8 @@ Install and update from npm (`/update` and `deepseek update --apply` query npm o
 
 ```sh
 npm install -g @deepseek-ai/dsh@0.1.5-rc.2 pnpm
-npm install -g dsh-code@1.0.8
-dsh plugin --profile cli add dsh-code@1.0.8
+npm install -g dsh-code@1.1.0
+dsh plugin --profile cli add dsh-code@1.1.0
 ```
 
 > Note: pnpm ignores packages published less than 24 hours ago. Use the exact version on release day; omit the version after 24 hours.
@@ -47,8 +47,8 @@ For development or emergency installs, a GitHub Release tarball works (CI builds
 
 ```sh
 npm install -g @deepseek-ai/dsh@0.1.5-rc.2 pnpm
-npm install -g https://github.com/unlinearity/dsh-code/releases/download/1.0.8/dsh-code-1.0.8.tgz
-dsh plugin --profile cli add https://github.com/unlinearity/dsh-code/releases/download/1.0.8/dsh-code-1.0.8.tgz
+npm install -g https://github.com/unlinearity/dsh-code/releases/download/1.1.0/dsh-code-1.1.0.tgz
+dsh plugin --profile cli add https://github.com/unlinearity/dsh-code/releases/download/1.1.0/dsh-code-1.1.0.tgz
 ```
 
 ### 2. Launch commands
@@ -78,7 +78,7 @@ DSH-Code brings DSH Agents, models, tools, and durable sessions directly into th
 - Search history by current directory, update time, and session scope
 - Recall input history with Up/Down (typed slash commands included), or search previous prompts and commands with `/history`
 - Use persistent titles, Markdown export, context occupancy, token, cache, TTFT, and elapsed-time metrics
-- Restore the session's Agent Preset and model selection when resuming it
+- Restore the session's Agent Preset, model selection, and subagent list when resuming it; the welcome header shows both the dsh and dsh-code versions
 
 <p align="center"><img src="docs/pictures/dsh-3.png" width="95%" alt="Searchable session resume picker"></p>
 
@@ -116,7 +116,8 @@ Levels above `high` include `xhigh`, `x-high`, `very-high`, `max`, `maximum`, an
 
 - Use `@` to reference workspace files or existing sessions; selecting PNG, JPEG, WebP, or GIF files attaches the real image automatically
 - Attach images through the initial prompt, repeated `--image` arguments, or by dragging one or more images into the terminal
-- Inspect changes by file with `/diff`, and start a read-only code review with `/review`
+- Inspect changes by file with `/diff`, and start a read-only code review with `/review` (a range picker; diffs use full-row green/red)
+- `run_code` lists nested tool calls as they run; workflow runs list their member agents until they finish
 - Copy the latest complete response with `/copy`, and inspect full history and tool details with Ctrl+O
 - Handle tool approvals, structured questions, plan reviews, multiple selections, and custom answers
 - Control what the Agent may do with permission Presets and sandboxes; add instructions or interrupt while a task is running
@@ -127,7 +128,7 @@ Start the TUI:
 
 ```sh
 dsh --profile cli                    # create a standard session
-dsh --profile cli --mode code        # start with the specified Agent Preset
+dsh --profile cli --mode ptc         # start with the specified Agent Preset (standard/minimal/cordis/ptc)
 dsh --profile cli --continue         # resume the latest session for the current directory
 dsh --profile cli --resume abc123    # resume by id or unique prefix
 dsh --profile cli --session my-id    # create a session with an explicit id
@@ -177,10 +178,12 @@ The following built-in commands are available inside the TUI. Additional Harness
 | Command | Purpose |
 | --- | --- |
 | `/plugin [query]` | Inspect loaded extensions and their status |
-| `/update` | One aligned upgrade: pins the global Harness host to the line the target release declares in its peers, moves dsh-code, the host, and profile companion plugins together, shows the full plan and refusal reasons before confirming, and prompts a restart when done |
+| `/update` | Probe npm for an upgrade plan and install the versions just shown (does not re-query latest); says so and refuses when this install is newer than npm; a local `link:` mount is refused. Restart after it finishes |
 | `/statusline` | Select the items displayed in the status bar |
 | `/vscode-keys` | Pass Ctrl+R through VS Code-family terminals (idempotent user-level keybindings.json write) |
-| `/theme` | Switch the terminal color theme |
+| `/theme` | Switch colors: `dark` / `light` / `prismatic` / `rainbow` / `auto` |
+| `/rainbow [seed]` | Reroll or pin the rainbow theme seed; a bare `/rainbow` rolls a new seed and switches to rainbow |
+| `/language [en\|zh]` | Switch the interface language, default English; model prompts and factual status values stay in English |
 | `/animation` | Toggle timed animations (shimmer/chase/blink/switch wave), `/animation [on\|off]` |
 | `/help` | View key bindings, built-in commands, Harness commands, and user skills |
 | `/quit` | Exit DSH-Code |
@@ -194,9 +197,9 @@ The following built-in commands are available inside the TUI. Additional Harness
 | `Up` / `Down` | Recall the previous or next input-history entry |
 | `Tab` | Complete commands, skills, or `@` references |
 | `@` | Reference workspace files or existing sessions; image files are sent as attachments |
-| `Ctrl+O` | Inspect full history and tool details |
+| `Ctrl+O` | Inspect full history and tool details, with a kind label on each entry (user prompt / reply / tool call, and so on) |
 | `Ctrl/Alt+R` | Fold or expand model reasoning; run /vscode-keys first in VS Code-family terminals to pass Ctrl+R through |
-| `Shift+Tab` | Cycle through permission Presets |
+| `Shift+Tab` | Cycle permission Presets, and the plan station when `/plan` is available |
 | `Delete` | Cancel the newest queued message when the composer is empty |
 | `Ctrl+K` | Delete from the cursor to the end of the line |
 | `Ctrl+U` | Clear the current input line |
