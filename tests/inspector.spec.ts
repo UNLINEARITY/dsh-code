@@ -9,6 +9,7 @@ import {
   revealRow,
   selectionWindow,
   layoutGutterRows,
+  liveRegionBudget,
 } from '../src/render/inspector.ts'
 
 describe('inspectorViewport', () => {
@@ -39,6 +40,36 @@ describe('inspectorViewport', () => {
   it('falls back to a one-line view before borders become invalid', () => {
     expect(inspectorViewport(7, 24).compact).toBe(true)
     expect(inspectorViewport(80, 5).compact).toBe(true)
+  })
+})
+
+describe('liveRegionBudget', () => {
+  const resting = {
+    terminalRows: 24,
+    composerRows: 1,
+    statusBarRows: 1 as const,
+    menuRows: 0,
+    gutterRows: 1 as const,
+    notice: false,
+    todo: false,
+    agents: false,
+  }
+
+  it('pins composer and status by covering live rows with extra chrome', () => {
+    const restingBudget = liveRegionBudget(resting)
+    expect(restingBudget).toBe(24 - (1 + 2) - 1 - 0 - 1 - 0 - 0 - 0 - 2)
+    expect(liveRegionBudget({ ...resting, menuRows: 6 })).toBe(restingBudget - 6)
+    expect(liveRegionBudget({ ...resting, menuRows: 6 }) + 6).toBe(restingBudget)
+    expect(liveRegionBudget({ ...resting, notice: true, todo: true })).toBe(restingBudget - 2)
+    expect(liveRegionBudget({ ...resting, statusBarRows: 2, composerRows: 3 })).toBe(restingBudget - 3)
+  })
+
+  it('keeps the painted tree strictly shorter than the terminal', () => {
+    for (const rows of [8, 14, 24, 40]) {
+      const budget = liveRegionBudget({ ...resting, terminalRows: rows })
+      const painted = budget + 3 + 1 + 1
+      expect(painted).toBe(rows - 2)
+    }
   })
 })
 

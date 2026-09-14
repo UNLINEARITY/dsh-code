@@ -375,8 +375,12 @@ export const RAINBOW_BURST_HUES: readonly RgbTriple[] = [
   [175, 82, 222],
 ]
 
-/** Smoothstep in 0..1, then wrap-lerp around the seven burst hues. */
-function rainbowBurstHue(position: number): RgbTriple {
+/**
+ * Smoothstep in 0..1, then wrap-lerp around the seven burst hues.
+ * Position 0 is red, wrapping back toward red at 1. Shared by the
+ * composer burst and the static rainbow whale header.
+ */
+export function rainbowSpectrumHue(position: number): RgbTriple {
   const hues = RAINBOW_BURST_HUES
   const x = ((position % 1) + 1) % 1
   const scaled = x * hues.length
@@ -419,7 +423,7 @@ export function rainbowBurstColumnBg(
   if (fade <= 0) return null
   const span = Math.max(1, width - 1)
   const slide = elapsed / total * 1.2
-  const mixed = rainbowBurstHue(column / span + slide)
+  const mixed = rainbowSpectrumHue(column / span + slide)
   const edge = rows > 1 && (row === 0 || row === rows - 1)
   const alpha = Math.min(0.72 * fade * (edge ? 0.78 : 1), 0.70)
   if (alpha < 0.02) return null

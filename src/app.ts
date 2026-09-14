@@ -75,6 +75,7 @@ import {
   RAINBOW_BURST_DURATION_MS,
   RAINBOW_BURST_TICK_MS,
   rainbowBurstColumnBg,
+  rainbowSpectrumHue,
   type DeepseekWaveStyle,
   type DeepseekWaveTier,
 } from './render/animations.ts'
@@ -796,6 +797,32 @@ function PanelGap({ visible }: { visible: boolean }): ReactElement | undefined {
  * keeps its historical three lines. Short or narrow terminals keep a one-line
  * form without the kernel line.
  */
+/**
+ * One whale-glyph row painted as a frozen seven-color spectrum (column 0
+ * red, column 25 violet). Spaces stay uncolored so the silhouette punches
+ * through; adjacent same-hue blocks merge into one span.
+ */
+function rainbowGlyphRow(row: string, rowKey: number): ReactElement {
+  const span = Math.max(1, WHALE_GLYPH_COLUMNS - 1)
+  const children: ReactElement[] = []
+  let start = 0
+  while (start < row.length) {
+    if (row[start] === ' ') {
+      let end = start + 1
+      while (end < row.length && row[end] === ' ') end += 1
+      children.push(createElement(Text, { key: start }, row.slice(start, end)))
+      start = end
+      continue
+    }
+    const color = inkColor(rainbowSpectrumHue(start / span))
+    let end = start + 1
+    while (end < row.length && row[end] !== ' ' && inkColor(rainbowSpectrumHue(end / span)) === color) end += 1
+    children.push(createElement(Text, { key: start, color }, row.slice(start, end)))
+    start = end
+  }
+  return createElement(Text, { key: rowKey }, ...children)
+}
+
 function Header({ resumed }: { resumed: boolean }): ReactElement {
   const stdout = useStdout().stdout
   const rows = stdout?.rows ?? 40
@@ -829,7 +856,10 @@ function Header({ resumed }: { resumed: boolean }): ReactElement {
     createElement(
       Box,
       { flexDirection: 'column', width: WHALE_GLYPH_COLUMNS, justifyContent: 'center' },
-      ...WHALE_GLYPH.map((row, index) => createElement(Text, { key: index, color: inkColor(getPalette().brand) }, row)),
+      ...WHALE_GLYPH.map((row, index) =>
+        isRainbow()
+          ? rainbowGlyphRow(row, index)
+          : createElement(Text, { key: index, color: inkColor(getPalette().brand) }, row)),
     ),
     createElement(
       Box,

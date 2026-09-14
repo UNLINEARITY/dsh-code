@@ -39,6 +39,7 @@ import {
   RAINBOW_BURST_HUES,
   RAINBOW_BURST_TICK_MS,
   rainbowBurstColumnBg,
+  rainbowSpectrumHue,
   parseAnimationsPref,
   SPARK_GLYPHS,
   WAVE_SURFACE_ALPHA_CAP,
@@ -693,6 +694,9 @@ describe('rainbow composer burst', () => {
 
   it('pins seven fixed spectrum hues, independent of the rolled palette', () => {
     expect(RAINBOW_BURST_HUES).toHaveLength(7)
+    expect(rainbowSpectrumHue(0)).toEqual(RAINBOW_BURST_HUES[0])
+    // A position just below 1 sits on the last→first blend, not past the wrap.
+    expect(rainbowSpectrumHue(0.99)[0]).toBeGreaterThan(200)
   })
 
   it('returns null before and after the burst window', () => {

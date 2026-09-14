@@ -24,6 +24,48 @@ export function layoutGutterRows(rows: number): 0 | 1 {
   return Math.max(1, Math.floor(rows)) >= 14 ? 1 : 0
 }
 
+/** Measured chrome that sits below (or in) the live region. */
+export interface LiveRegionChrome {
+  /** Terminal rows. */
+  readonly terminalRows: number
+  /** Editor rows inside the composer band (frozen reports 1). */
+  readonly composerRows: number
+  /** Status footer rows. */
+  readonly statusBarRows: 1 | 2
+  /** Completion menu rows (0 when closed). */
+  readonly menuRows: number
+  /** Transcript-to-composer gutter. */
+  readonly gutterRows: 0 | 1
+  /** Notice line present. */
+  readonly notice: boolean
+  /** Todo summary line present. */
+  readonly todo: boolean
+  /** Agents summary line present. */
+  readonly agents: boolean
+}
+
+/**
+ * Rows left for live transcript and streaming after pinning the composer and
+ * status at the bottom. Variable chrome (menu, notice, todos, agents, extra
+ * status row, extra editor rows) is deducted here so those rows cover the
+ * live region instead of growing the tree and moving the bottom bar.
+ */
+export function liveRegionBudget(chrome: LiveRegionChrome): number {
+  const terminal = Math.max(1, Math.floor(chrome.terminalRows))
+  const editor = Math.max(1, Math.floor(chrome.composerRows))
+  const band = editor + 2
+  const status = chrome.statusBarRows === 2 ? 2 : 1
+  const menu = Math.max(0, Math.floor(chrome.menuRows))
+  const gutter = chrome.gutterRows
+  const notice = chrome.notice ? 1 : 0
+  const todo = chrome.todo ? 1 : 0
+  const agents = chrome.agents ? 1 : 0
+  // Two spare rows: Ink's parked cursor, plus one so the painted tree never
+  // reaches stdout.rows (equality takes the full-terminal clear path).
+  const inkSpare = 2
+  return Math.max(1, terminal - band - status - menu - gutter - notice - todo - agents - inkSpare)
+}
+
 /**
  * Keep the inspector plus its persistent status/composer chrome below
  * `stdout.rows`: at equality Ink clears the terminal and rewrites all
