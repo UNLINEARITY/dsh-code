@@ -67,7 +67,7 @@ export const THEMES: readonly ThemeDescriptor[] = [
   { id: 'dark', label: 'dark', description: 'DeepSeek dark palette (default)' },
   { id: 'light', label: 'light', description: 'light palette for bright terminals' },
   { id: 'prismatic', label: 'prismatic', description: 'neon synthwave palette (violet/magenta/cyan)' },
-  { id: 'rainbow', label: 'rainbow', description: 'randomized carnival palette (new roll every launch)' },
+  { id: 'rainbow', label: 'rainbow', description: 'randomized carnival palette (/rainbow to reroll)' },
   { id: 'auto', label: 'auto', description: 'follow the terminal; dark until detection lands' },
 ]
 

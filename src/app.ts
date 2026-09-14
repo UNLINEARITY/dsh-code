@@ -39,7 +39,7 @@ import {
   type ThemeName,
 } from './theme.ts'
 import { panelAccent } from './panel-accent.ts'
-import { rainbowRoll, rainbowSeedLabel } from './rainbow.ts'
+import { parseRainbowArgument, rainbowRoll, rainbowSeedLabel, rerollRainbow } from './rainbow.ts'
 import { ThemePanel } from './theme-panel.ts'
 import { LanguagePanel } from './language-panel.ts'
 import { getLanguage, parseLanguageName, t, type LanguageName, type MessageKey } from './i18n.ts'
@@ -256,6 +256,7 @@ const LOCAL_COMMANDS: readonly LocalCommand[] = [
   { label: '/statusline', descriptionKey: 'cmd.statusline' },
   { label: '/theme', descriptionKey: 'cmd.theme' },
   { label: '/language', descriptionKey: 'cmd.language' },
+  { label: '/rainbow', descriptionKey: 'cmd.rainbow' },
   { label: '/animation', descriptionKey: 'cmd.animation' },
   { label: '/history', descriptionKey: 'cmd.history' },
   { label: '/agents', descriptionKey: 'cmd.agents' },
@@ -3356,7 +3357,7 @@ interface DraftFile extends FilePathInspection {
  * While a modal (approval / question / model panel) owns the keys, the
  * box passes every key through untouched.
  */
-function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openEffort, openHelp, openMode, openPermission, openResume, openSearch, openPlugin, openUpdate, openSchedule, openJobs, openStatusline, openTheme, openLanguage, saveLanguage, openHistory, openAgents, openSubagent, openTodos, openDelete, openDiff, openReviewPicker, reviewChanges, deleteConfirm, confirmDelete, cancelDelete, createSession, forkSession, cancelSessionSwitch, notify, applyEditorKeys, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, inspectImages, prepareImages, inspectFiles, prepareFiles, cycleMode, exportTranscript, renameTitle, copyLastResponse, recallSpace, recordLocal, recordHistory, queued, cancelQueued, historyFill, historyConsumed, animations, applyAnimations, waveTier, waveStyle, maxRows, anchorRowsBelow, tabTitle, onEditorRows, onMenuRows, sessionKey }: {
+function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openEffort, openHelp, openMode, openPermission, openResume, openSearch, openPlugin, openUpdate, openSchedule, openJobs, openStatusline, openTheme, openLanguage, saveLanguage, openHistory, openAgents, openSubagent, openTodos, openDelete, openDiff, openReviewPicker, reviewChanges, deleteConfirm, confirmDelete, cancelDelete, createSession, forkSession, cancelSessionSwitch, notify, applyEditorKeys, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, inspectImages, prepareImages, inspectFiles, prepareFiles, cycleMode, exportTranscript, renameTitle, copyLastResponse, recallSpace, recordLocal, recordHistory, queued, cancelQueued, historyFill, historyConsumed, animations, applyAnimations, applyRainbow, waveTier, waveStyle, maxRows, anchorRowsBelow, tabTitle, onEditorRows, onMenuRows, sessionKey }: {
   active: boolean
   frozen: boolean
   /** Frozen-band hint naming the surface that owns the keyboard; an empty
@@ -3449,6 +3450,8 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
   animations: boolean
   /** Apply and report one /animation toggle (App persists through the runner). */
   applyAnimations(enabled: boolean): void
+  /** Reroll or pin the rainbow palette (switches to rainbow if needed). */
+  applyRainbow(seed?: number): void
   /** DeepSeek easter-egg wave tier of the applied route (null otherwise):
    * official DeepSeek models drive their flash/pro tiers, non-DeepSeek
    * models running an effort above high drive the "Into the Unknown"
@@ -4317,6 +4320,12 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
         if (parsed === 'toggle') applyAnimations(!animations)
         else if (parsed === 'usage') notify(t('notice.usage.animation'), 'info')
         else applyAnimations(parsed.enabled)
+        return
+      }
+      if (text === '/rainbow' || text.startsWith('/rainbow ')) {
+        const parsed = parseRainbowArgument(text.slice('/rainbow'.length))
+        if (parsed === 'usage') notify(t('notice.usage.rainbow'), 'warning')
+        else applyRainbow(parsed === 'random' ? undefined : parsed.seed)
         return
       }
       if (text === '/history') {
@@ -5442,6 +5451,17 @@ export function App(props: AppProps): ReactElement {
     }
     setRefreshEpoch(epoch => epoch + 1)
   }
+  const applyRainbow = (seed?: number): void => {
+    // Replace the memoized roll, then setTheme so getPalette() and the
+    // painters pick the new values; persist rainbow as the active theme
+    // so a mid-session /rainbow from dark/light actually sticks. The
+    // source-backed rebuild (same as /theme) repaints Static history too.
+    rerollRainbow(seed)
+    setTheme('rainbow')
+    props.saveTheme?.('rainbow')
+    notify(t('notice.rainbowRolled', { seed: rainbowSeedLabel() }))
+    refreshScreen()
+  }
   useEffect(() => {
     if (!synchronizedReplayPending.current || appStdout === undefined) return
     synchronizedReplayPending.current = false
@@ -5897,8 +5917,8 @@ export function App(props: AppProps): ReactElement {
           // Rainbow prints its roll seed so a lucky launch can be reproduced
           // with RAINBOW_SEED=<seed>.
           notify(name === 'rainbow'
-            ? `theme → rainbow · seed ${rainbowSeedLabel()} (RAINBOW_SEED=${rainbowSeedLabel()} to reproduce)`
-            : `theme → ${name}`)
+            ? t('notice.themeRainbow', { seed: rainbowSeedLabel() })
+            : t('notice.themeSaved', { name }))
           setThemeOpen(false)
           // The header whale and settled history live in the Static region,
           // which renders once and would keep the old palette's colors; the
@@ -6128,6 +6148,7 @@ export function App(props: AppProps): ReactElement {
         historyConsumed,
         animations,
         applyAnimations,
+        applyRainbow,
         waveTier,
         waveStyle,
         maxRows: composerEditorCap,

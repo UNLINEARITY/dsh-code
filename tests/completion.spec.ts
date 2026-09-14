@@ -21,9 +21,9 @@ describe('completionCandidates', () => {
       skill('agentic-workflow'),
     ]
     const rows = completionCandidates('/', descriptors, skills)
-    // 30 local commands + 1 registry command + 1 unshadowed skill (/review is local).
-    expect(rows).toHaveLength(32)
-    expect(rows.filter(row => row.origin === 'command')).toHaveLength(31)
+    // 31 local commands + 1 registry command + 1 unshadowed skill (/review is local).
+    expect(rows).toHaveLength(33)
+    expect(rows.filter(row => row.origin === 'command')).toHaveLength(32)
     expect(rows.filter(row => row.origin === 'skill').map(row => row.label))
       .toEqual(['/agentic-workflow'])
     expect(rows[0]).toMatchObject({ label: '/help', origin: 'command' })
@@ -64,7 +64,7 @@ describe('completionCandidates', () => {
   it('keeps every local command reachable with an empty prefix', () => {
     const localNames = completionCandidates('/', [], [])
       .map(row => row.label)
-    for (const name of ['/help', '/quit', '/export', '/title', '/theme', '/mode', '/permission']) {
+    for (const name of ['/help', '/quit', '/export', '/title', '/theme', '/rainbow', '/mode', '/permission']) {
       expect(localNames).toContain(name)
     }
   })

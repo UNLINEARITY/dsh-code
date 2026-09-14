@@ -37,7 +37,7 @@ export const zh: MessageCatalog = {
   'theme.prismatic.label': '棱彩',
   'theme.prismatic.description': '霓虹合成波配色（紫/品红/青）',
   'theme.rainbow.label': '彩虹',
-  'theme.rainbow.description': '随机多彩配色（每次启动重新生成）',
+  'theme.rainbow.description': '随机多彩配色（/rainbow 重掷）',
   'theme.auto.label': '自动',
   'theme.auto.description': '跟随终端；检测功能启用前使用暗色',
 
@@ -127,6 +127,7 @@ export const zh: MessageCatalog = {
   'cmd.statusline': '自定义状态栏显示项',
   'cmd.theme': '切换配色主题',
   'cmd.language': '切换界面语言（/language [en|zh]）',
+  'cmd.rainbow': '重掷或指定彩虹配色（/rainbow [seed]）',
   'cmd.animation': '开关计时动画（/animation [on|off]）',
   'cmd.history': '搜索并复用历史提示词',
   'cmd.agents': '查看本会话的子代理',
@@ -191,6 +192,8 @@ export const zh: MessageCatalog = {
 
   // Common notices
   'notice.themeSaved': '主题 → {name}',
+  'notice.themeRainbow': '主题 → rainbow · 种子 {seed} · /rainbow 再随机',
+  'notice.rainbowRolled': '彩虹 · 种子 {seed} · /rainbow 再随机 · /rainbow {seed} 锁定',
   'notice.languageSaved': '语言 → {name}',
   'notice.themeSaveFailed': '主题保存失败：{message}',
   'notice.languageSaveFailed': '语言保存失败：{message}',
@@ -202,6 +205,7 @@ export const zh: MessageCatalog = {
   'notice.noSessionYet': '还没有会话——先发一条消息开始',
   'notice.usage.animation': '用法：/animation [on|off]',
   'notice.usage.language': '用法：/language [en|zh]',
+  'notice.usage.rainbow': '用法：/rainbow [seed]',
   'notice.imageCancelled': '图片提交已取消',
   'notice.themeConfigUnreadable': '主题配置无法读取，使用暗色：{message}',
   'notice.languageConfigUnreadable': '语言配置无法读取，使用英文：{message}',

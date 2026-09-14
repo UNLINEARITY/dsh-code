@@ -70,6 +70,19 @@ export function parseRainbowSeed(value: string | undefined): number | undefined 
   return Number.isSafeInteger(parsed) ? parsed >>> 0 : undefined
 }
 
+/**
+ * One parsed `/rainbow` argument: empty means a fresh random roll; a
+ * decimal uint32 pins that seed; anything else is a usage error.
+ * @param argument - the raw text after `/rainbow`.
+ * @returns `{ seed }`, `'random'`, or `'usage'`.
+ */
+export function parseRainbowArgument(argument: string): { seed: number } | 'random' | 'usage' {
+  const trimmed = argument.trim()
+  if (trimmed === '') return 'random'
+  const parsed = parseRainbowSeed(trimmed)
+  return parsed === undefined ? 'usage' : { seed: parsed }
+}
+
 /** Deterministic 32-bit RNG (mulberry32) — one roll, one stream. */
 function mulberry32(seed: number): () => number {
   let state = seed >>> 0
@@ -165,6 +178,20 @@ let rolled: RainbowRoll | undefined
 /** The memoized per-launch roll; computed once, stable for the whole run. */
 export function rainbowRoll(): RainbowRoll {
   if (rolled === undefined) rolled = rollRainbow(launchSeed())
+  return rolled
+}
+
+/**
+ * Replace the memoized roll: omit the seed for a fresh random one, or pass
+ * a uint32 to pin it. `/rainbow` uses this so a mid-session reroll actually
+ * recolors; {@link setTheme}(`'rainbow'`) must run afterwards so the
+ * palette accessor picks the new values up.
+ * @param seed - the seed to pin, or undefined for a new random roll.
+ * @returns the roll now in force.
+ */
+export function rerollRainbow(seed?: number): RainbowRoll {
+  const next = seed ?? ((Date.now() ^ Math.floor(Math.random() * 0x100000000)) >>> 0)
+  rolled = rollRainbow(next)
   return rolled
 }
 

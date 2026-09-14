@@ -35,7 +35,7 @@ export const en = {
   'theme.prismatic.label': 'prismatic',
   'theme.prismatic.description': 'neon synthwave palette (violet/magenta/cyan)',
   'theme.rainbow.label': 'rainbow',
-  'theme.rainbow.description': 'randomized carnival palette (new roll every launch)',
+  'theme.rainbow.description': 'randomized carnival palette (/rainbow to reroll)',
   'theme.auto.label': 'auto',
   'theme.auto.description': 'follow the terminal; dark until detection lands',
 
@@ -125,6 +125,7 @@ export const en = {
   'cmd.statusline': 'customize the status line items',
   'cmd.theme': 'switch the color theme',
   'cmd.language': 'switch the interface language (/language [en|zh])',
+  'cmd.rainbow': 'reroll or pin the rainbow palette (/rainbow [seed])',
   'cmd.animation': 'toggle timed animations (/animation [on|off])',
   'cmd.history': 'search and recall past prompts',
   'cmd.agents': 'inspect subagent sessions of this conversation',
@@ -189,6 +190,8 @@ export const en = {
 
   // Common notices
   'notice.themeSaved': 'theme \u2192 {name}',
+  'notice.themeRainbow': 'theme \u2192 rainbow · seed {seed} · /rainbow to reroll',
+  'notice.rainbowRolled': 'rainbow · seed {seed} · /rainbow to reroll · /rainbow {seed} to pin',
   'notice.languageSaved': 'language \u2192 {name}',
   'notice.themeSaveFailed': 'theme save failed: {message}',
   'notice.languageSaveFailed': 'language save failed: {message}',
@@ -200,6 +203,7 @@ export const en = {
   'notice.noSessionYet': 'no session yet \u2014 submit a message to start',
   'notice.usage.animation': 'usage: /animation [on|off]',
   'notice.usage.language': 'usage: /language [en|zh]',
+  'notice.usage.rainbow': 'usage: /rainbow [seed]',
   'notice.imageCancelled': 'image submission cancelled',
   'notice.themeConfigUnreadable': 'theme config unreadable, using dark: {message}',
   'notice.languageConfigUnreadable': 'language config unreadable, using english: {message}',

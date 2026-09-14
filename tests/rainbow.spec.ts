@@ -1,7 +1,7 @@
 /** The rainbow roll: determinism, adjacency, and AA over the bright pool. */
 
 import { describe, expect, it } from 'vitest'
-import { RAINBOW_POOL, parseRainbowSeed, rollRainbow } from '../src/rainbow.ts'
+import { RAINBOW_POOL, parseRainbowArgument, parseRainbowSeed, rainbowRoll, rerollRainbow, rollRainbow } from '../src/rainbow.ts'
 import type { StatusTone } from '../src/render/status.ts'
 import type { RgbTriple } from '../src/theme.ts'
 
@@ -101,5 +101,27 @@ describe('rainbow roll', () => {
     expect(parseRainbowSeed('-1')).toBeUndefined()
     expect(parseRainbowSeed('12345678901')).toBeUndefined()
     expect(parseRainbowSeed(undefined)).toBeUndefined()
+  })
+
+  it('parses /rainbow arguments: empty is random, a uint32 pins, else usage', () => {
+    expect(parseRainbowArgument('')).toBe('random')
+    expect(parseRainbowArgument('  ')).toBe('random')
+    expect(parseRainbowArgument('42')).toEqual({ seed: 42 })
+    expect(parseRainbowArgument(' 0 ')).toEqual({ seed: 0 })
+    expect(parseRainbowArgument('banana')).toBe('usage')
+    expect(parseRainbowArgument('-1')).toBe('usage')
+    expect(parseRainbowArgument('12 34')).toBe('usage')
+  })
+
+  it('replaces the memoized roll when rerollRainbow pins a seed', () => {
+    const pinned = rerollRainbow(4242)
+    expect(pinned).toEqual(rollRainbow(4242))
+    expect(rainbowRoll()).toBe(pinned)
+    const again = rerollRainbow(4242)
+    expect(again).toEqual(pinned)
+    expect(rainbowRoll()).toBe(again)
+    const other = rerollRainbow(7)
+    expect(other.palette).not.toEqual(pinned.palette)
+    expect(rainbowRoll()).toBe(other)
   })
 })
