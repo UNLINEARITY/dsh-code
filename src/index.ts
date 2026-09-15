@@ -24,6 +24,7 @@ import type {} from '@deepseek-ai/dsh-attachment'
 import { createUserMessage, MessageId, type ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { JobSnapshot } from '@deepseek-ai/dsh-jobs'
 import { SessionId, SessionLogOffset, type Session, type SessionEvent, type SessionHeader, type UserMessage } from '@deepseek-ai/dsh-session'
+import { deriveTurnTokenUsage } from '@deepseek-ai/dsh-token-meter/client'
 import type { SessionPersistence } from '@deepseek-ai/dsh-session-persistence'
 // Type-only: carries the ctx.sessionTitle service merge for /title.
 import type {} from '@deepseek-ai/dsh-session-title'
@@ -111,6 +112,11 @@ import {
 } from './session-directory.ts'
 import type { JobRow, SearchRow } from './kernel-panels.ts'
 import { createUserSettingsPersistence, writeFileAtomically } from './settings-file.ts'
+import { turnUsages, type UsageView } from './render/usage.ts'
+// Type-only import: merges the projection registry into the Context type so
+// `ctx.get('sessionProjections')` is typed (the service itself is mounted by
+// dsh-base at runtime).
+import type {} from '@deepseek-ai/dsh-session-projection'
 
 /** Stable Cordis plugin name. */
 export const name = 'tui-runner'
@@ -1762,6 +1768,26 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     return buildExportMarkdown(createTranscriptStore(snapshot.events).getView(), snapshot.session.id)
   }
 
+  /**
+   * Read one session's usage blocks for the /usage panel: the mounted
+   * projection's session totals plus the meter's own per-turn fold over the
+   * durable log (which the panel merges by model). A deployment without the
+   * projection registry renders the totals as explicitly unavailable rather
+   * than as zeros. The read is synchronous — the registry materializes a cell
+   * on first touch — so it is handed to the panel behind a resolved promise,
+   * which keeps the fold out of the keystroke that opens the panel.
+   * @param current - the session to read, or undefined before the first one.
+   * @returns the resolved panel data.
+   */
+  const loadUsage = (current: Session | undefined): Promise<UsageView> => {
+    if (current === undefined) return Promise.resolve({ turns: [] })
+    const values = ctx.get('sessionProjections')?.snapshot(current, ['tokenUsage']).values
+    return Promise.resolve({
+      totals: values?.tokenUsage,
+      turns: turnUsages(current.snapshotEvents(), deriveTurnTokenUsage),
+    })
+  }
+
   const switchModeAction = async (id: string): Promise<string> => {
     if (id === '') throw new Error('usage: /mode <preset>')
     const currentAgent = agent
@@ -2166,6 +2192,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       forkSession,
       loadSessions,
       loadSessionTranscript,
+      loadUsage: () => loadUsage(session),
       loadSubagents: () => {
         const current = session
         if (current === undefined || sessionQuery === undefined) return Promise.resolve([])

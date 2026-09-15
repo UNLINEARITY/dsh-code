@@ -13,6 +13,7 @@ import { formatRelativeTime } from './session-directory.ts'
 import type { ReviewBranch, ReviewCommit, ReviewSelection } from './git-workflow.ts'
 import { panelViewport, revealRow } from './render/inspector.ts'
 import { markdownLines, textLines, type LineStyle, type StyledLine } from './render/lines.ts'
+import { usageLines, type UsageView } from './render/usage.ts'
 import { deleteLastGrapheme } from './render/editor.ts'
 import { stripPasteMarkers } from './keyboard.ts'
 import { DEFAULT_STATUSLINE_ITEMS, STATUS_ITEMS, type StatusItemId } from './render/status.ts'
@@ -1330,5 +1331,68 @@ export function SchedulePanel({ rows, close }: { rows: () => readonly ScheduleRo
         wrap: 'truncate-end',
       }, truncateColumns(`  ${singleLineText(row.text)}`, viewport.contentColumns)))),
     createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns(t('panel.schedule.footer', { more: hidden > 0 ? t('panel.schedule.more', { count: hidden }) : '' }), viewport.contentColumns)),
+  )
+}
+
+/**
+ * The /usage panel: the session's provider-reported token totals, its context
+ * pressure and estimated composition, and the exact per-turn accounting, in
+ * one bounded scrollable surface. Read-only — Esc or q closes it.
+ */
+export function UsagePanel({ load, close }: {
+  /** Read the current session's usage blocks from the mounted projections. */
+  load: () => Promise<UsageView>
+  close: () => void
+}): ReactElement {
+  const stdout = useStdout().stdout
+  const viewport = panelViewport(stdout?.columns ?? 80, stdout?.rows ?? 30)
+  const [scroll, setScroll] = useState(0)
+  const [view, setView] = useState<UsageView>()
+  const [error, setError] = useState<string>()
+  // The panel opens on the loading row and swaps in the numbers when the
+  // loader settles: materializing the projection units folds the whole log,
+  // and that must not run inside the keystroke that opened the panel.
+  useEffect(() => {
+    let live = true
+    Promise.resolve().then(load).then(
+      loaded => {
+        if (live) setView(loaded)
+      },
+      reason => {
+        if (live) setError(reason instanceof Error ? reason.message : String(reason))
+      },
+    )
+    return () => {
+      live = false
+    }
+  }, [load])
+  const lines = useMemo(
+    () => view === undefined ? [] : usageLines(view, viewport.contentColumns),
+    [view, viewport.contentColumns],
+  )
+  useInput((input, key) => {
+    if (key.escape || input === 'q') return close()
+    if (key.upArrow) return setScroll(value => Math.max(0, value - 1))
+    if (key.downArrow) return setScroll(value => Math.min(Math.max(0, lines.length - viewport.bodyRows), value + 1))
+    if (key.pageUp) return setScroll(value => Math.max(0, value - Math.max(1, viewport.bodyRows - 1)))
+    if (key.pageDown) return setScroll(value => Math.min(Math.max(0, lines.length - viewport.bodyRows), value + Math.max(1, viewport.bodyRows - 1)))
+    if (input === 'g') return setScroll(0)
+    if (input === 'G') return setScroll(Math.max(0, lines.length - viewport.bodyRows))
+  })
+  if (viewport.compact) {
+    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(t('panel.usage.compact'), viewport.contentColumns))
+  }
+  const body: readonly StyledLine[] = error !== undefined
+    ? textLines(`error: ${singleLineText(error)}`, viewport.contentColumns, 'error')
+    : view === undefined
+      ? textLines(t('panel.loading'), viewport.contentColumns, 'dim')
+      : lines.slice(scroll, scroll + viewport.bodyRows)
+  const accent = panelAccent('usage', getPalette().dim, getPalette().brandBright)
+  return createElement(
+    Box,
+    { width: viewport.outerColumns, borderStyle: 'round', borderColor: inkColor(accent.border), flexDirection: 'column', paddingX: 1 },
+    createElement(Text, { color: inkColor(accent.title), wrap: 'truncate-end' }, truncateColumns(t('panel.usage.title'), viewport.contentColumns)),
+    createElement(DocumentRows, { lines: body }),
+    createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns(t('panel.usage.footer'), viewport.contentColumns)),
   )
 }

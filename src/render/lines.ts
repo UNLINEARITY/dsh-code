@@ -4,8 +4,7 @@ import { promptDisplayText, type TranscriptEntry, type ToolEntry } from './proje
 import type { ToolDetail } from './tool-detail.ts'
 import { renderMarkdown, visibleColumns, type MdStyle } from './markdown.ts'
 import { graphemeWidth, splitGraphemes } from './width.ts'
-import { formatTokens } from './status.ts'
-import { displayText, truncateColumns } from './text.ts'
+import { formatTokens, displayText, truncateColumns } from './text.ts'
 import { t } from '../i18n.ts'
 
 /** Trailing marker naming how a settled prompt was delivered; '' for ordinary. */

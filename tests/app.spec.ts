@@ -152,6 +152,7 @@ function appProps(overrides: Partial<AppProps> = {}): AppProps {
     loadSessions: async () => [],
     loadSubagents: async () => [],
     loadSessionTranscript: async () => '',
+    loadUsage: async () => ({ turns: [] }),
     switchSession: noop,
     cancelSessionSwitch: () => false,
     loadPlugins: () => [],
@@ -3914,6 +3915,102 @@ describe('/agents panel', () => {
       harness.stdin.write('q')
       await wait()
       expect(harness.output.text.lastIndexOf('type a message')).toBeGreaterThan(harness.output.text.lastIndexOf('/agents ·'))
+    } finally {
+      instance.unmount()
+      harness.stdin.destroy()
+      harness.stdout.destroy()
+    }
+  })
+})
+
+describe('/usage panel', () => {
+  const usage = {
+    totals: { uncachedInputTokens: 15_553_400, outputTokens: 1_057_300, cacheReadTokens: 920_064_800, cacheWriteTokens: 0 },
+    turns: [{
+      turn: 3,
+      model: 'deepseek-flash',
+      usage: {
+        uncachedInputTokens: 12_000,
+        outputTokens: 900,
+        totalTokens: 12_900,
+        reasoningTokens: 120,
+        routes: [{ provider: 'deepseek-official', model: 'deepseek-flash' }],
+      },
+    }, {
+      turn: 4,
+      model: 'glm-5.3',
+      usage: {
+        uncachedInputTokens: 4_000,
+        outputTokens: 300,
+        totalTokens: 4_300,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        routes: [{ provider: 'other', model: 'glm-5.3' }],
+      },
+    }],
+  }
+
+  it('shows the session totals, the per-model merge, and the per-turn table', async () => {
+    // Tall enough for all three blocks: the panel's body is a bounded
+    // viewport (`panelViewport`), so a short terminal shows only the top of it.
+    const harness = createTty(100, 60)
+    const instance = renderApp(harness, appProps({ loadUsage: async () => usage }))
+    try {
+      await wait()
+      harness.stdin.write('/usage')
+      await wait()
+      // Measure the panel's own frame only, not the keystroke echo.
+      harness.output.text = ''
+      harness.stdin.write('\r')
+      await wait()
+      const opened = harness.output.text
+      expect(opened).toContain('/usage — usage of this session')
+      // The four buckets are listed apart: the uncached input is not the
+      // billed prompt side, so the cached 920M can never hide inside it.
+      expect(opened).toContain('15.6M')
+      expect(opened).toContain('920M')
+      expect(opened).toContain('98.3%')
+      // Merged by model, biggest spender first, then the per-turn table.
+      expect(opened).toContain('By model · 2')
+      expect(opened.indexOf('deepseek-flash')).toBeLessThan(opened.indexOf('glm-5.3'))
+      expect(opened).toContain('#3')
+      expect(opened).toContain('#4')
+      // The shared bounded-panel contract: strictly under the terminal height
+      // and never a full-screen clear.
+      const terminalRows = (harness.stdout as unknown as { rows?: number }).rows ?? 60
+      expect(opened.split('\n').length).toBeLessThan(terminalRows)
+      expect(opened).not.toContain('\x1b[2J')
+
+      harness.stdin.write('q')
+      await wait()
+      expect(harness.output.text.lastIndexOf('type a message')).toBeGreaterThan(
+        harness.output.text.lastIndexOf('/usage — usage of this session'),
+      )
+    } finally {
+      instance.unmount()
+      harness.stdin.destroy()
+      harness.stdout.destroy()
+    }
+  })
+
+  it('reports a loader failure instead of an empty panel', async () => {
+    const harness = createTty(100, 30)
+    const instance = renderApp(harness, appProps({
+      loadUsage: () => Promise.reject(new Error('projection registry is unavailable')),
+    }))
+    try {
+      await wait()
+      harness.stdin.write('/usage')
+      await wait()
+      harness.output.text = ''
+      harness.stdin.write('\r')
+      await wait()
+      expect(harness.output.text).toContain('projection registry is unavailable')
+      harness.stdin.write('\x1b')
+      await wait()
+      expect(harness.output.text.lastIndexOf('type a message')).toBeGreaterThan(
+        harness.output.text.lastIndexOf('projection registry is unavailable'),
+      )
     } finally {
       instance.unmount()
       harness.stdin.destroy()

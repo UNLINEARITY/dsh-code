@@ -100,7 +100,8 @@ import type { QuestionSnapshot, QuestionStore } from './questions.ts'
 import type { SkillsView, SkillRow } from './skills.ts'
 import { isPathLikeMentionQuery, type MentionCandidate } from './mentions.ts'
 import type { SubagentFeedView, SubagentRow } from './subagents.ts'
-import { AgentsPanel, editQuery, EffortPanel, HistoryPanel, JobsPanel, ModePanel, PermissionPanel, PluginPanel, ResumePanel, ReviewPickerPanel, SchedulePanel, SearchPanel, StatuslinePanel, runClock, SubagentPanel, type JobRow, type SearchRow } from './kernel-panels.ts'
+import type { UsageView } from './render/usage.ts'
+import { AgentsPanel, editQuery, EffortPanel, HistoryPanel, JobsPanel, ModePanel, PermissionPanel, PluginPanel, ResumePanel, ReviewPickerPanel, SchedulePanel, SearchPanel, StatuslinePanel, runClock, SubagentPanel, UsagePanel, type JobRow, type SearchRow } from './kernel-panels.ts'
 import type { PresetRow } from './presets.ts'
 import type { PermissionRow } from './permissions.ts'
 import type { PluginRow } from './plugin-inventory.ts'
@@ -267,6 +268,7 @@ const LOCAL_COMMANDS: readonly LocalCommand[] = [
   { label: '/animation', descriptionKey: 'cmd.animation' },
   { label: '/history', descriptionKey: 'cmd.history' },
   { label: '/queue', descriptionKey: 'cmd.queue' },
+  { label: '/usage', descriptionKey: 'cmd.usage' },
   { label: '/agents', descriptionKey: 'cmd.agents' },
   { label: '/todos', descriptionKey: 'cmd.todos' },
   { label: '/subagent', descriptionKey: 'cmd.subagent' },
@@ -430,6 +432,8 @@ export interface AppProps {
   forkSession: (argument: string) => void
   loadSessions: (options: SessionDirectoryOptions, signal?: AbortSignal) => Promise<readonly SessionRow[]>
   loadSessionTranscript: (id: string, signal?: AbortSignal) => Promise<string>
+  /** Read the current session's usage blocks (projections plus per-turn fold). */
+  loadUsage: () => Promise<UsageView>
   /**
    * Full-text search over every persisted session (the in-process
    * session-query engine). Absent when the deployment disabled the row;
@@ -3647,7 +3651,7 @@ interface DraftFile extends FilePathInspection {
  * While a modal (approval / question / model panel) owns the keys, the
  * box passes every key through untouched.
  */
-function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch, steer, submitMode, cycleSubmitMode, interrupt, quit, openModel, openEffort, openHelp, openMode, openPermission, openResume, openSearch, openPlugin, openUpdate, openSchedule, openJobs, openStatusline, openTheme, openLanguage, saveLanguage, openHistory, openQueue, openAgents, openSubagent, openTodos, openDelete, openDiff, openReviewPicker, reviewChanges, deleteConfirm, confirmDelete, cancelDelete, createSession, forkSession, cancelSessionSwitch, notify, applyEditorKeys, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, inspectImages, prepareImages, inspectFiles, prepareFiles, cycleMode, exportTranscript, renameTitle, copyLastResponse, recallSpace, recordLocal, recordHistory, queued, updateQueued, historyFill, historyConsumed, animations, applyAnimations, applyRainbow, rainbowBurstId, waveTier, waveStyle, maxRows, anchorRowsBelow, tabTitle, onEditorRows, onMenuRows, sessionKey }: {
+function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch, steer, submitMode, cycleSubmitMode, interrupt, quit, openModel, openEffort, openHelp, openMode, openPermission, openResume, openSearch, openPlugin, openUpdate, openSchedule, openJobs, openStatusline, openTheme, openLanguage, saveLanguage, openHistory, openQueue, openAgents, openSubagent, openTodos, openUsage, openDelete, openDiff, openReviewPicker, reviewChanges, deleteConfirm, confirmDelete, cancelDelete, createSession, forkSession, cancelSessionSwitch, notify, applyEditorKeys, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, inspectImages, prepareImages, inspectFiles, prepareFiles, cycleMode, exportTranscript, renameTitle, copyLastResponse, recallSpace, recordLocal, recordHistory, queued, updateQueued, historyFill, historyConsumed, animations, applyAnimations, applyRainbow, rainbowBurstId, waveTier, waveStyle, maxRows, anchorRowsBelow, tabTitle, onEditorRows, onMenuRows, sessionKey }: {
   active: boolean
   frozen: boolean
   /** Frozen-band hint naming the surface that owns the keyboard; an empty
@@ -3695,6 +3699,7 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
   openSubagent: () => void
   /** Open the /todos subpage (full todo list in one bounded panel). */
   openTodos: () => void
+  openUsage: () => void
   /** Open the /resume picker in delete mode, optionally pre-armed on one id. */
   openDelete: (id?: string) => void
   openDiff: (argument: string) => void
@@ -4645,6 +4650,10 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
         openQueue()
         return
       }
+      if (text === '/usage') {
+        openUsage()
+        return
+      }
       if (text === '/agents') {
         openAgents()
         return
@@ -5483,6 +5492,7 @@ export function App(props: AppProps): ReactElement {
   const [agentsOpen, setAgentsOpen] = useState(false)
   const [subagentOpen, setSubagentOpen] = useState(false)
   const [todosOpen, setTodosOpen] = useState(false)
+  const [usageOpen, setUsageOpen] = useState(false)
   /** /delete state: delete-mode hint plus an optional pre-armed row id. */
   const [resumeDelete, setResumeDelete] = useState<{ mode: boolean; id?: string }>({ mode: false })
   /** The row id awaiting y/n in the COMPOSER (codex delete confirm): the
@@ -5553,8 +5563,8 @@ export function App(props: AppProps): ReactElement {
   // panel keypress.
   const inputActive = deleteConfirmId !== undefined
     ? !approvalPending && !questionPending
-    : !modelOpen && !helpOpen && !modeOpen && !permissionOpen && !resumeOpen && !pluginOpen && !updateOpen && !scheduleOpen && !jobsOpen && !statuslineOpen && !themeOpen && !languageOpen && !historyOpen && !queueOpen && !agentsOpen && !subagentOpen && !todosOpen && !verboseOpen && diffView === undefined && !reviewPickerOpen && !approvalPending && !questionPending
-  const transcriptVisible = !modelOpen && !helpOpen && !modeOpen && !permissionOpen && !resumeOpen && !pluginOpen && !updateOpen && !scheduleOpen && !jobsOpen && !statuslineOpen && !themeOpen && !languageOpen && !historyOpen && !queueOpen && !agentsOpen && !subagentOpen && !todosOpen && !verboseOpen && diffView === undefined && !reviewPickerOpen && !approvalPending && !questionPending
+    : !modelOpen && !helpOpen && !modeOpen && !permissionOpen && !resumeOpen && !pluginOpen && !updateOpen && !scheduleOpen && !jobsOpen && !statuslineOpen && !themeOpen && !languageOpen && !historyOpen && !queueOpen && !agentsOpen && !subagentOpen && !todosOpen && !usageOpen && !verboseOpen && diffView === undefined && !reviewPickerOpen && !approvalPending && !questionPending
+  const transcriptVisible = !modelOpen && !helpOpen && !modeOpen && !permissionOpen && !resumeOpen && !pluginOpen && !updateOpen && !scheduleOpen && !jobsOpen && !statuslineOpen && !themeOpen && !languageOpen && !historyOpen && !queueOpen && !agentsOpen && !subagentOpen && !todosOpen && !usageOpen && !verboseOpen && diffView === undefined && !reviewPickerOpen && !approvalPending && !questionPending
 
   // Human questions outrank local inspectors. Close the lower modal instead
   // of leaving an approval/question visible but keyboard-locked behind it.
@@ -5765,7 +5775,7 @@ export function App(props: AppProps): ReactElement {
   const auditedReasoningRows = liveAudit.allocation.reasoning
   const auditedAnswerRows = liveAudit.allocation.answer
   const inspectorVisible = verboseOpen && !approvalPending && !questionPending
-  const modalVisible = modelOpen || helpOpen || modeOpen || permissionOpen || resumeOpen || pluginOpen || updateOpen || scheduleOpen || jobsOpen || statuslineOpen || themeOpen || languageOpen || historyOpen || queueOpen || agentsOpen || subagentOpen || todosOpen || inspectorVisible || diffView !== undefined || reviewPickerOpen || approvalPending || questionPending
+  const modalVisible = modelOpen || helpOpen || modeOpen || permissionOpen || resumeOpen || pluginOpen || updateOpen || scheduleOpen || jobsOpen || statuslineOpen || themeOpen || languageOpen || historyOpen || queueOpen || agentsOpen || subagentOpen || todosOpen || usageOpen || inspectorVisible || diffView !== undefined || reviewPickerOpen || approvalPending || questionPending
   // The surface that currently owns the keyboard, named in the frozen band:
   // an empty composer under a panel must not advertise typing it cannot
   // accept — every key actually feeds the panel (which may or may not
@@ -5810,9 +5820,11 @@ export function App(props: AppProps): ReactElement {
                                   ? '/subagent'
                                   : todosOpen
                                     ? '/todos'
-                                    : inspectorVisible
-                                      ? 'history details'
-                                      : undefined
+                                    : usageOpen
+                                      ? '/usage'
+                                      : inspectorVisible
+                                        ? 'history details'
+                                        : undefined
   const frozenHint = keyboardOwner === undefined
     ? undefined
     : `keys go to ${keyboardOwner} · esc ${approvalPending ? 'rejects' : questionPending ? 'cancels' : 'closes'}`
@@ -6150,6 +6162,13 @@ export function App(props: AppProps): ReactElement {
       : undefined,
     transcriptVisible ? createElement(TodoPanel, { todos: view.todos }) : undefined,
     transcriptVisible ? createElement(AgentsLine, { rows: agentRows, total: props.subagents.getTotalSeen() }) : undefined,
+    usageOpen && !approvalPending && !questionPending
+      ? createElement(UsagePanel, {
+        key: props.sessionKey,
+        load: props.loadUsage,
+        close: () => setUsageOpen(false),
+      })
+      : undefined,
     todosOpen && !approvalPending && !questionPending
       ? createElement(MemoTodoListPanel, {
         todos: view.todos,
@@ -6484,6 +6503,7 @@ export function App(props: AppProps): ReactElement {
         openAgents: () => setAgentsOpen(true),
         openSubagent: () => setSubagentOpen(true),
         openTodos: () => setTodosOpen(true),
+        openUsage: () => setUsageOpen(true),
         openDelete: (id?: string) => {
           const armed = id === undefined || id === '' ? undefined : id
           setResumeDelete({ mode: true, ...armed === undefined ? {} : { id: armed } })

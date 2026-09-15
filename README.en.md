@@ -75,7 +75,8 @@ DSH-Code brings DSH Agents, models, tools, and durable sessions directly into th
 - Create a new work branch from a historical point with `/fork` while preserving the original session
 - Search history by current directory, update time, and session scope
 - Recall input history with Up/Down (typed slash commands included), or search previous prompts and commands with `/history`
-- Use persistent titles, Markdown export, context occupancy, token, cache, TTFT, and elapsed-time metrics
+- Use persistent titles, Markdown export, context occupancy, token, cache, TTFT, and elapsed-time metrics; `/usage` reports the harness token meter's four disjoint buckets, the totals merged by model, and a per-turn breakdown
+- The status bar's `in` counts only uncached input, and `cache` shows both the cache-read volume and the hit share — together they are the billed prompt side
 - Restore the session's Agent Preset, model selection, and subagent list when resuming it; the welcome header shows both the dsh and dsh-code versions
 
 <p align="center"><img src="docs/pictures/dsh-3.png" width="95%" alt="Searchable session resume picker"></p>
@@ -189,6 +190,7 @@ The following built-in commands are available inside the TUI. Additional Harness
 | `/review [note]` | Bare /review opens a candidate picker (uncommitted changes / pick a branch / pick a commit / custom focus); any argument becomes a review note over the uncommitted diff (`/review in Chinese`). The diff is pasted into the current session under read-only permissions, and findings arrive with P0-P3 priorities and file anchors |
 | `/todos` | View the complete todo list for the current session |
 | `/queue` | See the messages waiting for the next turn: enter sends one as steering instead, `e` edits its text, `d` removes it; `↑↓`/`PageUp`/`PageDown`/`g`/`G` move |
+| `/usage` | See this session's token usage: the four disjoint buckets (uncached input, cache write, cache read, output), the totals merged by model, and the per-turn breakdown |
 | `/agents` | View subagent sessions created by the current session |
 | `/jobs` | View background jobs and their runtime status |
 | `/schedule` | Inspect active reminders (created through the model's schedule tools; read-only, overdue first) |

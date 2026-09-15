@@ -113,6 +113,7 @@
     "@deepseek-ai/dsh-session": "0.1.5-rc.2",
     "@deepseek-ai/dsh-session-persistence": "0.1.5-rc.2",
     "@deepseek-ai/dsh-session-persistence-jsonl": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-session-projection": "0.1.5-rc.2",
     "@deepseek-ai/dsh-session-query": "0.1.5-rc.2",
     "@deepseek-ai/dsh-session-query-sqlite": "0.1.5-rc.2",
     "@deepseek-ai/dsh-session-reference": "0.1.5-rc.2",
@@ -123,6 +124,7 @@
     "@deepseek-ai/dsh-terminal-bash": "0.1.5-rc.2",
     "@deepseek-ai/dsh-time-context": "0.1.5-rc.2",
     "@deepseek-ai/dsh-tmux-context": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-token-meter": "0.1.5-rc.2",
     "@deepseek-ai/dsh-tool-lsp": "0.1.5-rc.2",
     "@deepseek-ai/dsh-tool-terminal": "0.1.5-rc.2",
     "@deepseek-ai/dsh-user-approval": "0.1.5-rc.2",
@@ -219,6 +221,9 @@
     "@deepseek-ai/dsh-session-persistence-jsonl": {
       "optional": true
     },
+    "@deepseek-ai/dsh-session-projection": {
+      "optional": true
+    },
     "@deepseek-ai/dsh-session-query": {
       "optional": true
     },
@@ -247,6 +252,9 @@
       "optional": true
     },
     "@deepseek-ai/dsh-tmux-context": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-token-meter": {
       "optional": true
     },
     "@deepseek-ai/dsh-tool-lsp": {
@@ -282,6 +290,7 @@
     "@deepseek-ai/dsh-schedule": "0.1.5-rc.2",
     "@deepseek-ai/dsh-session-persistence": "0.1.5-rc.2",
     "@deepseek-ai/dsh-session-persistence-jsonl": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-session-projection": "0.1.5-rc.2",
     "@deepseek-ai/dsh-session-query": "0.1.5-rc.2",
     "@deepseek-ai/dsh-session-query-sqlite": "0.1.5-rc.2",
     "@deepseek-ai/dsh-session-reference": "0.1.5-rc.2",
@@ -293,6 +302,7 @@
     "@deepseek-ai/dsh-terminal-bash": "0.1.5-rc.2",
     "@deepseek-ai/dsh-time-context": "0.1.5-rc.2",
     "@deepseek-ai/dsh-tmux-context": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-token-meter": "0.1.5-rc.2",
     "@deepseek-ai/dsh-tool-lsp": "0.1.5-rc.2",
     "@deepseek-ai/dsh-tool-terminal": "0.1.5-rc.2",
     "@deepseek-ai/dsh-tool-todo": "0.1.5-rc.2",

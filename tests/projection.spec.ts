@@ -953,7 +953,7 @@ describe('transcript projection', () => {
       steps: 1,
       llmMs: 2_000,
       toolMs: 2_100,
-      usage: { inputTokens: 450, outputTokens: 20, cacheReadTokens: 300 },
+      usage: { uncachedInputTokens: 100, outputTokens: 20, cacheReadTokens: 300, cacheWriteTokens: 50 },
       lastPromptTokens: 450,
       contextWindow: 0,
       contextSegments: { system: 0, prompt: 0, assistant: 2, thinking: 0, tools: 5 },
@@ -1023,7 +1023,7 @@ describe('empty assistant settlements', () => {
       { type: 'step/start', seq: SessionSeq(2), time: 100, data: { turn: 1, step: 1 } },
       { ...emptyAssistantEvent(3), data: { ...emptyAssistantEvent(3).data, usage: { inputTokens: 10, outputTokens: 0, cacheReadTokens: 0 } } },
     ])
-    expect(statsView.stats.usage.inputTokens).toBe(10)
+    expect(statsView.stats.usage.uncachedInputTokens).toBe(10)
   })
 })
 

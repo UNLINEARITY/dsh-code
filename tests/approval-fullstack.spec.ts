@@ -125,6 +125,7 @@ function appProps(overrides: Partial<AppProps> = {}): AppProps {
     loadSessions: async () => [],
     loadSubagents: async () => [],
     loadSessionTranscript: async () => '',
+    loadUsage: async () => ({ turns: [] }),
     switchSession: noop,
     cancelSessionSwitch: () => false,
     loadPlugins: () => [],

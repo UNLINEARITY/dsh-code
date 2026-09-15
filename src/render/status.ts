@@ -12,22 +12,13 @@
 
 import { visibleColumns } from './markdown.ts'
 import type { TranscriptStats } from './projection.ts'
-import { singleLineText, truncateColumns } from './text.ts'
+import { billedInputTokens } from './usage.ts'
+import { singleLineText, truncateColumns, formatTokens } from './text.ts'
+
+// Re-exported for the callers that have always read the formatter here.
+export { formatTokens }
 import { t } from '../i18n.ts'
 
-/**
- * Compact token count: 517 / 12.2K / 517K / 1.2M (one decimal under three
- * digits), mirroring the web composer's StatsLine format.
- * @param n - token count.
- * @returns display string.
- */
-export function formatTokens(n: number): string {
-  const scaled = (v: number): string =>
-    v >= 100 ? String(Math.round(v)) : String(Math.round(v * 10) / 10)
-  if (n < 1_000) return String(n)
-  if (n < 1_000_000) return scaled(n / 1_000) + 'K'
-  return scaled(n / 1_000_000) + 'M'
-}
 
 /**
  * Compact duration: 45.2s under a minute, 2m42s from there on.
@@ -54,14 +45,17 @@ function formatRate(n: number): string {
 }
 
 /**
- * Cache-hit share of billed prompt-side input.
+ * Cache-hit share of billed prompt-side input. The denominator is the same
+ * billed total the /usage panel shows (uncached input plus both cache
+ * buckets), so the two readouts can never disagree.
  * @param usage - cumulative token totals.
  * @returns percent rounded to one decimal place, or null when no input was billed.
  */
 export function cacheHitPercent(usage: TranscriptStats['usage']): number | null {
-  return usage.inputTokens === 0
+  const billed = billedInputTokens(usage)
+  return billed === 0
     ? null
-    : Math.round(usage.cacheReadTokens / usage.inputTokens * 1_000) / 10
+    : Math.round(usage.cacheReadTokens / billed * 1_000) / 10
 }
 
 /**
@@ -466,13 +460,18 @@ function buildCandidates(
     }
   }
 
+  // The cache group carries both facts about cached prompt tokens: how many
+  // were read and what share of the billed prompt that was. The read count
+  // lives here rather than in the tokens group so the tokens group keeps
+  // meaning "what the provider billed outside the cache".
   const cacheHit = cacheHitPercent(stats.usage)
   if (cacheHit !== null && enabled.has('cache')) {
-    row2.push({
-      group: { spans: [{ text: t('status.label.cache') + ' ', tone: 'label' }, { text: cacheHit + '%', tone: 'value' }] },
-      rank: RANK2_CACHE,
-      id: 'cache',
-    })
+    const spans: StatusSpan[] = [{ text: t('status.label.cache') + ' ', tone: 'label' }]
+    if (stats.usage.cacheReadTokens > 0) {
+      spans.push({ text: formatTokens(stats.usage.cacheReadTokens), tone: 'value' }, sep())
+    }
+    spans.push({ text: cacheHit + '%', tone: 'value' })
+    row2.push({ group: { spans }, rank: RANK2_CACHE, id: 'cache' })
   }
   // Context occupancy as a purely proportional bar with the usage readout
   // riding outside it: the used total is the most recent reported prompt
@@ -486,13 +485,13 @@ function buildCandidates(
       id: 'context',
     })
   }
-  if ((stats.usage.inputTokens > 0 || stats.usage.outputTokens > 0) && enabled.has('tokens')) {
+  if ((stats.usage.uncachedInputTokens > 0 || stats.usage.outputTokens > 0) && enabled.has('tokens')) {
     const tokens: StatusSpan[] = []
     const pair = (label: string, value: string): void => {
       if (tokens.length > 0) tokens.push(sep())
       tokens.push({ text: label + ' ', tone: 'label' }, { text: value, tone: 'value' })
     }
-    pair(t('status.label.in'), formatTokens(stats.usage.inputTokens))
+    pair(t('status.label.in'), formatTokens(stats.usage.uncachedInputTokens))
     pair(t('status.label.out'), formatTokens(stats.usage.outputTokens))
     row2.push({ group: { spans: tokens }, rank: RANK_TOKENS, id: 'tokens' })
   }

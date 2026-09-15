@@ -14,6 +14,20 @@
 
 import { graphemeWidth, splitGraphemes, stringWidth } from './width.ts'
 
+/**
+ * Compact token count: exact below 1K, then one-decimal-ish K/M.
+ * @param n - token count.
+ * @returns display string.
+ */
+export function formatTokens(n: number): string {
+  const scaled = (v: number): string =>
+    v >= 100 ? String(Math.round(v)) : String(Math.round(v * 10) / 10)
+  if (n < 1_000) return String(n)
+  if (n < 1_000_000) return scaled(n / 1_000) + 'K'
+  return scaled(n / 1_000_000) + 'M'
+}
+
+
 /** C0 controls except tab (0x09) and newline (0x0a), plus DEL and C1. */
 const CONTROL_ESCAPE = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/gu
 

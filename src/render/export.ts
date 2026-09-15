@@ -110,7 +110,7 @@ export function buildExportMarkdown(view: TranscriptView, sessionId: string): st
   out.push('---', '')
   out.push(`- model: ${view.model === '' ? '(none yet)' : view.model}`)
   out.push(`- turns: ${stats.turns} · steps: ${stats.steps}`)
-  out.push(`- tokens: ↑${stats.usage.inputTokens} ↓${stats.usage.outputTokens} · cache read ${stats.usage.cacheReadTokens}`)
+  out.push(`- tokens: ↑${stats.usage.uncachedInputTokens} ↓${stats.usage.outputTokens} · cache read ${stats.usage.cacheReadTokens} · cache write ${stats.usage.cacheWriteTokens}`)
   out.push(`- todos: ${view.todos.length}`)
   return out.join('\n')
 }

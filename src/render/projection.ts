@@ -378,14 +378,21 @@ export interface GoalFold {
   blocked: string
 }
 
-/** Cumulative token accounting folded from `assistant/message` usage reports. */
+/**
+ * Cumulative token accounting folded from `assistant/message` usage reports.
+ * The buckets are disjoint and mirror the provider's report, so the prompt
+ * side is never double counted: reasoning tokens are already inside
+ * `outputTokens`, and cache reads are never folded into the uncached input.
+ */
 export interface UsageTotals {
-  /** Prompt-side billed tokens: `inputTokens` plus both cache buckets. */
-  inputTokens: number
+  /** Prompt-side tokens billed outside the cache. */
+  uncachedInputTokens: number
   /** Completion-side tokens over the whole log. */
   outputTokens: number
   /** Cache-read tokens over the whole log (0 when the adapter reports none). */
   cacheReadTokens: number
+  /** Cache-write tokens over the whole log (0 when the adapter reports none). */
+  cacheWriteTokens: number
 }
 
 /**
@@ -757,7 +764,7 @@ export function createTranscriptView(): TranscriptView {
     schedules: [],
     pending: { 'next-turn': [], 'next-step': [] },
     claimOrigin: new Map(),
-    stats: { turns: 0, steps: 0, llmMs: 0, toolMs: 0, usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 }, lastPromptTokens: 0, contextWindow: 0, contextSegments: { system: 0, prompt: 0, assistant: 0, thinking: 0, tools: 0 }, ttftMs: 0, ttftSteps: 0, decodeMs: 0, decodeTokens: 0, reasoningEffort: '' },
+    stats: { turns: 0, steps: 0, llmMs: 0, toolMs: 0, usage: { uncachedInputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }, lastPromptTokens: 0, contextWindow: 0, contextSegments: { system: 0, prompt: 0, assistant: 0, thinking: 0, tools: 0 }, ttftMs: 0, ttftSteps: 0, decodeMs: 0, decodeTokens: 0, reasoningEffort: '' },
     anchors: { stepStart: new Map(), toolStart: new Map(), subStart: new Map(), firstChunkAt: new Map(), compactionTokens: new Map(), lastPruneTokens: 0, turnFiles: new Map(), turnSteps: new Map(), turnTools: new Map(), systemNodes: new Map() },
   }
 }
@@ -1043,9 +1050,10 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
           ...stats,
           llmMs: stats.llmMs + (started === undefined ? 0 : Math.max(0, event.time - started)),
           usage: usage === undefined ? totals : {
-            inputTokens: totals.inputTokens + usage.inputTokens + (usage.cacheReadTokens ?? 0) + (usage.cacheWriteTokens ?? 0),
+            uncachedInputTokens: totals.uncachedInputTokens + usage.inputTokens,
             outputTokens: totals.outputTokens + usage.outputTokens,
             cacheReadTokens: totals.cacheReadTokens + (usage.cacheReadTokens ?? 0),
+            cacheWriteTokens: totals.cacheWriteTokens + (usage.cacheWriteTokens ?? 0),
           },
           lastPromptTokens: usage === undefined ? stats.lastPromptTokens
             : usage.inputTokens + (usage.cacheReadTokens ?? 0) + (usage.cacheWriteTokens ?? 0),
@@ -1573,7 +1581,7 @@ export function createReplayAccumulator(): ReplayAccumulator {
     sandbox: '',
     goal: undefined,
     schedules: [],
-    stats: { turns: 0, steps: 0, llmMs: 0, toolMs: 0, usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 }, lastPromptTokens: 0, contextWindow: 0, contextSegments: { system: 0, prompt: 0, assistant: 0, thinking: 0, tools: 0 }, ttftMs: 0, ttftSteps: 0, decodeMs: 0, decodeTokens: 0, reasoningEffort: '' },
+    stats: { turns: 0, steps: 0, llmMs: 0, toolMs: 0, usage: { uncachedInputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }, lastPromptTokens: 0, contextWindow: 0, contextSegments: { system: 0, prompt: 0, assistant: 0, thinking: 0, tools: 0 }, ttftMs: 0, ttftSteps: 0, decodeMs: 0, decodeTokens: 0, reasoningEffort: '' },
     stepStart: new Map(),
     toolStart: new Map(),
     subStart: new Map(),
@@ -1864,9 +1872,10 @@ export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent):
         ...acc.stats,
         llmMs: acc.stats.llmMs + (started === undefined ? 0 : Math.max(0, event.time - started)),
         usage: usage === undefined ? totals : {
-          inputTokens: totals.inputTokens + usage.inputTokens + (usage.cacheReadTokens ?? 0) + (usage.cacheWriteTokens ?? 0),
+          uncachedInputTokens: totals.uncachedInputTokens + usage.inputTokens,
           outputTokens: totals.outputTokens + usage.outputTokens,
           cacheReadTokens: totals.cacheReadTokens + (usage.cacheReadTokens ?? 0),
+          cacheWriteTokens: totals.cacheWriteTokens + (usage.cacheWriteTokens ?? 0),
         },
         lastPromptTokens: usage === undefined ? acc.stats.lastPromptTokens
           : usage.inputTokens + (usage.cacheReadTokens ?? 0) + (usage.cacheWriteTokens ?? 0),

@@ -29,7 +29,7 @@ const emptyStats: TranscriptStats = {
   steps: 0,
   llmMs: 0,
   toolMs: 0,
-  usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 },
+  usage: { uncachedInputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
   lastPromptTokens: 0,
   contextWindow: 0,
   contextSegments: { system: 0, prompt: 0, assistant: 0, thinking: 0, tools: 0 },
@@ -101,8 +101,8 @@ describe('status formatting', () => {
 
   it('computes cache hit only over billed input', () => {
     expect(cacheHitPercent(emptyStats.usage)).toBeNull()
-    expect(cacheHitPercent({ inputTokens: 200, outputTokens: 0, cacheReadTokens: 150 })).toBe(75)
-    expect(cacheHitPercent({ inputTokens: 201, outputTokens: 0, cacheReadTokens: 150 })).toBe(74.6)
+    expect(cacheHitPercent({ uncachedInputTokens: 50, outputTokens: 0, cacheReadTokens: 150, cacheWriteTokens: 0 })).toBe(75)
+    expect(cacheHitPercent({ uncachedInputTokens: 51, outputTokens: 0, cacheReadTokens: 150, cacheWriteTokens: 0 })).toBe(74.6)
   })
 })
 
@@ -260,7 +260,7 @@ describe('status layout', () => {
       { ...baseFacts, mode: 'standard', model: 'm', cwd: 'r', branch: 'main', permission: 'workspace-write' },
       {
         ...emptyStats,
-        usage: { inputTokens: 32_000, outputTokens: 800, cacheReadTokens: 0 },
+        usage: { uncachedInputTokens: 32_000, outputTokens: 800, cacheReadTokens: 0, cacheWriteTokens: 0 },
         lastPromptTokens: 32_000,
         contextWindow: 128_000,
         contextSegments: { system: 2_000, prompt: 12_000, assistant: 6_000, thinking: 8_000, tools: 4_000 },
@@ -285,7 +285,7 @@ describe('status layout', () => {
         steps: 5,
         llmMs: 45_233,
         toolMs: 162_000,
-        usage: { inputTokens: 12_160, outputTokens: 2_400, cacheReadTokens: 9_728 },
+        usage: { uncachedInputTokens: 2_432, outputTokens: 2_400, cacheReadTokens: 9_728, cacheWriteTokens: 0 },
       },
       160,
     )
@@ -293,8 +293,8 @@ describe('status layout', () => {
     expect(groupText(layout.row2)).toEqual([
       'turns 2 · steps 5',
       'model 45.2s · tool 2m42s',
-      'cache 80%',
-      'in 12.2K · out 2.4K',
+      'cache 9.7K · 80%',
+      'in 2.4K · out 2.4K',
       's',
     ])
     expect(layout.row1.left[0].spans[1]).toEqual({ text: 'm', tone: 'model' })
@@ -345,7 +345,7 @@ describe('status layout', () => {
           toolMs: 162_000,
           lastPromptTokens: 32_000,
           contextWindow: 128_000,
-          usage: { inputTokens: 12_160, outputTokens: 2_400, cacheReadTokens: 9_728 },
+          usage: { uncachedInputTokens: 2_432, outputTokens: 2_400, cacheReadTokens: 9_728, cacheWriteTokens: 0 },
         },
         200,
       )
@@ -354,8 +354,8 @@ describe('status layout', () => {
       expect(groupText(layout.row2)).toEqual(expect.arrayContaining([
         '回合 93 · 步骤 1655',
         '模型 45.2s · 延迟 0.6s · 20 tokens/秒 · 工具 2m42s',
-        '缓存 80%',
-        '入 12.2K · 出 2.4K',
+        '缓存 9.7K · 80%',
+        '入 2.4K · 出 2.4K',
       ]))
     } finally {
       setLanguage('en')
@@ -367,7 +367,7 @@ describe('status layout', () => {
       { ...baseFacts, model: 'm', cwd: 'r', sessionId: '' },
       {
         ...emptyStats,
-        usage: { inputTokens: 32_000, outputTokens: 800, cacheReadTokens: 0 },
+        usage: { uncachedInputTokens: 32_000, outputTokens: 800, cacheReadTokens: 0, cacheWriteTokens: 0 },
         lastPromptTokens: 32_000,
         contextWindow: 128_000,
         contextSegments: { system: 2_000, prompt: 12_000, assistant: 6_000, thinking: 8_000, tools: 4_000 },
@@ -506,7 +506,7 @@ const richStats: TranscriptStats = {
   ttftSteps: 4,
   decodeMs: 60_000,
   decodeTokens: 1_200,
-  usage: { inputTokens: 12_160, outputTokens: 2_400, cacheReadTokens: 9_728 },
+  usage: { uncachedInputTokens: 2_432, outputTokens: 2_400, cacheReadTokens: 9_728, cacheWriteTokens: 0 },
   lastPromptTokens: 32_000,
   contextWindow: 128_000,
   contextSegments: { system: 2_000, prompt: 12_000, assistant: 6_000, thinking: 8_000, tools: 4_000 },
@@ -525,8 +525,8 @@ describe('status width degradation', () => {
       '⧉ plan',
       'turns 3 · steps 9',
       'model 45.2s · latency 0.6s · 20 tokens/s · tool 2m42s',
-      'cache 80%',
-      'in 12.2K · out 2.4K',
+      'cache 9.7K · 80%',
+      'in 2.4K · out 2.4K',
       'a'.repeat(40),
       '◎ round 2/8',
       'sandbox danger-full-access',
@@ -552,7 +552,7 @@ describe('status width degradation', () => {
     expect(groupText(layout.row1)).toContain('context ' + '█'.repeat(5) + '░'.repeat(16) + ' 32K/128K 25%')
     expect(groups).toContain('workspace-write')
     expect(groups).toContain('turns 3 · steps 9')
-    expect(groups).toContain('in 12.2K · out 2.4K')
+    expect(groups).toContain('in 2.4K · out 2.4K')
     expect(groups).toContain('◎ round 2/8')
     expect(groups).toContain('sandbox danger-full-access')
     expect(groups).not.toContain('model 45.2s · latency 0.6s · 20 tokens/s · tool 2m42s')
