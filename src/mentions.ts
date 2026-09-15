@@ -25,6 +25,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
+import type { UserMessage } from '@deepseek-ai/dsh-session'
 import { isAbsolute, resolve } from 'node:path'
 import {
   DEFAULT_FILE_SEARCH_EXCLUDED_DIRECTORIES,
@@ -61,7 +62,7 @@ export interface PreparedMention {
   /** Structured source sessions in appearance order (empty when none). */
   references: SessionReferenceInput[]
   /** Aggregated snapshot for `agent.inject()`, undefined without references. */
-  additionalContext?: import('@deepseek-ai/dsh-session').UserMessage
+  additionalContext?: UserMessage
 }
 
 /** One path candidate the `ctx.fileReferences` service returns. */
@@ -86,7 +87,7 @@ export function isPathLikeMentionQuery(query: string): boolean {
 /** The mention API the input editor and the runner share. */
 export interface MentionsApi {
   /** Ranked menu candidates for the typed `@` query. */
-  candidates(query: string, signal?: AbortSignal): Promise<readonly MentionCandidate[]>
+  candidates: (query: string, signal?: AbortSignal) => Promise<readonly MentionCandidate[]>
   /** Parse submission text into readable text plus structured references. */
   parse(text: string): ParsedSessionReferenceText
   /**
@@ -167,7 +168,7 @@ export function createMentions(ctx: Context, agent: Agent | undefined, cwd: stri
             })
             : Promise.resolve([] as readonly ServiceFileCandidate[]),
         sessionCapable && needle !== '' && !isPathLikeMentionQuery(needle) && agent !== undefined
-          ? resolver!.listCandidates(agent, needle, 10, signal).catch((error: unknown) => {
+          ? resolver.listCandidates(agent, needle, 10, signal).catch((error: unknown) => {
             sessionFailure = error
             return [] as readonly SessionReferenceCandidate[]
           })

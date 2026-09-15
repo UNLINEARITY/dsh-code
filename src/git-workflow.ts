@@ -320,7 +320,7 @@ export function reviewSummaryLine(conclusion: ReviewConclusion): string {
   const total = conclusion.findings.length
   const parts: string[] = []
   for (let level = 0; level <= 3; level += 1) {
-    if (counts[level]! > 0) parts.push(`P${level}×${counts[level]}`)
+    if (counts[level] > 0) parts.push(`P${level}×${counts[level]}`)
   }
   if (untagged > 0) parts.push(t('review.summary.untagged', { n: untagged }))
   const verdict = conclusion.overall === 'incorrect'

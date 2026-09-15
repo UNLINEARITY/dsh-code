@@ -1,6 +1,6 @@
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import type { SessionHeader } from '@deepseek-ai/dsh-session'
+import { SessionId, type SessionHeader } from '@deepseek-ai/dsh-session'
 import { setLanguage } from '../src/i18n.ts'
 import {
   collectDeletionSubtree,
@@ -29,7 +29,7 @@ describe('session directory', () => {
   it('defaults to root sessions across workspaces and sorts newest first', () => {
     const rows = projectSessionRows([
       record('old', 1, { cwd: 'C:\\a' }),
-      record('child', 3, { cwd: 'C:\\a', parentSession: 'old', origin: 'subagent' }),
+      record('child', 3, { cwd: 'C:\\a', parentSession: SessionId('old'), origin: 'subagent' }),
       record('new', 2, { cwd: 'C:\\b', agentPreset: 'code' }),
     ], { sessions: 'roots', cwd: 'all', sort: 'newest', currentCwd: 'C:\\a', query: '' })
     expect(rows.map(row => row.id)).toEqual(['new', 'old'])
@@ -39,7 +39,7 @@ describe('session directory', () => {
   it('shows children read-only in all-conversations mode and filters by cwd/search', () => {
     const rows = projectSessionRows([
       record('root', 1, { cwd: 'C:\\repo' }),
-      record('child-match', 2, { cwd: 'C:\\repo', parentSession: 'root', origin: 'subagent' }),
+      record('child-match', 2, { cwd: 'C:\\repo', parentSession: SessionId('root'), origin: 'subagent' }),
       record('elsewhere', 3, { cwd: 'C:\\other' }),
     ], { sessions: 'all', cwd: 'current', sort: 'oldest', currentCwd: 'C:\\repo', query: 'child' })
     expect(rows).toHaveLength(1)
@@ -75,14 +75,14 @@ describe('session selection policy', () => {
   it('picks the newest root session pinned to the cwd, skipping subagents', () => {
     const headers = [
       record('old', 1, { cwd: 'C:\\repo' }).header,
-      record('child', 5, { cwd: 'C:\\repo', parentSession: 'old', origin: 'subagent' }).header,
+      record('child', 5, { cwd: 'C:\\repo', parentSession: SessionId('old'), origin: 'subagent' }).header,
       record('newer', 3, { cwd: 'C:\\repo' }).header,
       record('other', 9, { cwd: 'C:\\elsewhere' }).header,
     ]
     expect(newestRootForCwd(headers, 'C:\\repo')?.id).toBe('newer')
     expect(newestRootForCwd(headers, 'C:\\absent')).toBeUndefined()
     // A directory whose only sessions are subagents yields nothing.
-    expect(newestRootForCwd([record('only-child', 1, { cwd: 'C:\\repo', parentSession: 'x', origin: 'subagent' }).header], 'C:\\repo')).toBeUndefined()
+    expect(newestRootForCwd([record('only-child', 1, { cwd: 'C:\\repo', parentSession: SessionId('x'), origin: 'subagent' }).header], 'C:\\repo')).toBeUndefined()
   })
 })
 
@@ -156,9 +156,9 @@ describe('session deletion guards', () => {
   it('collects the deletion subtree across listing order', () => {
     const records = [
       record('root', 1),
-      record('child', 2, { parentSession: 'root' }),
-      record('grand', 3, { parentSession: 'child' }),
-      record('sibling', 4, { parentSession: 'root' }),
+      record('child', 2, { parentSession: SessionId('root') }),
+      record('grand', 3, { parentSession: SessionId('child') }),
+      record('sibling', 4, { parentSession: SessionId('root') }),
       record('unrelated', 5),
     ]
     expect(collectDeletionSubtree(records, 'root')).toEqual(expect.arrayContaining(['root', 'child', 'grand', 'sibling']))
@@ -183,7 +183,7 @@ describe('session deletion plan', () => {
   it('refuses the whole subtree when any member is live', () => {
     const records = [
       record('root', 1),
-      { ...record('child', 2, { parentSession: 'root' }), live: true },
+      { ...record('child', 2, { parentSession: SessionId('root') }), live: true },
     ]
     const plan = planSessionDeletion(records, 'root')
     expect(plan.ok).toBe(false)
@@ -196,9 +196,9 @@ describe('session deletion plan', () => {
   it('orders the plan children-first across the lineage', () => {
     const records = [
       record('root', 1),
-      record('child', 2, { parentSession: 'root' }),
-      record('grand', 3, { parentSession: 'child' }),
-      record('sibling', 4, { parentSession: 'root' }),
+      record('child', 2, { parentSession: SessionId('root') }),
+      record('grand', 3, { parentSession: SessionId('child') }),
+      record('sibling', 4, { parentSession: SessionId('root') }),
       record('unrelated', 5),
     ]
     const plan = planSessionDeletion(records, 'root')

@@ -81,7 +81,7 @@ describe('mountQuestionProvider', () => {
     const store = mountQuestionProvider(ctx, () => true)
     const first = ask(request([{ id: 'a', question: 'first', options: [{ label: '1' }] }]))
     const second = ask(request([{ id: 'b', question: 'second', options: [{ label: '2' }] }]))
-    const secondFailure = (second as Promise<AskUserQuestionAnswer>).catch((error: unknown) => error)
+    const secondFailure = (second).catch((error: unknown) => error)
     await settle()
     const pending = store.getSnapshot().pending!
     expect(pending.request.questions[0]?.question).toBe('first')

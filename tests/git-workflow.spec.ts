@@ -109,8 +109,8 @@ describe('Git workflow', () => {
       // Commits on the current branch, newest first, with titles and times.
       const commits = await listReviewCommits(root)
       expect(commits.map(commit => commit.title)).toEqual(['third commit', 'second commit', 'first commit'])
-      expect(commits[0]!.sha).toMatch(/^[0-9a-f]{40}$/u)
-      expect(commits[0]!.at).toBeGreaterThanOrEqual(commits[1]!.at)
+      expect(commits[0].sha).toMatch(/^[0-9a-f]{40}$/u)
+      expect(commits[0].at).toBeGreaterThanOrEqual(commits[1].at)
     })
 
     it('resolves merge bases against a real repository and degrades cleanly', async () => {

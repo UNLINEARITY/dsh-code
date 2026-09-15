@@ -310,11 +310,17 @@ dsh profile
 
 ```sh
 pnpm install
+pnpm lint            # ESLint（类型敏感）：src、tests、scripts、根配置
+pnpm typecheck       # 构建项目的类型检查（src）
+pnpm typecheck:tests # 测试套件与 scripts 的类型检查
 pnpm test
-pnpm typecheck
+pnpm test:coverage   # 覆盖率报告（只报告，不设门槛）
 pnpm build
+pnpm verify          # lint + 两个类型检查 + 测试，一次跑完
 pnpm run gen:whale   # 从 vendored Logo 路径重新生成 src/whale-glyph.ts
 ```
+
+测试文件由 `tsconfig.test.json` 纳入类型检查：spec 里的假实现若与真实接口脱节，会在 `pnpm typecheck:tests` 直接报错，而不是留到运行时。
 
 鲸鱼字形由 `scripts/fish-logo.ts` 中 vendored 的 DeepSeek FishLogo 几何数据生成（来源：DeepSeek Harness，MIT）。
 

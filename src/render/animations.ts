@@ -106,14 +106,14 @@ export const FLOW_PERIOD_MS = 2_400
  */
 export function flowColor(elapsedMs: number, anchors: readonly RgbTriple[]): RgbTriple {
   if (anchors.length === 0) throw new Error('flowColor needs at least one anchor')
-  if (anchors.length === 1) return anchors[0]!
+  if (anchors.length === 1) return anchors[0]
   const lap = ((elapsedMs % FLOW_PERIOD_MS) + FLOW_PERIOD_MS) % FLOW_PERIOD_MS
   const span = FLOW_PERIOD_MS / anchors.length
   const at = lap / span
   const index = Math.floor(at)
   const phase = at - index
   const eased = phase * phase * (3 - 2 * phase)
-  return blendRgb(anchors[(index + 1) % anchors.length]!, anchors[index % anchors.length]!, eased)
+  return blendRgb(anchors[(index + 1) % anchors.length], anchors[index % anchors.length], eased)
 }
 
 /** Caret blink cadence: one blink step (on or off) per tick. */
@@ -387,8 +387,8 @@ export function rainbowSpectrumHue(position: number): RgbTriple {
   const index = Math.floor(scaled)
   const t = scaled - index
   const eased = t * t * (3 - 2 * t)
-  const a = hues[index % hues.length]!
-  const b = hues[(index + 1) % hues.length]!
+  const a = hues[index % hues.length]
+  const b = hues[(index + 1) % hues.length]
   return [
     Math.round(a[0] + (b[0] - a[0]) * eased),
     Math.round(a[1] + (b[1] - a[1]) * eased),
@@ -620,19 +620,19 @@ export function deepseekWaveColumnBg(
   let bandIndex = 0
   for (const band of DEEPSEEK_WAVE_BANDS[style][tier]) {
     for (const [hue, strength] of bandSample(style, band, elapsed, column, width, { dy, u, undulating, pulseSpan, bandIndex, total })) {
-      weights[hue] = style === 'aurora' ? weights[hue]! + strength : Math.max(weights[hue]!, strength)
+      weights[hue] = style === 'aurora' ? weights[hue] + strength : Math.max(weights[hue], strength)
     }
     bandIndex += 1
   }
-  const weight = weights[0]! + weights[1]! + weights[2]!
+  const weight = weights[0] + weights[1] + weights[2]
   if (weight <= 0.01) return null
   let red = 0
   let green = 0
   let blue = 0
   for (let index = 0; index < 3; index += 1) {
-    red += weights[index]! * hues[index]![0]
-    green += weights[index]! * hues[index]![1]
-    blue += weights[index]! * hues[index]![2]
+    red += weights[index] * hues[index][0]
+    green += weights[index] * hues[index][1]
+    blue += weights[index] * hues[index][2]
   }
   const mixed: RgbTriple = [
     Math.round(red / weight),
@@ -688,7 +688,7 @@ export function deepseekWaveWordVisible(tick: number, tier: DeepseekWaveTier, st
  * @returns the hue for that character.
  */
 export function deepseekWaveWordHue(index: number, hues: readonly [RgbTriple, RgbTriple, RgbTriple]): RgbTriple {
-  return hues[index % hues.length]!
+  return hues[index % hues.length]
 }
 
 /**

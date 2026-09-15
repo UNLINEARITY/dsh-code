@@ -22,15 +22,15 @@ function scheduleEvent(data: unknown, seq: number): SessionEvent {
   return { type: 'schedule/change', seq, time: 0, data } as SessionEvent
 }
 
-function pluginMessageEvent(plugin: string, form: string | undefined, text: string, seq: number): SessionEvent {
+function pluginMessageEvent(plugin: string, form: 'snapshot' | undefined, text: string, seq: number): SessionEvent {
   const source = form === undefined
-    ? { kind: 'plugin', plugin }
-    : { kind: 'plugin', plugin, form, sections: [{ name: `${plugin}-context`, text }] }
+    ? { kind: 'plugin', plugin } as const
+    : { kind: 'plugin', plugin, form, sections: [{ name: `${plugin}-context`, text }] } as const
   return {
     type: 'user/message',
     seq,
     time: 0,
-    data: createUserMessage({ content: [{ type: 'text', text }], source } as never),
+    data: createUserMessage({ content: [{ type: 'text', text }], source }),
   } as SessionEvent
 }
 
@@ -43,14 +43,14 @@ describe('applyScheduleChange', () => {
     // AfterScheduleRecord.scheduledAt IS the RFC 3339 target (delay included):
     // adding afterSeconds again would double the delay.
     const created = applyScheduleChange([], { operation: 'create', schedule: { id: 'schedule-1', kind: 'after', prompt: 'ping', afterSeconds: 60, scheduledAt: '2026-09-11T08:00:00Z' } })
-    expect(created[0]!.targetAt).toBe(Date.parse('2026-09-11T08:00:00Z'))
+    expect(created[0].targetAt).toBe(Date.parse('2026-09-11T08:00:00Z'))
     const at = applyScheduleChange([], { operation: 'create', schedule: { id: 'schedule-2', kind: 'at', prompt: 'ping', scheduledAt: '2026-09-11T09:00:00Z' } })
-    expect(at[0]!.targetAt).toBe(Date.parse('2026-09-11T09:00:00Z'))
+    expect(at[0].targetAt).toBe(Date.parse('2026-09-11T09:00:00Z'))
     // EveryScheduleRecord.scheduledAt is the earliest anchor-aligned
     // occurrence NOT YET dispatched — no interval added on create either.
     const every = applyScheduleChange([], { operation: 'create', schedule: { id: 'schedule-3', kind: 'every', prompt: 'ping', everySeconds: 300, scheduledAt: '2026-09-11T08:00:00Z' } })
-    expect(every[0]!.everySeconds).toBe(300)
-    expect(every[0]!.targetAt).toBe(Date.parse('2026-09-11T08:00:00Z'))
+    expect(every[0].everySeconds).toBe(300)
+    expect(every[0].targetAt).toBe(Date.parse('2026-09-11T08:00:00Z'))
   })
 
   it('finishes a dispatched one-shot and advances a recurrence past missed occurrences', () => {
@@ -94,7 +94,7 @@ describe('schedule projection folds', () => {
     view = projectEvent(view, scheduleEvent(AT_CREATE, 2))
     view = projectEvent(view, scheduleEvent(EVERY_DISPATCH, 3))
     expect(view.schedules.map(row => row.id)).toEqual(['schedule-1', 'schedule-2'])
-    expect(view.schedules[0]!.targetAt).toBe(Date.parse('2026-09-11T09:00:00Z') + 3_600_000)
+    expect(view.schedules[0].targetAt).toBe(Date.parse('2026-09-11T09:00:00Z') + 3_600_000)
     const acc = createReplayAccumulator()
     replayProjectEvent(acc, scheduleEvent(EVERY_CREATE, 1))
     replayProjectEvent(acc, scheduleEvent(AT_CREATE, 2))
@@ -138,7 +138,7 @@ describe('schedule panel rows', () => {
     ] as const satisfies readonly ScheduleRow[]
     const display = scheduleDisplayRows(rows, 5_000)
     expect(display.map(row => row.key)).toEqual(['overdue', 'later'])
-    expect(display[0]!.tone).toBe('error')
+    expect(display[0].tone).toBe('error')
   })
 })
 

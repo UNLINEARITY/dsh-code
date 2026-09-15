@@ -1,0 +1,18 @@
+{
+  // Test-suite typecheck: the exact same compiler contract as the build
+  // (strict, unused checks on) but over `tests/` too, so a spec fixture can no
+  // longer drift from the interfaces it fakes without failing a gate. The
+  // build config keeps `rootDir: src` for declaration output; this project
+  // never emits, so it widens the root instead. `scripts/` and the root
+  // `*.config.ts` ride along because ESLint's type-aware pass needs one
+  // project that contains every linted TypeScript file.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "emitDeclarationOnly": false,
+    "declaration": false,
+    "rootDir": ".",
+    "types": ["node"]
+  },
+  "include": ["src", "tests", "scripts", "*.config.ts"]
+}

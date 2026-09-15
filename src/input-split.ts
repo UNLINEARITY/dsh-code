@@ -60,7 +60,7 @@ export function createKeypressSplitter(): KeypressSplitter {
           buffer = buffer.slice(stop)
           continue
         }
-        const head = buffer[0]!
+        const head = buffer[0]
         if (head !== '\x1b') {
           // Plain bytes key one at a time; a surrogate pair is one grapheme
           // and must not split into two lone surrogates.
@@ -74,7 +74,7 @@ export function createKeypressSplitter(): KeypressSplitter {
         if (buffer[1] === '[') {
           let end = -1
           for (let at = 2; at < buffer.length; at += 1) {
-            if (isCsiFinal(buffer[at]!)) {
+            if (isCsiFinal(buffer[at])) {
               end = at
               break
             }
@@ -134,7 +134,7 @@ export interface TuiStdin extends PassThrough {
  * @param source - the process (or harness) input stream in raw mode.
  * @returns the proxy stream plus a dispose that detaches the tap.
  */
-export function createSplitStdin(source: NodeJS.ReadStream): { stdin: TuiStdin; dispose(): void } {
+export function createSplitStdin(source: NodeJS.ReadStream): { stdin: TuiStdin; dispose: () => void } {
   // Object mode matters: a plain stream's read() without a size drains the
   // whole buffer as one chunk, which would re-coalesce the units this module
   // exists to separate. In object mode every pushed unit reads back alone.

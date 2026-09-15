@@ -7,7 +7,7 @@
 import { PassThrough } from 'node:stream'
 import { createElement } from 'react'
 import { render } from 'ink'
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { ApprovalOutcome, ApprovalRequest } from '@deepseek-ai/dsh-user-approval'
@@ -43,13 +43,19 @@ function request(reason: string): ApprovalRequest {
 
 const wait = async (ms = 120): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
 
+/** Normalize one forwarded rejection: a non-Error reason would lose its stack. */
+function rejectionError(reason: unknown): Error {
+  if (reason instanceof Error) return reason
+  return new Error(typeof reason === 'string' ? reason : 'upstream rejection')
+}
+
 /** Resolve-with-timeout helper: a dead approval bar never settles. */
 function withTimeout<T>(promise: Promise<T>, label: string, ms = 4000): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(label + ': did not settle within ' + ms + 'ms (dead approval bar)')), ms)
     promise.then(
       value => { clearTimeout(timer); resolve(value) },
-      error => { clearTimeout(timer); reject(error) },
+      (error: unknown) => { clearTimeout(timer); reject(rejectionError(error)) },
     )
   })
 }
@@ -75,18 +81,19 @@ const frozenQuestion = Object.freeze({ pending: undefined })
 const EMPTY_AGENTS = Object.freeze([])
 
 function appProps(overrides: Partial<AppProps> = {}): AppProps {
-  return {
+  const props: AppProps = {
     store: createTranscriptStore(),
     subagents: { subscribe: () => unsubscribe, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
     approval: { subscribe: () => unsubscribe, getSnapshot: () => frozenEmpty },
     questions: { subscribe: () => unsubscribe, getSnapshot: () => frozenQuestion, submit: noop, cancel: noop },
-    commands: { descriptors: [], subscribe: () => unsubscribe },
-    skills: { rows: [], subscribe: () => unsubscribe },
+    commands: { descriptors: [], subscribe: () => unsubscribe, setAgent: noop },
+    skills: { rows: [], subscribe: () => unsubscribe, setAgent: noop },
     model: 'test/model',
     cwd: 'dsh-cli',
     workspaceRoot: 'C:\\repo\\dsh-cli',
     branch: 'main',
     sessionId: '12345678',
+    sessionKey: 'session-12345678',
     resumed: false,
     mode: 'standard',
     permission: 'workspace-write',
@@ -97,6 +104,8 @@ function appProps(overrides: Partial<AppProps> = {}): AppProps {
     loadMentions: async () => [],
     inspectImages: async () => [],
     prepareImages: async () => [],
+    inspectFiles: async () => [],
+    prepareFiles: async () => [],
     selectModel: () => 'test/model',
     subagentModel: '',
     setSubagentModel: () => '',
@@ -107,7 +116,7 @@ function appProps(overrides: Partial<AppProps> = {}): AppProps {
     exportTranscript: async () => {},
     renameTitle: () => '',
     copyLastResponse: async () => '',
-    loadGitDiff: async () => ({ title: 'git diff', text: '' }),
+    loadGitDiff: async () => ({ title: 'git diff', files: [] }),
     reviewChanges: noop,
     loadPresets: async () => [],
     loadPermissions: async () => [],
@@ -125,12 +134,13 @@ function appProps(overrides: Partial<AppProps> = {}): AppProps {
     loadJobs: () => [],
     statusline: DEFAULT_STATUSLINE_ITEMS,
     saveStatusline: noop,
+    saveLanguage: noop,
     applyEditorKeys: async () => 'ok',
     history: [],
     recordHistory: noop,
     onBridgeReady: noop,
-    ...overrides,
   }
+  return Object.assign(props, overrides)
 }
 
 describe('approval freeze probe (live store, real keys)', () => {

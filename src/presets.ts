@@ -38,7 +38,7 @@ export function resolvePreset(session: Pick<Session, 'header' | 'snapshotEvents'
   for (let index = events.length - 1; index >= 0; index -= 1) {
     const event = events[index] as unknown as { type: string; data?: { agentPreset?: string } }
     if (event.type === 'agent-preset/selected' && event.data?.agentPreset !== undefined) {
-      return normalizePresetId(event.data.agentPreset) as string
+      return normalizePresetId(event.data.agentPreset)
     }
   }
   return normalizePresetId(session.header.agentPreset) ?? 'standard'

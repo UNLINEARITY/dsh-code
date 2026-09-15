@@ -17,6 +17,7 @@ import {
   saveProviderCredential,
   subscribeProviderSettings,
   unsetProviderCredential,
+  type DiscoveredModelView,
   type ProviderTargetView,
 } from '../src/provider-settings.ts'
 
@@ -120,7 +121,7 @@ describe('loadProviderSettings', () => {
     expect(directory.writable).toBe(true)
     expect(directory.failures).toEqual([])
     expect(directory.rows).toHaveLength(1)
-    const row = directory.rows[0]!
+    const row = directory.rows[0]
     expect(row.provider).toBe('deepseek-official')
     expect(row.displayName).toBe('DeepSeek')
     expect(row.active).toBe(true)
@@ -148,7 +149,7 @@ describe('loadProviderSettings', () => {
     }
     const llm = llmWith([], [piAiEntry])
     const directory = await loadProviderSettings(fakeCtx({ llm, settings, credentials }))
-    const row = directory.rows[0]!
+    const row = directory.rows[0]
     expect(row.active).toBe(false)
     expect(row.configured).toBe(false)
     expect(row.removable).toBe(false)
@@ -175,10 +176,10 @@ describe('loadProviderSettings', () => {
     const llm = llmWith([], [broken])
     const directory = await loadProviderSettings(fakeCtx({ llm, settings, credentials }))
     expect(directory.failures).toEqual([])
-    expect(directory.rows[0]!.diagnostic).toBe('model "glm-9" declares an unknown protocol')
+    expect(directory.rows[0].diagnostic).toBe('model "glm-9" declares an unknown protocol')
     // A clean entry never grows the field.
     const clean = await loadProviderSettings(fakeCtx({ llm: llmWith([], [piAiEntry]), settings, credentials }))
-    expect(clean.rows[0]!.diagnostic).toBeUndefined()
+    expect(clean.rows[0].diagnostic).toBeUndefined()
   })
 
   it('surfaces an active provider outside the directory as a read-only unmanaged row', async () => {
@@ -190,7 +191,7 @@ describe('loadProviderSettings', () => {
     }
     const llm = llmWith([{ id: 'acme-gateway', name: 'Acme' }])
     const directory = await loadProviderSettings(fakeCtx({ llm, settings, credentials }))
-    const row = directory.rows[0]!
+    const row = directory.rows[0]
     expect(row.provider).toBe('acme-gateway')
     expect(row.displayName).toBe('Acme')
     expect(row.active).toBe(true)
@@ -217,7 +218,7 @@ describe('loadProviderSettings', () => {
     }
     const llm = llmWith([{ id: 'pi-ai', name: 'PI AI' }], [piAiEntry])
     const directory = await loadProviderSettings(fakeCtx({ llm, settings, credentials }))
-    const row = directory.rows[0]!
+    const row = directory.rows[0]
     expect(row.active).toBe(true)
     expect(row.configured).toBe(true)
     expect(row.removable).toBe(true)
@@ -245,8 +246,8 @@ describe('loadProviderSettings', () => {
     )
     const directory = await loadProviderSettings(fakeCtx({ llm, settings, credentials }))
     expect(directory.rows).toHaveLength(2)
-    expect(directory.rows[0]!.credential).toEqual({ kind: 'facts', configured: true, source: 'file', writable: true })
-    expect(directory.rows[1]!.credential).toEqual({ kind: 'error', message: 'credentials store offline' })
+    expect(directory.rows[0].credential).toEqual({ kind: 'facts', configured: true, source: 'file', writable: true })
+    expect(directory.rows[1].credential).toEqual({ kind: 'error', message: 'credentials store offline' })
   })
 
   it('tolerates absent settings and credentials services without losing rows', async () => {
@@ -261,8 +262,8 @@ describe('loadProviderSettings', () => {
       expect(row.credentialRef).toBeUndefined()
       expect(row.credential).toBeUndefined()
     }
-    expect(directory.rows[0]!.active).toBe(true)
-    expect(directory.rows[1]!.active).toBe(false)
+    expect(directory.rows[0].active).toBe(true)
+    expect(directory.rows[1].active).toBe(false)
   })
 
   it('reports a bounded error for a named ref when the credentials service is absent', async () => {
@@ -273,8 +274,8 @@ describe('loadProviderSettings', () => {
     }
     const llm = llmWith([{ id: 'deepseek-official', name: 'DeepSeek' }], [deepseekEntry])
     const directory = await loadProviderSettings(fakeCtx({ llm, settings }))
-    expect(directory.rows[0]!.credentialRef).toBe('DEEPSEEK_API_KEY')
-    expect(directory.rows[0]!.credential).toEqual({ kind: 'error', message: 'credentials service is unavailable' })
+    expect(directory.rows[0].credentialRef).toBe('DEEPSEEK_API_KEY')
+    expect(directory.rows[0].credential).toEqual({ kind: 'error', message: 'credentials service is unavailable' })
   })
 
   it('returns an empty directory when the llm service is unavailable', async () => {
@@ -347,18 +348,20 @@ describe('discoverProviderModels', () => {
   })
 
   it('sends the draft with the typed key and endpoint - never the route id, so a builtin catalog cannot shadow the gateway', async () => {
-    const discover = vi.fn(async (_ns: string, request: Record<string, unknown>) => {
+    const discover = vi.fn(async (_ns: string, request: Record<string, unknown>): Promise<readonly DiscoveredModelView[]> => {
       expect(request).toEqual({ apiKey: 'sk-typed', baseURL: 'https://gw.example/v1' })
       expect('provider' in request).toBe(false)
       return [
         { id: 'glm-5.4', name: 'GLM-5.4', contextWindow: 1000000 },
         { id: '' },
         { id: 'glm-5.4' },
-        { name: 'nameless' } as { id: string },
+        // The endpoint reply is a wire value, not a checked one: this row
+        // deliberately has no id, so the double cast is the point of the test.
+        { name: 'nameless' } as unknown as DiscoveredModelView,
       ]
     })
     const rows = await discoverProviderModels(
-      fakeCtx({ llm: { discoverModels: discover } }) as never as Context,
+      fakeCtx({ llm: { discoverModels: discover } }),
       targetOf(),
       { apiKey: 'sk-typed', baseURL: 'https://gw.example/v1' },
     )
@@ -367,7 +370,7 @@ describe('discoverProviderModels', () => {
   })
 
   it('resolves the stored credential once for an endpoint probe when no key is typed', async () => {
-    const discover = vi.fn(async () => [])
+    const discover = vi.fn(async (_ns: string, _request: Record<string, unknown>) => [])
     // The mock mirrors the real provider's shape: resolve is a METHOD reading
     // instance state, so a bridge that destructures it off the service loses
     // `this`, the lookup throws, and the probe goes out unauthenticated —
@@ -381,11 +384,11 @@ describe('discoverProviderModels', () => {
       },
     }
     await discoverProviderModels(
-      fakeCtx({ llm: { discoverModels: discover }, credentials }) as never as Context,
+      fakeCtx({ llm: { discoverModels: discover }, credentials }),
       targetOf({ configuration: { api: 'openai-responses', models: [] } }),
       { baseURL: 'https://gw.example/v1' },
     )
-    expect(discover.mock.calls[0]![1]).toEqual({
+    expect(discover.mock.calls[0][1]).toEqual({
       apiKey: 'sk-stored',
       baseURL: 'https://gw.example/v1',
       api: 'openai-responses',
@@ -393,30 +396,30 @@ describe('discoverProviderModels', () => {
   })
 
   it('probes the endpoint unauthenticated when no key exists anywhere', async () => {
-    const discover = vi.fn(async () => [])
+    const discover = vi.fn(async (_ns: string, _request: Record<string, unknown>) => [])
     const resolve = vi.fn(async () => { throw new Error('locked') })
     await discoverProviderModels(
-      fakeCtx({ llm: { discoverModels: discover }, credentials: { resolve } }) as never as Context,
+      fakeCtx({ llm: { discoverModels: discover }, credentials: { resolve } }),
       targetOf(),
       { baseURL: 'https://gw.example/v1' },
     )
-    expect(discover.mock.calls[0]![1]).toEqual({ baseURL: 'https://gw.example/v1' })
+    expect(discover.mock.calls[0][1]).toEqual({ baseURL: 'https://gw.example/v1' })
   })
 
   it('asks the route itself only when no endpoint override exists', async () => {
-    const discover = vi.fn(async () => [])
+    const discover = vi.fn(async (_ns: string, _request: Record<string, unknown>) => [])
     await discoverProviderModels(
-      fakeCtx({ llm: { discoverModels: discover } }) as never as Context,
+      fakeCtx({ llm: { discoverModels: discover } }),
       targetOf(),
       {},
     )
-    expect(discover.mock.calls[0]![1]).toEqual({ provider: 'gateway' })
+    expect(discover.mock.calls[0][1]).toEqual({ provider: 'gateway' })
   })
 
   it('forwards the cancellation signal verbatim', async () => {
     const discover = vi.fn(async () => [])
     const controller = new AbortController()
-    await discoverProviderModels(fakeCtx({ llm: { discoverModels: discover } }) as never as Context, targetOf(), {}, controller.signal)
+    await discoverProviderModels(fakeCtx({ llm: { discoverModels: discover } }), targetOf(), {}, controller.signal)
     expect(discover).toHaveBeenCalledWith('llm-pi-ai', expect.anything(), controller.signal)
   })
 
@@ -426,7 +429,7 @@ describe('discoverProviderModels', () => {
     await expect(discoverProviderModels(fakeCtx({}), targetOf(), {}))
       .rejects.toThrow('model discovery is unavailable')
     const failing = vi.fn(async () => { throw new Error('gateway answered 401;\ncheck the API key') })
-    await expect(discoverProviderModels(fakeCtx({ llm: { discoverModels: failing } }) as never as Context, targetOf(), {}))
+    await expect(discoverProviderModels(fakeCtx({ llm: { discoverModels: failing } }), targetOf(), {}))
       .rejects.toThrow('gateway answered 401; check the API key')
   })
 })
@@ -479,7 +482,7 @@ describe('saveProviderConfiguration', () => {
     }
     const llm = llmWith([{ id: 'pi-ai', name: 'PI AI' }], [piAiEntry])
     const ctx = fakeCtx({ llm, settings })
-    const row = (await loadProviderSettings(ctx)).rows[0]!
+    const row = (await loadProviderSettings(ctx)).rows[0]
     expect(row.configuration.models).toEqual([{
       id: 'model-a',
       name: 'Model A',
@@ -491,7 +494,7 @@ describe('saveProviderConfiguration', () => {
     // edited modelled fields (a new output window) win over nothing carried.
     await saveProviderConfiguration(ctx, row, {
       baseURL: 'https://gateway.example/v1',
-      models: [{ ...row.configuration.models[0]!, maxTokens: 4_096 }],
+      models: [{ ...row.configuration.models[0], maxTokens: 4_096 }],
     })
     expect(settings.mutate).toHaveBeenCalledWith('llm-pi-ai', [
       { op: 'set', path: ['providers', 'pi-ai', 'baseURL'], value: 'https://gateway.example/v1' },
@@ -541,7 +544,7 @@ describe('saveProviderCredential', () => {
     }
     const llm = llmWith([], [piAiEntry])
     const ctx = fakeCtx({ llm, settings, credentials })
-    const row = (await loadProviderSettings(ctx)).rows[0]!
+    const row = (await loadProviderSettings(ctx)).rows[0]
     await saveProviderCredential(ctx, row, '  sk-pi-ai-123  ')
     expect(settings.mutate).toHaveBeenCalledWith('llm-pi-ai', [
       { op: 'set', path: ['providers', 'pi-ai', 'apiKeyEnv'], value: 'PI_AI_API_KEY' },
@@ -563,7 +566,7 @@ describe('saveProviderCredential', () => {
     }
     const llm = llmWith([{ id: 'pi-ai', name: 'PI AI' }], [piAiEntry])
     const ctx = fakeCtx({ llm, settings, credentials })
-    const row = (await loadProviderSettings(ctx)).rows[0]!
+    const row = (await loadProviderSettings(ctx)).rows[0]
     expect(row.configured).toBe(true)
     expect(row.credentialRef).toBeUndefined()
     await saveProviderCredential(ctx, row, 'sk-gateway')
@@ -586,7 +589,7 @@ describe('saveProviderCredential', () => {
     }
     const llm = llmWith([{ id: 'deepseek-official', name: 'DeepSeek' }], [deepseekEntry])
     const ctx = fakeCtx({ llm, settings, credentials })
-    const row = (await loadProviderSettings(ctx)).rows[0]!
+    const row = (await loadProviderSettings(ctx)).rows[0]
     await saveProviderCredential(ctx, row, 'sk-rotated-1')
     expect(settings.mutate).not.toHaveBeenCalled()
     expect(credentials.set).toHaveBeenCalledWith('DEEPSEEK_API_KEY', 'sk-rotated-1')
@@ -601,7 +604,7 @@ describe('saveProviderCredential', () => {
     }
     const llm = llmWith([{ id: 'deepseek-official', name: 'DeepSeek' }], [deepseekEntry])
     const ctx = fakeCtx({ llm, settings, credentials })
-    const row = (await loadProviderSettings(ctx)).rows[0]!
+    const row = (await loadProviderSettings(ctx)).rows[0]
     const secret = 'sk-must-not-escape'
     await expect(saveProviderCredential(ctx, row, secret)).rejects.toThrow('credentials service rejected the API key')
     try {
@@ -620,7 +623,7 @@ describe('saveProviderCredential', () => {
     }
     const llm = llmWith([{ id: 'deepseek-official', name: 'DeepSeek' }], [deepseekEntry])
     const ctx = fakeCtx({ llm, settings, credentials })
-    const row = (await loadProviderSettings(ctx)).rows[0]!
+    const row = (await loadProviderSettings(ctx)).rows[0]
     await expect(saveProviderCredential(ctx, row, 'sk-secret')).rejects.toThrow('read-only')
     expect(credentials.set).not.toHaveBeenCalled()
     expect(settings.mutate).not.toHaveBeenCalled()
@@ -635,7 +638,7 @@ describe('saveProviderCredential', () => {
     }
     const llm = llmWith([{ id: 'deepseek-official', name: 'DeepSeek' }], [deepseekEntry])
     const ctx = fakeCtx({ llm, settings, credentials })
-    const row = (await loadProviderSettings(ctx)).rows[0]!
+    const row = (await loadProviderSettings(ctx)).rows[0]
     for (const bad of [
       '',
       '   ',
@@ -670,7 +673,7 @@ describe('saveProviderCredential', () => {
     }
     const llm = llmWith([{ id: 'acme-gateway', name: 'Acme' }])
     const ctx = fakeCtx({ llm, settings, credentials })
-    const row = (await loadProviderSettings(ctx)).rows[0]!
+    const row = (await loadProviderSettings(ctx)).rows[0]
     await expect(saveProviderCredential(ctx, row, 'sk-acme')).rejects.toThrow('no managed settings namespace')
     expect(settings.mutate).not.toHaveBeenCalled()
     expect(credentials.set).not.toHaveBeenCalled()
@@ -693,7 +696,7 @@ describe('saveProviderCredential', () => {
     }
     const llm = llmWith([], [piAiEntry])
     const ctx = fakeCtx({ llm, settings, credentials })
-    const row = (await loadProviderSettings(ctx)).rows[0]!
+    const row = (await loadProviderSettings(ctx)).rows[0]
     await expect(saveProviderCredential(ctx, row, 'sk-a')).rejects.toThrow('store busy')
     // Same (stale) target: the re-materialization is idempotent, then the key lands.
     await saveProviderCredential(ctx, row, 'sk-a')
@@ -713,7 +716,7 @@ describe('unsetProviderCredential', () => {
     }
     const llm = llmWith([{ id: 'deepseek-official', name: 'DeepSeek' }], [deepseekEntry])
     const ctx = fakeCtx({ llm, settings, credentials })
-    const row = (await loadProviderSettings(ctx)).rows[0]!
+    const row = (await loadProviderSettings(ctx)).rows[0]
     await unsetProviderCredential(ctx, row)
     expect(credentials.unset).toHaveBeenCalledWith('DEEPSEEK_API_KEY')
     expect(settings.mutate).not.toHaveBeenCalled()
@@ -728,7 +731,7 @@ describe('unsetProviderCredential', () => {
     }
     const llm = llmWith([], [piAiEntry])
     const ctx = fakeCtx({ llm, settings, credentials })
-    const dormant = (await loadProviderSettings(ctx)).rows[0]!
+    const dormant = (await loadProviderSettings(ctx)).rows[0]
     await expect(unsetProviderCredential(ctx, dormant)).rejects.toThrow('names no credential reference')
     expect(credentials.unset).not.toHaveBeenCalled()
 
@@ -744,6 +747,7 @@ describe('unsetProviderCredential', () => {
       credentialRef: 'DEEPSEEK_API_KEY',
       suggestedRef: 'DEEPSEEK_OFFICIAL_API_KEY',
       credential: { kind: 'facts' as const, configured: false, writable: true },
+      configuration: { models: [] },
     } satisfies ProviderTargetView
     await expect(unsetProviderCredential(ctx, absent)).rejects.toThrow('no configured credential')
     expect(credentials.unset).not.toHaveBeenCalled()
@@ -758,7 +762,7 @@ describe('unsetProviderCredential', () => {
     }
     const llm = llmWith([{ id: 'deepseek-official', name: 'DeepSeek' }], [deepseekEntry])
     const ctx = fakeCtx({ llm, settings, credentials })
-    const row = (await loadProviderSettings(ctx)).rows[0]!
+    const row = (await loadProviderSettings(ctx)).rows[0]
     await expect(unsetProviderCredential(ctx, row)).rejects.toThrow('read-only')
     expect(credentials.unset).not.toHaveBeenCalled()
   })
@@ -779,7 +783,7 @@ describe('removeProviderSettings', () => {
     }
     const llm = llmWith([{ id: 'pi-ai', name: 'PI AI' }], [piAiEntry])
     const ctx = fakeCtx({ llm, settings, credentials })
-    const row = (await loadProviderSettings(ctx)).rows[0]!
+    const row = (await loadProviderSettings(ctx)).rows[0]
     expect(row.removable).toBe(true)
     await removeProviderSettings(ctx, row)
     expect(credentials.unset).toHaveBeenCalledWith('PI_AI_API_KEY')
@@ -803,7 +807,7 @@ describe('removeProviderSettings', () => {
     }
     const llm = llmWith([{ id: 'pi-ai', name: 'PI AI' }], [piAiEntry])
     const ctx = fakeCtx({ llm, settings, credentials })
-    const row = (await loadProviderSettings(ctx)).rows[0]!
+    const row = (await loadProviderSettings(ctx)).rows[0]
     expect(row.removable).toBe(true)
     expect(row.credentialRef).toBe('MY_SHARED_KEY')
     await removeProviderSettings(ctx, row)
@@ -820,7 +824,7 @@ describe('removeProviderSettings', () => {
     }
     const llm = llmWith([{ id: 'deepseek-official', name: 'DeepSeek' }], [deepseekEntry])
     const ctx = fakeCtx({ llm, settings, credentials })
-    const row = (await loadProviderSettings(ctx)).rows[0]!
+    const row = (await loadProviderSettings(ctx)).rows[0]
     expect(row.removable).toBe(false)
     await expect(removeProviderSettings(ctx, row)).rejects.toThrow('not removable')
     expect(credentials.unset).not.toHaveBeenCalled()
@@ -844,7 +848,7 @@ describe('removeProviderSettings', () => {
     }
     const llm = llmWith([{ id: 'pi-ai', name: 'PI AI' }], [piAiEntry])
     const ctx = fakeCtx({ llm, settings, credentials })
-    const row = (await loadProviderSettings(ctx)).rows[0]!
+    const row = (await loadProviderSettings(ctx)).rows[0]
     await expect(removeProviderSettings(ctx, row)).rejects.toThrow('settings busy')
     // Same (stale) target: the second unset is an idempotent no-op on the
     // already-removed key, and the settings unset lands this time.

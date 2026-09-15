@@ -24,9 +24,31 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm typecheck
+      # Specs sat outside every TypeScript project until tsconfig.test.json
+      # existed, so a fixture could drift from the interface it fakes and never
+      # fail a gate.
+      - run: pnpm typecheck:tests
       # A small family of timing-sensitive panel tests trips intermittently
       # under full-suite parallel load and passes in isolation; retry keeps
       # the gate on real breakage instead of scheduler noise.
       - run: pnpm exec vitest run --retry=2
-      - run: pnpm typecheck
       - run: pnpm build
+
+  coverage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # Reporting only: the totals land in the job log so a change's coverage
+      # stays visible and comparable. No threshold is enforced.
+      - run: pnpm test:coverage

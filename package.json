@@ -58,10 +58,15 @@
   "scripts": {
     "build": "tsdown && tsc -p tsconfig.json",
     "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck:tests": "tsc -p tsconfig.test.json --noEmit",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "verify": "pnpm lint && pnpm typecheck && pnpm typecheck:tests && pnpm test",
     "gen:whale": "tsx scripts/gen-whale-glyph.ts",
     "prepare": "pnpm build",
-    "prepublishOnly": "pnpm typecheck && pnpm test && pnpm build"
+    "prepublishOnly": "pnpm typecheck && pnpm typecheck:tests && pnpm test && pnpm build"
   },
   "engines": {
     "node": "^22.19 || >=24"
@@ -296,10 +301,14 @@
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^24.0.0",
     "@types/react": "~18.3.1",
+    "@vitest/coverage-v8": "^3.2.7",
+    "eslint": "^10.10.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
     "js-yaml": "^4.3.1",
     "tsdown": "^0.22.2",
     "tsx": "^4.22.4",
     "typescript": "^5.9.0",
+    "typescript-eslint": "^8.70.0",
     "vitest": "^3.0.0"
   }
 }

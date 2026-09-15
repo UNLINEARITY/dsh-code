@@ -47,18 +47,18 @@ describe('planCapabilitySync', () => {
     const bqy = profile('bqy', [{ id: 'glm-5.2' }])
     const plans = planCapabilitySync({ rows: [], profiles: new Map([['zai', zai], ['bqy', bqy]]) })
     expect(plans).toHaveLength(1)
-    expect(plans[0]!.provider).toBe('bqy')
-    expect(plans[0]!.models).toEqual([{ id: 'glm-5.2', reasoningEfforts: { low: 'high', high: 'high', max: 'max' } }])
-    expect(plans[0]!.inherited).toEqual(['glm-5.2'])
-    expect(plans[0]!.sources).toEqual(['zai/glm-5.2'])
+    expect(plans[0].provider).toBe('bqy')
+    expect(plans[0].models).toEqual([{ id: 'glm-5.2', reasoningEfforts: { low: 'high', high: 'high', max: 'max' } }])
+    expect(plans[0].inherited).toEqual(['glm-5.2'])
+    expect(plans[0].sources).toEqual(['zai/glm-5.2'])
   })
 
   it('maps an advertised donor row by identity: off sends nothing, levels keep their names', () => {
     const bqy = profile('bqy', [{ id: 'gpt-5.5' }])
     const plans = planCapabilitySync({ rows: [row('openai', 'gpt-5.5', ['off', 'low', 'medium', 'high'])], profiles: new Map([['bqy', bqy]]) })
     expect(plans).toHaveLength(1)
-    expect(plans[0]!.models).toEqual([{ id: 'gpt-5.5', reasoningEfforts: { off: null, low: 'low', medium: 'medium', high: 'high' } }])
-    expect(plans[0]!.sources).toEqual(['openai/gpt-5.5'])
+    expect(plans[0].models).toEqual([{ id: 'gpt-5.5', reasoningEfforts: { off: null, low: 'low', medium: 'medium', high: 'high' } }])
+    expect(plans[0].sources).toEqual(['openai/gpt-5.5'])
   })
 
   it('prefers a sibling declaration over an advertised row for the same id', () => {
@@ -66,8 +66,8 @@ describe('planCapabilitySync', () => {
     const bqy = profile('bqy', [{ id: 'glm-5.2' }])
     const rows = [row('openai', 'glm-5.2', ['low', 'medium'])]
     const plans = planCapabilitySync({ rows, profiles: new Map([['zai', zai], ['bqy', bqy]]) })
-    expect(plans[0]!.models[0]!.reasoningEfforts).toEqual({ high: 'high' })
-    expect(plans[0]!.sources).toEqual(['zai/glm-5.2'])
+    expect(plans[0].models[0].reasoningEfforts).toEqual({ high: 'high' })
+    expect(plans[0].sources).toEqual(['zai/glm-5.2'])
   })
 
   it('never touches an explicit dict or false declaration', () => {
@@ -98,7 +98,7 @@ describe('planCapabilitySync', () => {
     const target = profile('b', [{ id: 'm' }])
     const rows = [row('openai', 'm', ['high'])]
     const plans = planCapabilitySync({ rows, profiles: new Map([['a', declared], ['b', target]]) })
-    expect(plans[0]!.models[0]!.reasoningEfforts).toEqual({ high: 'high' })
+    expect(plans[0].models[0].reasoningEfforts).toEqual({ high: 'high' })
   })
 
   it('preserves untouched entries, fields, and key order in the merged array', () => {
@@ -109,10 +109,10 @@ describe('planCapabilitySync', () => {
     ])
     const rows = [row('openai', 'gpt-5.5', ['low', 'high'])]
     const plans = planCapabilitySync({ rows, profiles: new Map([['bqy', bqy]]) })
-    const models = plans[0]!.models
+    const models = plans[0].models
     expect(models).toHaveLength(3)
     expect(models[0]).toEqual({ id: 'first', name: 'First' })
-    expect(Object.keys(models[1]!)).toEqual(['id', 'name', 'contextWindow', 'reasoningEfforts'])
+    expect(Object.keys(models[1])).toEqual(['id', 'name', 'contextWindow', 'reasoningEfforts'])
     expect(models[2]).toEqual({ id: 'last', compat: { supportsStore: false } })
   })
 
@@ -123,8 +123,8 @@ describe('planCapabilitySync', () => {
     const clean = profile('clean', [{ id: 'other', reasoningEfforts: false }])
     const plans = planCapabilitySync({ rows: [], profiles: new Map([['zai', zai], ['bqy', bqy], ['relay', relay], ['clean', clean]]) })
     expect(plans.map(plan => plan.provider)).toEqual(['bqy', 'relay'])
-    expect(plans[1]!.inherited).toEqual(['glm-5.2'])
-    expect(plans[1]!.sources).toEqual(['zai/glm-5.2'])
+    expect(plans[1].inherited).toEqual(['glm-5.2'])
+    expect(plans[1].sources).toEqual(['zai/glm-5.2'])
   })
 })
 
@@ -163,8 +163,8 @@ describe('syncModelCapabilities', () => {
       { op: 'set', path: ['providers', 'bqy', 'models'], value: [{ id: 'glm-5.2', reasoningEfforts: { low: 'low', high: 'high' } }] },
     ], 9)
     expect(notices).toHaveLength(1)
-    expect(notices[0]![0]).toContain('bqy')
-    expect(notices[0]![1]).toBe('info')
+    expect(notices[0][0]).toContain('bqy')
+    expect(notices[0][1]).toBe('info')
     // The fingerprint suppresses a redundant rewrite of the same value.
     await syncModelCapabilities(fakeCtx({ llm: llmAdvertised, settings }), (text, tone) => notices.push([text, tone]))
     expect(settings.mutate).toHaveBeenCalledTimes(1)
@@ -231,7 +231,7 @@ describe('syncModelCapabilities', () => {
       }]),
       mutate: vi.fn(async (_ns: string, ops: readonly { path: readonly string[] }[]) => {
         revisions += 1
-        if (ops[0]!.path[1] === 'bqy') throw new Error('settings busy')
+        if (ops[0].path[1] === 'bqy') throw new Error('settings busy')
       }),
     }
     const llmThree = {

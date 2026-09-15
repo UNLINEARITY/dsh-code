@@ -109,7 +109,7 @@ import {
   type SessionQueryService,
   type SessionRow,
 } from './session-directory.ts'
-import type { SearchRow } from './kernel-panels.ts'
+import type { JobRow, SearchRow } from './kernel-panels.ts'
 import { createUserSettingsPersistence, writeFileAtomically } from './settings-file.ts'
 
 /** Stable Cordis plugin name. */
@@ -138,7 +138,7 @@ export const Config: z<Config> = z.object({
 /** Process-facing effects of the runner: the Ink mount plus the launcher's exit request. */
 interface TuiIo {
   mount: typeof internals.mount
-  exit(code: number): void
+  exit: (code: number) => void
 }
 
 /** Report an unexpected direct-driver failure and request a failing exit. */
@@ -157,7 +157,7 @@ function fail(io: TuiIo, error: unknown): void {
  * @param caller - the active agent (undefined sees only unowned jobs).
  * @returns job rows in registration order; never throws.
  */
-function listJobs(ctx: Context, caller: Agent | undefined): readonly import('./kernel-panels.ts').JobRow[] {
+function listJobs(ctx: Context, caller: Agent | undefined): readonly JobRow[] {
   const jobs = ctx.get('jobs')
   if (jobs === undefined) return []
   try {
@@ -173,6 +173,23 @@ function listJobs(ctx: Context, caller: Agent | undefined): readonly import('./k
   } catch {
     return []
   }
+}
+
+/**
+ * Read one user-level settings file as a plain object. The callers all treat a
+ * missing file as "unset" and a corrupt one as "warn and fall back", so this
+ * helper owns the one distinction they share: readable JSON that is not an
+ * object is corruption, not an absent preference, and must not surface as a
+ * cryptic property access on `null`.
+ * @param path - absolute path of the settings file.
+ * @returns the parsed object; the caller narrows each field itself.
+ */
+function readSettingsObject(path: string): Record<string, unknown> {
+  const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'))
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new Error(`${basename(path)} must contain a JSON object`)
+  }
+  return parsed as Record<string, unknown>
 }
 
 /**
@@ -442,7 +459,7 @@ export function planCycleDecision(input: {
 }): ModeCycleDecision | undefined {
   const names = input.names
   if (names.length === 0) return undefined
-  const first = names[0]!
+  const first = names[0]
   if ((input.planIntent ?? input.inPlan) === true) return { kind: 'plan-off', preset: names[1] ?? first }
   const at = names.indexOf(input.current)
   if (at === 0 && input.planAvailable) return { kind: 'plan-on' }
@@ -546,7 +563,7 @@ function approvalCommandPreview(events: readonly { kind: string }[], callId: str
 /** The runner's connection between the React app and the process side. */
 interface AppBridge {
   /** Post one local notice line (feedback the transcript does not carry). */
-  notify(text: string, tone?: NoticeTone): void
+  notify: (text: string, tone?: NoticeTone) => void
 }
 
 /**
@@ -921,7 +938,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   let statuslineWarning: string | undefined
   let statuslineItems: readonly string[] = []
   try {
-    statuslineItems = parseStatuslineItems(JSON.parse(readFileSync(statuslinePath, 'utf8')).items)
+    statuslineItems = parseStatuslineItems(readSettingsObject(statuslinePath).items)
   } catch (error) {
     statuslineItems = parseStatuslineItems(undefined)
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
@@ -960,7 +977,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   let themeWarning: string | undefined
   if (startup.theme === undefined) {
     try {
-      setTheme(parseThemeName(JSON.parse(readFileSync(themePath, 'utf8')).theme))
+      setTheme(parseThemeName(readSettingsObject(themePath).theme))
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
         themeWarning = error instanceof Error ? error.message : String(error)
@@ -983,7 +1000,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   const languagePath = join(homedir(), '.dsh', 'dsh-code', 'language.json')
   let languageWarning: string | undefined
   try {
-    setLanguage(parseLanguageName(JSON.parse(readFileSync(languagePath, 'utf8')).language))
+    setLanguage(parseLanguageName(readSettingsObject(languagePath).language))
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
       languageWarning = error instanceof Error ? error.message : String(error)
@@ -1006,8 +1023,9 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   let animationsEnabled = true
   let animationsWarning: string | undefined
   try {
-    // `?? {}` keeps a literal `null` file from surfacing a cryptic TypeError.
-    animationsEnabled = parseAnimationsPref((JSON.parse(readFileSync(animationsPath, 'utf8')) ?? {}).animations)
+    // A literal `null` file reads as corruption and surfaces the warning the
+    // block above promises, instead of a property access on `null`.
+    animationsEnabled = parseAnimationsPref(readSettingsObject(animationsPath).animations)
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
       animationsWarning = error instanceof Error ? error.message : String(error)
@@ -1198,7 +1216,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   /** Deliver one trimmed line to the live session, expanding mentions first. */
   const deliverLine = (line: string, images: readonly ContentBlock[] = []): void => {
     const currentAgent = agent!
-    const currentMentions = mentions!
+    const currentMentions = mentions
     // The command registry is a closed namespace: slash lines run out of
     // band and never reach the model through this path.
     if (images.length === 0 && isSlashLine(line)) {
@@ -1250,14 +1268,18 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     }
     const controller = new AbortController()
     pendingControllers.add(controller)
-    enqueueDelivery(() => currentMentions.prepare(parsed, controller.signal).then((prepared) => {
-      pendingControllers.delete(controller)
-      deliver(prepared.text, prepared.additionalContext)
-    }, (error: unknown) => {
-      pendingControllers.delete(controller)
-      if (controller.signal.aborted || epoch !== atEpoch) return
-      bridge.notify(`session reference failed: ${error instanceof Error ? error.message : String(error)}`, 'error')
-    }))
+    // `enqueueDelivery` returns nothing; the delivery chain only orders the
+    // work, so the promise is consumed here with an explicit void.
+    enqueueDelivery(() => {
+      void currentMentions.prepare(parsed, controller.signal).then((prepared) => {
+        pendingControllers.delete(controller)
+        deliver(prepared.text, prepared.additionalContext)
+      }, (error: unknown) => {
+        pendingControllers.delete(controller)
+        if (controller.signal.aborted || epoch !== atEpoch) return
+        bridge.notify(`session reference failed: ${error instanceof Error ? error.message : String(error)}`, 'error')
+      })
+    })
   }
 
   // Deferred first-session creation for a bare launch: the session is composed
@@ -1897,7 +1919,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     const matches = exact.length > 0 ? exact : records.filter(record => record.header.id.startsWith(wanted))
     if (matches.length === 0) throw new Error(`no session matches "${wanted}"`)
     if (matches.length > 1) throw new Error(`session prefix "${wanted}" is ambiguous (${matches.length} matches)`)
-    const matched = matches[0]!
+    const matched = matches[0]
     // Same lineage gate as the CLI --resume path and the picker.
     if (isSubagentSession(matched.header)) {
       throw new Error('subagent conversations are read-only; resume a root session')

@@ -105,7 +105,7 @@ describe('createSubagentFeed', () => {
     feed.apply('b', event('tool/call', { name: 'grep' }, 2))
     await new Promise<void>(resolve => setTimeout(resolve, 25))
     expect(feed.getSnapshot().map(row => row.id)).toEqual(['a', 'b'])
-    expect(feed.getSnapshot()[1]!.activity).toBe('tool grep')
+    expect(feed.getSnapshot()[1].activity).toBe('tool grep')
     feed.reset()
     await new Promise<void>(resolve => setTimeout(resolve, 25))
     expect(feed.getSnapshot()).toEqual([])
@@ -128,9 +128,9 @@ describe('createSubagentFeed', () => {
     await new Promise<void>(resolve => setTimeout(resolve, 25))
     const rows = feed.getSnapshot()
     expect(rows.map(row => row.id)).toEqual(['b'])
-    expect(rows[0]!.label).toBe('research helper')
-    expect(rows[0]!.state).toBe('idle')
-    expect(rows[0]!.activity).toBe('catalog · one-shot · research helper')
+    expect(rows[0].label).toBe('research helper')
+    expect(rows[0].state).toBe('idle')
+    expect(rows[0].activity).toBe('catalog · one-shot · research helper')
     expect(feed.getTotalSeen()).toBe(1)
   })
 
@@ -149,7 +149,7 @@ describe('createSubagentFeed', () => {
     await new Promise<void>(resolve => setTimeout(resolve, 25))
     expect(notified).toBe(1)
     // The snapshot itself folded every event (view reads stay synchronous).
-    expect(feed.getSnapshot()[0]!.activity).toBe('thinking…')
+    expect(feed.getSnapshot()[0].activity).toBe('thinking…')
   })
 
   it('evicts the oldest done row for a new running child and keeps the honest total', async () => {

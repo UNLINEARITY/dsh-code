@@ -35,7 +35,7 @@ function request(overrides: Partial<ApprovalRequest> = {}): ApprovalRequest {
     toolName: 'bash',
     reason: 'escalate sandbox to workspace-write: run the build',
     ...overrides,
-  } as ApprovalRequest
+  }
 }
 
 /** Fake AbortSignal that records whether the answerer still listens to it (once:true semantics). */
@@ -153,7 +153,7 @@ describe('approval answerer', () => {
 
   it('detaches the abort listener when the ask is withdrawn', async () => {
     const harness = fakeContext()
-    const store = mountApprovalAnswerer(harness.ctx, () => true, () => '')
+    mountApprovalAnswerer(harness.ctx, () => true, () => '')
     const controller = fakeSignal()
     const settled = harness.listener()(
       request({ signal: controller.signal }),

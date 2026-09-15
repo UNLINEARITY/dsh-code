@@ -123,7 +123,7 @@ describe('displayTail tab normalization', () => {
   it('applies CJK kinsoku: closing punctuation overhangs, opening moves down', () => {
     // ，would start the next row at the 8-column budget; it overhangs instead.
     const tail = displayTail('甲乙丙丁，戊', 8, 10)
-    expect(tail.text.split('\n')[0]!.endsWith('，')).toBe(true)
+    expect(tail.text.split('\n')[0].endsWith('，')).toBe(true)
     expect(tail.text.split('\n')[1]).toBe('戊')
     // （must not dangle at a row end; it moves down with the next cluster.
     const head = displayTail('甲乙丙（丁', 8, 10)

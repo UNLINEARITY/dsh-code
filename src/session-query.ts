@@ -107,9 +107,13 @@ function sameHeader(a: SessionHeader, b: SessionHeader): boolean {
 }
 
 function materializePersistenceSnapshots(snapshots: readonly SessionPersistenceSnapshot[]): Map<SessionId, ObservedPersistedSession> {
-  if (!Array.isArray(snapshots)) throw new Error('persistence snapshots must be an array')
+  // `Array.isArray` narrows a declared array type to `any[]`, which would let
+  // every later access escape the type system. Step through `unknown` so the
+  // guard stays a runtime assertion and the element type stays declared.
+  const candidate: unknown = snapshots
+  if (!Array.isArray(candidate)) throw new Error('persistence snapshots must be an array')
   const result = new Map<SessionId, ObservedPersistedSession>()
-  for (const snapshot of snapshots) {
+  for (const snapshot of candidate as readonly SessionPersistenceSnapshot[]) {
     if (typeof snapshot.revision !== 'string') {
       throw new Error('persistence snapshot revision must be a string')
     }
@@ -210,7 +214,7 @@ export async function observeStableWithSkip(
         live.set(session.id, observed)
         continue
       }
-      if (durable !== undefined) assertSessionHeadersCompatible(observed.header, durable.header as SessionHeader)
+      if (durable !== undefined) assertSessionHeadersCompatible(observed.header, durable.header)
       live.set(session.id, observed)
     }
     const sameLive = initiallyLive.size === live.size && [...initiallyLive].every(id => live.has(id))
@@ -228,7 +232,7 @@ const EngineBase = SqliteSessionQueryEngine as unknown as abstract new (ctx: nev
 /** The engine this bundle mounts in place of the base `session-query-sqlite` row. */
 export class SkipTolerantSessionQueryEngine extends EngineBase {
   async _observeStable(indexed: ReadonlyMap<SessionId, { revision: SessionPersistenceRevision }>, signal: AbortSignal | undefined): Promise<unknown> {
-    return await observeStableWithSkip(this as unknown as EngineSurface, indexed, signal)
+    return await observeStableWithSkip(this, indexed, signal)
   }
 }
 

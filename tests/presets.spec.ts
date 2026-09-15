@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
+import { SESSION_FORMAT_VERSION, SessionId, type Session, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { isBlankSession, normalizePresetId, resolvePreset, selectPreset, switchPreset, type AgentPresetsService } from '../src/presets.ts'
 
 describe('agent preset policy', () => {
@@ -17,7 +17,8 @@ describe('agent preset policy', () => {
   })
 
   it('uses the latest logged selection and standard for legacy sessions', () => {
-    const header = { id: 's', createdAt: 0, version: 0 } as Session['header']
+    // A legacy persisted header: a real, complete header with no preset logged.
+    const header: Session['header'] = { id: SessionId('s'), createdAt: 0, version: SESSION_FORMAT_VERSION, isSeeded: false }
     expect(resolvePreset({ header, snapshotEvents: () => [] })).toBe('standard')
     expect(resolvePreset({
       header: { ...header, agentPreset: 'code' },

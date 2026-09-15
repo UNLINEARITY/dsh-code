@@ -89,9 +89,11 @@ describe('provider authorization adapter', () => {
 
 describe('ProviderAuthorizationPanel', () => {
   it('selects a method, shows/copies URL and code, masks a secret, then completes', async () => {
-    const stdin = new PassThrough() as NodeJS.ReadStream
+    // A PassThrough wearing the TTY read face is the point: no real terminal here.
+    const stdin = new PassThrough() as unknown as NodeJS.ReadStream
     Object.assign(stdin, { isTTY: true, setRawMode: vi.fn(), ref() {}, unref() {} })
-    const stdout = Object.assign(new PassThrough(), { isTTY: true, columns: 100, rows: 24 }) as NodeJS.WriteStream
+    // Same fake-TTY cast for the write side; Ink only reads isTTY/columns/rows.
+    const stdout = Object.assign(new PassThrough(), { isTTY: true, columns: 100, rows: 24 }) as unknown as NodeJS.WriteStream
     let output = ''
     stdout.on('data', chunk => { output += chunk.toString() })
     const openUrl = vi.fn(() => true)
@@ -136,9 +138,11 @@ describe('ProviderAuthorizationPanel', () => {
   })
 
   it('answers select prompts and lets Esc cancel the running authorization', async () => {
-    const stdin = new PassThrough() as NodeJS.ReadStream
+    // A PassThrough wearing the TTY read face is the point: no real terminal here.
+    const stdin = new PassThrough() as unknown as NodeJS.ReadStream
     Object.assign(stdin, { isTTY: true, setRawMode: vi.fn(), ref() {}, unref() {} })
-    const stdout = Object.assign(new PassThrough(), { isTTY: true, columns: 100, rows: 24 }) as NodeJS.WriteStream
+    // Same fake-TTY cast for the write side; Ink only reads isTTY/columns/rows.
+    const stdout = Object.assign(new PassThrough(), { isTTY: true, columns: 100, rows: 24 }) as unknown as NodeJS.WriteStream
     let output = ''
     stdout.on('data', chunk => { output += chunk.toString() })
     const cancel = vi.fn()

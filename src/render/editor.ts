@@ -58,7 +58,7 @@ export function splitGraphemes(text: string): readonly GraphemeSpan[] {
 /** Round one UTF-16 offset down to the grapheme boundary at or before it. */
 function floorBoundary(spans: readonly GraphemeSpan[], offset: number): number {
   for (let index = spans.length - 1; index >= 0; index -= 1) {
-    const span = spans[index]!
+    const span = spans[index]
     if (span.end <= offset) return span.end
     if (span.start < offset) return span.start
   }
@@ -85,7 +85,7 @@ export function clampCursor(value: string, offset: number): number {
 export function deleteLastGrapheme(text: string): string {
   if (text === '') return ''
   const spans = splitGraphemes(text)
-  return text.slice(0, spans[spans.length - 1]!.start)
+  return text.slice(0, spans[spans.length - 1].start)
 }
 
 /**
@@ -100,7 +100,7 @@ export function moveCursorBy(value: string, offset: number, delta: number): numb
   const current = boundaries.indexOf(clampCursor(value, offset))
   if (current === -1) return clampCursor(value, offset)
   const next = Math.max(0, Math.min(boundaries.length - 1, current + delta))
-  return boundaries[next]!
+  return boundaries[next]
 }
 
 /**
@@ -221,9 +221,9 @@ export function editorRowParts(
   if (!caretEnabled || rowIndex !== caretRow) return { before: '', caret: '', after: row.text, hasCaret: false }
   const at = row.offsets.indexOf(cursor)
   if (at < 0) return { before: '', caret: '', after: row.text, hasCaret: false }
-  const before = at > 0 ? row.text.slice(0, row.cuts[at]!) : ''
-  const caret = at < row.cuts.length - 1 ? row.text.slice(row.cuts[at]!, row.cuts[at + 1]!) : ' '
-  const after = at < row.cuts.length - 1 ? row.text.slice(row.cuts[at + 1]!) : ''
+  const before = at > 0 ? row.text.slice(0, row.cuts[at]) : ''
+  const caret = at < row.cuts.length - 1 ? row.text.slice(row.cuts[at], row.cuts[at + 1]) : ' '
+  const after = at < row.cuts.length - 1 ? row.text.slice(row.cuts[at + 1]) : ''
   return { before, caret, after, hasCaret: true }
 }
 
@@ -231,12 +231,12 @@ export function editorRowParts(
 export function caretSite(model: EditorModel, offset: number): CaretSite {
   const target = Math.max(0, Math.min(model.length, offset))
   for (let index = model.rows.length - 1; index >= 0; index -= 1) {
-    const row = model.rows[index]!
+    const row = model.rows[index]
     const at = row.offsets.indexOf(target)
-    if (at >= 0) return { row: index, column: row.columns[at]! }
+    if (at >= 0) return { row: index, column: row.columns[at] }
   }
   const last = model.rows[model.rows.length - 1]
-  return { row: model.rows.length - 1, column: last === undefined ? 0 : last.columns[last.columns.length - 1]! }
+  return { row: model.rows.length - 1, column: last === undefined ? 0 : last.columns[last.columns.length - 1] }
 }
 
 /**
@@ -250,14 +250,14 @@ export function moveCursorVertically(model: EditorModel, offset: number, preferr
   if (delta === 0) return offset
   if (target < 0) return 0
   if (target >= model.rows.length) return model.length
-  const row = model.rows[target]!
-  const wanted = Math.max(0, Math.min(preferredColumn, row.columns[row.columns.length - 1]!))
+  const row = model.rows[target]
+  const wanted = Math.max(0, Math.min(preferredColumn, row.columns[row.columns.length - 1]))
   let best = 0
   for (let index = 1; index < row.columns.length; index += 1) {
-    if (row.columns[index]! <= wanted) best = index
+    if (row.columns[index] <= wanted) best = index
     else break
   }
-  return row.offsets[best]!
+  return row.offsets[best]
 }
 
 /** The start/end offsets of the logical line containing the cursor. */
@@ -309,13 +309,13 @@ export function moveWordLeft(value: string, offset: number): number {
   // left-hand fragment, instead of skipping the whole containing run.
   let index = runs.findLastIndex(run => run.start < cursor)
   if (index < 0) return 0
-  if (runs[index]!.class === 'space') {
+  if (runs[index].class === 'space') {
     index -= 1
     if (index < 0) return 0
   }
   let target = index
-  while (target > 0 && runs[target]!.class === 'punct' && runs[target - 1]!.class === 'punct') target -= 1
-  return runs[target]!.start
+  while (target > 0 && runs[target].class === 'punct' && runs[target - 1].class === 'punct') target -= 1
+  return runs[target].start
 }
 
 /**
@@ -329,13 +329,13 @@ export function moveWordRight(value: string, offset: number): number {
   // right-hand fragment, instead of jumping straight to the following word.
   let index = runs.findIndex(run => run.end > cursor)
   if (index >= runs.length) return value.length
-  if (runs[index]!.class === 'space') {
+  if (runs[index].class === 'space') {
     index += 1
     if (index >= runs.length) return value.length
   }
   let target = index
-  while (target < runs.length - 1 && runs[target]!.class === 'punct' && runs[target + 1]!.class === 'punct') target += 1
-  return runs[target]!.end
+  while (target < runs.length - 1 && runs[target].class === 'punct' && runs[target + 1].class === 'punct') target += 1
+  return runs[target].end
 }
 
 /** One edit outcome: the next draft value, cursor, and killed span (if any). */
@@ -362,7 +362,7 @@ function replaceRange(value: string, cursor: number, start: number, end: number,
 export function deleteBackward(value: string, cursor: number): EditResult {
   if (cursor === 0) return { value, cursor, killed: undefined }
   const spans = splitGraphemes(value.slice(0, cursor))
-  const start = spans.length === 0 ? 0 : spans[spans.length - 1]!.start
+  const start = spans.length === 0 ? 0 : spans[spans.length - 1].start
   return replaceRange(value, cursor, start, cursor, false)
 }
 

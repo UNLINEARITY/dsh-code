@@ -13,8 +13,8 @@ import { getPalette, inkColor } from './theme.ts'
 
 export function LanguagePanel({ current, select, close }: {
   current: LanguageName
-  select(name: LanguageName): void
-  close(): void
+  select: (name: LanguageName) => void
+  close: () => void
 }): ReactElement {
   const [cursor, setCursor] = useState(() => {
     const index = LANGUAGES.findIndex(language => language.id === current)
@@ -26,7 +26,7 @@ export function LanguagePanel({ current, select, close }: {
     if (key.escape || input === 'q') return close()
     if (key.upArrow) return setCursor(value => (value + LANGUAGES.length - 1) % LANGUAGES.length)
     if (key.downArrow) return setCursor(value => (value + 1) % LANGUAGES.length)
-    if (key.return) return select(LANGUAGES[cursor]!.id)
+    if (key.return) return select(LANGUAGES[cursor].id)
   })
   if (viewport.maxHeight === 0 || viewport.compact) {
     return createElement(Text, { wrap: 'truncate-end' }, truncateColumns('/language · esc/q close', viewport.contentColumns))

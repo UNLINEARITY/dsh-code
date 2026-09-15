@@ -156,7 +156,7 @@ export function ProviderAuthorizationPanel(props: ProviderAuthorizationPanelProp
         setCursor(current => (current + 1) % props.row.methods.length)
         return
       }
-      if (key.return) start(props.row.methods[cursor]?.id ?? props.row.methods[0]!.id)
+      if (key.return) start(props.row.methods[cursor]?.id ?? props.row.methods[0].id)
       return
     }
 
@@ -184,7 +184,7 @@ export function ProviderAuthorizationPanel(props: ProviderAuthorizationPanelProp
         setPromptCursor(current => (current + 1) % prompt.options.length)
         return
       }
-      if (key.return) answer(prompt.options[promptCursor]?.id ?? prompt.options[0]!.id)
+      if (key.return) answer(prompt.options[promptCursor]?.id ?? prompt.options[0].id)
       return
     }
     if (key.backspace || key.delete) {
@@ -251,9 +251,9 @@ export function ProviderAuthorizationPanel(props: ProviderAuthorizationPanelProp
 
 export function ProviderAuthorizationLogoutPanel({ row, confirm, done, back }: {
   row: ProviderAuthorizationRow
-  confirm(row: ProviderAuthorizationRow): Promise<void>
-  done(): void
-  back(): void
+  confirm: (row: ProviderAuthorizationRow) => Promise<void>
+  done: () => void
+  back: () => void
 }): ReactElement {
   const stdout = useStdout().stdout
   const viewport = panelViewport(stdout?.columns ?? 80, stdout?.rows ?? 30)

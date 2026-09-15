@@ -102,7 +102,7 @@ export function matchSessionId(headers: readonly SessionHeader[], wanted: string
   if (matches.length > 1) {
     throw new Error(`session prefix "${wanted}" is ambiguous (${matches.length} matches): use more of the id`)
   }
-  return matches[0]!
+  return matches[0]
 }
 
 /** The newest persisted ROOT session pinned to this cwd, or undefined. */

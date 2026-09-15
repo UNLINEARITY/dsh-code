@@ -45,9 +45,15 @@ describe('createUserSettingsPersistence', () => {
     // consumed temp file (ENOENT) or a mixed document.
     // Statuses carry rejection reasons so a rare transient failure
     // reports its errno instead of a bare fulfilled/rejected diff.
-    const statuses = saves.map(result => result.status === 'fulfilled'
-      ? 'fulfilled'
-      : `rejected: ${result.reason instanceof Error ? String(result.reason.code ?? result.reason.message) : String(result.reason)}`)
+    const statuses = saves.map(result => {
+      if (result.status === 'fulfilled') return 'fulfilled'
+      const reason: unknown = result.reason
+      if (!(reason instanceof Error)) return `rejected: ${String(reason)}`
+      // A Node failure carries its errno on the Error, which is the useful part.
+      const code: unknown = 'code' in reason ? reason.code : undefined
+      const detail = typeof code === 'string' || typeof code === 'number' ? String(code) : reason.message
+      return `rejected: ${detail}`
+    })
     expect(statuses).toEqual(['fulfilled', 'fulfilled'])
     const content = await readFile(path, 'utf8')
     expect([snapshotA, snapshotB]).toContain(content)

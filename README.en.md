@@ -302,11 +302,17 @@ dsh profile
 
 ```sh
 pnpm install
+pnpm lint            # type-aware ESLint over src, tests, scripts, and the root configs
+pnpm typecheck       # the build project (src)
+pnpm typecheck:tests # the spec suite and scripts
 pnpm test
-pnpm typecheck
+pnpm test:coverage   # coverage report (reporting only, no threshold)
 pnpm build
+pnpm verify          # lint + both typechecks + tests in one pass
 pnpm run gen:whale   # regenerate src/whale-glyph.ts from the vendored logo path
 ```
+
+`tsconfig.test.json` puts the specs inside a TypeScript project, so a fixture that drifts from the interface it fakes fails `pnpm typecheck:tests` instead of surfacing (or not) at runtime.
 
 The whale glyph is generated from the DeepSeek FishLogo geometry vendored in `scripts/fish-logo.ts` (source: DeepSeek Harness, MIT).
 

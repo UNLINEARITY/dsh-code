@@ -145,8 +145,8 @@ describe('styled terminal lines', () => {
     const built = styledLines([lineSegment('    +short', 'diffAdd')], columns)
     expect(built).toHaveLength(1)
     const filled = fillDiffLineBars(built, columns)
-    expect(filled[0]!.segments.every(segment => segment.style === 'diffAdd')).toBe(true)
-    expect(visibleColumns(filled[0]!.segments.map(segment => segment.text).join(''))).toBe(columns)
+    expect(filled[0].segments.every(segment => segment.style === 'diffAdd')).toBe(true)
+    expect(visibleColumns(filled[0].segments.map(segment => segment.text).join(''))).toBe(columns)
     // Mixed-style rows and non-diff rows pass through untouched.
     const mixed: StyledLine[] = [{ segments: [lineSegment('+x', 'diffAdd'), lineSegment('note', 'dim')] }]
     expect(fillDiffLineBars(mixed, columns)).toBe(mixed)

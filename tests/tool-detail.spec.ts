@@ -8,8 +8,8 @@ describe('diffRows', () => {
   it('clips long CJK lines by terminal columns and keeps the ellipsis in budget', () => {
     const result = diffRows(null, '甲'.repeat(200), 1)
     expect(result.lines).toHaveLength(1)
-    expect(visibleColumns(result.lines[0]!.text)).toBeLessThanOrEqual(240)
-    expect(result.lines[0]!.text.endsWith('…')).toBe(true)
+    expect(visibleColumns(result.lines[0].text)).toBeLessThanOrEqual(240)
+    expect(result.lines[0].text.endsWith('…')).toBe(true)
   })
 
   it('renders a create as pure additions', () => {
@@ -108,16 +108,16 @@ describe('diffRows hard caps', () => {
     const { lines, truncated } = diffRows('a'.repeat(20_000), 'b'.repeat(20_000), 8)
     expect(truncated).toBe(true)
     expect(lines).toHaveLength(2)
-    expect(lines[0]!.mark).toBe('-')
-    expect(lines[1]!.mark).toBe('+')
-    expect(lines[0]!.text.endsWith('…')).toBe(true)
+    expect(lines[0].mark).toBe('-')
+    expect(lines[1].mark).toBe('+')
+    expect(lines[0].text.endsWith('…')).toBe(true)
   })
 
   it('caps a single giant added text before line splitting', () => {
     const { lines, truncated } = diffRows(null, 'y'.repeat(30_000), 8)
     expect(truncated).toBe(true)
     expect(lines).toHaveLength(1)
-    expect(lines[0]!.text.endsWith('…')).toBe(true)
+    expect(lines[0].text.endsWith('…')).toBe(true)
   })
 
   it('still emits at most the row budget incrementally', () => {

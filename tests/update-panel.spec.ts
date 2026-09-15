@@ -162,15 +162,15 @@ describe('UpdatePanel lifecycle', () => {
     expect(applyCalls.length).toBe(1)
     text = harness.text()
     expect(text).toContain('updating…')
-    applyCalls[0]!('npm install  ')
-    applyCalls[0]!('added 42 packages')
+    applyCalls[0]('npm install  ')
+    applyCalls[0]('added 42 packages')
     await wait()
     text = harness.text()
     expect(text).toContain('added 42 packages')
     // Panel stays inside the terminal height budget while streaming: count
     // ONE fresh frame, not the accumulated multi-phase byte history.
     harness.reset()
-    applyCalls[0]!('final verification line')
+    applyCalls[0]('final verification line')
     await wait()
     expect(harness.text().split('\n').length).toBeLessThan(24)
     releaseApply(0)

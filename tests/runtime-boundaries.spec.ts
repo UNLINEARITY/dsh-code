@@ -1,9 +1,9 @@
 /** Runtime boundary policy: CLI target resolution, /export naming, quit sequencing. */
 
 import { describe, expect, it } from 'vitest'
-import type { AgentStatus, Inbox } from '@deepseek-ai/dsh-agent'
+import type { Inbox, InboxTarget } from '@deepseek-ai/dsh-agent'
 import { createUserMessage, type ContentBlock } from '@deepseek-ai/dsh-llm'
-import type { SessionHeader, UserMessage } from '@deepseek-ai/dsh-session'
+import { SessionId, type SessionHeader, type UserMessage } from '@deepseek-ai/dsh-session'
 import type { SessionPersistence } from '@deepseek-ai/dsh-session-persistence'
 import {
   applyQueueMutation,
@@ -57,7 +57,7 @@ describe('resolveTarget (CLI session policy)', () => {
   it('rejects resuming a subagent conversation by id or prefix', async () => {
     const persistence = persistenceWith([
       header('root1', 1, { cwd: CWD }),
-      header('child1', 2, { cwd: CWD, parentSession: 'root1', origin: 'subagent' }),
+      header('child1', 2, { cwd: CWD, parentSession: SessionId('root1'), origin: 'subagent' }),
     ])
     await expect(resolveTarget({ kind: 'resume', sessionId: 'child1' }, persistence, CWD))
       .rejects.toThrow(/subagent conversations are read-only/)
@@ -74,7 +74,7 @@ describe('resolveTarget (CLI session policy)', () => {
   it('--continue picks the newest root session for the cwd, skipping subagents', async () => {
     const persistence = persistenceWith([
       header('old', 1, { cwd: CWD }),
-      header('child', 5, { cwd: CWD, parentSession: 'old', origin: 'subagent' }),
+      header('child', 5, { cwd: CWD, parentSession: SessionId('old'), origin: 'subagent' }),
       header('newer', 3, { cwd: CWD }),
       header('other', 9, { cwd: 'C:/elsewhere' }),
     ])
@@ -84,7 +84,7 @@ describe('resolveTarget (CLI session policy)', () => {
 
   it('--continue fails when no root session pins the cwd (subagent-only directory included)', async () => {
     const subagentOnly = persistenceWith([
-      header('child', 1, { cwd: CWD, parentSession: 'root', origin: 'subagent' }),
+      header('child', 1, { cwd: CWD, parentSession: SessionId('root'), origin: 'subagent' }),
     ])
     await expect(resolveTarget({ kind: 'latest' }, subagentOnly, CWD))
       .rejects.toThrow(/no persisted session for this directory/)
@@ -249,7 +249,7 @@ describe('StartupInputGate (startup input ordering)', () => {
 describe('searchHitToRow (/search panel mapping)', () => {
   it('maps a root hit with workspace and preset detail', () => {
     const row = searchHitToRow({
-      header: { version: 0, id: 'session-abcdef123456', createdAt: 1, cwd: 'C:/repo/dsh-cli', agentPreset: 'standard' } as SessionHeader,
+      header: header('session-abcdef123456', 1, { cwd: 'C:/repo/dsh-cli', agentPreset: 'standard' }),
       bestMatch: { snippet: 'fix the\n  login bug', time: 1_000 },
     })
     expect(row.id).toBe('session-abcdef123456')
@@ -263,7 +263,7 @@ describe('searchHitToRow (/search panel mapping)', () => {
 
   it('marks subagent conversations read-only and bounds long snippets', () => {
     const row = searchHitToRow({
-      header: { version: 0, id: 'child1', createdAt: 1, cwd: 'C:/repo', origin: 'subagent', parentSession: 'root1' } as SessionHeader,
+      header: header('child1', 1, { cwd: 'C:/repo', origin: 'subagent', parentSession: SessionId('root1') }),
       bestMatch: { snippet: 'x'.repeat(300), time: 5 },
     })
     expect(row.subagent).toBe(true)
@@ -273,36 +273,52 @@ describe('searchHitToRow (/search panel mapping)', () => {
   })
 })
 
-describe('queue mutations', () => {
-  /** An inbox double recording every mutation it is asked to perform. */
-  function inboxOf(messages: readonly UserMessage[]): {
-    inbox: Pick<Inbox, 'nextTurn' | 'append' | 'remove' | 'replace'>
-    replaced: UserMessage[]
-    removed: string[]
-    appended: UserMessage[]
-  } {
-    const replaced: UserMessage[] = []
-    const removed: string[] = []
-    const appended: UserMessage[] = []
-    return {
-      replaced,
-      removed,
-      appended,
-      inbox: {
-        nextTurn: messages,
-        append: (_target, message) => { appended.push(message) },
-        remove: id => {
-          removed.push(String(id))
-          return messages.some(message => message.id === id)
-        },
-        replace: (id, next) => {
-          replaced.push(next)
-          return messages.some(message => message.id === id)
-        },
+/** An inbox double over a local queue, recording every mutation it is asked to perform. */
+function inboxOf(messages: readonly UserMessage[]): {
+  inbox: Inbox
+  replaced: UserMessage[]
+  removed: string[]
+  appended: UserMessage[]
+} {
+  const replaced: UserMessage[] = []
+  const removed: string[] = []
+  const appended: UserMessage[] = []
+  let nextTurn = [...messages]
+  let nextStep: UserMessage[] = []
+  const pending = (target: InboxTarget): UserMessage[] => (target === 'next-turn' ? nextTurn : nextStep)
+  return {
+    replaced,
+    removed,
+    appended,
+    inbox: {
+      get nextTurn() { return nextTurn },
+      get nextStep() { return nextStep },
+      clear: () => { nextStep = []; nextTurn = [] },
+      append: (target, message) => {
+        appended.push(message)
+        pending(target).push(message)
       },
-    }
+      prepend: (target, message) => { pending(target).unshift(message) },
+      replace: (id, next) => {
+        replaced.push(next)
+        const index = nextTurn.findIndex(message => message.id === id)
+        if (index === -1) return false
+        nextTurn[index] = next
+        return true
+      },
+      remove: id => {
+        removed.push(String(id))
+        const index = nextTurn.findIndex(message => message.id === id)
+        if (index === -1) return false
+        nextTurn.splice(index, 1)
+        return true
+      },
+      splice: (target, start, deleteCount, inserted) => pending(target).splice(start, deleteCount, ...inserted),
+    },
   }
+}
 
+describe('queue mutations', () => {
   const pend = (text: string, extra: readonly ContentBlock[] = []): UserMessage => createUserMessage({
     content: [{ type: 'text', text }, ...extra],
     source: { kind: 'user' },
@@ -327,8 +343,8 @@ describe('queue mutations', () => {
     const { inbox, replaced } = inboxOf([message])
     expect(applyQueueMutation(inbox, 'idle', message.id, { kind: 'edit', text: 'after' }, () => {})).toBe('edited')
     expect(replaced).toHaveLength(1)
-    expect(replaced[0]!.content).toEqual([{ type: 'text', text: 'after' }, image])
-    expect(replaced[0]!.source).toEqual({ kind: 'user' })
+    expect(replaced[0].content).toEqual([{ type: 'text', text: 'after' }, image])
+    expect(replaced[0].source).toEqual({ kind: 'user' })
   })
 
   it('removes an exact pending message and reports a vanished one as unavailable', () => {
@@ -374,7 +390,7 @@ describe('cancelPreservingQueue', () => {
     const order: string[] = []
     const followed: UserMessage[] = []
     const agent = {
-      inbox: { nextTurn: [first, second] },
+      inbox: inboxOf([first, second]).inbox,
       cancel: () => { order.push('cancel') },
       followup: (message: UserMessage) => {
         order.push(`followup:${message.id}`)
@@ -392,7 +408,7 @@ describe('cancelPreservingQueue', () => {
   it('reports an empty queue without inventing a wake', () => {
     const order: string[] = []
     const agent = {
-      inbox: { nextTurn: [] },
+      inbox: inboxOf([]).inbox,
       cancel: () => { order.push('cancel') },
       followup: () => { order.push('followup') },
     }

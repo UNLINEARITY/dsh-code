@@ -109,9 +109,9 @@ export function editQuery(query: string, input: string, key: { backspace?: boole
 
 export function ModePanel({ current, load, select, close }: {
   current: string
-  load(): Promise<readonly PresetRow[]>
-  select(id: string): void
-  close(): void
+  load: () => Promise<readonly PresetRow[]>
+  select: (id: string) => void
+  close: () => void
 }): ReactElement {
   const [rows, setRows] = useState<readonly PresetRow[]>([])
   const [query, setQuery] = useState('')
@@ -137,7 +137,7 @@ export function ModePanel({ current, load, select, close }: {
     // Empty/loading/filtered-out lists have no row at the cursor: a bare
     // `?.broken === undefined` check passes on undefined and crashes the
     // process on the `!.id` access (PermissionPanel guards this correctly).
-    if (key.return && visible[cursor] !== undefined && visible[cursor]!.broken === undefined) return select(visible[cursor]!.id)
+    if (key.return && visible[cursor] !== undefined && visible[cursor].broken === undefined) return select(visible[cursor].id)
     const next = editQuery(query, input, key)
     if (next !== undefined) { setQuery(next); setCursor(0) }
   })
@@ -150,9 +150,9 @@ export function ModePanel({ current, load, select, close }: {
 
 export function PermissionPanel({ current, load, select, close }: {
   current: string
-  load(): Promise<readonly PermissionRow[]>
-  select(id: string): void
-  close(): void
+  load: () => Promise<readonly PermissionRow[]>
+  select: (id: string) => void
+  close: () => void
 }): ReactElement {
   const [rows, setRows] = useState<readonly PermissionRow[]>([])
   const [query, setQuery] = useState('')
@@ -175,7 +175,7 @@ export function PermissionPanel({ current, load, select, close }: {
     if (input === 'r' && query === '') return refresh()
     if (key.upArrow) return setCursor(value => visible.length === 0 ? 0 : (value + visible.length - 1) % visible.length)
     if (key.downArrow) return setCursor(value => visible.length === 0 ? 0 : (value + 1) % visible.length)
-    if (key.return && visible[cursor] !== undefined) return select(visible[cursor]!.id)
+    if (key.return && visible[cursor] !== undefined) return select(visible[cursor].id)
     const next = editQuery(query, input, key)
     if (next !== undefined) { setQuery(next); setCursor(0) }
   })
@@ -186,7 +186,7 @@ export function PermissionPanel({ current, load, select, close }: {
   })
 }
 
-export function PluginPanel({ load, close, initialQuery = '' }: { load(): readonly PluginRow[]; close(): void; initialQuery?: string }): ReactElement {
+export function PluginPanel({ load, close, initialQuery = '' }: { load: () => readonly PluginRow[]; close: () => void; initialQuery?: string }): ReactElement {
   const [epoch, setEpoch] = useState(0)
   const [query, setQuery] = useState(initialQuery)
   const [cursor, setCursor] = useState(0)
@@ -256,7 +256,7 @@ const JOB_MARK: Record<JobRow['status'], string> = {
  * interval dies with the panel). Cancel stays upstream-only; an absent
  * registry renders as the plain empty state (a harmless missing service).
  */
-export function JobsPanel({ load, close }: { load(): readonly JobRow[]; close(): void }): ReactElement {
+export function JobsPanel({ load, close }: { load: () => readonly JobRow[]; close: () => void }): ReactElement {
   const [, setRefresh] = useState(0)
   const [cursor, setCursor] = useState(0)
   const [, setTick] = useState(0)
@@ -284,18 +284,18 @@ export function JobsPanel({ load, close }: { load(): readonly JobRow[]; close():
 
 export function ResumePanel({ currentCwd, load, readTranscript, select, requestDelete, deleteConfirmId, reloadToken = 0, deleteMode = false, close }: {
   currentCwd: string
-  load(options: SessionDirectoryOptions, signal?: AbortSignal): Promise<readonly SessionRow[]>
-  readTranscript(id: string, signal?: AbortSignal): Promise<string>
-  select(row: SessionRow): void
+  load: (options: SessionDirectoryOptions, signal?: AbortSignal) => Promise<readonly SessionRow[]>
+  readTranscript: (id: string, signal?: AbortSignal) => Promise<string>
+  select: (row: SessionRow) => void
   /** Arm the composer-based delete confirm for one row (App owns the keys). */
-  requestDelete?(row: SessionRow): void
+  requestDelete?: (row: SessionRow) => void
   /** The row id awaiting y/n in the composer, when any (App-owned). */
   deleteConfirmId?: string
   /** Bump to reload the listing (e.g. after a deletion). */
   reloadToken?: number
   /** Opened via /delete: hint-first delete mode. */
   deleteMode?: boolean
-  close(): void
+  close: () => void
 }): ReactElement {
   // Codex resume-picker default: the CURRENT directory's root sessions; the
   // cwd filter widens to all only on request (the old default leaked every
@@ -362,12 +362,12 @@ export function ResumePanel({ currentCwd, load, readTranscript, select, requestD
     if (key.pageDown) return setCursor(value => Math.min(rows.length - 1, value + 8))
     if (input === 'g') return setCursor(0)
     if (input === 'G') return setCursor(Math.max(0, rows.length - 1))
-    if (input === 'd' && rows[cursor] !== undefined && requestDelete !== undefined) return requestDelete(rows[cursor]!)
+    if (input === 'd' && rows[cursor] !== undefined && requestDelete !== undefined) return requestDelete(rows[cursor])
     if (input === 'e' && rows[cursor] !== undefined) {
-      return setExpanded(value => value === rows[cursor]!.id ? undefined : rows[cursor]!.id)
+      return setExpanded(value => value === rows[cursor].id ? undefined : rows[cursor].id)
     }
     if (input === 't' && rows[cursor] !== undefined) {
-      const row = rows[cursor]!
+      const row = rows[cursor]
       transcriptLoad.current?.abort()
       setTranscript({ id: row.id })
       const controller = new AbortController()
@@ -378,7 +378,7 @@ export function ResumePanel({ currentCwd, load, readTranscript, select, requestD
       )
       return
     }
-    if (key.return && rows[cursor]?.resumable === true) return select(rows[cursor]!)
+    if (key.return && rows[cursor]?.resumable === true) return select(rows[cursor])
   }, { isActive: transcript === undefined })
   if (transcript !== undefined) {
     return createElement(DocumentPanel, {
@@ -444,7 +444,7 @@ function DocumentPanel({ title, text, error, close }: {
   title: string
   text?: string
   error?: string
-  close(): void
+  close: () => void
 }): ReactElement {
   const stdout = useStdout().stdout
   const viewport = panelViewport(stdout?.columns ?? 80, stdout?.rows ?? 30)
@@ -485,8 +485,8 @@ export function HistoryPanel({ entries, fill, close }: {
   /** Newest-first recall entries (persistent + in-session, deduped). */
   entries: readonly string[]
   /** Accept one entry: its text plus its recall-space index (browsing resumes there). */
-  fill(text: string, index: number): void
-  close(): void
+  fill: (text: string, index: number) => void
+  close: () => void
 }): ReactElement {
   const [query, setQuery] = useState('')
   const [cursor, setCursor] = useState(0)
@@ -566,11 +566,11 @@ export function HistoryPanel({ entries, fill, close }: {
  * argument string the direct command accepts.
  */
 export function ReviewPickerPanel({ loadBranches, loadCommits, choose, close }: {
-  loadBranches(signal?: AbortSignal): Promise<readonly ReviewBranch[]>
-  loadCommits(signal?: AbortSignal): Promise<readonly ReviewCommit[]>
+  loadBranches: (signal?: AbortSignal) => Promise<readonly ReviewBranch[]>
+  loadCommits: (signal?: AbortSignal) => Promise<readonly ReviewCommit[]>
   /** Run the review for one picker selection. */
-  choose(selection: ReviewSelection): void
-  close(): void
+  choose: (selection: ReviewSelection) => void
+  close: () => void
 }): ReactElement {
   const [phase, setPhase] = useState<'preset' | 'branches' | 'commits' | 'custom'>('preset')
   const [cursor, setCursor] = useState(0)
@@ -739,10 +739,10 @@ export interface SearchRow {
  * resumes the hit; the query line edits like every kernel panel.
  */
 export function SearchPanel({ load, select, initialQuery = '', close }: {
-  load(query: string, signal?: AbortSignal): Promise<readonly SearchRow[]>
-  select(row: SearchRow): void
+  load: (query: string, signal?: AbortSignal) => Promise<readonly SearchRow[]>
+  select: (row: SearchRow) => void
   initialQuery?: string
-  close(): void
+  close: () => void
 }): ReactElement {
   const [query, setQuery] = useState(initialQuery)
   const [rows, setRows] = useState<readonly SearchRow[]>([])
@@ -872,8 +872,8 @@ export function SearchPanel({ load, select, initialQuery = '', close }: {
  */
 export function StatuslinePanel({ enabled, change, close }: {
   enabled: readonly StatusItemId[]
-  change(items: readonly StatusItemId[]): void
-  close(): void
+  change: (items: readonly StatusItemId[]) => void
+  close: () => void
 }): ReactElement {
   // Working state: the full catalog in display order (enabled entries in
   // their configured positions, disabled ones trailing canonically) plus
@@ -894,7 +894,7 @@ export function StatuslinePanel({ enabled, change, close }: {
     if (target < 0 || target >= order.length) return
     const next = [...order]
     const [item] = next.splice(cursor, 1)
-    next.splice(target, 0, item!)
+    next.splice(target, 0, item)
     commit(next, on)
     setCursor(target)
   }
@@ -972,11 +972,11 @@ export function EffortPanel({ row, current, select, back, onExit }: {
   /** Effective effort currently in force ('' when none), for the ● mark. */
   current: string | undefined
   /** Accept one advertised effort id, or '' for the provider default. */
-  select(effortId: string): void
+  select: (effortId: string) => void
   /** Return to the model list without applying. */
-  back(): void
+  back: () => void
   /** Leave the whole /model flow (Ctrl+C). */
-  onExit(): void
+  onExit: () => void
 }): ReactElement {
   const advertised = row.reasoning?.efforts ?? []
   const empty = row.reasoning === undefined || advertised.length === 0
@@ -1023,7 +1023,7 @@ export function EffortPanel({ row, current, select, back, onExit }: {
       return
     }
     if (key.return && rows[cursor] !== undefined) {
-      select(rows[cursor]!.id)
+      select(rows[cursor].id)
     }
   })
   return createElement(ListFrame, {
@@ -1062,10 +1062,10 @@ export function AgentsPanel({ live, load, readTranscript, close }: {
   /** Live feed rows (child sessions observed this process). */
   live: readonly SubagentRow[]
   /** Load this session's persisted child sessions by lineage. */
-  load(): Promise<readonly SessionRow[]>
+  load: () => Promise<readonly SessionRow[]>
   /** Read one child session's full transcript as markdown. */
-  readTranscript(id: string, signal?: AbortSignal): Promise<string>
-  close(): void
+  readTranscript: (id: string, signal?: AbortSignal) => Promise<string>
+  close: () => void
 }): ReactElement {
   const [dirRows, setDirRows] = useState<readonly SessionRow[] | undefined>(undefined)
   const [error, setError] = useState<string>()
@@ -1174,12 +1174,12 @@ export function AgentsPanel({ live, load, readTranscript, close }: {
 export function SubagentPanel({ current, load, pick, inherit, close }: {
   /** Display label of the override in force, '' when following the current model. */
   current: string
-  load(): Promise<ModelDirectory>
+  load: () => Promise<ModelDirectory>
   /** Apply one model (with an advertised effort, when picked) as the override. */
-  pick(row: ModelRow, effortId?: string): void
+  pick: (row: ModelRow, effortId?: string) => void
   /** Drop the override: subagents follow the current model again. */
-  inherit(): void
-  close(): void
+  inherit: () => void
+  close: () => void
 }): ReactElement {
   const [directory, setDirectory] = useState<ModelDirectory | undefined>(undefined)
   const [error, setError] = useState<string>()
@@ -1223,7 +1223,7 @@ export function SubagentPanel({ current, load, pick, inherit, close }: {
         setEffortFor(row)
         return
       }
-      const effortId = row.reasoning?.efforts.length === 1 ? row.reasoning.efforts[0]!.id : undefined
+      const effortId = row.reasoning?.efforts.length === 1 ? row.reasoning.efforts[0].id : undefined
       pick(row, effortId)
     }
   })
@@ -1298,7 +1298,7 @@ export function scheduleDisplayRows(rows: readonly ScheduleRow[], now: number): 
     }))
 }
 
-export function SchedulePanel({ rows, close }: { rows(): readonly ScheduleRow[]; close(): void }): ReactElement {
+export function SchedulePanel({ rows, close }: { rows: () => readonly ScheduleRow[]; close: () => void }): ReactElement {
   const [, setTick] = useState(0)
   useEffect(() => {
     const id = setInterval(() => setTick(value => value + 1), 1_000)
@@ -1311,7 +1311,7 @@ export function SchedulePanel({ rows, close }: { rows(): readonly ScheduleRow[];
     if (key.escape || input === 'q') return close()
   })
   if (viewport.maxHeight === 0 || viewport.compact) {
-    const summary = display.length === 0 ? t('panel.schedule.none') : singleLineText(display[0]!.text)
+    const summary = display.length === 0 ? t('panel.schedule.none') : singleLineText(display[0].text)
     return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(`/schedule · ${summary}`, viewport.contentColumns))
   }
   const budget = Math.max(1, viewport.bodyRows)

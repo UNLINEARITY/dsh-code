@@ -19,8 +19,8 @@ function summary(name: string, model: boolean, user: boolean): SkillSummary {
 /** Registry double plus context double feeding {@link watchSkills}. */
 function harness(initial: readonly SkillSummary[]): {
   ctx: Context
-  setCatalog(next: readonly SkillSummary[]): void
-  fireChange(): void
+  setCatalog: (next: readonly SkillSummary[]) => void
+  fireChange: () => void
 } {
   let catalog = initial
   const listeners = new Set<() => void>()

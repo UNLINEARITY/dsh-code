@@ -383,9 +383,9 @@ describe('status layout', () => {
 
   it('shows the session title in place of the short id once one lands', () => {
     const titled = layoutStatusBar({ ...baseFacts, sessionId: 'ab12cd34', title: 'fix the login bug' }, emptyStats, 120)
-    expect(titled.row2.left.at(-1).spans).toEqual([{ text: 'fix the login bug', tone: 'meta' }])
+    expect(titled.row2.left.at(-1)!.spans).toEqual([{ text: 'fix the login bug', tone: 'meta' }])
     const untitled = layoutStatusBar({ ...baseFacts, sessionId: 'ab12cd34', title: '' }, emptyStats, 120)
-    expect(untitled.row2.left.at(-1).spans).toEqual([{ text: 'ab12cd34', tone: 'meta' }])
+    expect(untitled.row2.left.at(-1)!.spans).toEqual([{ text: 'ab12cd34', tone: 'meta' }])
   })
 
   it('pins the permission badge right with the idle cycle hint', () => {
@@ -433,9 +433,9 @@ describe('status layout', () => {
 
   it('sanitizes external text and bounds the title by columns, not characters', () => {
     const layout = layoutStatusBar({ ...baseFacts, title: 'a\u0007b\nc' }, emptyStats, 120)
-    expect(layout.row2.left.at(-1).spans[0].text).toBe('a\\x07b ↵ c')
+    expect(layout.row2.left.at(-1)!.spans[0].text).toBe('a\\x07b ↵ c')
     const cjk = layoutStatusBar({ ...baseFacts, title: '深'.repeat(30) }, emptyStats, 320)
-    const titleSpan = cjk.row2.left.at(-1).spans[0]
+    const titleSpan = cjk.row2.left.at(-1)!.spans[0]
     expect(visibleColumns(titleSpan.text)).toBeLessThanOrEqual(48)
     expect(titleSpan.text.endsWith('…')).toBe(true)
   })
@@ -591,7 +591,7 @@ describe('status width degradation', () => {
       // Identity remains one bounded cluster; it may compact to preserve the
       // permission badge and its keyboard affordance.
       expect(groupText(layout.row1)[0]).toMatch(/^○ provider\/model-name/u)
-      expect(visibleColumns(groupText(layout.row1)[0]!)).toBeLessThanOrEqual(columns - 1)
+      expect(visibleColumns(groupText(layout.row1)[0])).toBeLessThanOrEqual(columns - 1)
       expect(badge).toBe('workspace-write')
       // Context survives only where the remaining budget can hold its minimum
       // useful bar after the permission badge and hint have been protected.

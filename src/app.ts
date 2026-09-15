@@ -325,143 +325,143 @@ export interface AppProps {
    * an attachment prepare resolves after the app remounted onto another
    * session, and the runner drops the stale delivery then.
    */
-  dispatch(text: string, attachments?: readonly ContentBlock[], origin?: string): void
+  dispatch: (text: string, attachments?: readonly ContentBlock[], origin?: string) => void
   /**
    * The FULL current session identity ('' while the first session is pending)
    * — the stale-delivery origin above. Distinct from the short display id.
    */
   sessionKey: string
   /** Interrupt the running turn (Esc); true when a turn was cancelled. */
-  interrupt(): boolean
+  interrupt: () => boolean
   /** Quit: unmount, flush, and request process exit. */
-  quit(): void
+  quit: () => void
   /** Load the selectable model directory (called when /model opens). */
-  loadModels(): Promise<ModelDirectory>
+  loadModels: () => Promise<ModelDirectory>
   /** Load @mention candidates for the typed query (files + sessions). */
-  loadMentions(query: string, signal?: AbortSignal): Promise<readonly MentionCandidate[]>
+  loadMentions: (query: string, signal?: AbortSignal) => Promise<readonly MentionCandidate[]>
   /** Validate draft image paths without committing attachment objects. */
-  inspectImages(paths: readonly string[]): Promise<readonly ImagePathInspection[]>
+  inspectImages: (paths: readonly string[]) => Promise<readonly ImagePathInspection[]>
   /** Validate, normalize and persist images immediately before submission. */
-  prepareImages(paths: readonly string[], signal?: AbortSignal): Promise<readonly ImageBlock[]>
+  prepareImages: (paths: readonly string[], signal?: AbortSignal) => Promise<readonly ImageBlock[]>
   /** Validate draft non-image file paths without committing attachment objects. */
-  inspectFiles(paths: readonly string[]): Promise<readonly FilePathInspection[]>
+  inspectFiles: (paths: readonly string[]) => Promise<readonly FilePathInspection[]>
   /** Persist non-image files immediately before submission as durable file blocks. */
-  prepareFiles(paths: readonly string[], signal?: AbortSignal): Promise<readonly FileBlock[]>
+  prepareFiles: (paths: readonly string[], signal?: AbortSignal) => Promise<readonly FileBlock[]>
   /** Apply one /model selection (with an advertised reasoning effort, when picked); returns the display label. */
-  selectModel(row: ModelRow, effortId?: string): string
+  selectModel: (row: ModelRow, effortId?: string) => string
   /** The /subagent override label, '' when delegated agents follow the current model. */
   subagentModel: string
   /** Apply one /subagent model pick; returns the override label. */
-  setSubagentModel(row: ModelRow, effortId?: string): string
+  setSubagentModel: (row: ModelRow, effortId?: string) => string
   /** Drop the /subagent override (delegated agents follow the current model). */
-  clearSubagentModel(): void
+  clearSubagentModel: () => void
   /** Delete one session subtree; resolves with the outcome line. */
-  deleteSession(id: string): Promise<string>
+  deleteSession: (id: string) => Promise<string>
   /** Load provider/settings/credential facts for the optional /model provider stage. */
-  loadModelProviders?(): Promise<ProviderSettingsDirectory>
+  loadModelProviders?: () => Promise<ProviderSettingsDirectory>
   /** Subscribe to Harness credential/settings/adapter invalidations while /model is open. */
-  subscribeModelProviders?(listener: () => void): () => void
+  subscribeModelProviders?: (listener: () => void) => () => void
   /** Store or rotate one provider credential through the Harness credential service. */
-  saveModelProviderCredential?(target: ProviderTargetView, key: string): Promise<void>
+  saveModelProviderCredential?: (target: ProviderTargetView, key: string) => Promise<void>
   /** Remove one writable provider credential without removing its settings profile. */
-  unsetModelProviderCredential?(target: ProviderTargetView): Promise<void>
+  unsetModelProviderCredential?: (target: ProviderTargetView) => Promise<void>
   /** Remove one user-owned provider profile and its page-managed credential. */
-  removeModelProvider?(target: ProviderTargetView): Promise<void>
+  removeModelProvider?: (target: ProviderTargetView) => Promise<void>
   /** Save endpoint and explicit model capacities through the provider profile. */
-  saveModelProviderConfiguration?(target: ProviderTargetView, configuration: ProviderConfiguration): Promise<void>
+  saveModelProviderConfiguration?: (target: ProviderTargetView, configuration: ProviderConfiguration) => Promise<void>
   /**
    * Interrogate the provider's real endpoint (typed key wins over the stored
    * credential) for the models it actually serves — the discovery stage of
    * the provider setup page.
    */
-  discoverModelProvider?(
+  discoverModelProvider?: (
     target: ProviderTargetView,
     request: { readonly apiKey?: string; readonly baseURL?: string },
     signal?: AbortSignal,
-  ): Promise<readonly DiscoveredModelView[]>
+  ) => Promise<readonly DiscoveredModelView[]>
   /** Provider authorization flows and value-free stored-record facts. */
-  loadProviderAuthorizations?(): Promise<ProviderAuthorizationDirectory>
-  subscribeProviderAuthorizations?(listener: () => void): () => void
-  beginProviderAuthorization?(
+  loadProviderAuthorizations?: () => Promise<ProviderAuthorizationDirectory>
+  subscribeProviderAuthorizations?: (listener: () => void) => () => void
+  beginProviderAuthorization?: (
     row: ProviderAuthorizationRow,
     method: string,
     interaction: AuthorizationInteraction,
     signal: AbortSignal,
-  ): Promise<AuthorizationStatus>
-  cancelProviderAuthorization?(row: ProviderAuthorizationRow): void
-  logoutProviderAuthorization?(row: ProviderAuthorizationRow): Promise<void>
-  openAuthorizationUrl?(url: string): boolean
-  copyTextValue?(text: string): Promise<void>
+  ) => Promise<AuthorizationStatus>
+  cancelProviderAuthorization?: (row: ProviderAuthorizationRow) => void
+  logoutProviderAuthorization?: (row: ProviderAuthorizationRow) => Promise<void>
+  openAuthorizationUrl?: (url: string) => boolean
+  copyTextValue?: (text: string) => Promise<void>
   /** Cycle to the next mode station (Shift+Tab): a permission preset or a plan switch; returns the notice label. */
-  cycleMode(): string
+  cycleMode: () => string
   /** Pre-session plan choice: shows the plan badge before the first session exists. */
   pendingPlan?: boolean
   /** Select or inspect a permission preset without requiring a pre-existing session. */
-  setPermission(id: string): string
+  setPermission: (id: string) => string
   /** Export the transcript to a markdown file (/export [path]); reports via notices. */
-  exportTranscript(argument: string): Promise<void>
+  exportTranscript: (argument: string) => Promise<void>
   /** Rename the session (/title <text>); returns the outcome line for the notice. */
-  renameTitle(argument: string): string
+  renameTitle: (argument: string) => string
   /** Copy the latest complete assistant response; resolves to notice text. */
-  copyLastResponse(): Promise<string>
+  copyLastResponse: () => Promise<string>
   /** Load a complete read-only Git diff for the file-oriented viewport. */
-  loadGitDiff(argument: string): Promise<GitDiffView>
+  loadGitDiff: (argument: string) => Promise<GitDiffView>
   /** Local branches for the /review picker (absent: the picker hides the branch phase's list). */
-  listReviewBranches?(signal?: AbortSignal): Promise<readonly ReviewBranch[]>
+  listReviewBranches?: (signal?: AbortSignal) => Promise<readonly ReviewBranch[]>
   /** Recent commits on the current branch for the /review picker. */
-  listReviewCommits?(signal?: AbortSignal): Promise<readonly ReviewCommit[]>
+  listReviewCommits?: (signal?: AbortSignal) => Promise<readonly ReviewCommit[]>
   /** Start a model review after applying the read-only permission preset. */
-  reviewChanges(selection: ReviewSelection): void
+  reviewChanges: (selection: ReviewSelection) => void
   /** Preset/session/plugin kernel operations. */
-  loadPresets(): Promise<readonly PresetRow[]>
-  switchMode(id: string): Promise<string>
+  loadPresets: () => Promise<readonly PresetRow[]>
+  switchMode: (id: string) => Promise<string>
   /** Load the switchable permission presets for the /permission panel. */
-  loadPermissions(): Promise<readonly PermissionRow[]>
-  createSession(mode?: string): void
+  loadPermissions: () => Promise<readonly PermissionRow[]>
+  createSession: (mode?: string) => void
   /** Fork the active session at a completed-turn boundary. */
-  forkSession(argument: string): void
-  loadSessions(options: SessionDirectoryOptions, signal?: AbortSignal): Promise<readonly SessionRow[]>
-  loadSessionTranscript(id: string, signal?: AbortSignal): Promise<string>
+  forkSession: (argument: string) => void
+  loadSessions: (options: SessionDirectoryOptions, signal?: AbortSignal) => Promise<readonly SessionRow[]>
+  loadSessionTranscript: (id: string, signal?: AbortSignal) => Promise<string>
   /**
    * Full-text search over every persisted session (the in-process
    * session-query engine). Absent when the deployment disabled the row;
    * /search degrades to a notice instead of opening the panel.
    */
-  searchSessions?(query: string, signal?: AbortSignal): Promise<readonly SearchRow[]>
+  searchSessions?: (query: string, signal?: AbortSignal) => Promise<readonly SearchRow[]>
   /** Load this session's subagent conversations (children by lineage). */
-  loadSubagents(): Promise<readonly SessionRow[]>
-  switchSession(row: SessionRow): void
-  cancelSessionSwitch(): boolean
-  loadPlugins(): readonly PluginRow[]
+  loadSubagents: () => Promise<readonly SessionRow[]>
+  switchSession: (row: SessionRow) => void
+  cancelSessionSwitch: () => boolean
+  loadPlugins: () => readonly PluginRow[]
   /** Caller-visible background jobs (the host jobs registry, read-only). */
-  loadJobs(): readonly JobRow[]
+  loadJobs: () => readonly JobRow[]
   /** Probe the launcher's aligned update plan (read-only; never installs). */
-  probeUpdate(): Promise<LauncherUpdateStatus>
+  probeUpdate: () => Promise<LauncherUpdateStatus>
   /** Run the launcher's aligned update; streams sanitized lines; resolves with the exit code. */
-  applyUpdate(onLine: (line: string) => void, plan?: { readonly dshSpec: string; readonly codeSpec: string; readonly pluginSpecs: readonly string[] }): Promise<number>
+  applyUpdate: (onLine: (line: string) => void, plan?: { readonly dshSpec: string; readonly codeSpec: string; readonly pluginSpecs: readonly string[] }) => Promise<number>
   /** Registers the app's notice channel with the runner (called once on mount). */
-  onBridgeReady(bridge: { notify(text: string, tone?: NoticeTone): void }): void
+  onBridgeReady: (bridge: { notify: (text: string, tone?: NoticeTone) => void }) => void
   /** Ordered enabled status items (/statusline config); the runner owns persistence. */
   statusline: readonly string[]
   /** Persist a new statusline item set; the runner surfaces IO failures as notices. */
-  saveStatusline(items: readonly string[]): void
+  saveStatusline: (items: readonly string[]) => void
   /** Apply and persist one /language selection; the runner owns the language.json file. */
-  saveLanguage(name: LanguageName): void
+  saveLanguage: (name: LanguageName) => void
   /** Apply and persist one /theme selection; the runner owns the theme.json file. */
-  saveTheme?(name: ThemeName): void
+  saveTheme?: (name: ThemeName) => void
   /** Whether timed animations run at startup (animations.json; on by default
    * — like parseAnimationsPref, only an explicit false disables them). */
   animations?: boolean
   /** Apply and persist one /animation toggle; the runner owns the file. */
-  saveAnimations?(enabled: boolean): void
+  saveAnimations?: (enabled: boolean) => void
   /** Persistent cross-session input history (oldest first); the runner owns the file. */
   history: readonly string[]
   /** Persist one submitted prompt to the global history file. */
-  recordHistory(text: string): void
+  recordHistory: (text: string) => void
   /** Mutate one next-turn inbox message; durable inbox splices reconcile the result. */
-  updateQueued?(messageId: string, action: QueueMutation): void
+  updateQueued?: (messageId: string, action: QueueMutation) => void
   /** Apply the Ctrl+R terminal passthrough to the detected editor (/vscode-keys); resolves to a one-line summary. */
-  applyEditorKeys(): Promise<string>
+  applyEditorKeys: () => Promise<string>
 }
 
 /** Pad text with spaces to a visible-column target (menu name column). */
@@ -531,7 +531,7 @@ function Caret({ animated = true }: { animated?: boolean }): ReactElement {
 }
 
 /** One resettable input-caret phase shared by the entire composer. */
-function useCursorBlink(active: boolean): { visible: boolean; reset(): void } {
+function useCursorBlink(active: boolean): { visible: boolean; reset: () => void } {
   const [epoch, setEpoch] = useState(0)
   const [visible, setVisible] = useState(true)
   useEffect(() => {
@@ -748,7 +748,7 @@ function StyledRows({ lines }: { lines: readonly StyledLine[] }): ReactElement {
 }
 
 /** File-oriented, color-coded unified diff viewport. */
-function DiffPanel({ view, onClose }: { view: GitDiffView; onClose(): void }): ReactElement {
+function DiffPanel({ view, onClose }: { view: GitDiffView; onClose: () => void }): ReactElement {
   const stdout = useStdout().stdout
   const viewport = panelViewport(stdout?.columns ?? 80, stdout?.rows ?? 30)
   const [fileIndex, setFileIndex] = useState(0)
@@ -899,7 +899,7 @@ function todoMark(status: TodoItem['status']): string {
 function AgentsLine({ rows, total }: { rows: readonly SubagentRow[]; total: number }): ReactElement | undefined {
   if (rows.length === 0) return undefined
   const running = rows.filter(row => row.state !== 'done').length
-  const newest = [...rows].sort((left, right) => right.updatedAt - left.updatedAt)[0]!
+  const newest = [...rows].sort((left, right) => right.updatedAt - left.updatedAt)[0]
   const mark = newest.state === 'done' ? '✓' : newest.state === 'idle' ? '⏸' : '●'
   return createElement(
     Box,
@@ -1018,7 +1018,7 @@ function QueuePanel({ rows, busy, update, onClose }: {
   rows: readonly Extract<TranscriptEntry, { kind: 'pending' }>[]
   busy: boolean
   update?: (messageId: string, action: QueueMutation) => void
-  onClose(): void
+  onClose: () => void
 }): ReactElement {
   const stdout = useStdout().stdout
   const viewport = panelViewport(stdout?.columns ?? 80, stdout?.rows ?? 30)
@@ -1243,11 +1243,11 @@ function deepseekWaveHues(tier: DeepseekWaveTier): readonly [RgbTriple, RgbTripl
   if (isRainbow()) {
     const anchors = rainbowRoll().flowAnchors
     const stride = Math.max(1, Math.floor(anchors.length / 3))
-    return [anchors[0]!, anchors[stride]!, anchors[stride * 2]!]
+    return [anchors[0], anchors[stride], anchors[stride * 2]]
   }
   // Prismatic waves ride the flow anchors for both tiers — the model-switch
   // easter egg becomes a violet→fuchsia→cyan sweep.
-  if (isPrismatic()) return [FLOW_ANCHORS[0]!, FLOW_ANCHORS[1]!, FLOW_ANCHORS[2]!]
+  if (isPrismatic()) return [FLOW_ANCHORS[0], FLOW_ANCHORS[1], FLOW_ANCHORS[2]]
   return tier === 'flash'
     ? [palette.brandBright, palette.brand, palette.brandMid]
     : [palette.brandBright, palette.code, palette.brandMid]
@@ -1410,9 +1410,9 @@ const APPROVAL_OPTIONS: readonly ApprovalOption[] = [
 function ApprovalBar({ snapshot, locked, notify, interrupt, summarize }: {
   snapshot: ApprovalSnapshot
   locked: boolean
-  notify(text: string, tone?: NoticeTone): void
+  notify: (text: string, tone?: NoticeTone) => void
   /** Cancel the running turn (Ctrl+C), matching the composer's busy branch. */
-  interrupt(): boolean
+  interrupt: () => boolean
   /** Render as the bounded one-line form even on tall terminals (another
    * human-asked surface already owns the full panel budget). */
   summarize?: boolean
@@ -1463,28 +1463,28 @@ function ApprovalBar({ snapshot, locked, notify, interrupt, summarize }: {
       return
     }
     if (key.return) {
-      decide(APPROVAL_OPTIONS[cursor]!)
+      decide(APPROVAL_OPTIONS[cursor])
       return
     }
     if (key.escape) {
-      decide(APPROVAL_OPTIONS[2]!)
+      decide(APPROVAL_OPTIONS[2])
       return
     }
     if (input === 'y' || input === 'Y') {
-      decide(APPROVAL_OPTIONS[0]!)
+      decide(APPROVAL_OPTIONS[0])
       return
     }
     if (input === 'n' || input === 'N') {
-      decide(APPROVAL_OPTIONS[1]!)
+      decide(APPROVAL_OPTIONS[1])
       return
     }
     if (input === 'd' || input === 'D') {
-      decide(APPROVAL_OPTIONS[2]!)
+      decide(APPROVAL_OPTIONS[2])
       return
     }
     if (/^[1-9]$/u.test(input)) {
       const index = Number(input) - 1
-      if (index < APPROVAL_OPTIONS.length) decide(APPROVAL_OPTIONS[index]!)
+      if (index < APPROVAL_OPTIONS.length) decide(APPROVAL_OPTIONS[index])
     }
   }, { isActive: active })
 
@@ -1938,10 +1938,10 @@ function ModelPanel({ directory, error, current, onSelect, onProviders, onRetry,
   error: string | undefined
   /** `provider/model` label of the applied model: the cursor lands on it once. */
   current?: string
-  onSelect(row: ModelRow): void
-  onProviders?(): void
-  onRetry(): void
-  onClose(): void
+  onSelect: (row: ModelRow) => void
+  onProviders?: () => void
+  onRetry: () => void
+  onClose: () => void
 }): ReactElement {
   const [query, setQuery] = useState('')
   const [cursor, setCursor] = useState(0)
@@ -1983,7 +1983,7 @@ function ModelPanel({ directory, error, current, onSelect, onProviders, onRetry,
       // Position within the ACTIVE filter: the full-row index means nothing
       // when the query already narrowed the list while the directory loaded
       // (a late resolve must not place the cursor outside `filtered`).
-      const filteredIndex = filtered.indexOf(rows[index]!)
+      const filteredIndex = filtered.indexOf(rows[index])
       setCursor(filteredIndex >= 0 ? filteredIndex : 0)
     } else if (cursor >= filtered.length) {
       setCursor(Math.max(0, filtered.length - 1))
@@ -2130,15 +2130,15 @@ function ProviderPanel({ directory, error, authorizations, authorizationError, o
   error: string | undefined
   authorizations: ProviderAuthorizationDirectory | undefined
   authorizationError: string | undefined
-  onConfigure(target: ProviderTargetView): void
-  onUnset(target: ProviderTargetView): void
-  onRemove(target: ProviderTargetView): void
-  onLogin(target: ProviderTargetView, authorization: ProviderAuthorizationRow): void
-  onLogout(target: ProviderTargetView, authorization: ProviderAuthorizationRow): void
-  onRetry(): void
-  onBack(): void
+  onConfigure: (target: ProviderTargetView) => void
+  onUnset: (target: ProviderTargetView) => void
+  onRemove: (target: ProviderTargetView) => void
+  onLogin: (target: ProviderTargetView, authorization: ProviderAuthorizationRow) => void
+  onLogout: (target: ProviderTargetView, authorization: ProviderAuthorizationRow) => void
+  onRetry: () => void
+  onBack: () => void
   /** Leave the whole /model flow (Ctrl+C), not just this stage. */
-  onExit(): void
+  onExit: () => void
 }): ReactElement {
   const stdout = useStdout().stdout
   const viewport = panelViewport(stdout?.columns ?? 80, stdout?.rows ?? 30)
@@ -2338,14 +2338,14 @@ function ProviderSetupPanel({ target, save, saveCredential, discover, effortDono
   target: ProviderTargetView
   /** Models with declared efforts (settings first, catalog-advertised after) a model row can copy from. */
   effortDonors: readonly EffortDonor[]
-  save(target: ProviderTargetView, configuration: ProviderConfiguration): Promise<void>
+  save: (target: ProviderTargetView, configuration: ProviderConfiguration) => Promise<void>
   saveCredential: ((target: ProviderTargetView, key: string) => Promise<void>) | undefined
-  discover(target: ProviderTargetView, request: { readonly apiKey?: string; readonly baseURL?: string }, signal?: AbortSignal): Promise<readonly DiscoveredModelView[]>
+  discover: (target: ProviderTargetView, request: { readonly apiKey?: string; readonly baseURL?: string }, signal?: AbortSignal) => Promise<readonly DiscoveredModelView[]>
   /** Report a successful save so the surface can notice the key rotation. */
-  done(result: { readonly key: boolean }): void
-  back(): void
+  done: (result: { readonly key: boolean }) => void
+  back: () => void
   /** Leave the whole /model flow (Ctrl+C), not just this page. */
-  onExit(): void
+  onExit: () => void
 }): ReactElement {
   const stdout = useStdout().stdout
   const viewport = panelViewport(stdout?.columns ?? 80, stdout?.rows ?? 30)
@@ -2399,7 +2399,7 @@ function ProviderSetupPanel({ target, save, saveCredential, discover, effortDono
 
   /** Compact declaration summary for the row label: count, off, or inherit. */
   const effortsSummary = (model: ProviderModelSettings): string => {
-    const raw = (model.extras as Record<string, unknown> | undefined)?.reasoningEfforts
+    const raw = (model.extras)?.reasoningEfforts
     if (raw === false) return 'off'
     if (isDeclaredReasoningEfforts(raw)) return String(Object.keys(raw).length)
     return '~'
@@ -2552,7 +2552,7 @@ function ProviderSetupPanel({ target, save, saveCredential, discover, effortDono
     }
     if (input === 'e' && selected !== undefined) {
       setError(undefined)
-      setEffDraft(serializeReasoningEfforts((selected.extras as Record<string, unknown> | undefined)?.reasoningEfforts))
+      setEffDraft(serializeReasoningEfforts((selected.extras)?.reasoningEfforts))
       setEffEditing(true)
       return
     }
@@ -2644,7 +2644,7 @@ function ProviderSetupPanel({ target, save, saveCredential, discover, effortDono
       modelRows.push(createElement(Text, { key: 'add', color: cursor === index ? inkColor(getPalette().brandBright) : inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns('  ' + (cursor === index ? '>' : ' ') + ' + add by id' + (addDraft === '' ? '' : ' ' + addDraft + '▏'), viewport.contentColumns)))
       continue
     }
-    const model = models[index]!
+    const model = models[index]
     const active = index === cursor
     const context = model.contextWindow === undefined ? '-' : String(model.contextWindow)
     const output = model.maxTokens === undefined ? '-' : String(model.maxTokens)
@@ -2688,11 +2688,11 @@ function ProviderDiscoveryPanel({ target, baseURL, apiKey, configured, discover,
   baseURL: string
   apiKey: string
   configured: readonly string[]
-  discover(target: ProviderTargetView, request: { readonly apiKey?: string; readonly baseURL?: string }, signal?: AbortSignal): Promise<readonly DiscoveredModelView[]>
-  onAdopt(models: readonly DiscoveredModelView[]): void
-  back(): void
+  discover: (target: ProviderTargetView, request: { readonly apiKey?: string; readonly baseURL?: string }, signal?: AbortSignal) => Promise<readonly DiscoveredModelView[]>
+  onAdopt: (models: readonly DiscoveredModelView[]) => void
+  back: () => void
   /** Leave the whole /model flow (Ctrl+C). */
-  onExit(): void
+  onExit: () => void
 }): ReactElement {
   const stdout = useStdout().stdout
   const viewport = panelViewport(stdout?.columns ?? 80, stdout?.rows ?? 30)
@@ -2791,9 +2791,9 @@ function ProviderDiscoveryPanel({ target, baseURL, apiKey, configured, discover,
 function ProviderConfirmPanel({ target, kind, confirm, done, back }: {
   target: ProviderTargetView
   kind: 'credential' | 'provider'
-  confirm(target: ProviderTargetView): Promise<void>
-  done(): void
-  back(): void
+  confirm: (target: ProviderTargetView) => Promise<void>
+  done: () => void
+  back: () => void
 }): ReactElement {
   const stdout = useStdout().stdout
   const viewport = panelViewport(stdout?.columns ?? 80, stdout?.rows ?? 30)
@@ -2851,7 +2851,7 @@ function HelpPanel({ descriptors, skills, commandError, skillError, onClose }: {
   skills: readonly SkillRow[]
   commandError: string | undefined
   skillError: string | undefined
-  onClose(): void
+  onClose: () => void
 }): ReactElement {
   const stdout = useStdout().stdout
   const columns = stdout?.columns ?? 80
@@ -2987,9 +2987,9 @@ function waveRowSpans(cells: readonly ComposerCell[]): ReactElement[] {
   const spans: ReactElement[] = []
   let start = 0
   while (start < cells.length) {
-    const cell = cells[start]!
+    const cell = cells[start]
     let end = start + 1
-    while (end < cells.length && sameCellStyle(cells[end]!, cell)) end += 1
+    while (end < cells.length && sameCellStyle(cells[end], cell)) end += 1
     spans.push(createElement(
       Text,
       {
@@ -3012,7 +3012,7 @@ function cellIndexAtColumn(cells: readonly ComposerCell[], target: number): numb
   let column = 0
   for (let index = 0; index < cells.length; index += 1) {
     if (column === target) return index
-    column += cells[index]!.width ?? visibleColumns(cells[index]!.char)
+    column += cells[index].width ?? visibleColumns(cells[index].char)
     if (column > target) return undefined
   }
   return undefined
@@ -3089,7 +3089,7 @@ interface ComposerWaveProps {
   /** Fires EXACTLY ONCE when this sweep ends for any reason — completed,
    * cancelled by the gate, or unmounted (a modal panel froze the composer) —
    * so Input's played-key latch survives the leaf's unmount/remount cycle. */
-  onSettled(): void
+  onSettled: () => void
 }
 
 /**
@@ -3166,9 +3166,9 @@ function ComposerWave(props: ComposerWaveProps): ReactElement {
       const word = tier === 'unknown' ? 'Into the Unknown' : 'deepseek'
       const start = Math.max(2, Math.floor((props.bandWidth - word.length) / 2))
       const indices = Array.from({ length: word.length }, (_, at) => cellIndexAtColumn(cells, start + at))
-      if (indices.every(index => index !== undefined && (cells[index]!.char === ' ' || cells[index]!.dim === true))) {
+      if (indices.every(index => index !== undefined && (cells[index].char === ' ' || cells[index].dim === true))) {
         for (let at = 0; at < word.length; at += 1) {
-          const cell = cells[indices[at]!]!
+          const cell = cells[indices[at]!]
           cell.char = word[at]!
           cell.width = 1
           cell.color = inkColor(deepseekWaveWordHue(at, hues))
@@ -3180,11 +3180,11 @@ function ComposerWave(props: ComposerWaveProps): ReactElement {
     if (bandRow === middleBandRow && (tier === 'deepseek' || tier === 'unknown') && style === 'wave') {
       const spark = deepseekWaveSpark(tick)
       const lastIndex = cellIndexAtColumn(cells, props.bandWidth - 1)
-      if (spark !== null && lastIndex !== undefined && cells[lastIndex]!.char === ' ') {
-        cells[lastIndex]!.char = spark
-        cells[lastIndex]!.color = props.promptColor
-        cells[lastIndex]!.bold = true
-        cells[lastIndex]!.dim = false
+      if (spark !== null && lastIndex !== undefined && cells[lastIndex].char === ' ') {
+        cells[lastIndex].char = spark
+        cells[lastIndex].color = props.promptColor
+        cells[lastIndex].bold = true
+        cells[lastIndex].dim = false
       }
     }
     return createElement(Text, { key: `editor-${sourceIndex}`, wrap: 'truncate-end' }, ...waveRowSpans(cells))
@@ -3295,7 +3295,7 @@ function entryKindLabel(entry: TranscriptEntry | undefined): string {
  * retained entry is converted to physical rows, but only one viewport slice
  * reaches Ink, so even a huge reasoning block cannot grow the dynamic tree.
  */
-function VerbosePanel({ entries, onClose }: { entries: readonly TranscriptEntry[]; onClose(): void }): ReactElement {
+function VerbosePanel({ entries, onClose }: { entries: readonly TranscriptEntry[]; onClose: () => void }): ReactElement {
   const stdout = useStdout().stdout
   const columns = stdout?.columns ?? 80
   const rows = stdout?.rows ?? 30
@@ -3628,91 +3628,91 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
   busy: boolean
   descriptors: readonly CommandDescriptor[]
   skills: readonly SkillRow[]
-  dispatch(text: string, attachments?: readonly ContentBlock[], origin?: string): void
+  dispatch: (text: string, attachments?: readonly ContentBlock[], origin?: string) => void
   /** The full current session identity ('' while pending); the delivery origin. */
   sessionKey: string
-  interrupt(): boolean
-  quit(): void
-  openModel(): void
-  openEffort(): void
-  openHelp(): void
-  openMode(): void
-  openPermission(): void
-  openResume(): void
+  interrupt: () => boolean
+  quit: () => void
+  openModel: () => void
+  openEffort: () => void
+  openHelp: () => void
+  openMode: () => void
+  openPermission: () => void
+  openResume: () => void
   /** Open the /search panel with an optional seed query. */
-  openSearch(query: string): void
-  openPlugin(query?: string): void
+  openSearch: (query: string) => void
+  openPlugin: (query?: string) => void
   /** Open the /update panel (aligned upgrade surface). */
-  openUpdate(): void
+  openUpdate: () => void
   /** Open the /schedule reminder panel (read-only catalog). */
-  openSchedule(): void
-  openJobs(): void
-  openStatusline(): void
-  openTheme(): void
+  openSchedule: () => void
+  openJobs: () => void
+  openStatusline: () => void
+  openTheme: () => void
   /** Open the /language picker (bare /language). */
-  openLanguage(): void
+  openLanguage: () => void
   /** Apply and persist a language chosen by argument. */
-  saveLanguage(name: LanguageName): void
-  openHistory(): void
-  openQueue(): void
+  saveLanguage: (name: LanguageName) => void
+  openHistory: () => void
+  openQueue: () => void
   /** Open the /agents panel (live subagent feed + transcript entry). */
-  openAgents(): void
+  openAgents: () => void
   /** Open the /subagent model panel. */
-  openSubagent(): void
+  openSubagent: () => void
   /** Open the /todos subpage (full todo list in one bounded panel). */
-  openTodos(): void
+  openTodos: () => void
   /** Open the /resume picker in delete mode, optionally pre-armed on one id. */
-  openDelete(id?: string): void
-  openDiff(argument: string): void
-  reviewChanges(selection: ReviewSelection): void
+  openDelete: (id?: string) => void
+  openDiff: (argument: string) => void
+  reviewChanges: (selection: ReviewSelection) => void
   /** Open the /review candidate picker (bare /review). */
-  openReviewPicker(): void
+  openReviewPicker: () => void
   /** The row id awaiting y/n in this box, when a deletion is pending. */
   deleteConfirm?: string
   /** Confirm the pending deletion (y in the box). */
-  confirmDelete(): void
+  confirmDelete: () => void
   /** Cancel the pending deletion (any other key in the box). */
-  cancelDelete(): void
-  createSession(mode?: string): void
-  forkSession(argument: string): void
-  cancelSessionSwitch(): boolean
-  notify(text: string, tone?: NoticeTone): void
+  cancelDelete: () => void
+  createSession: (mode?: string) => void
+  forkSession: (argument: string) => void
+  cancelSessionSwitch: () => boolean
+  notify: (text: string, tone?: NoticeTone) => void
   /** Apply the Ctrl+R passthrough to the detected editor (/vscode-keys); resolves to a one-line summary. */
-  applyEditorKeys(): Promise<string>
+  applyEditorKeys: () => Promise<string>
   hasNotice: boolean
-  dismissNotice(): void
-  toggleReasoning(): void
-  openVerbose(): void
-  clearView(): void
-  refresh(): void
-  loadMentions(query: string, signal?: AbortSignal): Promise<readonly MentionCandidate[]>
-  inspectImages(paths: readonly string[]): Promise<readonly ImagePathInspection[]>
-  prepareImages(paths: readonly string[], signal?: AbortSignal): Promise<readonly ImageBlock[]>
-  inspectFiles(paths: readonly string[]): Promise<readonly FilePathInspection[]>
-  prepareFiles(paths: readonly string[], signal?: AbortSignal): Promise<readonly FileBlock[]>
-  cycleMode(): string
-  exportTranscript(argument: string): Promise<void>
-  renameTitle(argument: string): string
-  copyLastResponse(): Promise<string>
+  dismissNotice: () => void
+  toggleReasoning: () => void
+  openVerbose: () => void
+  clearView: () => void
+  refresh: () => void
+  loadMentions: (query: string, signal?: AbortSignal) => Promise<readonly MentionCandidate[]>
+  inspectImages: (paths: readonly string[]) => Promise<readonly ImagePathInspection[]>
+  prepareImages: (paths: readonly string[], signal?: AbortSignal) => Promise<readonly ImageBlock[]>
+  inspectFiles: (paths: readonly string[]) => Promise<readonly FilePathInspection[]>
+  prepareFiles: (paths: readonly string[], signal?: AbortSignal) => Promise<readonly FileBlock[]>
+  cycleMode: () => string
+  exportTranscript: (argument: string) => Promise<void>
+  renameTitle: (argument: string) => string
+  copyLastResponse: () => Promise<string>
   /** Newest-first recall space (persistent + in-session, deduped). */
   recallSpace: readonly string[]
   /** Record one in-session submission (deduped, local only). */
-  recordLocal(text: string): void
+  recordLocal: (text: string) => void
   /** Persist one submission to the global history file. */
-  recordHistory(text: string): void
+  recordHistory: (text: string) => void
   /** Next-turn inbox rows, ordered exactly as the durable inbox. */
   queued: readonly Extract<TranscriptEntry, { kind: 'pending' }>[]
-  updateQueued?(messageId: string, action: QueueMutation): void
+  updateQueued?: (messageId: string, action: QueueMutation) => void
   /** Accepted /history entry waiting to be placed into the composer. */
   historyFill: { text: string; index: number } | undefined
   /** Marks the accepted entry consumed (called after the fill is applied). */
-  historyConsumed(): void
+  historyConsumed: () => void
   /** Whether timed animations run (shimmer, chase, blink, wave). */
   animations: boolean
   /** Apply and report one /animation toggle (App persists through the runner). */
-  applyAnimations(enabled: boolean): void
+  applyAnimations: (enabled: boolean) => void
   /** Reroll or pin the rainbow palette (switches to rainbow if needed). */
-  applyRainbow(seed?: number): void
+  applyRainbow: (seed?: number) => void
   /** Monotonic id of the in-flight /rainbow composer burst; 0 means none. */
   rainbowBurstId: number
   /** DeepSeek easter-egg wave tier of the applied route (null otherwise):
@@ -3733,10 +3733,10 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
    * background process sharing the console cannot keep it overwritten. */
   tabTitle: string
   /** Reports the editor's current physical row count so the live budget stays exact. */
-  onEditorRows(rows: number): void
+  onEditorRows: (rows: number) => void
   /** Reports the open completion menu's physical row count (0 when closed)
    * for the same reason: the dynamic budget must reserve it, not overflow. */
-  onMenuRows(rows: number): void
+  onMenuRows: (rows: number) => void
 }): ReactElement {
   const { stdout: inputStdout } = useStdout()
   const columns = inputStdout?.columns ?? 80
@@ -3839,7 +3839,11 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
     if (stdin === undefined) return
     const originalRead = stdin.read.bind(stdin)
     const patchedRead = function patchedRead(this: typeof stdin, ...args: Parameters<typeof originalRead>) {
-      const chunk = originalRead(...args)
+      // `Readable.read` is declared `any`; the assertion names its real result
+      // union once so the normalization and the focus-event stripping below
+      // stay type-checked. Node hands back a Buffer unless an encoding was set,
+      // and null once the stream ends.
+      const chunk = originalRead(...args) as string | Buffer | null
       if (chunk === null) return chunk
       const normalized = normalizeKeyboardChunk(typeof chunk === 'string' ? chunk : String(chunk))
       const input = focusReporting
@@ -3860,7 +3864,7 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
     } as typeof stdin.read
     stdin.read = patchedRead
     return () => {
-      stdin.read = originalRead as typeof stdin.read
+      stdin.read = originalRead
     }
   }, [focusReporting, stdin])
 
@@ -4348,7 +4352,7 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
       const forwardDelete = rawEditorTokens.current?.some(token =>
         token.kind === 'delete-forward' || token.kind === 'delete-word-forward') === true
       if (forwardDelete) {
-        updateQueued?.(queued[queued.length - 1]!.messageId, { kind: 'remove' })
+        updateQueued?.(queued[queued.length - 1].messageId, { kind: 'remove' })
         return
       }
     }
@@ -4910,7 +4914,7 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
   // spacer or a second blink timer.
   const editorRows: ReactElement[] = []
   for (let index = editorWindowStart; index < Math.min(editorViewModel.rows.length, editorWindowStart + editorWindowRows); index += 1) {
-    const row = editorViewModel.rows[index]!
+    const row = editorViewModel.rows[index]
     const parts = editorRowParts(row, index, caret.row, clampedCursor, !preparingImages)
     const placeholder = index === 0 && value === '' && !busy && !preparingImages
     const tail = placeholder ? composerPlaceholder() : parts.after
@@ -5209,7 +5213,13 @@ export function computeSettledRows(
 
 /** The whole terminal app; state arrives via the store, output via Ink. */
 export function App(props: AppProps): ReactElement {
-  const view = useSyncExternalStore(props.store.subscribe, props.store.getView)
+  // The stores are closure-backed singletons whose methods never touch `this`,
+  // but a bare method reference still detaches it from its receiver. One stable
+  // wrapper per store keeps both the receiver and the reference identity the
+  // `useSyncExternalStore` contract requires.
+  const subscribeTranscript = useCallback((listener: () => void) => props.store.subscribe(listener), [props.store])
+  const readTranscript = useCallback(() => props.store.getView(), [props.store])
+  const view = useSyncExternalStore(subscribeTranscript, readTranscript)
   // Terminal input anchor: Ink reference-counts raw mode across every active
   // `useInput` hook, so mutually exclusive surfaces (composer <-> approval
   // bar <-> panels) drop the count to zero inside each handoff commit — the
@@ -5231,8 +5241,10 @@ export function App(props: AppProps): ReactElement {
   // process-stable, so one callback per view identity is enough.
   const readDescriptors = useCallback(() => props.commands.descriptors, [props.commands])
   const readSkills = useCallback(() => props.skills.rows, [props.skills])
-  const descriptors = useSyncExternalStore(props.commands.subscribe, readDescriptors)
-  const skills = useSyncExternalStore(props.skills.subscribe, readSkills)
+  const subscribeCommands = useCallback((listener: () => void) => props.commands.subscribe(listener), [props.commands])
+  const subscribeSkills = useCallback((listener: () => void) => props.skills.subscribe(listener), [props.skills])
+  const descriptors = useSyncExternalStore(subscribeCommands, readDescriptors)
+  const skills = useSyncExternalStore(subscribeSkills, readSkills)
   const [modelLabel, setModelLabel] = useState(props.model)
   const [modelOpen, setModelOpen] = useState(false)
   /** Nested /model stages; only one owns terminal input at a time. */
@@ -5462,9 +5474,15 @@ export function App(props: AppProps): ReactElement {
     [view.entries, view.pending],
   )
   const [refreshEpoch, setRefreshEpoch] = useState(0)
-  const approvalSnapshot = useSyncExternalStore(props.approval.subscribe, props.approval.getSnapshot)
-  const questionSnapshot = useSyncExternalStore(props.questions.subscribe, props.questions.getSnapshot)
-  const agentRows = useSyncExternalStore(props.subagents.subscribe, props.subagents.getSnapshot)
+  const subscribeApproval = useCallback((listener: () => void) => props.approval.subscribe(listener), [props.approval])
+  const readApprovalSnapshot = useCallback(() => props.approval.getSnapshot(), [props.approval])
+  const subscribeQuestions = useCallback((listener: () => void) => props.questions.subscribe(listener), [props.questions])
+  const readQuestionSnapshot = useCallback(() => props.questions.getSnapshot(), [props.questions])
+  const subscribeSubagents = useCallback((listener: () => void) => props.subagents.subscribe(listener), [props.subagents])
+  const readAgentRows = useCallback(() => props.subagents.getSnapshot(), [props.subagents])
+  const approvalSnapshot = useSyncExternalStore(subscribeApproval, readApprovalSnapshot)
+  const questionSnapshot = useSyncExternalStore(subscribeQuestions, readQuestionSnapshot)
+  const agentRows = useSyncExternalStore(subscribeSubagents, readAgentRows)
   const approvalPending = approvalSnapshot.pending !== undefined
   const questionPending = questionSnapshot.pending !== undefined
   // While any modal owns the keys, the prompt box passes everything through.
@@ -5673,6 +5691,10 @@ export function App(props: AppProps): ReactElement {
   )
   if (liveAudit.warning !== undefined && budgetWarnRef.current !== liveAudit.warning) {
     budgetWarnRef.current = liveAudit.warning
+    // The budget tripwire is a last-resort diagnostic: it fires only when the
+    // live/static allocation already broke its contract, and Ink owns/shadows
+    // console output. Everywhere else the TUI must never write to stdout.
+    // eslint-disable-next-line no-console -- see the tripwire note above
     console.warn(`[dsh-code] ${liveAudit.warning}`)
   }
   const auditedLiveLines = liveAudit.allocation.live === visibleLiveLines.length
@@ -5819,7 +5841,7 @@ export function App(props: AppProps): ReactElement {
     const seen = new Set<string>()
     for (const row of providerDirectory?.rows ?? []) {
       for (const model of row.configuration.models) {
-        const raw = (model.extras as Record<string, unknown> | undefined)?.reasoningEfforts
+        const raw = (model.extras)?.reasoningEfforts
         if (!isDeclaredReasoningEfforts(raw)) continue
         const key = row.provider + '/' + model.id
         if (seen.has(key)) continue
@@ -5884,7 +5906,7 @@ export function App(props: AppProps): ReactElement {
         save: props.saveModelProviderConfiguration,
         saveCredential: props.saveModelProviderCredential,
         discover: props.discoverModelProvider
-          ?? (async () => { throw new Error('model discovery is unavailable in this profile; enter models by hand') }),
+          ?? (() => Promise.reject(new Error('model discovery is unavailable in this profile; enter models by hand'))),
         done: result => {
           const target = providerAction.target
           setProviderAction(undefined)
@@ -5999,7 +6021,7 @@ export function App(props: AppProps): ReactElement {
             setEffortFor(row)
             return
           }
-          const effortId = row.reasoning?.efforts.length === 1 ? row.reasoning.efforts[0]!.id : undefined
+          const effortId = row.reasoning?.efforts.length === 1 ? row.reasoning.efforts[0].id : undefined
           applyModel(row, effortId)
         },
         ...(props.loadModelProviders === undefined || props.saveModelProviderConfiguration === undefined

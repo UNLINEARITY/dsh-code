@@ -346,11 +346,11 @@ export function themeFlow(): ThemeFlow | undefined {
 export function surfaceAccent(index: number, base: RgbTriple): RgbTriple {
   if (isPrismatic()) {
     const ring = ACCENT_RING
-    return ring[((index % ring.length) + ring.length) % ring.length]!
+    return ring[((index % ring.length) + ring.length) % ring.length]
   }
   if (isRainbow()) {
     const ring = rainbowRoll().ring
-    return ring[((index % ring.length) + ring.length) % ring.length]!
+    return ring[((index % ring.length) + ring.length) % ring.length]
   }
   return base
 }

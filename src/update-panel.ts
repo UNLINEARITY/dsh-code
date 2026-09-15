@@ -121,13 +121,13 @@ export function updateFooter(phase: UpdatePhase, runnable: boolean, upToDate: bo
  */
 export function UpdatePanel({ probe, apply, close, notify }: {
   /** Read-only probe of the launcher update status (never installs). */
-  probe(): Promise<LauncherUpdateStatus>
+  probe: () => Promise<LauncherUpdateStatus>
   /** Run the aligned update; streams sanitized progress lines. */
-  apply(onLine: (line: string) => void, plan: LauncherUpdateStatus['plan']): Promise<number>
+  apply: (onLine: (line: string) => void, plan: LauncherUpdateStatus['plan']) => Promise<number>
   /** Close the panel (App keeps ownership of the flag). */
-  close(): void
+  close: () => void
   /** One bounded cross-surface notice (phase completions). */
-  notify(text: string, tone?: 'info' | 'warning' | 'error'): void
+  notify: (text: string, tone?: 'info' | 'warning' | 'error') => void
 }): ReactElement {
   const [phase, setPhase] = useState<UpdatePhase>('probe')
   const [status, setStatus] = useState<LauncherUpdateStatus>()

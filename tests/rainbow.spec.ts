@@ -70,7 +70,7 @@ describe('rainbow roll', () => {
     for (let seed = 0; seed < 24; seed += 1) {
       const { toneColors } = rollRainbow(seed)
       for (let i = 1; i < TONE_ORDER.length; i += 1) {
-        expect(toneColors[TONE_ORDER[i]!]).not.toEqual(toneColors[TONE_ORDER[i - 1]!])
+        expect(toneColors[TONE_ORDER[i]]).not.toEqual(toneColors[TONE_ORDER[i - 1]])
       }
     }
   })
@@ -87,7 +87,7 @@ describe('rainbow roll', () => {
     expect(flowAnchors).toHaveLength(RAINBOW_POOL.length)
     const hues = flowAnchors.map(hueOf)
     for (let i = 1; i < hues.length; i += 1) {
-      expect(hues[i]!).toBeGreaterThanOrEqual(hues[i - 1]!)
+      expect(hues[i]).toBeGreaterThanOrEqual(hues[i - 1])
     }
     expect(flowPhaseMs).toBeGreaterThanOrEqual(0)
     expect(flowPhaseMs).toBeLessThan(2400)

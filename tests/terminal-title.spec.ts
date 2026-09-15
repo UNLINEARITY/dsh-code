@@ -126,11 +126,15 @@ describe('App tab label over real streams', () => {
   const noop = (): void => {}
   const approvalSnapshot = Object.freeze({ pending: undefined, answered: false, queued: 0 })
   const questionSnapshot = Object.freeze({ pending: undefined })
+  // Frozen ONCE here, not inside the getter: `Object.freeze([])` in the arrow
+  // would build a fresh array per call, so useSyncExternalStore would see a new
+  // identity every render and spin into "Maximum update depth exceeded".
+  const emptyAgents = Object.freeze([])
 
   function appProps(store: ReturnType<typeof createTranscriptStore>): AppProps {
     return {
       store,
-      subagents: { subscribe: () => unsubscribe, getSnapshot: () => Object.freeze([]), getTotalSeen: () => 0 },
+      subagents: { subscribe: () => unsubscribe, getSnapshot: () => emptyAgents, getTotalSeen: () => 0 },
       approval: { subscribe: () => unsubscribe, getSnapshot: () => approvalSnapshot },
       questions: { subscribe: () => unsubscribe, getSnapshot: () => questionSnapshot, submit: noop, cancel: noop },
       commands: { descriptors: [], subscribe: () => unsubscribe },
@@ -159,7 +163,7 @@ describe('App tab label over real streams', () => {
       clearSubagentModel: noop,
       deleteSession: async () => '',
       cycleMode: () => '',
-      setPermission: id => id,
+      setPermission: (id: string) => id,
       exportTranscript: async () => {},
       renameTitle: () => '',
       copyLastResponse: async () => '',
@@ -167,7 +171,7 @@ describe('App tab label over real streams', () => {
       reviewChanges: noop,
       loadPresets: async () => [],
       loadPermissions: async () => [],
-      switchMode: async id => id,
+      switchMode: async (id: string) => id,
       createSession: noop,
       forkSession: noop,
       loadSessions: async () => [],

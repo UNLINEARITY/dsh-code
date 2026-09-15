@@ -5,9 +5,10 @@ import {
   createAssistantMessage,
   createToolResultMessage,
   createUserMessage,
-  type CallId,
+  ToolCallId,
 } from '@deepseek-ai/dsh-llm'
-import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import { AttachmentId, type FileAttachmentRef, type ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
+import { SessionSeq, type SessionEvent } from '@deepseek-ai/dsh-session'
 import type { ToolEntry, WorkflowEntry } from '../src/render/projection.ts'
 import {
   applyAssistantStreamChunk,
@@ -24,15 +25,16 @@ import {
   snapshotReplayView,
 } from '../src/render/projection.ts'
 
-const callId = { current: 'c1' as CallId }
+const callId = { current: ToolCallId('c1') }
 
 function userEvent(text: string, seq: number): SessionEvent {
   return {
     type: 'user/message',
-    seq,
+    seq: SessionSeq(seq),
     time: 0,
+    surfaceOp: 'append',
     data: createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } }),
-  } as SessionEvent
+  }
 }
 
 // Session-log v2+ keeps durable logs settlement-only: the live typing buffers
@@ -53,8 +55,9 @@ function streamReasoning(acc: ReturnType<typeof createReplayAccumulator>, text: 
 function assistantEvent(text: string, seq: number): SessionEvent {
   return {
     type: 'assistant/message',
-    seq,
+    seq: SessionSeq(seq),
     time: 0,
+    surfaceOp: 'append',
     data: {
       turn: 1,
       step: 1,
@@ -64,23 +67,24 @@ function assistantEvent(text: string, seq: number): SessionEvent {
         source: { provider: 'p', model: 'm' },
       }),
     },
-  } as SessionEvent
+  }
 }
 
-function toolCallEvent(name: string, id: CallId, seq: number): SessionEvent {
+function toolCallEvent(name: string, id: ToolCallId, seq: number): SessionEvent {
   return {
     type: 'tool/call',
-    seq,
+    seq: SessionSeq(seq),
     time: 0,
     data: { turn: 1, step: 1, callId: id, name, arguments: '{"path":"a.ts"}' },
-  } as SessionEvent
+  }
 }
 
-function toolResultEvent(id: CallId, text: string, isError: boolean, seq: number): SessionEvent {
+function toolResultEvent(id: ToolCallId, text: string, isError: boolean, seq: number): SessionEvent {
   return {
     type: 'tool/result',
-    seq,
+    seq: SessionSeq(seq),
     time: 0,
+    surfaceOp: 'append',
     data: {
       turn: 1,
       step: 1,
@@ -90,7 +94,7 @@ function toolResultEvent(id: CallId, text: string, isError: boolean, seq: number
         isError,
       }),
     },
-  } as SessionEvent
+  }
 }
 
 describe('replay equivalence (property)', () => {
@@ -102,9 +106,9 @@ describe('replay equivalence (property)', () => {
       return seed / 0x1_0000_0000
     }
     const attemptEvent = (text: string, seq: number): SessionEvent => ({
-      type: 'assistant/attempt', seq, time: 0,
+      type: 'assistant/attempt', seq: SessionSeq(seq), time: 0,
       data: { turn: 1, step: 1, stream: [{ type: 'text-chunks', time0: 0, index: 0, dt: [1], texts: [text] }] },
-    } as SessionEvent)
+    })
     const systemEvent = (text: string, seq: number): SessionEvent => ({
       type: 'system/message', seq, time: 0, surfaceOp: 'append',
       data: { turn: 1, step: 1, message: { role: 'system', id: 's' + seq, content: text === '' ? [] : [{ type: 'text', text }], source: { kind: 'plugin', plugin: 'system-prompt' } } },
@@ -115,7 +119,7 @@ describe('replay equivalence (property)', () => {
       const events: SessionEvent[] = []
       let seq = 1
       for (let index = 0; index < length; index += 1) {
-        const builder = builders[Math.floor(rand() * builders.length)]!
+        const builder = builders[Math.floor(rand() * builders.length)]
         events.push(builder(`t${trial}-${index}`, seq++))
       }
       const replayed = projectEvents(events)
@@ -126,9 +130,9 @@ describe('replay equivalence (property)', () => {
 
   it('projectEvents is deterministic for repeated folds of the same log', () => {
     const attemptEvent = (text: string, seq: number): SessionEvent => ({
-      type: 'assistant/attempt', seq, time: 0,
+      type: 'assistant/attempt', seq: SessionSeq(seq), time: 0,
       data: { turn: 1, step: 1, stream: [{ type: 'text-chunks', time0: 0, index: 0, dt: [1], texts: [text] }] },
-    } as SessionEvent)
+    })
     const events = [
       userEvent('one', 1),
       attemptEvent('partial ', 2),
@@ -145,17 +149,17 @@ describe('transcript projection', () => {
   })
 
   it('projects durable image metadata without paths or encoded bytes', () => {
-    const attachment = {
-      attachmentId: 'sha-1', mediaType: 'image/png', bytes: 128,
+    const attachment: ImageAttachmentRef = {
+      attachmentId: AttachmentId('sha-1'), mediaType: 'image/png', bytes: 128,
       width: 20, height: 10, name: 'diagram.png', originalDimensions: { width: 80, height: 40 },
     }
-    const event = {
-      type: 'user/message', seq: 1, time: 0,
+    const event: SessionEvent = {
+      type: 'user/message', seq: SessionSeq(1), time: 0, surfaceOp: 'append',
       data: createUserMessage({
         content: [{ type: 'text', text: 'inspect' }, { type: 'image', attachment }],
         source: { kind: 'user' },
       }),
-    } as unknown as SessionEvent
+    }
     const sequential = projectEvent(createTranscriptView(), event)
     const replay = projectEvents([event])
     expect(sequential).toEqual(replay)
@@ -166,14 +170,14 @@ describe('transcript projection', () => {
   })
 
   it('projects durable file blocks alongside images without exposing paths', () => {
-    const file = { attachmentId: 'sha-f1', name: 'report.pdf', bytes: 2_048 }
-    const event = {
-      type: 'user/message', seq: 1, time: 0,
+    const file: FileAttachmentRef = { attachmentId: AttachmentId('sha-f1'), name: 'report.pdf', bytes: 2_048 }
+    const event: SessionEvent = {
+      type: 'user/message', seq: SessionSeq(1), time: 0, surfaceOp: 'append',
       data: createUserMessage({
         content: [{ type: 'text', text: 'summarize' }, { type: 'file', attachment: file }],
         source: { kind: 'user' },
       }),
-    } as unknown as SessionEvent
+    }
     const sequential = projectEvent(createTranscriptView(), event)
     const replay = projectEvents([event])
     expect(sequential).toEqual(replay)
@@ -217,8 +221,9 @@ describe('transcript projection', () => {
     expect(snapshotReplayView(acc).streamingReasoning).toBe('let me think')
     replayProjectEvent(acc, {
       type: 'assistant/message',
-      seq: 3,
+      seq: SessionSeq(3),
       time: 3,
+      surfaceOp: 'append',
       data: {
         turn: 1,
         step: 1,
@@ -228,9 +233,10 @@ describe('transcript projection', () => {
             { type: 'reasoning', text: 'let me think' },
             { type: 'text', text: 'here is the answer' },
           ],
+          source: { provider: 'p', model: 'm' },
         }),
       },
-    } as unknown as SessionEvent)
+    })
     const view = snapshotReplayView(acc)
     expect(view.streamingReasoning).toBe('')
     expect(view.entries).toEqual([{
@@ -277,7 +283,7 @@ describe('transcript projection', () => {
     expect(view.entries).toStrictEqual([])
     // Settlement appends one assistant entry from the assembled message.
     replayProjectEvent(acc, {
-      type: 'assistant/message', seq: 5, time: 0,
+      type: 'assistant/message', seq: SessionSeq(5), time: 0, surfaceOp: 'append',
       data: {
         turn: 1,
         step: 1,
@@ -290,7 +296,7 @@ describe('transcript projection', () => {
           source: { provider: 'p', model: 'm' },
         }),
       },
-    } as SessionEvent)
+    })
     view = snapshotReplayView(acc)
     expect(view.entries).toEqual([{
       kind: 'assistant',
@@ -315,8 +321,9 @@ describe('transcript projection', () => {
     streamReasoning(acc, 'second segment', 3)
     replayProjectEvent(acc, {
       type: 'assistant/message',
-      seq: 4,
+      seq: SessionSeq(4),
       time: 0,
+      surfaceOp: 'append',
       data: {
         turn: 1,
         step: 1,
@@ -327,9 +334,10 @@ describe('transcript projection', () => {
             { type: 'text', text: 'partial' },
             { type: 'reasoning', text: 'second segment' },
           ],
+          source: { provider: 'p', model: 'm' },
         }),
       },
-    } as unknown as SessionEvent)
+    })
     expect(snapshotReplayView(acc).entries).toEqual([{
       kind: 'assistant',
       text: 'partial',
@@ -344,7 +352,7 @@ describe('transcript projection', () => {
     streamText(acc, 'answer', 2)
     expect(snapshotReplayView(acc).streamingReasoning.length).toBeLessThanOrEqual(65_536)
     replayProjectEvent(acc, {
-      type: 'assistant/message', seq: 3, time: 0,
+      type: 'assistant/message', seq: SessionSeq(3), time: 0, surfaceOp: 'append',
       data: {
         turn: 1,
         step: 1,
@@ -354,7 +362,7 @@ describe('transcript projection', () => {
           source: { provider: 'p', model: 'm' },
         }),
       },
-    } as SessionEvent)
+    })
     expect(snapshotReplayView(acc).entries[0]).toEqual({ kind: 'assistant', text: 'answer', reasoning: huge })
   })
 
@@ -380,20 +388,20 @@ describe('transcript projection', () => {
     const live = liveAcc()
     replayProjectEvent(live, { type: 'step/start', seq: 1, time: 1_000, data: { turn: 1, step: 1 } } as SessionEvent)
     streamText(live, 'first', 1_100)
-    replayProjectEvent(live, { type: 'assistant/attempt', seq: 2, time: 1_200, data: { turn: 1, step: 1, stream: attemptStream(1_100) } } as SessionEvent)
+    replayProjectEvent(live, { type: 'assistant/attempt', seq: SessionSeq(2), time: 1_200, data: { turn: 1, step: 1, stream: attemptStream(1_100) } })
     streamText(live, 'retry', 1_300)
     replayProjectEvent(live, {
-      type: 'assistant/message', seq: 3, time: 2_000,
+      type: 'assistant/message', seq: SessionSeq(3), time: 2_000, surfaceOp: 'append',
       data: { turn: 1, step: 1, stream: attemptStream(1_300), message: createAssistantMessage({ content: [{ type: 'text', text: 'ok' }], source: { provider: 'p', model: 'm' } }) },
-    } as unknown as SessionEvent)
+    })
     // Replay: the same durable log through the pure settlement path.
     const replayed = projectEvents([
       { type: 'step/start', seq: 1, time: 1_000, data: { turn: 1, step: 1 } } as SessionEvent,
-      { type: 'assistant/attempt', seq: 2, time: 1_200, data: { turn: 1, step: 1, stream: attemptStream(1_100) } } as SessionEvent,
+      { type: 'assistant/attempt', seq: SessionSeq(2), time: 1_200, data: { turn: 1, step: 1, stream: attemptStream(1_100) } },
       {
-        type: 'assistant/message', seq: 3, time: 2_000,
+        type: 'assistant/message', seq: SessionSeq(3), time: 2_000, surfaceOp: 'append',
         data: { turn: 1, step: 1, stream: attemptStream(1_300), message: createAssistantMessage({ content: [{ type: 'text', text: 'ok' }], source: { provider: 'p', model: 'm' } }) },
-      } as unknown as SessionEvent,
+      },
     ])
     expect(snapshotReplayView(live).stats.ttftMs).toBe(replayed.stats.ttftMs)
     expect(snapshotReplayView(live).stats.ttftSteps).toBe(replayed.stats.ttftSteps)
@@ -427,9 +435,9 @@ describe('transcript projection', () => {
     streamReasoning(acc, 'half a thought', 1)
     streamText(acc, 'partial answer', 2)
     replayProjectEvent(acc, {
-      type: 'assistant/attempt', seq: 3, time: 3,
+      type: 'assistant/attempt', seq: SessionSeq(3), time: 3,
       data: { turn: 1, step: 1, stream: [] },
-    } as SessionEvent)
+    })
     const view = snapshotReplayView(acc)
     expect(view.entries).toEqual([])
     expect(view.streaming).toBe('')
@@ -439,7 +447,7 @@ describe('transcript projection', () => {
   it('replays authoritative assistant reasoning identically from the durable event log', () => {
     const events: readonly SessionEvent[] = [
       {
-        type: 'assistant/message', seq: 4, time: 0,
+        type: 'assistant/message', seq: SessionSeq(4), time: 0, surfaceOp: 'append',
         data: {
           turn: 1,
           step: 1,
@@ -452,7 +460,7 @@ describe('transcript projection', () => {
             source: { provider: 'p', model: 'm' },
           }),
         },
-      } as SessionEvent,
+      },
     ]
     let sequential = createTranscriptView()
     for (const event of events) sequential = projectEvent(sequential, event)
@@ -465,7 +473,7 @@ describe('transcript projection', () => {
   })
 
   it('pairs tool calls with their results by call id', () => {
-    const other = 'c2' as CallId
+    const other = ToolCallId('c2')
     const view = projectEvents([
       toolCallEvent('read_file', callId.current, 1),
       toolCallEvent('bash', other, 2),
@@ -479,9 +487,9 @@ describe('transcript projection', () => {
   })
 
   it('numbers tool calls globally across turns so badges and errors never renounce', () => {
-    const callA = 'a' as CallId
-    const callB = 'b' as CallId
-    const callC = 'c' as CallId
+    const callA = ToolCallId('a')
+    const callB = ToolCallId('b')
+    const callC = ToolCallId('c')
     const view = projectEvents([
       { type: 'turn/start', seq: 1, time: 0, data: { turn: 1 } } as SessionEvent,
       toolCallEvent('read', callA, 2),
@@ -871,7 +879,7 @@ describe('transcript projection', () => {
       type: 'tool/call', seq, time: 0,
       data: { turn: 1, step: 1, callId: id, name: 'edit', arguments: {} },
     }) as unknown as SessionEvent
-    const toolResult = (id: string, seq: number) => toolResultEvent(id as CallId, 'done', false, seq)
+    const toolResult = (id: string, seq: number) => toolResultEvent(ToolCallId(id), 'done', false, seq)
     // Empty transcript flushes nothing; a transcript with no running work
     // flushes EVERYTHING (the completed tail included — later events only
     // append new rows, so resizes never re-print the conversation).
@@ -959,11 +967,12 @@ describe('transcript projection', () => {
 })
 
 describe('empty assistant settlements', () => {
-  function emptyAssistantEvent(seq: number, interrupted = false): SessionEvent {
+  function emptyAssistantEvent(seq: number, interrupted = false): SessionEvent<'assistant/message'> {
     return {
       type: 'assistant/message',
-      seq,
+      seq: SessionSeq(seq),
       time: 0,
+      surfaceOp: 'append',
       data: {
         turn: 1,
         step: 1,
@@ -974,17 +983,17 @@ describe('empty assistant settlements', () => {
           source: { provider: 'p', model: 'm' },
         }),
       },
-    } as SessionEvent
+    }
   }
 
   it('skips zero-line entries for tool-only steps in both fold paths', () => {
     const events: readonly SessionEvent[] = [
-      { type: 'turn/start', seq: 1, time: 0, data: { turn: 1 } },
+      { type: 'turn/start', seq: SessionSeq(1), time: 0, data: { turn: 1 } },
       toolCallEvent('run_code', callId.current, 2),
       emptyAssistantEvent(3),
       toolResultEvent(callId.current, 'done', false, 4),
       assistantEvent('final answer', 5),
-      { type: 'turn/end', seq: 6, time: 0, data: { turn: 1, reason: { kind: 'completed' } } } as SessionEvent,
+      { type: 'turn/end', seq: SessionSeq(6), time: 0, data: { turn: 1, reason: { kind: 'completed' } } },
     ]
     const view = projectEvents(events)
     // No zero-line assistant card between the tool card and the reply.
@@ -996,8 +1005,8 @@ describe('empty assistant settlements', () => {
 
   it('keeps interrupted empty settlements and timing/usage accounting', async () => {
     const events: readonly SessionEvent[] = [
-      { type: 'turn/start', seq: 1, time: 0, data: { turn: 1 } },
-      { type: 'step/start', seq: 2, time: 100, data: { turn: 1, step: 1 } },
+      { type: 'turn/start', seq: SessionSeq(1), time: 0, data: { turn: 1 } },
+      { type: 'step/start', seq: SessionSeq(2), time: 100, data: { turn: 1, step: 1 } },
       emptyAssistantEvent(3, true),
     ]
     const view = projectEvents(events)
@@ -1005,13 +1014,13 @@ describe('empty assistant settlements', () => {
     expect(entries).toHaveLength(1)
     // The interrupted marker keeps the card renderable even with no text.
     const { transcriptEntryLines } = await import('../src/render/lines.ts')
-    const lines = transcriptEntryLines(entries[0]!, 80, true)
+    const lines = transcriptEntryLines(entries[0], 80, true)
     expect(lines.length).toBeGreaterThan(0)
     expect(lines.some(line => line.segments.some(segment => segment.text.includes('interrupted')))).toBe(true)
     // An empty settlement with usage still feeds the stats it carried.
     const statsView = projectEvents([
-      { type: 'turn/start', seq: 1, time: 0, data: { turn: 1 } },
-      { type: 'step/start', seq: 2, time: 100, data: { turn: 1, step: 1 } },
+      { type: 'turn/start', seq: SessionSeq(1), time: 0, data: { turn: 1 } },
+      { type: 'step/start', seq: SessionSeq(2), time: 100, data: { turn: 1, step: 1 } },
       { ...emptyAssistantEvent(3), data: { ...emptyAssistantEvent(3).data, usage: { inputTokens: 10, outputTokens: 0, cacheReadTokens: 0 } } },
     ])
     expect(statsView.stats.usage.inputTokens).toBe(10)
@@ -1047,7 +1056,7 @@ describe('PTC sub-dispatch projection', () => {
 
   it('folds start/settle pairs into bounded rows on the parent run_code card', () => {
     const events: readonly SessionEvent[] = [
-      { type: 'turn/start', seq: 1, time: 0, data: { turn: 1 } },
+      { type: 'turn/start', seq: SessionSeq(1), time: 0, data: { turn: 1 } },
       toolCallEvent('run_code', callId.current, 2),
       ptcStartEvent(callId.current, 'run:ptc:1', 'read_file', { path: 'a.ts' }, 3, 1_000),
       ptcStartEvent(callId.current, 'run:ptc:2', 'bash', { command: 'ls' }, 4, 1_500),
@@ -1062,10 +1071,10 @@ describe('PTC sub-dispatch projection', () => {
       ['run:ptc:1', 'done', 1_500],
       ['run:ptc:2', 'error', 2_500],
     ])
-    expect(entry.subs[0]!.summary).toBe('ok')
-    expect(entry.subs[1]!.summary).toBe('boom')
+    expect(entry.subs[0].summary).toBe('ok')
+    expect(entry.subs[1].summary).toBe('boom')
     // JSON-normalized sub arguments preview like the native card.
-    expect(entry.subs[0]!.preview).toContain('a.ts')
+    expect(entry.subs[0].preview).toContain('a.ts')
     // Sub durations are display-only: the parent tool/result already owns
     // the wall-clock, so stats.toolMs stays the parent's alone.
     expect(view.stats.toolMs).toBe(0)
@@ -1097,12 +1106,12 @@ describe('PTC sub-dispatch projection', () => {
     const entry = view.entries.find(item => item.kind === 'tool') as ToolEntry
     expect(entry.subs).toHaveLength(MAX_TOOL_SUB_DISPATCHES)
     expect(entry.subsDropped).toBe(3)
-    expect(entry.subs[entry.subs.length - 1]!.subCallId).toBe(`run:ptc:${MAX_TOOL_SUB_DISPATCHES + 2}`)
+    expect(entry.subs[entry.subs.length - 1].subCallId).toBe(`run:ptc:${MAX_TOOL_SUB_DISPATCHES + 2}`)
   })
 
   it('matches between the live fold and the replay fold', () => {
     const events: readonly SessionEvent[] = [
-      { type: 'turn/start', seq: 1, time: 0, data: { turn: 1 } },
+      { type: 'turn/start', seq: SessionSeq(1), time: 0, data: { turn: 1 } },
       toolCallEvent('run_code', callId.current, 2),
       ptcStartEvent(callId.current, 'run:ptc:1', 'read_file', { path: 'a.ts' }, 3, 1_000),
       ptcSettleEvent(callId.current, 'run:ptc:1', 'read_file', 4, 3_000),
@@ -1209,8 +1218,9 @@ describe('context segment estimates', () => {
   it('splits assistant replies into visible text and hidden thinking', () => {
     const view = projectEvent(createTranscriptView(), {
       type: 'assistant/message',
-      seq: 1,
+      seq: SessionSeq(1),
       time: 0,
+      surfaceOp: 'append',
       data: {
         turn: 1,
         step: 1,
@@ -1220,9 +1230,10 @@ describe('context segment estimates', () => {
             { type: 'reasoning', text: 'let me think' },
             { type: 'text', text: 'here is the answer' },
           ],
+          source: { provider: 'p', model: 'm' },
         }),
       },
-    } as unknown as SessionEvent)
+    })
     expect(view.stats.contextSegments).toEqual({ system: 0, prompt: 0, assistant: 5, thinking: 3, tools: 0 })
   })
 
@@ -1510,7 +1521,7 @@ describe('replay accumulator', () => {
     let seq = 1
     let turn = 0
     const time = (): number => Math.floor(rand() * 10_000)
-    const pick = <T,>(list: readonly T[]): T => list[Math.floor(rand() * list.length)]!
+    const pick = <T,>(list: readonly T[]): T => list[Math.floor(rand() * list.length)]
     const push = (type: string, data: unknown): void => {
       events.push({ type, seq: seq++, time: time(), data } as unknown as SessionEvent)
     }
@@ -1585,7 +1596,7 @@ describe('replay accumulator', () => {
           // arrived — exercises the replay's index-miss fallback scans.
           switch (Math.floor(rand() * 4)) {
             case 0:
-              push('tool/result', { turn: 1, step: 1, message: createToolResultMessage({ callId: ('orphan-' + seq) as CallId, content: [{ type: 'text', text: 'orphan result' }], isError: false }) })
+              push('tool/result', { turn: 1, step: 1, message: createToolResultMessage({ callId: ToolCallId('orphan-' + seq), content: [{ type: 'text', text: 'orphan result' }], isError: false }) })
               return
             case 1:
               push('llm/retry-started', { retryId: 'orphan-retry-' + seq, turn: 1, step: 1, retry: 1 })
@@ -1607,7 +1618,7 @@ describe('replay accumulator', () => {
       if (list.length === 0) return
       const id = list.shift()!
       if (rand() < 0.6) {
-        push('user/message', queuedMessages[id]!)
+        push('user/message', queuedMessages[id])
       } else {
         push('agent/inbox/spliced', { target, start: 0, removedCount: 1, inserted: [] })
       }
@@ -1625,13 +1636,13 @@ describe('replay accumulator', () => {
           push('assistant/attempt', { turn: current, step, stream: [{ type: 'text-chunks', time0: 0, index: 0, dt: [1], texts: ['attempt ' + current + '.' + step] }] })
         }
         const toolCount = Math.floor(rand() * 3)
-        const stepCalls: CallId[] = []
+        const stepCalls: ToolCallId[] = []
         for (let t = 0; t < toolCount; t += 1) {
           // Occasionally reuse the previous callId so the replay's multi-index
           // path (duplicate ids update every matching row) is fuzzed too.
           const id = rand() < 0.05 && stepCalls.length > 0
-            ? stepCalls[stepCalls.length - 1]!
-            : (`call-${current}-${step}-${t}` as CallId)
+            ? stepCalls[stepCalls.length - 1]
+            : ToolCallId(`call-${current}-${step}-${t}`)
           stepCalls.push(id)
           push('tool/call', { turn: current, step, callId: id, name: pick(['read_file', 'bash', 'edit']), arguments: '{"path":"a.ts"}' })
         }
@@ -1655,6 +1666,7 @@ describe('replay accumulator', () => {
               ...(rand() < 0.5 ? [{ type: 'reasoning' as const, text: 'let me think' }] : []),
               { type: 'text' as const, text: `answer ${current}.${step}` },
             ],
+            source: { provider: 'p', model: 'm' },
           }),
           ...(usage === undefined ? {} : { usage }),
         })
@@ -1783,9 +1795,9 @@ describe('replay accumulator', () => {
     // lists instead of only touching the last registration.
     const events = [
       { type: 'turn/start', seq: 1, time: 0, data: { turn: 1 } },
-      toolCallEvent('read', 'dup' as CallId, 2),
-      toolCallEvent('edit', 'dup' as CallId, 3), // duplicate callId: two rows share it
-      toolResultEvent('dup' as CallId, 'done', false, 4),
+      toolCallEvent('read', ToolCallId('dup'), 2),
+      toolCallEvent('edit', ToolCallId('dup'), 3), // duplicate callId: two rows share it
+      toolResultEvent(ToolCallId('dup'), 'done', false, 4),
       { type: 'command/run', seq: 5, time: 0, data: { commandId: 'dup-cmd', name: 'compact', args: '', source: { kind: 'user' } } },
       { type: 'command/run', seq: 6, time: 0, data: { commandId: 'dup-cmd', name: 'compact', args: '', source: { kind: 'user' } } },
       { type: 'command/done', seq: 7, time: 0, data: { commandId: 'dup-cmd', kind: 'success', text: 'ok' } },
@@ -1818,7 +1830,7 @@ describe('replay accumulator', () => {
       }
       const kind = orphanKinds[i % orphanKinds.length]
       if (kind === 'tool/result') {
-        events.push({ type: 'tool/result', seq: seq++, time: 0, data: { turn: 1, step: 1, message: createToolResultMessage({ callId: ('orphan-' + i) as CallId, content: [{ type: 'text', text: 'x' }], isError: false }) } } as unknown as SessionEvent)
+        events.push({ type: 'tool/result', seq: seq++, time: 0, data: { turn: 1, step: 1, message: createToolResultMessage({ callId: ToolCallId('orphan-' + i), content: [{ type: 'text', text: 'x' }], isError: false }) } } as unknown as SessionEvent)
       } else if (kind === 'command/done') {
         events.push({ type: 'command/done', seq: seq++, time: 0, data: { commandId: 'orphan-cmd-' + i, kind: 'success', text: 'x' } } as unknown as SessionEvent)
       } else {
@@ -1931,10 +1943,10 @@ describe('settledEntryCount tail invariant', () => {
     // safe optimization for this function.
     const view = projectEvents([
       { type: 'turn/start', seq: 1, time: 0, data: { turn: 1 } },
-      toolCallEvent('read', 'a' as CallId, 2),
-      toolCallEvent('bash', 'b' as CallId, 3),
-      toolCallEvent('edit', 'c' as CallId, 4),
-      toolResultEvent('b' as CallId, 'done', false, 5), // b completes between running a and c
+      toolCallEvent('read', ToolCallId('a'), 2),
+      toolCallEvent('bash', ToolCallId('b'), 3),
+      toolCallEvent('edit', ToolCallId('c'), 4),
+      toolResultEvent(ToolCallId('b'), 'done', false, 5), // b completes between running a and c
     ] as unknown as readonly SessionEvent[])
     expect(view.entries.map(entry => entry.kind)).toEqual(['tool', 'tool', 'tool'])
     expect(view.entries[1]).toMatchObject({ callId: 'b', state: 'done' })

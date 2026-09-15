@@ -722,7 +722,7 @@ export async function discoverProviderModels(
   const draft = hasUrl
     ? {
       ...(oneShotKey !== undefined && oneShotKey !== '' ? { apiKey: oneShotKey } : {}),
-      baseURL: baseURL!,
+      baseURL: baseURL,
       ...target.configuration.api === undefined ? {} : { api: target.configuration.api },
     }
     : {

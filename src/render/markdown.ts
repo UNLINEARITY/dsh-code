@@ -319,7 +319,7 @@ function segmentsWidth(segments: readonly MdSegment[]): number {
 function trimLeadingSpaces(segments: readonly MdSegment[]): readonly MdSegment[] {
   const trimmed = segments.map(segment => ({ ...segment }))
   while (trimmed[0]?.text.startsWith(' ') === true) {
-    const first = trimmed[0]!
+    const first = trimmed[0]
     const text = first.text.replace(/^ +/u, '')
     if (text === '') trimmed.shift()
     else trimmed[0] = { ...first, text }

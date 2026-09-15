@@ -28,7 +28,9 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
       - run: pnpm typecheck
+      - run: pnpm typecheck:tests
       - run: pnpm exec vitest run --retry=2
       - run: pnpm pack --pack-destination dist
       - name: Create the GitHub release with the packed bundle

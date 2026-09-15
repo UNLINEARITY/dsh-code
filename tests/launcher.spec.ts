@@ -27,6 +27,7 @@ import {
   updatePlan,
   updateSteps,
 } from '../bin/deepseek.mjs'
+import type { PackagePeers, SpawnOptions, SpawnProcess } from '../bin/deepseek.mjs'
 
 describe('global launcher aliases', () => {
   it('recognizes wrapper operations without stealing ordinary prompts', () => {
@@ -45,7 +46,7 @@ describe('global launcher aliases', () => {
 
   it('starts dsh with inherited stdio and preserves its exit code', () => {
     const child = new EventEmitter()
-    const calls = []
+    const calls: Array<{ command: string; args: readonly string[]; options: SpawnOptions }> = []
     const previousExitCode = process.exitCode
     try {
       launchDsh(['--help'], (command, args, options) => {
@@ -67,7 +68,7 @@ describe('global launcher aliases', () => {
   it('fails loudly instead of hanging when the cli profile does not mount dsh-code', () => {
     const previousExitCode = process.exitCode
     const previousError = console.error
-    const messages = []
+    const messages: string[] = []
     console.error = (message: unknown) => {
       messages.push(String(message))
     }
@@ -353,7 +354,7 @@ describe('update orchestration', () => {
   })
 
   describe('buildUpdateStatus', () => {
-    const registry = () => ({
+    const registry = (): Record<string, PackagePeers | undefined> => ({
       // view(subject) returns the FIELD value, so the peers map is bare.
       'dsh-code@1.2.0': { '@deepseek-ai/dsh-session': '0.1.5-rc.2' },
     })
@@ -461,9 +462,9 @@ describe('update orchestration', () => {
   })
 
   it('runs update steps in order and stops at the first failure', async () => {
-    const children = []
-    const started = []
-    const fakeSpawn = (command, args) => {
+    const children: EventEmitter[] = []
+    const started: string[] = []
+    const fakeSpawn: SpawnProcess = (command, args) => {
       started.push(`${command} ${args.join(' ')}`)
       const child = new EventEmitter()
       children.push(child)
@@ -492,9 +493,9 @@ describe('update orchestration', () => {
   })
 
   it('reports a best-effort step failure and keeps the sequence running', async () => {
-    const children = []
-    const started = []
-    const fakeSpawn = (command, args) => {
+    const children: EventEmitter[] = []
+    const started: string[] = []
+    const fakeSpawn: SpawnProcess = (command, args) => {
       started.push(`${command} ${args.join(' ')}`)
       const child = new EventEmitter()
       children.push(child)

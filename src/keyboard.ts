@@ -269,7 +269,7 @@ export function tokenizeRawEditorChunk(chunk: string): readonly RawEditorToken[]
       offset += functional.length
       continue
     }
-    const char = chunk[offset]!
+    const char = chunk[offset]
     if (char === '\x7f' || char === '\b') {
       flushText()
       tokens.push({ kind: 'delete-backward' })

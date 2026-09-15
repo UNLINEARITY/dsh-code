@@ -122,7 +122,7 @@ describe('audit fix: orphan retry/command finalization on turn/end', () => {
 
 describe('audit fix: inbox splice keeps upstream order', () => {
   const message = (id: string): ReturnType<typeof createUserMessage> =>
-    createUserMessage({ content: [{ type: 'text', text: id }], source: { kind: 'user' } }) as unknown as ReturnType<typeof createUserMessage>
+    createUserMessage({ content: [{ type: 'text', text: id }], source: { kind: 'user' } })
 
   it('a prepend lands at the splice position, never at the tail (reducer and replay)', () => {
     const m1 = message('m1')
@@ -184,7 +184,7 @@ describe('audit fix: skill catalog agent ownership', () => {
     invocation: { modelInvocable: true, userInvocable: true },
     source: 'project-dsh',
     provider: 'filesystem',
-  } as SkillSummary)
+  })
 
   function harness() {
     let catalog: readonly SkillSummary[] = []

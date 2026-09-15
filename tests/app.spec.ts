@@ -8,9 +8,10 @@ import chalk from 'chalk'
 import { createElement } from 'react'
 import { render } from 'ink'
 import { describe, expect, it, vi } from 'vitest'
-import { createAssistantMessage, createToolResultMessage, createUserMessage, type CallId, type ImageBlock } from '@deepseek-ai/dsh-llm'
+import { AttachmentId } from '@deepseek-ai/dsh-attachment'
+import { createAssistantMessage, createToolResultMessage, createUserMessage, type ImageBlock, type ToolCallId, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
-import type { TodoItem } from '@deepseek-ai/dsh-session'
+import type { TodoItem } from '@deepseek-ai/dsh-tool-todo'
 import { App, computeSettledRows, queuedInboxRows, type AppProps } from '../src/app.ts'
 import { createSplitStdin } from '../src/input-split.ts'
 import { createTranscriptStore, type TranscriptStore } from '../src/store.ts'
@@ -49,7 +50,7 @@ import { DARK_PALETTE, setTheme } from '../src/theme.ts'
 import { DSH_CODE_VERSION, _resetDshKernelVersionForTests } from '../src/version.ts'
 import type { PendingQuestion, QuestionSnapshot } from '../src/questions.ts'
 
-const wait = async (): Promise<void> => new Promise(resolve => setTimeout(resolve, 100))
+const wait = async (ms = 100): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
 const resizeClear = '\x1b[r\x1b[0m\x1b[H\x1b[2J\x1b[3J\x1b[H'
 // The composer band's resting background (dark palette): every frame may
 // carry it. A WAVE background is any OTHER truecolor 48;2 triple.
@@ -110,8 +111,8 @@ function appProps(overrides: Partial<AppProps> = {}): AppProps {
       submit: noop,
       cancel: noop,
     },
-    commands: { descriptors: [], subscribe: () => unsubscribe },
-    skills: { rows: [], subscribe: () => unsubscribe },
+    commands: { descriptors: [], subscribe: () => unsubscribe, setAgent: noop },
+    skills: { rows: [], subscribe: () => unsubscribe, setAgent: noop },
     model: 'test/model',
     cwd: 'dsh-cli',
     workspaceRoot: 'C:\\repo\\dsh-cli',
@@ -131,16 +132,16 @@ function appProps(overrides: Partial<AppProps> = {}): AppProps {
     inspectFiles: async () => [],
     prepareFiles: async () => [],
     selectModel: () => 'test/model',
-      subagentModel: '',
-      setSubagentModel: () => '',
-      clearSubagentModel: noop,
-      deleteSession: async () => '',
+    subagentModel: '',
+    setSubagentModel: () => '',
+    clearSubagentModel: noop,
+    deleteSession: async () => '',
     cycleMode: () => '',
     setPermission: id => id,
     exportTranscript: async () => {},
     renameTitle: () => '',
     copyLastResponse: async () => '',
-    loadGitDiff: async () => ({ title: 'git diff', text: '' }),
+    loadGitDiff: async () => ({ title: 'git diff', files: [] }),
     reviewChanges: noop,
     loadPresets: async () => [],
     loadPermissions: async () => [],
@@ -158,6 +159,7 @@ function appProps(overrides: Partial<AppProps> = {}): AppProps {
     loadJobs: () => [],
     statusline: DEFAULT_STATUSLINE_ITEMS,
     saveStatusline: noop,
+    saveLanguage: noop,
     applyEditorKeys: async () => 'ctrl+r passthrough written to test',
     history: [],
     recordHistory: noop,
@@ -210,7 +212,7 @@ describe('pre-session controls', () => {
       switchMode,
       setPermission,
       cycleMode,
-      loadPresets: async () => [{ id: 'minimal', trust: 'system' }],
+      loadPresets: async () => [{ id: 'minimal', trust: 'system', path: 'C:\\repo\\presets\\minimal\\agent.yml' }],
       loadPermissions: async () => [{ id: 'read-only' }, { id: 'workspace-write' }, { id: 'danger-full-access' }],
     }))
 
@@ -302,11 +304,11 @@ describe('mention completion scheduling', () => {
       await wait(80)
       expect(calls.map(call => call.query)).toEqual(['a', 'ab'])
 
-      calls[0]!.resolve([{ label: 'old.ts', description: 'File', kind: 'file' }])
+      calls[0].resolve([{ label: 'old.ts', description: 'File', kind: 'file' }])
       await wait()
       expect(harness.output.text).not.toContain('@old.ts')
 
-      calls[1]!.resolve([{ label: 'new.ts', description: 'File', kind: 'file' }])
+      calls[1].resolve([{ label: 'new.ts', description: 'File', kind: 'file' }])
       await wait()
       expect(harness.output.text).toContain('@new.ts')
     } finally {
@@ -330,7 +332,7 @@ describe('composer image attachments', () => {
     const prepareImages = vi.fn(async (paths: readonly string[]) => paths.map((path, index) => ({
       type: 'image' as const,
       attachment: {
-        attachmentId: `sha-${index}`,
+        attachmentId: AttachmentId(`sha-${index}`),
         mediaType: path.endsWith('.webp') ? 'image/webp' as const : 'image/png' as const,
         bytes: 8,
         width: 1,
@@ -383,14 +385,14 @@ describe('composer image attachments', () => {
     })))
     const prepareImages = vi.fn(async (paths: readonly string[]) => paths.map((path, index) => ({
       type: 'image' as const,
-      attachment: { attachmentId: `img-${index}`, mediaType: 'image/png' as const, bytes: 8, width: 1, height: 1, name: path.split(/[\\/]/u).at(-1) },
+      attachment: { attachmentId: AttachmentId(`img-${index}`), mediaType: 'image/png' as const, bytes: 8, width: 1, height: 1, name: path.split(/[\\/]/u).at(-1) },
     })))
     const inspectFiles = vi.fn(async (paths: readonly string[]) => paths.map((path) => ({
       path, name: path.split(/[\\/]/u).at(-1) ?? 'notes.txt', bytes: 10,
     })))
     const prepareFiles = vi.fn(async (paths: readonly string[]) => paths.map((path, index) => ({
       type: 'file' as const,
-      attachment: { attachmentId: `file-${index}`, name: path.split(/[\\/]/u).at(-1), bytes: 10 },
+      attachment: { attachmentId: AttachmentId(`file-${index}`), name: path.split(/[\\/]/u).at(-1) ?? 'notes.txt', bytes: 10 },
     })))
     const instance = renderApp(harness, appProps({ dispatch, inspectImages, prepareImages, inspectFiles, prepareFiles }))
     try {
@@ -422,7 +424,7 @@ describe('composer image attachments', () => {
       data: createUserMessage({
         content: [{
           type: 'image',
-          attachment: { attachmentId: 'sha-1', mediaType: 'image/png', bytes: 8, width: 1, height: 1, name: 'pixel.png' },
+          attachment: { attachmentId: AttachmentId('sha-1'), mediaType: 'image/png', bytes: 8, width: 1, height: 1, name: 'pixel.png' },
         }],
         source: { kind: 'user' },
       }),
@@ -830,7 +832,7 @@ describe('structured question multi-select', () => {
       reject: noop,
     } as unknown as PendingQuestion
     const snapshot: QuestionSnapshot = { pending }
-    const stdinProxy = createSplitStdin(harness.stdin as unknown as NodeJS.ReadStream)
+    const stdinProxy = createSplitStdin(harness.stdin)
     const instance = render(createElement(App, appProps({
       questions: {
         subscribe: () => unsubscribe,
@@ -839,7 +841,9 @@ describe('structured question multi-select', () => {
         cancel: noop,
       },
     })), {
-      stdin: stdinProxy.stdin,
+      // Ink types the stdin slot as the full NodeJS.ReadStream; the split proxy is
+      // a deliberately partial PassThrough double that carries only what Ink touches.
+      stdin: stdinProxy.stdin as unknown as NodeJS.ReadStream,
       stdout: harness.stdout,
       stderr: harness.stdout,
       exitOnCtrlC: false,
@@ -877,7 +881,7 @@ describe('structured question multi-select', () => {
       reject: noop,
     } as unknown as PendingQuestion
     const snapshot: QuestionSnapshot = { pending }
-    const stdinProxy = createSplitStdin(harness.stdin as unknown as NodeJS.ReadStream)
+    const stdinProxy = createSplitStdin(harness.stdin)
     const instance = render(createElement(App, appProps({
       questions: {
         subscribe: () => unsubscribe,
@@ -886,7 +890,9 @@ describe('structured question multi-select', () => {
         cancel: noop,
       },
     })), {
-      stdin: stdinProxy.stdin,
+      // Ink types the stdin slot as the full NodeJS.ReadStream; the split proxy is
+      // a deliberately partial PassThrough double that carries only what Ink touches.
+      stdin: stdinProxy.stdin as unknown as NodeJS.ReadStream,
       stdout: harness.stdout,
       stderr: harness.stdout,
       exitOnCtrlC: false,
@@ -1361,7 +1367,7 @@ describe('keyboard protocol and transcript alignment', () => {
   it('folds tool output by default and expands wrapped summaries with Ctrl+R', async () => {
     const harness = createTty(40, 30)
     const { stdin, output } = harness
-    const callId = 'wide-tool' as CallId
+    const callId = 'wide-tool' as ToolCallId
     const store = createTranscriptStore([
       { type: 'turn/start', seq: 1, time: 1, data: { turn: 1 } } as SessionEvent,
       { type: 'tool/call', seq: 2, time: 2, data: { turn: 1, step: 1, callId, name: 'run_code', arguments: '{}' } } as SessionEvent,
@@ -1431,7 +1437,7 @@ describe('keyboard protocol and transcript alignment', () => {
       ref() {},
       unref() {},
     }) as unknown as NodeJS.ReadStream
-    const harness = { stdin, stdout, output: { text: '' } } as TtyHarness
+    const harness = { stdin, stdout, output: { text: '' } }
     const instance = renderApp(harness, appProps())
     try {
       await wait()
@@ -1559,59 +1565,15 @@ describe('Ctrl+O history details', () => {
       model: `model-${String(index).padStart(2, '0')}`,
       modelName: `Model ${String(index).padStart(2, '0')}`,
     }))
-    const instance = render(createElement(App, {
+    const instance = render(createElement(App, appProps({
       store,
-      subagents: { subscribe: () => unsubscribe, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
-      approval: { subscribe: () => unsubscribe, getSnapshot: () => approvalSnapshot },
-      questions: {
-        subscribe: () => unsubscribe,
-        getSnapshot: () => questionSnapshot,
-        submit: noop,
-        cancel: noop,
-      },
-      commands: { descriptors, subscribe: () => unsubscribe },
-      skills: { rows: skills, subscribe: () => unsubscribe },
-      model: 'test/model',
-      cwd: 'dsh-cli',
-      workspaceRoot: 'C:\\repo\\dsh-cli',
-      branch: 'main',
-      sessionId: '12345678',
-      resumed: false,
-      mode: 'standard',
-      permission: 'workspace-write',
+      commands: { descriptors, subscribe: () => unsubscribe, setAgent: noop },
+      skills: { rows: skills, subscribe: () => unsubscribe, setAgent: noop },
       dispatch: (text: string) => {
         dispatched = text
       },
-      interrupt: () => false,
-      quit: noop,
       loadModels: async () => ({ rows: models, failures: [] }),
-      loadMentions: async () => [],
-      selectModel: () => 'test/model',
-      subagentModel: '',
-      setSubagentModel: () => '',
-      clearSubagentModel: noop,
-      deleteSession: async () => '',
-      cycleMode: () => '',
-      setPermission: id => id,
-      exportTranscript: async () => {},
-      renameTitle: () => '',
-      loadPresets: async () => [],
-      loadPermissions: async () => [],
-      switchMode: async id => id,
-      createSession: noop,
-      loadSessions: async () => [],
-      loadSubagents: async () => [],
-      loadSessionTranscript: async () => '',
-      switchSession: noop,
-      cancelSessionSwitch: () => false,
-      loadPlugins: () => [],
-      loadJobs: () => [],
-      statusline: DEFAULT_STATUSLINE_ITEMS,
-      saveStatusline: noop,
-      history: [],
-      recordHistory: noop,
-      onBridgeReady: noop,
-    }), {
+    })), {
       stdin,
       stdout,
       stderr: stdout,
@@ -1678,7 +1640,7 @@ describe('Ctrl+O history details', () => {
       expect(output).not.toContain('\x1b[2J')
       expect(output.split('\n').length).toBeLessThan(stdout.rows)
 
-      const callId = 'long-tool' as CallId
+      const callId = 'long-tool' as ToolCallId
       store.apply({
         type: 'tool/call',
         seq: 3,
@@ -1797,8 +1759,6 @@ describe('DeepSeek model-switch easter egg', () => {
     stdout.on('data', chunk => {
       output += chunk.toString()
     })
-    const unsubscribe = (): void => {}
-    const noop = (): void => {}
     const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
     const store = createTranscriptStore()
     // The last selectable row is the official DeepSeek route; 'G' jumps to it.
@@ -1812,57 +1772,12 @@ describe('DeepSeek model-switch easter egg', () => {
       })),
       { provider: 'deepseek-official', providerName: 'DeepSeek', model: 'deepseek-reasoner', modelName: 'DeepSeek-Reasoner' },
     ]
-    const instance = render(createElement(App, {
+    const instance = render(createElement(App, appProps({
       store,
-      subagents: { subscribe: () => unsubscribe, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
-      approval: { subscribe: () => unsubscribe, getSnapshot: () => approvalSnapshot },
-      questions: {
-        subscribe: () => unsubscribe,
-        getSnapshot: () => questionSnapshot,
-        submit: noop,
-        cancel: noop,
-      },
-      commands: { descriptors: [], subscribe: () => unsubscribe },
-      skills: { rows: [], subscribe: () => unsubscribe },
       model: 'acme/model-01',
-      cwd: 'dsh-cli',
-      workspaceRoot: 'C:\\repo\\dsh-cli',
-      branch: 'main',
-      sessionId: '12345678',
-      resumed: false,
-      mode: 'standard',
-      permission: 'workspace-write',
-      dispatch: noop,
-      interrupt: () => false,
-      quit: noop,
       loadModels: async () => ({ rows: models, failures: [] }),
-      loadMentions: async () => [],
       selectModel: row => `${row.provider}/${row.model}`,
-      subagentModel: '',
-      setSubagentModel: () => '',
-      clearSubagentModel: noop,
-      deleteSession: async () => '',
-      cycleMode: () => '',
-      setPermission: id => id,
-      exportTranscript: async () => {},
-      renameTitle: () => '',
-      loadPresets: async () => [],
-      loadPermissions: async () => [],
-      switchMode: async id => id,
-      createSession: noop,
-      loadSessions: async () => [],
-      loadSubagents: async () => [],
-      loadSessionTranscript: async () => '',
-      switchSession: noop,
-      cancelSessionSwitch: () => false,
-      loadPlugins: () => [],
-      loadJobs: () => [],
-      statusline: DEFAULT_STATUSLINE_ITEMS,
-      saveStatusline: noop,
-      history: [],
-      recordHistory: noop,
-      onBridgeReady: noop,
-    }), {
+    })), {
       stdin,
       stdout,
       stderr: stdout,
@@ -1983,7 +1898,6 @@ describe('DeepSeek model-switch easter egg', () => {
     stdout.on('data', chunk => {
       output += chunk.toString()
     })
-    const noop = (): void => {}
     const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
     // The applied route is NON-DeepSeek, so only an above-high effort may
     // trigger the wave. acme/think advertises off/high/max with default high.
@@ -2004,57 +1918,12 @@ describe('DeepSeek model-switch easter egg', () => {
         },
       },
     ]
-    const instance = render(createElement(App, {
+    const instance = render(createElement(App, appProps({
       store: createTranscriptStore(),
-      subagents: { subscribe: () => unsubscribe, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
-      approval: { subscribe: () => unsubscribe, getSnapshot: () => approvalSnapshot },
-      questions: {
-        subscribe: () => unsubscribe,
-        getSnapshot: () => questionSnapshot,
-        submit: noop,
-        cancel: noop,
-      },
-      commands: { descriptors: [], subscribe: () => unsubscribe },
-      skills: { rows: [], subscribe: () => unsubscribe },
       model: 'acme/model-01',
-      cwd: 'dsh-cli',
-      workspaceRoot: 'C:\\repo\\dsh-cli',
-      branch: 'main',
-      sessionId: '12345678',
-      resumed: false,
-      mode: 'standard',
-      permission: 'workspace-write',
-      dispatch: noop,
-      interrupt: () => false,
-      quit: noop,
       loadModels: async () => ({ rows: models, failures: [] }),
-      loadMentions: async () => [],
       selectModel: row => `${row.provider}/${row.model}`,
-      subagentModel: '',
-      setSubagentModel: () => '',
-      clearSubagentModel: noop,
-      deleteSession: async () => '',
-      cycleMode: () => '',
-      setPermission: id => id,
-      exportTranscript: async () => {},
-      renameTitle: () => '',
-      loadPresets: async () => [],
-      loadPermissions: async () => [],
-      switchMode: async id => id,
-      createSession: noop,
-      loadSessions: async () => [],
-      loadSubagents: async () => [],
-      loadSessionTranscript: async () => '',
-      switchSession: noop,
-      cancelSessionSwitch: () => false,
-      loadPlugins: () => [],
-      loadJobs: () => [],
-      statusline: DEFAULT_STATUSLINE_ITEMS,
-      saveStatusline: noop,
-      history: [],
-      recordHistory: noop,
-      onBridgeReady: noop,
-    }), {
+    })), {
       stdin,
       stdout,
       stderr: stdout,
@@ -2171,8 +2040,6 @@ describe('DeepSeek model-switch easter egg', () => {
     stdout.on('data', chunk => {
       output += chunk.toString()
     })
-    const unsubscribe = (): void => {}
-    const noop = (): void => {}
     const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
     const store = createTranscriptStore()
     const models = [
@@ -2184,57 +2051,12 @@ describe('DeepSeek model-switch easter egg', () => {
       })),
       { provider: 'deepseek-official', providerName: 'DeepSeek', model: 'deepseek-reasoner', modelName: 'DeepSeek-Reasoner' },
     ]
-    const instance = render(createElement(App, {
+    const instance = render(createElement(App, appProps({
       store,
-      subagents: { subscribe: () => unsubscribe, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
-      approval: { subscribe: () => unsubscribe, getSnapshot: () => approvalSnapshot },
-      questions: {
-        subscribe: () => unsubscribe,
-        getSnapshot: () => questionSnapshot,
-        submit: noop,
-        cancel: noop,
-      },
-      commands: { descriptors: [], subscribe: () => unsubscribe },
-      skills: { rows: [], subscribe: () => unsubscribe },
       model: 'acme/model-01',
-      cwd: 'dsh-cli',
-      workspaceRoot: 'C:\\repo\\dsh-cli',
-      branch: 'main',
-      sessionId: '12345678',
-      resumed: false,
-      mode: 'standard',
-      permission: 'workspace-write',
-      dispatch: noop,
-      interrupt: () => false,
-      quit: noop,
       loadModels: async () => ({ rows: models, failures: [] }),
-      loadMentions: async () => [],
       selectModel: row => `${row.provider}/${row.model}`,
-      subagentModel: '',
-      setSubagentModel: () => '',
-      clearSubagentModel: noop,
-      deleteSession: async () => '',
-      cycleMode: () => '',
-      setPermission: id => id,
-      exportTranscript: async () => {},
-      renameTitle: () => '',
-      loadPresets: async () => [],
-      loadPermissions: async () => [],
-      switchMode: async id => id,
-      createSession: noop,
-      loadSessions: async () => [],
-      loadSubagents: async () => [],
-      loadSessionTranscript: async () => '',
-      switchSession: noop,
-      cancelSessionSwitch: () => false,
-      loadPlugins: () => [],
-      loadJobs: () => [],
-      statusline: DEFAULT_STATUSLINE_ITEMS,
-      saveStatusline: noop,
-      history: [],
-      recordHistory: noop,
-      onBridgeReady: noop,
-    }), {
+    })), {
       stdin,
       stdout,
       stderr: stdout,
@@ -2336,8 +2158,6 @@ describe('DeepSeek model-switch easter egg', () => {
     stdout.on('data', chunk => {
       output += chunk.toString()
     })
-    const unsubscribe = (): void => {}
-    const noop = (): void => {}
     const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
     const store = createTranscriptStore()
     const models = [
@@ -2349,57 +2169,12 @@ describe('DeepSeek model-switch easter egg', () => {
       })),
       { provider: 'deepseek-official', providerName: 'DeepSeek', model: 'deepseek-reasoner', modelName: 'DeepSeek-Reasoner' },
     ]
-    const instance = render(createElement(App, {
+    const instance = render(createElement(App, appProps({
       store,
-      subagents: { subscribe: () => unsubscribe, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
-      approval: { subscribe: () => unsubscribe, getSnapshot: () => approvalSnapshot },
-      questions: {
-        subscribe: () => unsubscribe,
-        getSnapshot: () => questionSnapshot,
-        submit: noop,
-        cancel: noop,
-      },
-      commands: { descriptors: [], subscribe: () => unsubscribe },
-      skills: { rows: [], subscribe: () => unsubscribe },
       model: 'acme/model-01',
-      cwd: 'dsh-cli',
-      workspaceRoot: 'C:\\repo\\dsh-cli',
-      branch: 'main',
-      sessionId: '12345678',
-      resumed: false,
-      mode: 'standard',
-      permission: 'workspace-write',
-      dispatch: noop,
-      interrupt: () => false,
-      quit: noop,
       loadModels: async () => ({ rows: models, failures: [] }),
-      loadMentions: async () => [],
       selectModel: row => `${row.provider}/${row.model}`,
-      subagentModel: '',
-      setSubagentModel: () => '',
-      clearSubagentModel: noop,
-      deleteSession: async () => '',
-      cycleMode: () => '',
-      setPermission: id => id,
-      exportTranscript: async () => {},
-      renameTitle: () => '',
-      loadPresets: async () => [],
-      loadPermissions: async () => [],
-      switchMode: async id => id,
-      createSession: noop,
-      loadSessions: async () => [],
-      loadSubagents: async () => [],
-      loadSessionTranscript: async () => '',
-      switchSession: noop,
-      cancelSessionSwitch: () => false,
-      loadPlugins: () => [],
-      loadJobs: () => [],
-      statusline: DEFAULT_STATUSLINE_ITEMS,
-      saveStatusline: noop,
-      history: [],
-      recordHistory: noop,
-      onBridgeReady: noop,
-    }), {
+    })), {
       stdin,
       stdout,
       stderr: stdout,
@@ -2474,8 +2249,6 @@ describe('DeepSeek model-switch easter egg', () => {
     stdout.on('data', chunk => {
       output += chunk.toString()
     })
-    const unsubscribe = (): void => {}
-    const noop = (): void => {}
     const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
     const store = createTranscriptStore()
     const models = [
@@ -2487,58 +2260,13 @@ describe('DeepSeek model-switch easter egg', () => {
       })),
       { provider: 'deepseek-official', providerName: 'DeepSeek', model: 'deepseek-reasoner', modelName: 'DeepSeek-Reasoner' },
     ]
-    const instance = render(createElement(App, {
+    const instance = render(createElement(App, appProps({
       store,
       animations: false,
-      subagents: { subscribe: () => unsubscribe, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
-      approval: { subscribe: () => unsubscribe, getSnapshot: () => approvalSnapshot },
-      questions: {
-        subscribe: () => unsubscribe,
-        getSnapshot: () => questionSnapshot,
-        submit: noop,
-        cancel: noop,
-      },
-      commands: { descriptors: [], subscribe: () => unsubscribe },
-      skills: { rows: [], subscribe: () => unsubscribe },
       model: 'acme/model-01',
-      cwd: 'dsh-cli',
-      workspaceRoot: 'C:\\repo\\dsh-cli',
-      branch: 'main',
-      sessionId: '12345678',
-      resumed: false,
-      mode: 'standard',
-      permission: 'workspace-write',
-      dispatch: noop,
-      interrupt: () => false,
-      quit: noop,
       loadModels: async () => ({ rows: models, failures: [] }),
-      loadMentions: async () => [],
       selectModel: row => `${row.provider}/${row.model}`,
-      subagentModel: '',
-      setSubagentModel: () => '',
-      clearSubagentModel: noop,
-      deleteSession: async () => '',
-      cycleMode: () => '',
-      setPermission: id => id,
-      exportTranscript: async () => {},
-      renameTitle: () => '',
-      loadPresets: async () => [],
-      loadPermissions: async () => [],
-      switchMode: async id => id,
-      createSession: noop,
-      loadSessions: async () => [],
-      loadSubagents: async () => [],
-      loadSessionTranscript: async () => '',
-      switchSession: noop,
-      cancelSessionSwitch: () => false,
-      loadPlugins: () => [],
-      loadJobs: () => [],
-      statusline: DEFAULT_STATUSLINE_ITEMS,
-      saveStatusline: noop,
-      history: [],
-      recordHistory: noop,
-      onBridgeReady: noop,
-    }), {
+    })), {
       stdin,
       stdout,
       stderr: stdout,
@@ -2587,61 +2315,12 @@ describe('bracketed paste safety', () => {
     const { stdin, stdout, output } = createTty(100, 24)
     const store = createTranscriptStore()
     const dispatched: string[] = []
-    const unsubscribe = (): void => {}
-    const noop = (): void => {}
-    const instance = render(createElement(App, {
+    const instance = render(createElement(App, appProps({
       store,
-      subagents: { subscribe: () => unsubscribe, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
-      approval: { subscribe: () => unsubscribe, getSnapshot: () => approvalSnapshot },
-      questions: {
-        subscribe: () => unsubscribe,
-        getSnapshot: () => questionSnapshot,
-        submit: noop,
-        cancel: noop,
-      },
-      commands: { descriptors: [], subscribe: () => unsubscribe },
-      skills: { rows: [], subscribe: () => unsubscribe },
-      model: 'test/model',
-      cwd: 'dsh-cli',
-      workspaceRoot: 'C:\\repo\\dsh-cli',
-      branch: 'main',
-      sessionId: '12345678',
-      resumed: false,
-      mode: 'standard',
-      permission: 'workspace-write',
       dispatch: text => {
         dispatched.push(text)
       },
-      interrupt: () => false,
-      quit: noop,
-      loadModels: async () => ({ rows: [], failures: [] }),
-      loadMentions: async () => [],
-      selectModel: () => 'test/model',
-      subagentModel: '',
-      setSubagentModel: () => '',
-      clearSubagentModel: noop,
-      deleteSession: async () => '',
-      cycleMode: () => '',
-      setPermission: id => id,
-      exportTranscript: async () => {},
-      renameTitle: () => '',
-      loadPresets: async () => [],
-      loadPermissions: async () => [],
-      switchMode: async id => id,
-      createSession: noop,
-      loadSessions: async () => [],
-      loadSubagents: async () => [],
-      loadSessionTranscript: async () => '',
-      switchSession: noop,
-      cancelSessionSwitch: () => false,
-      loadPlugins: () => [],
-      loadJobs: () => [],
-      statusline: DEFAULT_STATUSLINE_ITEMS,
-      saveStatusline: noop,
-      history: [],
-      recordHistory: noop,
-      onBridgeReady: noop,
-    }), {
+    })), {
       stdin,
       stdout,
       stderr: stdout,
@@ -2897,8 +2576,6 @@ describe('Ctrl+R reasoning fold', () => {
     stdout.on('data', chunk => {
       output += chunk.toString()
     })
-    const unsubscribe = (): void => {}
-    const noop = (): void => {}
     const store = createTranscriptStore([
       {
         type: 'user/message',
@@ -2923,57 +2600,10 @@ describe('Ctrl+R reasoning fold', () => {
         },
       } as SessionEvent,
     ])
-    const instance = render(createElement(App, {
+    const instance = render(createElement(App, appProps({
       store,
-      subagents: { subscribe: () => unsubscribe, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
-      approval: { subscribe: () => unsubscribe, getSnapshot: () => approvalSnapshot },
-      questions: {
-        subscribe: () => unsubscribe,
-        getSnapshot: () => questionSnapshot,
-        submit: noop,
-        cancel: noop,
-      },
-      commands: { descriptors: [], subscribe: () => unsubscribe },
-      skills: { rows: [], subscribe: () => unsubscribe },
-      model: 'test/model',
-      cwd: 'dsh-cli',
       workspaceRoot: 'C:\repo\dsh-cli',
-      branch: 'main',
-      sessionId: '12345678',
-      resumed: false,
-      mode: 'standard',
-      permission: 'workspace-write',
-      dispatch: noop,
-      interrupt: () => false,
-      quit: noop,
-      loadModels: async () => ({ rows: [], failures: [] }),
-      loadMentions: async () => [],
-      selectModel: () => 'test/model',
-      subagentModel: '',
-      setSubagentModel: () => '',
-      clearSubagentModel: noop,
-      deleteSession: async () => '',
-      cycleMode: () => '',
-      setPermission: id => id,
-      exportTranscript: async () => {},
-      renameTitle: () => '',
-      loadPresets: async () => [],
-      loadPermissions: async () => [],
-      switchMode: async id => id,
-      createSession: noop,
-      loadSessions: async () => [],
-      loadSubagents: async () => [],
-      loadSessionTranscript: async () => '',
-      switchSession: noop,
-      cancelSessionSwitch: () => false,
-      loadPlugins: () => [],
-      loadJobs: () => [],
-      statusline: DEFAULT_STATUSLINE_ITEMS,
-      saveStatusline: noop,
-      history: [],
-      recordHistory: noop,
-      onBridgeReady: noop,
-    }), {
+    })), {
       stdin,
       stdout,
       stderr: stdout,
@@ -3049,59 +2679,9 @@ describe('Ctrl+R reasoning fold', () => {
         },
       } as SessionEvent,
     ])
-    const unsubscribe = (): void => {}
-    const noop = (): void => {}
-    const instance = render(createElement(App, {
+    const instance = render(createElement(App, appProps({
       store,
-      subagents: { subscribe: () => unsubscribe, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
-      approval: { subscribe: () => unsubscribe, getSnapshot: () => approvalSnapshot },
-      questions: {
-        subscribe: () => unsubscribe,
-        getSnapshot: () => questionSnapshot,
-        submit: noop,
-        cancel: noop,
-      },
-      commands: { descriptors: [], subscribe: () => unsubscribe },
-      skills: { rows: [], subscribe: () => unsubscribe },
-      model: 'test/model',
-      cwd: 'dsh-cli',
-      workspaceRoot: 'C:\\repo\\dsh-cli',
-      branch: 'main',
-      sessionId: '12345678',
-      resumed: false,
-      mode: 'standard',
-      permission: 'workspace-write',
-      dispatch: noop,
-      interrupt: () => false,
-      quit: noop,
-      loadModels: async () => ({ rows: [], failures: [] }),
-      loadMentions: async () => [],
-      selectModel: () => 'test/model',
-      subagentModel: '',
-      setSubagentModel: () => '',
-      clearSubagentModel: noop,
-      deleteSession: async () => '',
-      cycleMode: () => '',
-      setPermission: id => id,
-      exportTranscript: async () => {},
-      renameTitle: () => '',
-      loadPresets: async () => [],
-      loadPermissions: async () => [],
-      switchMode: async id => id,
-      createSession: noop,
-      loadSessions: async () => [],
-      loadSubagents: async () => [],
-      loadSessionTranscript: async () => '',
-      switchSession: noop,
-      cancelSessionSwitch: () => false,
-      loadPlugins: () => [],
-      loadJobs: () => [],
-      statusline: DEFAULT_STATUSLINE_ITEMS,
-      saveStatusline: noop,
-      history: [],
-      recordHistory: noop,
-      onBridgeReady: noop,
-    }), {
+    })), {
       stdin,
       stdout,
       stderr: stdout,
@@ -3166,59 +2746,9 @@ describe('Ctrl+R reasoning fold', () => {
         },
       } as SessionEvent,
     ])
-    const unsubscribe = (): void => {}
-    const noop = (): void => {}
-    const instance = render(createElement(App, {
+    const instance = render(createElement(App, appProps({
       store,
-      subagents: { subscribe: () => unsubscribe, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
-      approval: { subscribe: () => unsubscribe, getSnapshot: () => approvalSnapshot },
-      questions: {
-        subscribe: () => unsubscribe,
-        getSnapshot: () => questionSnapshot,
-        submit: noop,
-        cancel: noop,
-      },
-      commands: { descriptors: [], subscribe: () => unsubscribe },
-      skills: { rows: [], subscribe: () => unsubscribe },
-      model: 'test/model',
-      cwd: 'dsh-cli',
-      workspaceRoot: 'C:\\repo\\dsh-cli',
-      branch: 'main',
-      sessionId: '12345678',
-      resumed: false,
-      mode: 'standard',
-      permission: 'workspace-write',
-      dispatch: noop,
-      interrupt: () => false,
-      quit: noop,
-      loadModels: async () => ({ rows: [], failures: [] }),
-      loadMentions: async () => [],
-      selectModel: () => 'test/model',
-      subagentModel: '',
-      setSubagentModel: () => '',
-      clearSubagentModel: noop,
-      deleteSession: async () => '',
-      cycleMode: () => '',
-      setPermission: id => id,
-      exportTranscript: async () => {},
-      renameTitle: () => '',
-      loadPresets: async () => [],
-      loadPermissions: async () => [],
-      switchMode: async id => id,
-      createSession: noop,
-      loadSessions: async () => [],
-      loadSubagents: async () => [],
-      loadSessionTranscript: async () => '',
-      switchSession: noop,
-      cancelSessionSwitch: () => false,
-      loadPlugins: () => [],
-      loadJobs: () => [],
-      statusline: DEFAULT_STATUSLINE_ITEMS,
-      saveStatusline: noop,
-      history: [],
-      recordHistory: noop,
-      onBridgeReady: noop,
-    }), {
+    })), {
       stdin,
       stdout,
       stderr: stdout,
@@ -3280,59 +2810,9 @@ describe('Ctrl+R reasoning fold', () => {
   it('keeps expanded reasoning beside the streaming answer without a clear', async () => {
     const { stdin, stdout, output } = createTty(100, 24)
     const store = createTranscriptStore()
-    const unsubscribe = (): void => {}
-    const noop = (): void => {}
-    const instance = render(createElement(App, {
+    const instance = render(createElement(App, appProps({
       store,
-      subagents: { subscribe: () => unsubscribe, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
-      approval: { subscribe: () => unsubscribe, getSnapshot: () => approvalSnapshot },
-      questions: {
-        subscribe: () => unsubscribe,
-        getSnapshot: () => questionSnapshot,
-        submit: noop,
-        cancel: noop,
-      },
-      commands: { descriptors: [], subscribe: () => unsubscribe },
-      skills: { rows: [], subscribe: () => unsubscribe },
-      model: 'test/model',
-      cwd: 'dsh-cli',
-      workspaceRoot: 'C:\\repo\\dsh-cli',
-      branch: 'main',
-      sessionId: '12345678',
-      resumed: false,
-      mode: 'standard',
-      permission: 'workspace-write',
-      dispatch: noop,
-      interrupt: () => false,
-      quit: noop,
-      loadModels: async () => ({ rows: [], failures: [] }),
-      loadMentions: async () => [],
-      selectModel: () => 'test/model',
-      subagentModel: '',
-      setSubagentModel: () => '',
-      clearSubagentModel: noop,
-      deleteSession: async () => '',
-      cycleMode: () => '',
-      setPermission: id => id,
-      exportTranscript: async () => {},
-      renameTitle: () => '',
-      loadPresets: async () => [],
-      loadPermissions: async () => [],
-      switchMode: async id => id,
-      createSession: noop,
-      loadSessions: async () => [],
-      loadSubagents: async () => [],
-      loadSessionTranscript: async () => '',
-      switchSession: noop,
-      cancelSessionSwitch: () => false,
-      loadPlugins: () => [],
-      loadJobs: () => [],
-      statusline: DEFAULT_STATUSLINE_ITEMS,
-      saveStatusline: noop,
-      history: [],
-      recordHistory: noop,
-      onBridgeReady: noop,
-    }), {
+    })), {
       stdin,
       stdout,
       stderr: stdout,
@@ -3418,57 +2898,12 @@ describe('deferred session remount', () => {
       model: `model-${String(index).padStart(2, '0')}`,
       modelName: `Model ${String(index).padStart(2, '0')}`,
     }))
-    const props = {
+    const props = appProps({
       store,
-      subagents: { subscribe: () => unsubscribe, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
-      approval: { subscribe: () => unsubscribe, getSnapshot: () => approvalSnapshot },
-      questions: {
-        subscribe: () => unsubscribe,
-        getSnapshot: () => questionSnapshot,
-        submit: noop,
-        cancel: noop,
-      },
-      commands: { descriptors, subscribe: () => unsubscribe },
-      skills: { rows: skills, subscribe: () => unsubscribe },
-      model: 'test/model',
-      cwd: 'dsh-cli',
-      workspaceRoot: 'C:\\repo\\dsh-cli',
-      branch: 'main',
-      sessionId: '12345678',
-      resumed: false,
-      mode: 'standard',
-      permission: 'workspace-write',
-      dispatch: noop,
-      interrupt: () => false,
-      quit: noop,
+      commands: { descriptors, subscribe: () => unsubscribe, setAgent: noop },
+      skills: { rows: skills, subscribe: () => unsubscribe, setAgent: noop },
       loadModels: async () => ({ rows: models, failures: [] }),
-      loadMentions: async () => [],
-      selectModel: () => 'test/model',
-      subagentModel: '',
-      setSubagentModel: () => '',
-      clearSubagentModel: noop,
-      deleteSession: async () => '',
-      cycleMode: () => '',
-      setPermission: id => id,
-      exportTranscript: async () => {},
-      renameTitle: () => '',
-      loadPresets: async () => [],
-      loadPermissions: async () => [],
-      switchMode: async id => id,
-      createSession: noop,
-      loadSessions: async () => [],
-      loadSubagents: async () => [],
-      loadSessionTranscript: async () => '',
-      switchSession: noop,
-      cancelSessionSwitch: () => false,
-      loadPlugins: () => [],
-      loadJobs: () => [],
-      statusline: DEFAULT_STATUSLINE_ITEMS,
-      saveStatusline: noop,
-      history: [],
-      recordHistory: noop,
-      onBridgeReady: noop,
-    }
+    })
     const instance = render(createElement(App, { key: 'pending', ...props }), {
       stdin,
       stdout,
@@ -3544,57 +2979,12 @@ describe('deferred session remount', () => {
       model: `model-${String(index).padStart(2, '0')}`,
       modelName: `Model ${String(index).padStart(2, '0')}`,
     }))
-    const props = {
+    const props = appProps({
       store,
-      subagents: { subscribe: () => unsubscribe, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
-      approval: { subscribe: () => unsubscribe, getSnapshot: () => approvalSnapshot },
-      questions: {
-        subscribe: () => unsubscribe,
-        getSnapshot: () => questionSnapshot,
-        submit: noop,
-        cancel: noop,
-      },
-      commands: { descriptors, subscribe: () => unsubscribe },
-      skills: { rows: skills, subscribe: () => unsubscribe },
-      model: 'test/model',
-      cwd: 'dsh-cli',
-      workspaceRoot: 'C:\\repo\\dsh-cli',
-      branch: 'main',
-      sessionId: '12345678',
-      resumed: false,
-      mode: 'standard',
-      permission: 'workspace-write',
-      dispatch: noop,
-      interrupt: () => false,
-      quit: noop,
+      commands: { descriptors, subscribe: () => unsubscribe, setAgent: noop },
+      skills: { rows: skills, subscribe: () => unsubscribe, setAgent: noop },
       loadModels: async () => ({ rows: models, failures: [] }),
-      loadMentions: async () => [],
-      selectModel: () => 'test/model',
-      subagentModel: '',
-      setSubagentModel: () => '',
-      clearSubagentModel: noop,
-      deleteSession: async () => '',
-      cycleMode: () => '',
-      setPermission: id => id,
-      exportTranscript: async () => {},
-      renameTitle: () => '',
-      loadPresets: async () => [],
-      loadPermissions: async () => [],
-      switchMode: async id => id,
-      createSession: noop,
-      loadSessions: async () => [],
-      loadSubagents: async () => [],
-      loadSessionTranscript: async () => '',
-      switchSession: noop,
-      cancelSessionSwitch: () => false,
-      loadPlugins: () => [],
-      loadJobs: () => [],
-      statusline: DEFAULT_STATUSLINE_ITEMS,
-      saveStatusline: noop,
-      history: [],
-      recordHistory: noop,
-      onBridgeReady: noop,
-    }
+    })
     const instance = render(createElement(App, { key: 'pending', ...props }), {
       stdin,
       stdout,
@@ -3627,7 +3017,7 @@ describe('deferred session remount', () => {
         type: 'agent/inbox/spliced',
         seq: 2,
         time: 0,
-        data: { target: 'next-turn', start: 0, removedCount: 1, inserted: [] },
+        data: { target: 'next-turn', start: 0, removedCount: 1, inserted: [] as UserMessage[] },
       } as SessionEvent)
       await wait()
       store.apply({ type: 'user/message', seq: 3, time: 0, data: first } as SessionEvent)
@@ -3673,10 +3063,8 @@ describe('context stepless bar', () => {
     stdout.on('data', chunk => {
       output += chunk.toString()
     })
-    const unsubscribe = (): void => {}
-    const noop = (): void => {}
     const store = createTranscriptStore()
-    const callId = 'parse-tool' as CallId
+    const callId = 'parse-tool' as ToolCallId
     store.apply({ type: 'request/context', seq: 1, time: 1, data: { provider: 'p', model: 'm', contextWindow: 128_000 } } as SessionEvent)
     store.apply({
       type: 'request/header', seq: 2, time: 2,
@@ -3711,57 +3099,9 @@ describe('context stepless bar', () => {
       type: 'tool/result', seq: 8, time: 2_500,
       data: { turn: 1, step: 1, message: createToolResultMessage({ callId, content: [{ type: 'text', text: 'patched the file' }], isError: false }) },
     } as unknown as SessionEvent)
-    const instance = render(createElement(App, {
+    const instance = render(createElement(App, appProps({
       store,
-      subagents: { subscribe: () => unsubscribe, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
-      approval: { subscribe: () => unsubscribe, getSnapshot: () => approvalSnapshot },
-      questions: {
-        subscribe: () => unsubscribe,
-        getSnapshot: () => questionSnapshot,
-        submit: noop,
-        cancel: noop,
-      },
-      commands: { descriptors: [], subscribe: () => unsubscribe },
-      skills: { rows: [], subscribe: () => unsubscribe },
-      model: 'test/model',
-      cwd: 'dsh-cli',
-      workspaceRoot: 'C:\\repo\\dsh-cli',
-      branch: 'main',
-      sessionId: '12345678',
-      resumed: false,
-      mode: 'standard',
-      permission: 'workspace-write',
-      dispatch: noop,
-      interrupt: () => false,
-      quit: noop,
-      loadModels: async () => ({ rows: [], failures: [] }),
-      loadMentions: async () => [],
-      selectModel: () => 'test/model',
-      subagentModel: '',
-      setSubagentModel: () => '',
-      clearSubagentModel: noop,
-      deleteSession: async () => '',
-      cycleMode: () => '',
-      setPermission: id => id,
-      exportTranscript: async () => {},
-      renameTitle: () => '',
-      loadPresets: async () => [],
-      loadPermissions: async () => [],
-      switchMode: async id => id,
-      createSession: noop,
-      loadSessions: async () => [],
-      loadSubagents: async () => [],
-      loadSessionTranscript: async () => '',
-      switchSession: noop,
-      cancelSessionSwitch: () => false,
-      loadPlugins: () => [],
-      loadJobs: () => [],
-      statusline: DEFAULT_STATUSLINE_ITEMS,
-      saveStatusline: noop,
-      history: [],
-      recordHistory: noop,
-      onBridgeReady: noop,
-    }), {
+    })), {
       stdin,
       stdout,
       stderr: stdout,
@@ -3824,7 +3164,7 @@ describe('light theme rendering', () => {
     const originalChalkLevel = chalk.level
     chalk.level = 3
     setTheme('light')
-    const instance = render(createElement(App, {
+    const instance = render(createElement(App, appProps({
       store: createTranscriptStore(),
       subagents: { subscribe: () => noop, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
       approval: { subscribe: () => noop, getSnapshot: () => approvalSnapshot },
@@ -3834,47 +3174,9 @@ describe('light theme rendering', () => {
         submit: noop,
         cancel: noop,
       },
-      commands: { descriptors: [], subscribe: () => noop },
-      skills: { rows: [], subscribe: () => noop },
-      model: 'test/model',
-      cwd: 'dsh-cli',
-      workspaceRoot: 'C:\\repo\\dsh-cli',
-      branch: 'main',
-      sessionId: '12345678',
-      resumed: false,
-      mode: 'standard',
-      permission: 'workspace-write',
-      dispatch: noop,
-      interrupt: () => false,
-      quit: noop,
-      loadModels: async () => ({ rows: [], failures: [] }),
-      loadMentions: async () => [],
-      selectModel: () => 'test/model',
-      subagentModel: '',
-      setSubagentModel: () => '',
-      clearSubagentModel: noop,
-      deleteSession: async () => '',
-      cycleMode: () => '',
-      setPermission: id => id,
-      exportTranscript: async () => {},
-      renameTitle: () => '',
-      loadPresets: async () => [],
-      loadPermissions: async () => [],
-      switchMode: async id => id,
-      createSession: noop,
-      loadSessions: async () => [],
-      loadSubagents: async () => [],
-      loadSessionTranscript: async () => '',
-      switchSession: noop,
-      cancelSessionSwitch: () => false,
-      loadPlugins: () => [],
-      loadJobs: () => [],
-      statusline: DEFAULT_STATUSLINE_ITEMS,
-      saveStatusline: noop,
-      history: [],
-      recordHistory: noop,
-      onBridgeReady: noop,
-    }), {
+      commands: { descriptors: [], subscribe: () => noop, setAgent: noop },
+      skills: { rows: [], subscribe: () => noop, setAgent: noop },
+    })), {
       stdin,
       stdout,
       stderr: stdout,
@@ -3974,7 +3276,7 @@ describe('settled tool/command name sanitization', () => {
     // surface).
     const oscTool = 'evil\x1b]0;pwned\x07fetch'
     const csiCommand = 'wipe\x1b[2Jfetch'
-    const toolCallId = 'evil-tool' as CallId
+    const toolCallId = 'evil-tool' as ToolCallId
     const store = createTranscriptStore([
       {
         type: 'user/message',
@@ -4027,7 +3329,7 @@ describe('settled tool/command name sanitization', () => {
       // beyond that well-formed managed sequence — in particular one riding
       // untrusted tool or command names — never reaches the terminal bytes.
       const titleOsc = /\x1b\]0;([^\x07\u0000-\u001F\u007F]*)\x07/g
-      const payloads = [...output.text.matchAll(titleOsc)].map(match => match[1]!)
+      const payloads = [...output.text.matchAll(titleOsc)].map(match => match[1])
       expect(payloads.length).toBeGreaterThan(0)
       for (const payload of payloads) {
         expect(payload).toBe(DEFAULT_TERMINAL_TITLE)
@@ -4183,15 +3485,18 @@ describe('queued inbox rows in a mixed mutable tail', () => {
     // remove action retires a row — edit and steer must reuse the same splice.
     const retire = (id: string): void => {
       cancelled.push(id)
-      const index = [first.id, second.id, third.id].indexOf(id)
+      // The runner echoes back the durable message id as a plain string; the
+      // index lookup is over the matching durable ids.
+      const ids: readonly string[] = [first.id, second.id, third.id]
+      const index = ids.indexOf(id)
       store.apply({
         type: 'agent/inbox/spliced',
         seq: 100,
         time: 100,
-        data: { target: 'next-turn', start: index, removedCount: 1, inserted: [] },
+        data: { target: 'next-turn', start: index, removedCount: 1, inserted: [] as UserMessage[] },
       } as SessionEvent)
     }
-    const callId = 'live-tool' as CallId
+    const callId = 'live-tool' as ToolCallId
     // Pending rows are NOT a contiguous tail: a running tool row sits between
     // the first pending row and the rest, so a naive "scan from the end until
     // the first non-pending" would lose `one`.
@@ -4282,6 +3587,7 @@ describe('completion menu', () => {
       commands: {
         descriptors: [{ name: 'command-00', description: 'registry command' }],
         subscribe: () => unsubscribe,
+        setAgent: noop,
       },
     }))
     try {
@@ -4309,6 +3615,7 @@ describe('completion menu', () => {
       commands: {
         descriptors: [{ name: 'command-00', description: 'registry command' }],
         subscribe: () => unsubscribe,
+        setAgent: noop,
       },
     }))
     try {
@@ -4337,6 +3644,7 @@ describe('completion menu', () => {
       commands: {
         descriptors: [{ name: 'command-00', description: 'registry command' }],
         subscribe: () => unsubscribe,
+        setAgent: noop,
       },
     }))
     try {
@@ -4505,7 +3813,7 @@ describe('/agents panel', () => {
     const instance = renderApp(harness, appProps({
       subagents: { subscribe: () => unsubscribe, getSnapshot: () => agents, getTotalSeen: () => agents.length },
       loadSubagents: async () => [{
-        id: 'child-session-2', createdAt: 2, cwd: 'C:\\repo', workspace: 'repo',
+        id: 'child-session-2', createdAt: 2, updatedAt: 2, cwd: 'C:\\repo', workspace: 'repo',
         parent: 'root', subagent: true, resumable: false, live: false, persisted: true, preset: 'standard',
       }],
     }))
@@ -4857,7 +4165,7 @@ describe('settled row cap window', () => {
     expect(result.cache.needsTrim).toBe(false)
     // flat = header + trim hint + the 8 window rows.
     expect(result.cache.flat).toHaveLength(1 + 1 + 8)
-    expect(result.cache.flat[1]!.key).toBe('history-cap-hint')
+    expect(result.cache.flat[1].key).toBe('history-cap-hint')
   })
 
   it('append only accounts rows; the epoch-bump replay performs the actual drop', () => {

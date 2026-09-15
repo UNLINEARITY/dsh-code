@@ -65,7 +65,7 @@ describe('editorModel wrapping', () => {
   it('maps boundaries and columns on each row', () => {
     const model = editorModel('ab cd', 10)
     expect(model.rows).toHaveLength(1)
-    const row = model.rows[0]!
+    const row = model.rows[0]
     expect(row.offsets).toEqual([0, 1, 2, 3, 4, 5])
     expect(row.columns).toEqual([0, 1, 2, 3, 4, 5])
     expect(row.cuts).toEqual([0, 1, 2, 3, 4, 5])
@@ -77,8 +77,8 @@ describe('editorModel wrapping', () => {
   it('seeds the continuation row with its own start boundary', () => {
     const model = editorModel('abcdef', 3)
     expect(model.rows.map(row => row.text)).toEqual(['abc', 'def'])
-    expect(model.rows[1]!.offsets[0]).toBe(3)
-    expect(model.rows[1]!.columns[0]).toBe(0)
+    expect(model.rows[1].offsets[0]).toBe(3)
+    expect(model.rows[1].columns[0]).toBe(0)
   })
 })
 
@@ -109,7 +109,7 @@ describe('editorRowParts', () => {
   })
   it('hides the caret without changing row text while input is locked', () => {
     const model = editorModel('hello', 20)
-    expect(editorRowParts(model.rows[0]!, 0, 0, 2, false)).toEqual({
+    expect(editorRowParts(model.rows[0], 0, 0, 2, false)).toEqual({
       before: '', caret: '', after: 'hello', hasCaret: false,
     })
   })

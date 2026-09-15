@@ -354,7 +354,7 @@ export function runSequence(steps, spawnProcess = spawn) {
         if (step.fatal === false) report(undefined)
         else resolve(1)
       })
-      child.once('exit', (code, signal) => {
+      child.once('exit', code => {
         if (code === 0) run(index + 1)
         else if (step.fatal === false) report(code)
         else resolve(code ?? 1)

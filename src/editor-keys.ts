@@ -113,11 +113,11 @@ export function stripJsoncComments(text: string): string {
   let index = 0
   let inString = false
   while (index < text.length) {
-    const char = text[index]!
+    const char = text[index]
     if (inString) {
       out += char
       if (char === '\\' && index + 1 < text.length) {
-        out += text[index + 1]!
+        out += text[index + 1]
         index += 2
         continue
       }
@@ -156,11 +156,11 @@ function removeTrailingCommas(text: string): string {
   let index = 0
   let inString = false
   while (index < text.length) {
-    const char = text[index]!
+    const char = text[index]
     if (inString) {
       out += char
       if (char === '\\' && index + 1 < text.length) {
-        out += text[index + 1]!
+        out += text[index + 1]
         index += 2
         continue
       }
@@ -199,7 +199,7 @@ function rawOpenBracketIndex(text: string): number {
   let index = 0
   let inString = false
   while (index < text.length) {
-    const char = text[index]!
+    const char = text[index]
     if (inString) {
       if (char === '\\') {
         index += 2
@@ -319,7 +319,7 @@ export async function applyCtrlRPassthrough({ env, paths, flagPath }: EditorKeys
   for (const candidate of candidates) {
     if (await readIfPresent(candidate) !== undefined) targets.push(candidate)
   }
-  if (targets.length === 0) targets.push(candidates[0]!)
+  if (targets.length === 0) targets.push(candidates[0])
   const updated: string[] = []
   const present: string[] = []
   for (const target of targets) {

@@ -25,9 +25,9 @@ export function ThemePanel({ current, select, close }: {
   /** Theme name in force (the requested name; 'auto' included). */
   current: ThemeName
   /** Accept one theme name: applied immediately and persisted by the runner. */
-  select(name: ThemeName): void
+  select: (name: ThemeName) => void
   /** Close without changing the theme. */
-  close(): void
+  close: () => void
 }): ReactElement {
   const [cursor, setCursor] = useState(() => {
     const index = THEMES.findIndex(theme => theme.id === current)
@@ -39,7 +39,7 @@ export function ThemePanel({ current, select, close }: {
     if (key.escape || input === 'q') return close()
     if (key.upArrow) return setCursor(value => (value + THEMES.length - 1) % THEMES.length)
     if (key.downArrow) return setCursor(value => (value + 1) % THEMES.length)
-    if (key.return) return select(THEMES[cursor]!.id)
+    if (key.return) return select(THEMES[cursor].id)
   })
   if (viewport.maxHeight === 0 || viewport.compact) {
     return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(t('theme.compact'), viewport.contentColumns))

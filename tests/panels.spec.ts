@@ -5,7 +5,7 @@ import chalk from 'chalk'
 import { createElement } from 'react'
 import { render } from 'ink'
 import { describe, expect, it, vi } from 'vitest'
-import { App } from '../src/app.ts'
+import { App, type AppProps } from '../src/app.ts'
 import { editQuery, HistoryPanel, JobsPanel, ModePanel, PermissionPanel, ResumePanel, SearchPanel, type JobRow, type SearchRow } from '../src/kernel-panels.ts'
 import { createTranscriptStore } from '../src/store.ts'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
@@ -13,6 +13,7 @@ import { DEFAULT_STATUSLINE_ITEMS } from '../src/render/status.ts'
 import type { ModelRow } from '../src/models.ts'
 import type { ApprovalSnapshot } from '../src/approval.ts'
 import type { PendingQuestion, QuestionSnapshot } from '../src/questions.ts'
+import type { ReviewSelection } from '../src/git-workflow.ts'
 
 const wait = async (): Promise<void> => new Promise(resolve => setTimeout(resolve, 100))
 
@@ -23,6 +24,80 @@ const approvalSnapshot = Object.freeze({ pending: undefined, answered: false, qu
 /** Shared identity-stable empty subagent feed snapshot (getSnapshot contract). */
 const EMPTY_AGENTS = Object.freeze([])
 const questionSnapshot = Object.freeze({ pending: undefined })
+
+/** Inert void double for the shared App props below. */
+const noop = (): void => {}
+
+/**
+ * The complete {@link AppProps} surface with inert doubles; a panel test only
+ * overrides the props its scenario drives. Typing the factory through the
+ * real interface keeps every fixture honest when App gains a required prop
+ * instead of letting the object literals drift silently.
+ */
+function appProps(overrides: Partial<AppProps> = {}): AppProps {
+  return {
+    store: createTranscriptStore(),
+    approval: { subscribe: () => noop, getSnapshot: () => approvalSnapshot },
+    questions: { subscribe: () => noop, getSnapshot: () => questionSnapshot, submit: noop, cancel: noop },
+    subagents: { subscribe: () => noop, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
+    commands: { descriptors: [], subscribe: () => noop, setAgent: noop },
+    skills: { rows: [], subscribe: () => noop, setAgent: noop },
+    model: 'test/model',
+    cwd: 'dsh-cli',
+    workspaceRoot: 'C:\\repo\\dsh-cli',
+    branch: 'main',
+    sessionId: '12345678',
+    // The runner passes '' until the first session exists (index.ts).
+    sessionKey: '',
+    resumed: false,
+    mode: 'standard',
+    permission: 'workspace-write',
+    dispatch: noop,
+    interrupt: () => false,
+    quit: noop,
+    loadModels: async () => ({ rows: [], failures: [] }),
+    loadMentions: async () => [],
+    inspectImages: async () => [],
+    prepareImages: async () => [],
+    inspectFiles: async () => [],
+    prepareFiles: async () => [],
+    selectModel: () => 'test/model',
+    subagentModel: '',
+    setSubagentModel: () => '',
+    clearSubagentModel: noop,
+    deleteSession: async () => '',
+    cycleMode: () => '',
+    setPermission: id => id,
+    exportTranscript: async () => {},
+    renameTitle: () => '',
+    copyLastResponse: async () => '',
+    loadGitDiff: async () => ({ title: 'git diff', files: [] }),
+    reviewChanges: noop,
+    loadPresets: async () => [],
+    switchMode: async id => id,
+    loadPermissions: async () => [],
+    createSession: noop,
+    forkSession: noop,
+    loadSessions: async () => [],
+    loadSessionTranscript: async () => '',
+    loadSubagents: async () => [],
+    switchSession: noop,
+    cancelSessionSwitch: () => false,
+    loadPlugins: () => [],
+    loadJobs: () => [],
+    // /update is out of scope here: a probe must fail loudly if a panel opens it.
+    probeUpdate: () => Promise.reject(new Error('update probe not wired in panel tests')),
+    applyUpdate: async () => 0,
+    onBridgeReady: noop,
+    statusline: DEFAULT_STATUSLINE_ITEMS,
+    saveStatusline: noop,
+    saveLanguage: noop,
+    history: [],
+    recordHistory: noop,
+    applyEditorKeys: async () => '',
+    ...overrides,
+  }
+}
 
 describe('exclusive panel height budgets', () => {
   it('bounds long approval and plan-review content without clearing the terminal', async () => {
@@ -53,7 +128,7 @@ describe('exclusive panel height budgets', () => {
     let questionSnapshot: QuestionSnapshot = { pending: undefined }
     let questionCancelCount = 0
     const noop = (): void => {}
-    const instance = render(createElement(App, {
+    const instance = render(createElement(App, appProps({
       store: createTranscriptStore(),
       subagents: { subscribe: () => () => {}, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
       approval: {
@@ -74,8 +149,8 @@ describe('exclusive panel height budgets', () => {
           questionCancelCount += 1
         },
       },
-      commands: { descriptors: [], subscribe: () => noop },
-      skills: { rows: [], subscribe: () => noop },
+      commands: { descriptors: [], subscribe: () => noop, setAgent: noop },
+      skills: { rows: [], subscribe: () => noop, setAgent: noop },
       model: 'test/model',
       cwd: 'dsh-cli',
       workspaceRoot: 'C:\\repo\\dsh-cli',
@@ -98,11 +173,11 @@ describe('exclusive panel height budgets', () => {
       setPermission: id => id,
       exportTranscript: async () => {},
       renameTitle: () => '',
-      loadPresets: async () => Array.from({ length: 40 }, (_, index) => ({ id: `mode-${index}`, trust: 'user' as const, description: `preset ${index}` })),
+      loadPresets: async () => Array.from({ length: 40 }, (_, index) => ({ id: `mode-${index}`, trust: 'user' as const, path: `C:\\presets\\mode-${index}\\agent.yml`, description: `preset ${index}` })),
       switchMode: async id => id,
       createSession: noop,
       loadSessions: async () => Array.from({ length: 80 }, (_, index) => ({
-        id: `session-${index}`, createdAt: index, cwd: 'C:\\repo', workspace: 'repo', subagent: false,
+        id: `session-${index}`, createdAt: index, updatedAt: index, cwd: 'C:\\repo', workspace: 'repo', subagent: false,
         resumable: true, live: false, persisted: true, preset: 'standard', title: `Conversation ${index}`,
       })),
       loadSessionTranscript: async id => `# ${id}\n${Array.from({ length: 200 }, (_, index) => `line ${index}`).join('\n')}`,
@@ -116,7 +191,7 @@ describe('exclusive panel height budgets', () => {
       history: [],
       recordHistory: noop,
       onBridgeReady: noop,
-    }), {
+    })), {
       stdin,
       stdout,
       stderr: stdout,
@@ -306,12 +381,12 @@ describe('exclusive panel height budgets', () => {
     })
     const approvalListeners = new Set<() => void>()
     const questionListeners = new Set<() => void>()
-    let approvalSnapshot: ApprovalSnapshot = { pending: undefined, answered: false, queued: 0 }
-    let questionSnapshot: QuestionSnapshot = { pending: undefined }
+    const approvalSnapshot: ApprovalSnapshot = { pending: undefined, answered: false, queued: 0 }
+    const questionSnapshot: QuestionSnapshot = { pending: undefined }
     const noop = (): void => {}
-    const saved: readonly string[][] = []
+    const saved: string[][] = []
     let currentItems: readonly string[] = DEFAULT_STATUSLINE_ITEMS
-    const instance = render(createElement(App, {
+    const instance = render(createElement(App, appProps({
       store: createTranscriptStore(),
       subagents: { subscribe: () => () => {}, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
       approval: {
@@ -330,8 +405,8 @@ describe('exclusive panel height budgets', () => {
         submit: noop,
         cancel: noop,
       },
-      commands: { descriptors: [], subscribe: () => noop },
-      skills: { rows: [], subscribe: () => noop },
+      commands: { descriptors: [], subscribe: () => noop, setAgent: noop },
+      skills: { rows: [], subscribe: () => noop, setAgent: noop },
       model: 'test/model',
       cwd: 'dsh-cli',
       workspaceRoot: 'C:\repo\dsh-cli',
@@ -373,7 +448,7 @@ describe('exclusive panel height budgets', () => {
       history: [],
       recordHistory: noop,
       onBridgeReady: noop,
-    }), {
+    })), {
       stdin,
       stdout,
       stderr: stdout,
@@ -488,7 +563,7 @@ describe('queued messages and global recall', () => {
         data: { target: 'next-turn', start: 0, inserted: [queued, later] },
       } as never,
     ])
-    const instance = render(createElement(App, {
+    const instance = render(createElement(App, appProps({
       subagents: { subscribe: () => () => {}, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
       store,
       approval: {
@@ -507,8 +582,8 @@ describe('queued messages and global recall', () => {
         submit: noop,
         cancel: noop,
       },
-      commands: { descriptors: [], subscribe: () => noop },
-      skills: { rows: [], subscribe: () => noop },
+      commands: { descriptors: [], subscribe: () => noop, setAgent: noop },
+      skills: { rows: [], subscribe: () => noop, setAgent: noop },
       model: 'test/model',
       cwd: 'dsh-cli',
       workspaceRoot: 'C:\repo\dsh-cli',
@@ -551,7 +626,7 @@ describe('queued messages and global recall', () => {
         if (action.kind === 'remove') cancelled.push(messageId)
       },
       onBridgeReady: noop,
-    }), {
+    })), {
       stdin,
       stdout,
       stderr: stdout,
@@ -666,7 +741,7 @@ describe('queued messages and global recall', () => {
         },
       } as never)
     }
-    const instance = render(createElement(App, {
+    const instance = render(createElement(App, appProps({
       subagents: { subscribe: () => () => {}, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
       store,
       approval: {
@@ -674,19 +749,22 @@ describe('queued messages and global recall', () => {
           approvalListeners.add(listener)
           return () => approvalListeners.delete(listener)
         },
-        getSnapshot: () => ({ pending: undefined, answered: false, queued: 0 }),
+        // Stable frozen snapshots: an inline object literal would hand React a
+        // new identity on every getSnapshot call and spin it into
+        // "Maximum update depth exceeded".
+        getSnapshot: () => approvalSnapshot,
       },
       questions: {
         subscribe: (listener: () => void) => {
           questionListeners.add(listener)
           return () => questionListeners.delete(listener)
         },
-        getSnapshot: () => ({ pending: undefined }),
+        getSnapshot: () => questionSnapshot,
         submit: noop,
         cancel: noop,
       },
-      commands: { descriptors: [], subscribe: () => noop },
-      skills: { rows: [], subscribe: () => noop },
+      commands: { descriptors: [], subscribe: () => noop, setAgent: noop },
+      skills: { rows: [], subscribe: () => noop, setAgent: noop },
       model: 'test/model',
       cwd: 'dsh-cli',
       workspaceRoot: 'C:\\repo\\dsh-cli',
@@ -726,7 +804,7 @@ describe('queued messages and global recall', () => {
       recordHistory: noop,
       updateQueued: noop,
       onBridgeReady: noop,
-    }), {
+    })), {
       stdin,
       stdout,
       stderr: stdout,
@@ -808,7 +886,7 @@ describe('queued messages and global recall', () => {
     const recorded: string[] = []
     const approvalListeners = new Set<() => void>()
     const questionListeners = new Set<() => void>()
-    const instance = render(createElement(App, {
+    const instance = render(createElement(App, appProps({
       store: createTranscriptStore(),
       subagents: { subscribe: () => () => {}, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
       approval: {
@@ -827,8 +905,8 @@ describe('queued messages and global recall', () => {
         submit: noop,
         cancel: noop,
       },
-      commands: { descriptors: [], subscribe: () => noop },
-      skills: { rows: [], subscribe: () => noop },
+      commands: { descriptors: [], subscribe: () => noop, setAgent: noop },
+      skills: { rows: [], subscribe: () => noop, setAgent: noop },
       model: 'test/model',
       cwd: 'dsh-cli',
       workspaceRoot: 'C:\repo\dsh-cli',
@@ -869,7 +947,7 @@ describe('queued messages and global recall', () => {
         recorded.push(text)
       },
       onBridgeReady: noop,
-    }), {
+    })), {
       stdin,
       stdout,
       stderr: stdout,
@@ -963,10 +1041,10 @@ describe('queued messages and global recall', () => {
       output += chunk.toString()
     })
     const noop = (): void => {}
-    const reviews: string[] = []
+    const reviews: ReviewSelection[] = []
     const approvalListeners = new Set<() => void>()
     const questionListeners = new Set<() => void>()
-    const instance = render(createElement(App, {
+    const instance = render(createElement(App, appProps({
       store: createTranscriptStore(),
       subagents: { subscribe: () => () => {}, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
       approval: {
@@ -985,8 +1063,8 @@ describe('queued messages and global recall', () => {
         submit: noop,
         cancel: noop,
       },
-      commands: { descriptors: [], subscribe: () => noop },
-      skills: { rows: [], subscribe: () => noop },
+      commands: { descriptors: [], subscribe: () => noop, setAgent: noop },
+      skills: { rows: [], subscribe: () => noop, setAgent: noop },
       model: 'test/model',
       cwd: 'dsh-cli',
       workspaceRoot: 'C:\\repo\\dsh-cli',
@@ -1030,7 +1108,7 @@ describe('queued messages and global recall', () => {
       history: [],
       recordHistory: noop,
       onBridgeReady: noop,
-    }), {
+    })), {
       stdin,
       stdout,
       stderr: stdout,
@@ -1135,7 +1213,7 @@ describe('queued messages and global recall', () => {
     const searched: string[] = []
     const approvalListeners = new Set<() => void>()
     const questionListeners = new Set<() => void>()
-    const instance = render(createElement(App, {
+    const instance = render(createElement(App, appProps({
       store: createTranscriptStore(),
       subagents: { subscribe: () => () => {}, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
       approval: {
@@ -1154,8 +1232,8 @@ describe('queued messages and global recall', () => {
         submit: noop,
         cancel: noop,
       },
-      commands: { descriptors: [], subscribe: () => noop },
-      skills: { rows: [], subscribe: () => noop },
+      commands: { descriptors: [], subscribe: () => noop, setAgent: noop },
+      skills: { rows: [], subscribe: () => noop, setAgent: noop },
       model: 'test/model',
       cwd: 'dsh-cli',
       workspaceRoot: 'C:\repo\dsh-cli',
@@ -1206,7 +1284,7 @@ describe('queued messages and global recall', () => {
       history: [],
       recordHistory: noop,
       onBridgeReady: noop,
-    }), {
+    })), {
       stdin,
       stdout,
       stderr: stdout,
@@ -1254,7 +1332,7 @@ describe('queued messages and global recall', () => {
     const noop = (): void => {}
     const approvalListeners = new Set<() => void>()
     const questionListeners = new Set<() => void>()
-    const instance = render(createElement(App, {
+    const instance = render(createElement(App, appProps({
       store: createTranscriptStore(),
       subagents: { subscribe: () => () => {}, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
       approval: {
@@ -1273,8 +1351,8 @@ describe('queued messages and global recall', () => {
         submit: noop,
         cancel: noop,
       },
-      commands: { descriptors: [], subscribe: () => noop },
-      skills: { rows: [], subscribe: () => noop },
+      commands: { descriptors: [], subscribe: () => noop, setAgent: noop },
+      skills: { rows: [], subscribe: () => noop, setAgent: noop },
       model: 'test/model',
       cwd: 'dsh-cli',
       workspaceRoot: 'C:\repo\dsh-cli',
@@ -1313,7 +1391,7 @@ describe('queued messages and global recall', () => {
       history: [],
       recordHistory: noop,
       onBridgeReady: noop,
-    }), {
+    })), {
       stdin,
       stdout,
       stderr: stdout,
@@ -1361,7 +1439,7 @@ describe('queued messages and global recall', () => {
     const switched: string[] = []
     const approvalListeners = new Set<() => void>()
     const questionListeners = new Set<() => void>()
-    const instance = render(createElement(App, {
+    const instance = render(createElement(App, appProps({
       store: createTranscriptStore(),
       subagents: { subscribe: () => () => {}, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
       approval: {
@@ -1380,8 +1458,8 @@ describe('queued messages and global recall', () => {
         submit: noop,
         cancel: noop,
       },
-      commands: { descriptors: [], subscribe: () => noop },
-      skills: { rows: [], subscribe: () => noop },
+      commands: { descriptors: [], subscribe: () => noop, setAgent: noop },
+      skills: { rows: [], subscribe: () => noop, setAgent: noop },
       model: 'test/model',
       cwd: 'dsh-cli',
       workspaceRoot: 'C:\repo\dsh-cli',
@@ -1445,7 +1523,7 @@ describe('queued messages and global recall', () => {
       history: [],
       recordHistory: noop,
       onBridgeReady: noop,
-    }), {
+    })), {
       stdin,
       stdout,
       stderr: stdout,
@@ -1512,7 +1590,7 @@ describe('queued messages and global recall', () => {
     const noop = (): void => {}
     const approvalListeners = new Set<() => void>()
     const questionListeners = new Set<() => void>()
-    const instance = render(createElement(App, {
+    const instance = render(createElement(App, appProps({
       store: createTranscriptStore(),
       subagents: { subscribe: () => () => {}, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
       approval: {
@@ -1531,8 +1609,8 @@ describe('queued messages and global recall', () => {
         submit: noop,
         cancel: noop,
       },
-      commands: { descriptors: [], subscribe: () => noop },
-      skills: { rows: [], subscribe: () => noop },
+      commands: { descriptors: [], subscribe: () => noop, setAgent: noop },
+      skills: { rows: [], subscribe: () => noop, setAgent: noop },
       model: 'test/model',
       cwd: 'dsh-cli',
       workspaceRoot: 'C:\repo\dsh-cli',
@@ -1571,7 +1649,7 @@ describe('queued messages and global recall', () => {
       history: ['Fix the login bug', 'bump the package version'],
       recordHistory: noop,
       onBridgeReady: noop,
-    }), {
+    })), {
       stdin,
       stdout,
       stderr: stdout,
@@ -1648,7 +1726,7 @@ describe('queued messages and global recall', () => {
       output += chunk.toString()
     })
     const noop = (): void => {}
-    const instance = render(createElement(App, {
+    const instance = render(createElement(App, appProps({
       subagents: { subscribe: () => () => {}, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
       store: createTranscriptStore([
         { type: 'turn/start', seq: 1, time: 0, data: { turn: 1 } } as never,
@@ -1663,8 +1741,8 @@ describe('queued messages and global recall', () => {
         submit: noop,
         cancel: noop,
       },
-      commands: { descriptors: [], subscribe: () => noop },
-      skills: { rows: [], subscribe: () => noop },
+      commands: { descriptors: [], subscribe: () => noop, setAgent: noop },
+      skills: { rows: [], subscribe: () => noop, setAgent: noop },
       model: 'test/model',
       cwd: 'dsh-cli',
       workspaceRoot: 'C:\repo\dsh-cli',
@@ -1703,7 +1781,7 @@ describe('queued messages and global recall', () => {
       history: [],
       recordHistory: noop,
       onBridgeReady: noop,
-    }), {
+    })), {
       stdin,
       stdout,
       stderr: stdout,
@@ -1797,7 +1875,7 @@ describe('/model effort stage', () => {
         },
       },
     ]
-    const instance = render(createElement(App, {
+    const instance = render(createElement(App, appProps({
       store: createTranscriptStore(),
       subagents: { subscribe: () => () => {}, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
       approval: {
@@ -1816,8 +1894,8 @@ describe('/model effort stage', () => {
         submit: noop,
         cancel: noop,
       },
-      commands: { descriptors: [], subscribe: () => noop },
-      skills: { rows: [], subscribe: () => noop },
+      commands: { descriptors: [], subscribe: () => noop, setAgent: noop },
+      skills: { rows: [], subscribe: () => noop, setAgent: noop },
       model: 'acme/plain',
       cwd: 'dsh-cli',
       workspaceRoot: 'C:\\repo\\dsh-cli',
@@ -1855,7 +1933,7 @@ describe('/model effort stage', () => {
       history: [],
       recordHistory: noop,
       onBridgeReady: noop,
-    }), {
+    })), {
       stdin,
       stdout,
       stderr: stdout,
@@ -2028,7 +2106,7 @@ describe('/effort command', () => {
       },
       { provider: 'acme', providerName: 'Acme', model: 'plain', modelName: 'Plain' },
     ]
-    const instance = render(createElement(App, {
+    const instance = render(createElement(App, appProps({
       store: createTranscriptStore(),
       subagents: { subscribe: () => () => {}, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
       approval: { subscribe: () => noop, getSnapshot: () => approvalSnapshot },
@@ -2038,8 +2116,8 @@ describe('/effort command', () => {
         submit: noop,
         cancel: noop,
       },
-      commands: { descriptors: [], subscribe: () => noop },
-      skills: { rows: [], subscribe: () => noop },
+      commands: { descriptors: [], subscribe: () => noop, setAgent: noop },
+      skills: { rows: [], subscribe: () => noop, setAgent: noop },
       // The deployment default names the route `deepseek`, while the catalog
       // registers `deepseek-official` for the same model id — the fallback
       // match must still resolve the row and open the effort stage.
@@ -2077,7 +2155,7 @@ describe('/effort command', () => {
       history: [],
       recordHistory: noop,
       onBridgeReady: noop,
-    }), {
+    })), {
       stdin,
       stdout,
       stderr: stdout,
@@ -2139,6 +2217,7 @@ describe('panel row sanitization', () => {
       load: async () => [{
         id: 'evil',
         trust: 'user' as const,
+        path: 'C:\\presets\\evil\\agent.yml',
         name: 'bad\x1b]0;pwned\x07name',
         description: 'desc\u202eFlipped\nnewline',
       }],
@@ -2256,7 +2335,6 @@ describe('panel row sanitization', () => {
         title: 'T\x1b[31mred\u202eR',
       }],
       readTranscript: async () => '',
-      remove: async () => '',
       select: () => {},
       close: () => {},
     }), {
@@ -2288,7 +2366,7 @@ describe('panel row sanitization', () => {
     const instance = render(createElement(SearchPanel, {
       // Every search parks on a caller-resolved promise so the test controls
       // settlement order exactly.
-      load: () => new Promise(resolve => { pending.push(resolve) }),
+      load: () => new Promise<readonly SearchRow[]>(resolve => { pending.push(resolve) }),
       select: () => {},
       close: () => {},
     }), {
@@ -2314,9 +2392,9 @@ describe('panel row sanitization', () => {
       expect(pending).toHaveLength(2)
       // The NEWER search settles first and must own the panel; the stale
       // promise resolving afterwards is dropped by the abort guard.
-      pending[1]!([row('second-hit')])
+      pending[1]([row('second-hit')])
       await wait()
-      pending[0]!([row('first-hit')])
+      pending[0]([row('first-hit')])
       await wait()
       const output = read()
       expect(output).toContain('second-hit')
@@ -2454,7 +2532,7 @@ describe('/model typing filter', () => {
     })
     const noop = (): void => {}
     const picked: ModelRow[] = []
-    const instance = render(createElement(App, {
+    const instance = render(createElement(App, appProps({
       store: createTranscriptStore(),
       subagents: { subscribe: () => () => {}, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
       approval: { subscribe: () => noop, getSnapshot: () => approvalSnapshot },
@@ -2464,8 +2542,8 @@ describe('/model typing filter', () => {
         submit: noop,
         cancel: noop,
       },
-      commands: { descriptors: [], subscribe: () => noop },
-      skills: { rows: [], subscribe: () => noop },
+      commands: { descriptors: [], subscribe: () => noop, setAgent: noop },
+      skills: { rows: [], subscribe: () => noop, setAgent: noop },
       model: 'deepseek/deepseek-chat',
       cwd: 'dsh-cli',
       workspaceRoot: 'C:\\repo\\dsh-cli',
@@ -2508,7 +2586,7 @@ describe('/model typing filter', () => {
       history: [],
       recordHistory: noop,
       onBridgeReady: noop,
-    }), {
+    })), {
       stdin,
       stdout,
       stderr: stdout,
@@ -2577,8 +2655,8 @@ describe('panel query q-key guard', () => {
     const instance = render(createElement(ModePanel, {
       current: 'standard',
       load: async () => [
-        { id: 'standard', trust: 'user' as const, description: 'standard preset' },
-        { id: 'quiet', trust: 'user' as const, description: 'quiet preset' },
+        { id: 'standard', trust: 'user' as const, path: 'C:\\presets\\standard\\agent.yml', description: 'standard preset' },
+        { id: 'quiet', trust: 'user' as const, path: 'C:\\presets\\quiet\\agent.yml', description: 'quiet preset' },
       ],
       select: () => {},
       close: () => {
@@ -2645,7 +2723,7 @@ describe('/model typing filter — late directory and compact copy', () => {
     })
     const noop = (): void => {}
     const picked: ModelRow[] = []
-    const instance = render(createElement(App, {
+    const instance = render(createElement(App, appProps({
       store: createTranscriptStore(),
       subagents: { subscribe: () => () => {}, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
       approval: { subscribe: () => noop, getSnapshot: () => approvalSnapshot },
@@ -2655,8 +2733,8 @@ describe('/model typing filter — late directory and compact copy', () => {
         submit: noop,
         cancel: noop,
       },
-      commands: { descriptors: [], subscribe: () => noop },
-      skills: { rows: [], subscribe: () => noop },
+      commands: { descriptors: [], subscribe: () => noop, setAgent: noop },
+      skills: { rows: [], subscribe: () => noop, setAgent: noop },
       // The applied model sits at FULL-list index 1 but is NOT in the
       // 'gpt' filter: a late directory resolve must not park the cursor on
       // the full-row index (which lands on gpt-5-mini and would pick it).
@@ -2705,7 +2783,7 @@ describe('/model typing filter — late directory and compact copy', () => {
       history: [],
       recordHistory: noop,
       onBridgeReady: noop,
-    }), {
+    })), {
       stdin,
       stdout,
       stderr: stdout,
@@ -2762,7 +2840,7 @@ describe('/model typing filter — late directory and compact copy', () => {
     })
     const noop = (): void => {}
     const picked: ModelRow[] = []
-    const instance = render(createElement(App, {
+    const instance = render(createElement(App, appProps({
       store: createTranscriptStore(),
       subagents: { subscribe: () => () => {}, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
       approval: { subscribe: () => noop, getSnapshot: () => approvalSnapshot },
@@ -2772,8 +2850,8 @@ describe('/model typing filter — late directory and compact copy', () => {
         submit: noop,
         cancel: noop,
       },
-      commands: { descriptors: [], subscribe: () => noop },
-      skills: { rows: [], subscribe: () => noop },
+      commands: { descriptors: [], subscribe: () => noop, setAgent: noop },
+      skills: { rows: [], subscribe: () => noop, setAgent: noop },
       model: 'deepseek/deepseek-chat',
       cwd: 'dsh-cli',
       workspaceRoot: 'C:\\repo\\dsh-cli',
@@ -2814,7 +2892,7 @@ describe('/model typing filter — late directory and compact copy', () => {
       history: [],
       recordHistory: noop,
       onBridgeReady: noop,
-    }), {
+    })), {
       stdin,
       stdout,
       stderr: stdout,

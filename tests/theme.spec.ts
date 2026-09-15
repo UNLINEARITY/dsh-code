@@ -118,11 +118,11 @@ describe('tui theme', () => {
       expect(surfaceAccent(0, DARK_PALETTE.brand)).toBe(DARK_PALETTE.brand)
       expect(surfaceAccent(7, LIGHT_PALETTE.dim)).toBe(LIGHT_PALETTE.dim)
       setTheme('prismatic')
-      for (const [index, ring] of [0, 1, 2, 3, 4, 5, 6, 7].map(i => [i, ACCENT_RING[i % ACCENT_RING.length]!] as const)) {
+      for (const [index, ring] of [0, 1, 2, 3, 4, 5, 6, 7].map(i => [i, ACCENT_RING[i % ACCENT_RING.length]] as const)) {
         expect(surfaceAccent(index, DARK_PALETTE.brand)).toBe(ring)
       }
       // Negative indices wrap like a modulo should.
-      expect(surfaceAccent(-1, DARK_PALETTE.brand)).toBe(ACCENT_RING[3]!)
+      expect(surfaceAccent(-1, DARK_PALETTE.brand)).toBe(ACCENT_RING[3])
     } finally {
       setTheme('dark')
     }
@@ -138,7 +138,7 @@ describe('tui theme', () => {
       const flow = themeFlow()
       expect(flow?.anchors).toBe(rainbowRoll().flowAnchors)
       expect(flow?.phaseMs).toBe(rainbowRoll().flowPhaseMs)
-      expect(surfaceAccent(5, DARK_PALETTE.brand)).toBe(rainbowRoll().ring[1]!)
+      expect(surfaceAccent(5, DARK_PALETTE.brand)).toBe(rainbowRoll().ring[1])
       setTheme('dark')
       expect(themeFlow()).toBeUndefined()
       expect(isRainbow()).toBe(false)

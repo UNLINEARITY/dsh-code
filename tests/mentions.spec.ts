@@ -144,7 +144,7 @@ describe('createMentions.candidates (fileReferences service)', () => {
     ), agent, nowhere)
     const rows = await api.candidates('app')
     expect(rows.map(row => row.kind)).toEqual(['file', 'session'])
-    expect(rows[1]!.description).toBe('Session · /repo')
+    expect(rows[1].description).toBe('Session · /repo')
     // A bare `@` never queries sessions.
     await expect(createMentions(serviceContext([], { sessions }), agent, nowhere).candidates('')).resolves.toEqual([])
   })

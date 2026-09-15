@@ -1,8 +1,10 @@
 node_modules/
 lib/
+coverage/
 *.tsbuildinfo
 /.omc
 /.agents/
 CLAUDE.md
 /log/*
 /.pnpm-store/
+git-log.md

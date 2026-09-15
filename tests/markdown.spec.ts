@@ -48,7 +48,7 @@ describe('renderMarkdown', () => {
       '科学视角：大脑释放多巴胺、催产素。哲学视角：柏拉图说爱情是灵魂对美的回忆。成长视角：爱情像一面镜子。',
       20,
     )
-    for (const line of lines) expect(visibleColumns(text([line])[0]!)).toBeLessThanOrEqual(20)
+    for (const line of lines) expect(visibleColumns(text([line])[0])).toBeLessThanOrEqual(20)
     expect(text(lines).some(line => /^[，。！？：；、）》」』】]/u.test(line))).toBe(false)
     expect(text(lines).join('')).toContain('哲学视角：')
     expect(text(lines).join('')).toContain('成长视角：')
@@ -68,8 +68,8 @@ describe('renderMarkdown', () => {
 
   it('styles headings as accent', () => {
     const [line] = renderMarkdown('## Release notes', 80)
-    expect(text([line!])).toEqual(['Release notes'])
-    expect(line!.segments[0]?.style).toBe('accent')
+    expect(text([line])).toEqual(['Release notes'])
+    expect(line.segments[0]?.style).toBe('accent')
   })
 
   it('renders fenced code verbatim with a dim language label', () => {
@@ -94,7 +94,7 @@ describe('renderMarkdown', () => {
 
   it('parses inline code, bold, italic, strike, and links', () => {
     const lines = renderMarkdown('run `npm i`, **bold**, *italic*, ~~gone~~ and [dsh](https://x.dev)', 120)
-    const segments = lines[0]!.segments
+    const segments = lines[0].segments
     expect(segments.map(segment => [segment.text, segment.style])).toEqual([
       ['run ', 'plain'],
       ['npm i', 'code'],
@@ -118,7 +118,7 @@ describe('renderMarkdown', () => {
 
   it('renders blockquotes dim with an accent border', () => {
     const [line] = renderMarkdown('> quoted wisdom', 80)
-    expect(line!.segments).toEqual([
+    expect(line.segments).toEqual([
       { text: '  │ ', style: 'accent' },
       { text: 'quoted wisdom', style: 'dim' },
     ])
@@ -126,13 +126,13 @@ describe('renderMarkdown', () => {
 
   it('renders thematic breaks as a dim rule', () => {
     const [line] = renderMarkdown('---', 40)
-    expect(line!.segments[0]?.style).toBe('dim')
-    expect(line!.segments[0]?.text).toBe('  ──────────')
+    expect(line.segments[0]?.style).toBe('dim')
+    expect(line.segments[0]?.text).toBe('  ──────────')
   })
 
   it('merges adjacent same-style runs after wrapping', () => {
     const lines = renderMarkdown('**bold** **bold**', 80)
-    expect(lines[0]!.segments).toEqual([
+    expect(lines[0].segments).toEqual([
       { text: 'bold', style: 'bold' },
       { text: ' ', style: 'plain' },
       { text: 'bold', style: 'bold' },
@@ -157,8 +157,8 @@ describe('renderMarkdown', () => {
       '─────  ───────',
       ' CLI      Busy',
     ])
-    expect(lines[0]!.segments.filter(segment => segment.text.trim() !== '').every(segment => segment.style === 'accentBold')).toBe(true)
-    expect(lines[1]!.segments).toEqual([{ text: '━━━━━  ━━━━━━━', style: 'dim' }])
+    expect(lines[0].segments.filter(segment => segment.text.trim() !== '').every(segment => segment.style === 'accentBold')).toBe(true)
+    expect(lines[1].segments).toEqual([{ text: '━━━━━  ━━━━━━━', style: 'dim' }])
   })
 
   it('keeps inline markdown styles inside table cells', () => {
@@ -214,6 +214,8 @@ describe('renderMarkdown tab normalization', () => {
       const width = line.segments.reduce((sum, segment) => sum + visibleColumns(segment.text), 0)
       expect(width).toBeLessThanOrEqual(12)
     }
-    expect(lines.flatMap(line => line.segments).join('')).not.toContain('\t')
+    // Join the segment TEXT: joining the segment objects would stringify them
+    // to "[object Object]" and the assertion could never fail.
+    expect(lines.flatMap(line => line.segments).map(segment => segment.text).join('')).not.toContain('\t')
   })
 })

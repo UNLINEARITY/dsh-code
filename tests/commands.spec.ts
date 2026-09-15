@@ -52,7 +52,7 @@ describe('submissionPayload', () => {
 /** Registry double plus context double feeding {@link watchCommands}. */
 function harness(descriptors: readonly CommandDescriptor[]): {
   ctx: Context
-  fireChange(): void
+  fireChange: () => void
 } {
   const listeners = new Set<() => void>()
   const registry = {

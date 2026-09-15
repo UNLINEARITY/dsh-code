@@ -99,7 +99,7 @@ function shuffle<T>(items: readonly T[], rng: () => number): T[] {
   const out = [...items]
   for (let i = out.length - 1; i > 0; i -= 1) {
     const j = Math.floor(rng() * (i + 1))
-    ;[out[i], out[j]] = [out[j]!, out[i]!]
+    ;[out[i], out[j]] = [out[j], out[i]]
   }
   return out
 }
@@ -136,21 +136,21 @@ export function rollRainbow(seed: number): RainbowRoll {
   const pool = shuffle(RAINBOW_POOL, rng)
   const [brand, brandBright, brandMid, brandDeep, code, success, error, warn, addHue, delHue] = pool
   const palette: ThemePalette = {
-    brand: brand!,
-    brandBright: brandBright!,
-    brandMid: brandMid!,
-    brandDeep: brandDeep!,
+    brand: brand,
+    brandBright: brandBright,
+    brandMid: brandMid,
+    brandDeep: brandDeep,
     dim: DIM,
-    success: success!,
-    error: error!,
-    warn: warn!,
+    success: success,
+    error: error,
+    warn: warn,
     text: TEXT,
-    code: code!,
+    code: code,
     composerBand: BAND,
-    diffAdd: darkTint(addHue!),
-    diffDel: darkTint(delHue!),
-    diffAddFg: addHue!,
-    diffDelFg: delHue!,
+    diffAdd: darkTint(addHue),
+    diffDel: darkTint(delHue),
+    diffAddFg: addHue,
+    diffDelFg: delHue,
   }
   const ring = shuffle(RAINBOW_POOL, rng).slice(0, 4)
   // Adjacency by construction: consecutive tones take consecutive slots of a

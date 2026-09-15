@@ -46,7 +46,7 @@ describe('resolveEffectiveSelection', () => {
   const logged = { provider: 'route', model: 'resumed-model', reasoningEffort: 'high' }
 
   it('prefers the in-process pick over the logged header and defaults', () => {
-    const picked: ModelSelection = { provider: 'route', model: 'picked-model', reasoningEffort: 'max' }
+    const picked: ModelSelection = { provider: 'route', model: 'picked-model', reasoningEffort: ReasoningEffortId('max') }
     expect(resolveEffectiveSelection(picked, logged, defaults)).toBe(picked)
   })
 

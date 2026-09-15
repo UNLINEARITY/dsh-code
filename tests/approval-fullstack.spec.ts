@@ -43,10 +43,16 @@ const request = (reason: string): ApprovalRequest =>
 
 const wait = async (ms = 150): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
 
+/** Normalize one forwarded rejection: a non-Error reason would lose its stack. */
+function rejectionError(reason: unknown): Error {
+  if (reason instanceof Error) return reason
+  return new Error(typeof reason === 'string' ? reason : 'upstream rejection')
+}
+
 function withTimeout<T>(promise: Promise<T>, label: string, ms = 4000): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(label + ': DEAD (no settle in ' + ms + 'ms)')), ms)
-    promise.then(v => { clearTimeout(timer); resolve(v) }, e => { clearTimeout(timer); reject(e) })
+    promise.then(v => { clearTimeout(timer); resolve(v) }, (e: unknown) => { clearTimeout(timer); reject(rejectionError(e)) })
   })
 }
 
@@ -73,18 +79,19 @@ const frozenQuestion = Object.freeze({ pending: undefined })
 const EMPTY_AGENTS = Object.freeze([])
 
 function appProps(overrides: Partial<AppProps> = {}): AppProps {
-  return {
+  const props: AppProps = {
     store: createTranscriptStore(),
     subagents: { subscribe: () => unsubscribe, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
     approval: { subscribe: () => unsubscribe, getSnapshot: () => frozenEmpty },
     questions: { subscribe: () => unsubscribe, getSnapshot: () => frozenQuestion, submit: noop, cancel: noop },
-    commands: { descriptors: [], subscribe: () => unsubscribe },
-    skills: { rows: [], subscribe: () => unsubscribe },
+    commands: { descriptors: [], subscribe: () => unsubscribe, setAgent: noop },
+    skills: { rows: [], subscribe: () => unsubscribe, setAgent: noop },
     model: 'test/model',
     cwd: 'dsh-cli',
     workspaceRoot: 'C:\\repo\\dsh-cli',
     branch: 'main',
     sessionId: '12345678',
+    sessionKey: 'session-12345678',
     resumed: false,
     mode: 'standard',
     permission: 'workspace-write',
@@ -95,6 +102,8 @@ function appProps(overrides: Partial<AppProps> = {}): AppProps {
     loadMentions: async () => [],
     inspectImages: async () => [],
     prepareImages: async () => [],
+    inspectFiles: async () => [],
+    prepareFiles: async () => [],
     selectModel: () => 'test/model',
     subagentModel: '',
     setSubagentModel: () => '',
@@ -105,7 +114,7 @@ function appProps(overrides: Partial<AppProps> = {}): AppProps {
     exportTranscript: async () => {},
     renameTitle: () => '',
     copyLastResponse: async () => '',
-    loadGitDiff: async () => ({ title: 'git diff', text: '' }),
+    loadGitDiff: async () => ({ title: 'git diff', files: [] }),
     reviewChanges: noop,
     loadPresets: async () => [],
     loadPermissions: async () => [],
@@ -123,12 +132,13 @@ function appProps(overrides: Partial<AppProps> = {}): AppProps {
     loadJobs: () => [],
     statusline: DEFAULT_STATUSLINE_ITEMS,
     saveStatusline: noop,
+    saveLanguage: noop,
     applyEditorKeys: async () => 'ok',
     history: [],
     recordHistory: noop,
     onBridgeReady: noop,
-    ...overrides,
   }
+  return Object.assign(props, overrides)
 }
 
 describe('full-stack approval probe (split stdin, real mount shape)', () => {

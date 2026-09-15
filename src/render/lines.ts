@@ -250,7 +250,7 @@ function toolDetailLines(detail: ToolDetail, columns: number): readonly StyledLi
     case 'read':
       return [
         ...prefixedTextLines(
-          `${detail.path} · lines ${detail.offset}-${detail.lines.length > 0 ? detail.lines[detail.lines.length - 1]!.number : detail.offset - 1} of ${detail.totalLines}${detail.truncated ? ' (window truncated)' : ''}`,
+          `${detail.path} · lines ${detail.offset}-${detail.lines.length > 0 ? detail.lines[detail.lines.length - 1].number : detail.offset - 1} of ${detail.totalLines}${detail.truncated ? ' (window truncated)' : ''}`,
           columns,
           '    ── ',
           'dim',
@@ -296,7 +296,7 @@ export function userPromptSegments(text: string): readonly StyledSegment[] {
   let diffFence = false
   let inFence = false
   for (let at = 0; at < lines.length; at += 1) {
-    const line = lines[at]!
+    const line = lines[at]
     const suffix = at === lines.length - 1 ? '' : '\n'
     if (line.trimStart().startsWith('```')) {
       const language = line.trim().slice(3).trim()

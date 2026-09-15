@@ -46,8 +46,6 @@ import {
   WAVE_SURFACE_AMPLITUDE,
   WAVE_SURFACE_OMEGA,
   WAVE_SURFACE_WAVELENGTH,
-  type DeepseekWaveStyle,
-  type DeepseekWaveTier,
 } from '../src/render/animations.ts'
 
 /** The wave's tint base in production is the composer band — pin fixtures to it. */
@@ -105,8 +103,8 @@ describe('deepDivingGradientColor', () => {
     for (let tick = 0; tick < 120; tick += 1) {
       const color = deepDivingGradientColor(0, tick, 12, base, highlight)
       for (let channel = 0; channel < 3; channel += 1) {
-        expect(color[channel]!).toBeGreaterThanOrEqual(base[channel]!)
-        expect(color[channel]!).toBeLessThanOrEqual(highlight[channel]!)
+        expect(color[channel]).toBeGreaterThanOrEqual(base[channel])
+        expect(color[channel]).toBeLessThanOrEqual(highlight[channel])
       }
     }
   })
@@ -387,8 +385,8 @@ describe('deepseekWaveColumnBg', () => {
             const bg = deepseekWaveColumnBg(tick, column, width, tier, 'wave', hues, base, row, 3)
             if (bg === null) continue
             for (let channel = 0; channel < 3; channel += 1) {
-              const spread = Math.abs(bg[channel]! - base[channel]!)
-              const widestHue = Math.max(...hues.map(hue => Math.abs(hue[channel]! - base[channel]!)))
+              const spread = Math.abs(bg[channel] - base[channel])
+              const widestHue = Math.max(...hues.map(hue => Math.abs(hue[channel] - base[channel])))
               expect(spread).toBeLessThanOrEqual(Math.ceil(WAVE_SURFACE_ALPHA_CAP * widestHue) + 1)
             }
           }
@@ -408,7 +406,7 @@ describe('deepseekWaveColumnBg', () => {
           const bg = deepseekWaveColumnBg(tick, column, width, 'deepseek', 'wave', deepseekHues, WAVE_BASE_DARK, row, 3)
           if (previous !== null && bg !== null) {
             for (let channel = 0; channel < 3; channel += 1) {
-              expect(Math.abs(bg[channel]! - previous[channel]!)).toBeLessThanOrEqual(18)
+              expect(Math.abs(bg[channel] - previous[channel])).toBeLessThanOrEqual(18)
             }
           }
           previous = bg
@@ -464,8 +462,8 @@ describe('deepseekWaveColumnBg', () => {
           const bg = deepseekWaveColumnBg(tick, column, width, tier, 'pulse', hues, base, 2, 5)
           if (bg === null) continue
           for (let channel = 0; channel < 3; channel += 1) {
-            const spread = Math.abs(bg[channel]! - base[channel]!)
-            const widestHue = Math.max(...hues.map(hue => Math.abs(hue[channel]! - base[channel]!)))
+            const spread = Math.abs(bg[channel] - base[channel])
+            const widestHue = Math.max(...hues.map(hue => Math.abs(hue[channel] - base[channel])))
             expect(spread).toBeLessThanOrEqual(Math.ceil(PULSE_ALPHA_CAP * widestHue) + 1)
           }
         }
@@ -503,7 +501,7 @@ describe('deepseekWaveColumnBg', () => {
     const bg = deepseekWaveColumnBg(12, 5, width, 'flash', 'wave', flashHues, WAVE_BASE_LIGHT)
     expect(bg).not.toBeNull()
     for (let channel = 0; channel < 3; channel += 1) {
-      expect(bg![channel]!).toBeGreaterThan(WAVE_BASE_LIGHT[channel]! - 160)
+      expect(bg![channel]).toBeGreaterThan(WAVE_BASE_LIGHT[channel] - 160)
     }
   })
 })
@@ -622,9 +620,9 @@ describe('three ignition styles', () => {
         // With only hue 0 weighted, the mix equals a hue0→base blend; any
         // deviation proves hue 1 participated.
         const expected: RgbTriple = [
-          Math.round(deepseekHues[0]![0] * 0.5 + WAVE_BASE_DARK[0] * 0.5),
-          Math.round(deepseekHues[0]![1] * 0.5 + WAVE_BASE_DARK[1] * 0.5),
-          Math.round(deepseekHues[0]![2] * 0.5 + WAVE_BASE_DARK[2] * 0.5),
+          Math.round(deepseekHues[0][0] * 0.5 + WAVE_BASE_DARK[0] * 0.5),
+          Math.round(deepseekHues[0][1] * 0.5 + WAVE_BASE_DARK[1] * 0.5),
+          Math.round(deepseekHues[0][2] * 0.5 + WAVE_BASE_DARK[2] * 0.5),
         ]
         if (channelDelta(bg, expected) > 0) { mixedSeen = true; break }
       }

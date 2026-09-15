@@ -118,7 +118,7 @@ function isWideCodePoint(code: number): boolean {
   let high = WIDE_RANGES.length - 1
   while (low <= high) {
     const mid = (low + high) >> 1
-    const [start, end] = WIDE_RANGES[mid]!
+    const [start, end] = WIDE_RANGES[mid]
     if (code < start) high = mid - 1
     else if (code > end) low = mid + 1
     else return true
@@ -147,7 +147,7 @@ export function splitGraphemes(text: string): string[] {
 export function graphemeWidth(cluster: string): number {
   // VS16 requests emoji presentation: ❤️ / ✳️ render two cells even when the
   // base glyph is text-default (width 1 without the selector).
-  if (cluster.includes('\u{fe0f}', 0) as boolean) return 2
+  if (cluster.includes('\u{fe0f}', 0)) return 2
   const first = cluster.codePointAt(0) ?? 0
   if (ZERO_WIDTH.test(String.fromCodePoint(first))) return 0
   return isWideCodePoint(first) ? 2 : 1
