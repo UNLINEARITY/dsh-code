@@ -264,6 +264,7 @@ export const zh: MessageCatalog = {
   'notice.usage.animation': '用法：/animation [on|off]',
   'notice.usage.language': '用法：/language [en|zh]',
   'notice.usage.rainbow': '用法：/rainbow [seed]',
+  'notice.usage.bareCommand': '用法：/{name}',
   'notice.switchInProgress': '正在切换会话 —— 等新会话就绪后再发送，或用 /resume cancel 取消',
   'notice.imageCancelled': '图片提交已取消',
   'notice.themeConfigUnreadable': '主题配置无法读取，使用暗色：{message}',

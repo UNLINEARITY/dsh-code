@@ -567,6 +567,23 @@ describe('composer image attachments', () => {
     }
   })
 
+  it('refuses extra tokens on a bare local command instead of sending them to the model', async () => {
+    const harness = createTty(120, 24)
+    const dispatch = vi.fn()
+    const instance = renderApp(harness, appProps({ dispatch }))
+    try {
+      await wait()
+      harness.stdin.write('/queue clear')
+      await wait(180)
+      harness.stdin.write('\r')
+      await wait(180)
+      expect(dispatch).not.toHaveBeenCalled()
+      expect(harness.output.text).toContain('usage: /queue')
+    } finally {
+      instance.unmount()
+    }
+  })
+
   it('opens the /schedule panel from the command line and folds live schedule events', async () => {
     const harness = createTty(120, 24)
     const store = createTranscriptStore()

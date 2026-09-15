@@ -286,6 +286,22 @@ const LOCAL_COMMANDS: readonly LocalCommand[] = [
 
 const LOCAL_COMMAND_NAMES = new Set(LOCAL_COMMANDS.map(command => command.label.slice(1)))
 
+/**
+ * TUI-local commands that take no input. Extra tokens used to fall through
+ * as a prompt (`/queue clear` reached the model); they now surface usage.
+ */
+const BARE_LOCAL_COMMANDS = new Set([
+  'quit', 'help', 'clear', 'copy', 'update', 'schedule', 'statusline', 'theme',
+  'history', 'queue', 'usage', 'agents', 'todos', 'subagent',
+])
+
+/** Split a slash line into the command name and any trailing input. */
+function slashNameAndArgs(text: string): { readonly name: string; readonly args: string } | undefined {
+  const match = /^\/([a-z][a-z0-9_-]*)(?:$|[\t ](.*))$/u.exec(text)
+  if (match === null || match[1] === undefined) return undefined
+  return { name: match[1], args: (match[2] ?? '').trim() }
+}
+
 /** One mutation the terminal may request for a pending next-turn inbox item. */
 export type QueueMutation =
   | { readonly kind: 'remove' }
@@ -4715,6 +4731,11 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
       }
       if (text === '/delete' || text.startsWith('/delete ')) {
         openDelete(text.slice(7).trim())
+        return
+      }
+      const slash = slashNameAndArgs(text)
+      if (slash !== undefined && BARE_LOCAL_COMMANDS.has(slash.name) && slash.args !== '') {
+        notify(t('notice.usage.bareCommand', { name: slash.name }), 'warning')
         return
       }
       // Delivery mode: everything above this point is a local command or a
