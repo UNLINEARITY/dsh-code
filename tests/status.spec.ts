@@ -203,7 +203,8 @@ describe('adaptive context layout', () => {
     expect(context).not.toContain('75K/128K')
     expect(layout.row1.right).toEqual([{ text: 'workspace-write', tone: 'warn' }])
     expect(layout.row1.hint).toBe(true)
-    // Past the meter minimum the whole group goes before badge or hint.
+    // Past the meter minimum the cycle hint goes first so a slightly
+    // tighter row can keep occupancy; only then does the group drop.
     const dropped = layoutStatusBar(
       { ...baseFacts, model: 'm', cwd: 'r', permission: 'workspace-write' },
       stats,
@@ -212,7 +213,7 @@ describe('adaptive context layout', () => {
     )
     expect(groupText(dropped.row1).some(group => group.startsWith('context '))).toBe(false)
     expect(dropped.row1.right).toEqual([{ text: 'workspace-write', tone: 'warn' }])
-    expect(dropped.row1.hint).toBe(true)
+    expect(dropped.row1.hint).toBe(false)
   })
 })
 
@@ -559,23 +560,26 @@ describe('status width degradation', () => {
     expect(groups).not.toContain('a'.repeat(40))
   })
 
-  it('keeps permission rightmost before the identity must ellipsize', () => {
-    // Context is now the lowest-priority group: it is removed before the
-    // fixed permission badge or its Shift+Tab hint.
+  it('keeps the context meter on a typical 120-column row instead of dropping it for the cycle hint', () => {
+    const layout = layoutStatusBar(richFacts, richStats, 120)
+    const groups = groupText(layout.row1)
+    expect(groups[0]).toMatch(/^○ provider\/model-name/u)
+    expect(groups.some(group => group.startsWith('context '))).toBe(true)
+    expect(layout.row1.right.map(span => span.text)).toEqual(['workspace-write'])
+    expect(visibleColumns(rowText(layout.row1))).toBeLessThanOrEqual(119)
+  })
+
+  it('keeps permission rightmost and peels identity before dropping context', () => {
     const withBadge = layoutStatusBar(richFacts, richStats, 100)
-    const compactIdentity = withBadge.row1.left.map(group => group.spans.map(span => span.text).join(''))
-    expect(compactIdentity).toHaveLength(1)
-    expect(compactIdentity[0]).toMatch(/^○ provider\/model-name/u)
-    expect(compactIdentity[0]).toMatch(/…$/u)
+    const groups = groupText(withBadge.row1)
+    expect(groups[0]).toMatch(/^○ provider\/model-name/u)
+    expect(groups.some(group => group.startsWith('context '))).toBe(true)
     expect(withBadge.row1.right.map(span => span.text)).toEqual(['workspace-write'])
-    expect(withBadge.row1.hint).toBe(true)
+    expect(withBadge.row1.hint).toBe(false)
     expect(visibleColumns(rowText(withBadge.row1))).toBeLessThanOrEqual(99)
-    // Below the threshold where even the minimum bar fits, context drops as a
-    // whole and the badge stays pinned.
-    const identityAlone = layoutStatusBar(richFacts, richStats, 80)
-    expect(identityAlone.row1.left).toHaveLength(1)
-    expect(identityAlone.row1.right).toEqual([{ text: 'workspace-write', tone: 'warn' }])
-    expect(visibleColumns(rowText(identityAlone.row1))).toBeLessThanOrEqual(79)
+    const tighter = layoutStatusBar(richFacts, richStats, 80)
+    expect(tighter.row1.right).toEqual([{ text: 'workspace-write', tone: 'warn' }])
+    expect(visibleColumns(rowText(tighter.row1))).toBeLessThanOrEqual(79)
   })
 
   it('shrinks the context bar before dropping it, without touching other segments', () => {
@@ -614,7 +618,7 @@ describe('status width degradation', () => {
       expect(visibleColumns(rowText(layout.row2, STATUS_ROW2_INDENT))).toBeLessThanOrEqual(23)
     }
     const text = rowText(layout.row1)
-    expect(text.endsWith('…')).toBe(true)
+    expect(text).toMatch(/^○ provider\/model-name/u)
     expect(visibleColumns(text)).toBeLessThanOrEqual(23)
   })
 

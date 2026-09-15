@@ -292,9 +292,10 @@ export const STATUS_ROW2_INDENT = 2
 const TITLE_BUDGET = 48
 
 /**
- * Primary-row drop ranks: context drops before permission; the identity
- * cluster never drops and ellipsizes only after the right badge is gone.
- * Secondary-row groups reuse the remaining ranks independently.
+ * Primary-row drop ranks: identity never drops; permission outranks context.
+ * The drop ladder peels hint and trailing identity facts before removing
+ * the context meter, so occupancy stays visible on a typical 120-column
+ * terminal. Secondary-row groups reuse the remaining ranks independently.
  */
 const RANK_TITLE = 10
 const RANK_TOKENS = 50
@@ -356,6 +357,30 @@ function safe(text: string): string {
 /** Dim junction separator span inside a cluster. */
 function sep(): StatusSpan {
   return { text: ' · ', tone: 'label' }
+}
+
+/** True for the dim ` · ` that joins identity facts. */
+function isIdentitySep(span: StatusSpan): boolean {
+  return span.text === ' · ' && span.tone === 'label'
+}
+
+/**
+ * Drop the trailing identity fact (branch, then mode, then cwd) so the
+ * context meter can keep a column. Returns undefined once only the busy
+ * dot and model remain.
+ */
+function peelIdentityFact(spans: readonly StatusSpan[]): StatusSpan[] | undefined {
+  if (spans.length < 3) return undefined
+  const last = spans[spans.length - 1]
+  const before = spans[spans.length - 2]
+  const modeSep = spans[spans.length - 3]
+  if (last?.tone === 'accent' && modeSep !== undefined && isIdentitySep(modeSep) && before?.tone === 'label') {
+    return spans.slice(0, -3)
+  }
+  if ((last?.tone === 'branch' || last?.tone === 'path') && before !== undefined && isIdentitySep(before)) {
+    return spans.slice(0, -2)
+  }
+  return undefined
 }
 
 /** Total visible columns of a span list (separators ride inside the spans). */
@@ -552,7 +577,8 @@ function buildCandidates(
 /**
  * Compose the two-row footer layout under a column budget. Row 1 keeps model,
  * cwd, mode, branch, context, then the right-pinned permission badge and cycle
- * hint. It drops hint, context, and permission before ellipsizing identity.
+ * hint. It shrinks the context bar, drops the hint, and peels trailing
+ * identity facts before removing the context group or the permission badge.
  * Row 2 fits all secondary figures and state within its own budget.
  * @param facts - identity facts resolved by the runner.
  * @param stats - session figures folded from the durable log.
@@ -623,11 +649,10 @@ export function layoutStatusBar(
   }
 
   while (width() > budget) {
-    // Context is the lowest-priority visual group: the bar shrinks inside
-    // its own budget first (the absolute readout survives), then the
-    // readout degrades to the bare percent, and only then does the whole
-    // group go — before the permission badge or its Shift+Tab affordance
-    // is touched.
+    // Occupancy outranks the cycle hint and trailing identity facts
+    // (cwd/mode/branch): shrink the bar, drop the hint, then peel those
+    // facts before removing the context group. Permission stays until
+    // context is already gone.
     if (leftKept.some(entry => entry.id === 'context')) {
       if (contextWidth > CONTEXT_MIN_WIDTH) {
         const overflow = width() - budget
@@ -640,24 +665,21 @@ export function layoutStatusBar(
         rebuildContext()
         continue
       }
-      leftKept.splice(leftKept.findIndex(entry => entry.id === 'context'), 1)
-      continue
-    }
-    if (hint && rightKept.length > 0 && leftKept.length > 0) {
-      const identity = leftKept[0]
-      const identityText = identity.group.spans.map(span => span.text).join('')
-      const rightWidth = joinWidth(rightKept.map(entry => visibleColumns(entry.span.text)), itemSeparator)
-      const identityBudget = budget - rightWidth - LEFT_RIGHT_GAP - visibleColumns(statusCycleHint())
-      if (identityBudget > 0 && visibleColumns(identityText) > identityBudget) {
-        leftKept[0] = {
-          ...identity,
-          group: { spans: [{ text: truncateColumns(identityText, identityBudget), tone: 'model' }] },
-        }
-        continue
-      }
     }
     if (hint) {
       hint = false
+      continue
+    }
+    const identityEntry = leftKept[0]
+    if (identityEntry?.id === 'identity') {
+      const peeled = peelIdentityFact(identityEntry.group.spans)
+      if (peeled !== undefined) {
+        leftKept[0] = { ...identityEntry, group: { spans: peeled } }
+        continue
+      }
+    }
+    if (leftKept.some(entry => entry.id === 'context')) {
+      leftKept.splice(leftKept.findIndex(entry => entry.id === 'context'), 1)
       continue
     }
     let dropLeft = -1
