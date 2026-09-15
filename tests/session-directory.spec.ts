@@ -11,6 +11,7 @@ import {
   isSubagentSession,
   jsonlSessionRoot,
   matchSessionId,
+  matchSessionRow,
   mergeSessionTitles,
   newestRootForCwd,
   sessionRowMatchesQuery,
@@ -86,6 +87,18 @@ describe('session selection policy', () => {
     expect(matchSessionId(headers, 'zzz').id).toBe('zzz')
     expect(() => matchSessionId(headers, 'abc')).toThrow(/ambiguous/)
     expect(() => matchSessionId(headers, 'nope')).toThrow(/no persisted session matches/)
+  })
+
+  it('matches a picker row by exact id, unique prefix, or unique suffix', () => {
+    const rows = projectSessionRows([
+      record('session-abcdef12', 1),
+      record('session-zzz99999', 2),
+    ], { sessions: 'roots', cwd: 'all', sort: 'newest', currentCwd: '', query: '' })
+    expect(matchSessionRow(rows, 'session-abcdef12').id).toBe('session-abcdef12')
+    expect(matchSessionRow(rows, 'session-abc').id).toBe('session-abcdef12')
+    expect(matchSessionRow(rows, 'abcdef12').id).toBe('session-abcdef12')
+    expect(() => matchSessionRow(rows, 'session-')).toThrow(/ambiguous/)
+    expect(() => matchSessionRow(rows, 'nope')).toThrow(/no persisted session matches/)
   })
 
   it('picks the newest root session pinned to the cwd, skipping subagents', () => {

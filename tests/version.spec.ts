@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
-import { _resetDshKernelVersionForTests, dshKernelVersion, resolveDshHostVersion } from '../src/version.ts'
+import { _resetDshKernelVersionForTests, dshKernelVersion, headerBrandTitle, resolveDshHostVersion } from '../src/version.ts'
 
 const roots: string[] = []
 
@@ -57,6 +57,11 @@ describe('resolveDshHostVersion', () => {
     const entry = join(root, 'a', 'b', 'c', 'd', 'e', 'f', 'bin.js')
     mkdirSync(dirname(entry), { recursive: true })
     expect(resolveDshHostVersion(entry)).toBeUndefined()
+  })
+
+  it('omits a missing-manifest 0.0.0 from the header brand line', () => {
+    expect(headerBrandTitle('1.2.0')).toBe('DeepSeek Harness · v1.2.0')
+    expect(headerBrandTitle('0.0.0')).toBe('DeepSeek Harness')
   })
 
   it('returns undefined for missing or empty entries', () => {

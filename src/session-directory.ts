@@ -105,6 +105,26 @@ export function matchSessionId(headers: readonly SessionHeader[], wanted: string
   return matches[0]
 }
 
+/**
+ * Unique picker-row match by exact id, unique prefix, or unique suffix.
+ * The resume list shows `id.slice(-12)`, so `/delete` arguments are often
+ * that tail rather than a leading prefix.
+ */
+export function matchSessionRow(rows: readonly SessionRow[], wanted: string): SessionRow {
+  const needle = wanted.trim()
+  if (needle === '') throw new Error('no persisted session matches ""')
+  const exact = rows.filter(row => row.id === needle)
+  if (exact[0] !== undefined && exact.length === 1) return exact[0]
+  const prefixed = rows.filter(row => row.id.startsWith(needle))
+  if (prefixed[0] !== undefined && prefixed.length === 1) return prefixed[0]
+  const suffixed = rows.filter(row => row.id.endsWith(needle))
+  if (suffixed[0] !== undefined && suffixed.length === 1) return suffixed[0]
+  if (prefixed.length > 1 || suffixed.length > 1) {
+    throw new Error(`session prefix "${needle}" is ambiguous (${Math.max(prefixed.length, suffixed.length)} matches): use more of the id`)
+  }
+  throw new Error(`no persisted session matches "${needle}"`)
+}
+
 /** The newest persisted ROOT session pinned to this cwd, or undefined. */
 export function newestRootForCwd(headers: readonly SessionHeader[], cwd: string): SessionHeader | undefined {
   const local = headers

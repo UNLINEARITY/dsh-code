@@ -9,7 +9,7 @@ import type { PermissionRow } from './permissions.ts'
 import type { PresetRow } from './presets.ts'
 import type { PluginRow } from './plugin-inventory.ts'
 import type { SessionDirectoryOptions, SessionRow } from './session-directory.ts'
-import { formatRelativeTime } from './session-directory.ts'
+import { formatRelativeTime, matchSessionRow } from './session-directory.ts'
 import type { ReviewBranch, ReviewCommit, ReviewSelection } from './git-workflow.ts'
 import { panelViewport, revealRow } from './render/inspector.ts'
 import { markdownLines, textLines, type LineStyle, type StyledLine } from './render/lines.ts'
@@ -283,7 +283,7 @@ export function JobsPanel({ load, close }: { load: () => readonly JobRow[]; clos
   })
 }
 
-export function ResumePanel({ currentCwd, load, readTranscript, select, requestDelete, deleteConfirmId, reloadToken = 0, deleteMode = false, close }: {
+export function ResumePanel({ currentCwd, load, readTranscript, select, requestDelete, deleteConfirmId, reloadToken = 0, deleteMode = false, presetId, close }: {
   currentCwd: string
   load: (options: SessionDirectoryOptions, signal?: AbortSignal) => Promise<readonly SessionRow[]>
   readTranscript: (id: string, signal?: AbortSignal) => Promise<string>
@@ -296,12 +296,20 @@ export function ResumePanel({ currentCwd, load, readTranscript, select, requestD
   reloadToken?: number
   /** Opened via /delete: hint-first delete mode. */
   deleteMode?: boolean
+  /** `/delete <id>` argument to resolve after the listing loads. */
+  presetId?: string
   close: () => void
 }): ReactElement {
   // Codex resume-picker default: the CURRENT directory's root sessions; the
   // cwd filter widens to all only on request (the old default leaked every
   // directory's sessions into what read as a current-directory view).
-  const [options, setOptions] = useState<SessionDirectoryOptions>({ sessions: 'roots', cwd: 'current', sort: 'newest', currentCwd, query: '' })
+  const [options, setOptions] = useState<SessionDirectoryOptions>({
+    sessions: presetId === undefined || presetId === '' ? 'roots' : 'all',
+    cwd: presetId === undefined || presetId === '' ? 'current' : 'all',
+    sort: 'newest',
+    currentCwd,
+    query: '',
+  })
   const [focus, setFocus] = useState(0)
   const [density, setDensity] = useState<'comfortable' | 'dense'>('comfortable')
   const [rows, setRows] = useState<readonly SessionRow[]>([])
@@ -327,6 +335,20 @@ export function ResumePanel({ currentCwd, load, readTranscript, select, requestD
     return () => controller.abort()
   }, [options, reloadToken])
   useEffect(() => setCursor(value => Math.min(value, Math.max(0, rows.length - 1))), [rows.length])
+  const presetArmed = useRef(false)
+  useEffect(() => {
+    if (presetArmed.current || presetId === undefined || presetId === '' || rows.length === 0 || requestDelete === undefined) return
+    try {
+      const row = matchSessionRow(rows, presetId)
+      presetArmed.current = true
+      const index = rows.findIndex(candidate => candidate.id === row.id)
+      if (index >= 0) setCursor(index)
+      requestDelete(row)
+    } catch (reason: unknown) {
+      presetArmed.current = true
+      setError(reason instanceof Error ? reason.message : String(reason))
+    }
+  }, [rows, presetId, requestDelete])
   const cycle = (): void => {
     if (focus === 3) {
       setDensity(current => current === 'comfortable' ? 'dense' : 'comfortable')

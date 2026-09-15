@@ -17,6 +17,11 @@ function readPackageVersion(manifest = new URL('../package.json', import.meta.ur
 /** Version of the installed dsh-code package. */
 export const DSH_CODE_VERSION = readPackageVersion()
 
+/** Header brand line: hide a missing-manifest fallback so we never paint v0.0.0. */
+export function headerBrandTitle(version: string = DSH_CODE_VERSION): string {
+  return version === '0.0.0' ? 'DeepSeek Harness' : `DeepSeek Harness · v${version}`
+}
+
 /** The harness host package: the dsh CLI whose process runs the TUI plugin. */
 const DSH_HOST_PACKAGE_NAME = '@deepseek-ai/dsh'
 

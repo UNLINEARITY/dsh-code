@@ -4367,6 +4367,38 @@ describe('/delete and /subagent', () => {
     }
   })
 
+  it('arms /delete <suffix> against the matching listing row', async () => {
+    const harness = createTty(100, 24)
+    const removed: string[] = []
+    const instance = renderApp(harness, appProps({
+      loadSessions: async () => [{
+        id: 'session-abcdef12', createdAt: 1, updatedAt: 1, cwd: '/tmp/other', workspace: 'other',
+        subagent: false, resumable: true, live: false, persisted: true, preset: 'standard',
+        title: 'old thread',
+      }],
+      deleteSession: async (id: string) => {
+        removed.push(id)
+        return 'deleted 1 session'
+      },
+    }))
+    try {
+      await wait()
+      harness.stdin.write('/delete abcdef12')
+      await wait()
+      harness.stdin.write('\r')
+      await wait(180)
+      expect(harness.output.text).toContain('permanently delete')
+      expect(harness.output.text).toContain('old thread')
+      harness.stdin.write('y')
+      await wait()
+      expect(removed).toEqual(['session-abcdef12'])
+    } finally {
+      instance.unmount()
+      harness.stdin.destroy()
+      harness.stdout.destroy()
+    }
+  })
+
   it('opens /subagent with the inherit row and applies a picked override', async () => {
     const harness = createTty(100, 24)
     const applied: string[] = []

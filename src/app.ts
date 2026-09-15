@@ -48,7 +48,7 @@ import { getLanguage, parseLanguageName, t, type LanguageName, type MessageKey }
 import { UpdatePanel, subscribeUpdateApplyRunning } from './update-panel.ts'
 import type { LauncherUpdateStatus } from './update.ts'
 import { WHALE_GLYPH, WHALE_GLYPH_COLUMNS } from './whale-glyph.ts'
-import { DSH_CODE_VERSION, dshKernelVersion } from './version.ts'
+import { dshKernelVersion, headerBrandTitle } from './version.ts'
 import type { TranscriptStore } from './store.ts'
 import { DEFAULT_TERMINAL_TITLE, sanitizeTerminalTitle, terminalTitleSequence, useTerminalTitle } from './terminal-title.ts'
 import { settledEntryCount, type TranscriptEntry } from './render/projection.ts'
@@ -894,7 +894,7 @@ function Header({ resumed }: { resumed: boolean }): ReactElement {
     const version = dshKernelVersion()
     return version === undefined ? undefined : `dsh-v${version}`
   })()
-  const title = `DeepSeek Harness · v${DSH_CODE_VERSION}`
+  const title = headerBrandTitle()
   const slogan = 'Into the Unknown  探索未至之境'
   const hint = resumed ? 'resumed · /help · Esc interrupt' : '/help · Esc interrupt · Ctrl+C quit'
   const copyWidths = [visibleColumns(title), visibleColumns(slogan), visibleColumns(hint)]
@@ -6350,6 +6350,7 @@ export function App(props: AppProps): ReactElement {
         deleteConfirmId,
         reloadToken: deleteReloadToken,
         deleteMode: resumeDelete.mode,
+        presetId: resumeDelete.id,
         select: (row: SessionRow) => { props.switchSession(row); setResumeOpen(false) },
         close: () => setResumeOpen(false),
       })
@@ -6600,7 +6601,9 @@ export function App(props: AppProps): ReactElement {
         openDelete: (id?: string) => {
           const armed = id === undefined || id === '' ? undefined : id
           setResumeDelete({ mode: true, ...armed === undefined ? {} : { id: armed } })
-          setDeleteConfirmId(armed)
+          // Confirm after the picker resolves the id against the listing —
+          // the argument may be a suffix of the displayed id, not the row key.
+          setDeleteConfirmId(undefined)
           setResumeOpen(true)
         },
         openDiff: (argument: string) => {
