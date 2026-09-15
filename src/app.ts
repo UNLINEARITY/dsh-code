@@ -5557,41 +5557,68 @@ export function App(props: AppProps): ReactElement {
   const agentRows = useSyncExternalStore(subscribeSubagents, readAgentRows)
   const approvalPending = approvalSnapshot.pending !== undefined
   const questionPending = questionSnapshot.pending !== undefined
-  // While any modal owns the keys, the prompt box passes everything through.
+  /**
+   * Every keyboard-owning surface that is mutually exclusive with the composer,
+   * in precedence order. This ONE list drives the composer gate, the transcript
+   * visibility, the frozen band's hint, and the hand-off when a human approval
+   * or question arrives, so a panel cannot be wired into one of them and
+   * forgotten in the others.
+   */
+  const panelSurfaces: readonly { readonly hint: string; readonly open: boolean; readonly close: () => void }[] = [
+    { hint: 'the diff review', open: diffView !== undefined, close: () => setDiffView(undefined) },
+    { hint: 'the review picker', open: reviewPickerOpen, close: () => setReviewPickerOpen(false) },
+    {
+      hint: '/model',
+      open: modelOpen,
+      close: () => {
+        setModelOpen(false)
+        setProviderOpen(false)
+        setProviderAction(undefined)
+        setEffortFor(undefined)
+      },
+    },
+    { hint: '/help', open: helpOpen, close: () => setHelpOpen(false) },
+    { hint: '/mode', open: modeOpen, close: () => setModeOpen(false) },
+    { hint: '/permission', open: permissionOpen, close: () => setPermissionOpen(false) },
+    { hint: '/resume', open: resumeOpen, close: () => setResumeOpen(false) },
+    { hint: '/search', open: searchOpen, close: () => setSearchOpen(false) },
+    { hint: '/plugin', open: pluginOpen, close: () => setPluginOpen(false) },
+    { hint: '/update', open: updateOpen, close: () => setUpdateOpen(false) },
+    { hint: '/schedule', open: scheduleOpen, close: () => setScheduleOpen(false) },
+    { hint: '/jobs', open: jobsOpen, close: () => setJobsOpen(false) },
+    { hint: '/statusline', open: statuslineOpen, close: () => setStatuslineOpen(false) },
+    { hint: '/theme', open: themeOpen, close: () => setThemeOpen(false) },
+    { hint: '/language', open: languageOpen, close: () => setLanguageOpen(false) },
+    { hint: '/history', open: historyOpen, close: () => setHistoryOpen(false) },
+    { hint: '/queue', open: queueOpen, close: () => setQueueOpen(false) },
+    { hint: '/agents', open: agentsOpen, close: () => setAgentsOpen(false) },
+    { hint: '/subagent', open: subagentOpen, close: () => setSubagentOpen(false) },
+    { hint: '/todos', open: todosOpen, close: () => setTodosOpen(false) },
+    { hint: '/usage', open: usageOpen, close: () => setUsageOpen(false) },
+  ]
+  const openPanel = panelSurfaces.find(surface => surface.open)
+  // The Ctrl+O inspector is the one surface the composer already yields to
+  // through verboseOpen; it rides the same gate without a panel row.
+  const inspectorVisible = verboseOpen && !approvalPending && !questionPending
+  const modalVisible = openPanel !== undefined || inspectorVisible || approvalPending || questionPending
   // While a deletion waits for y/n, the composer takes the keys (the resume
   // panel yields): the confirm is typed IN the input box, not as an invisible
   // panel keypress.
   const inputActive = deleteConfirmId !== undefined
     ? !approvalPending && !questionPending
-    : !modelOpen && !helpOpen && !modeOpen && !permissionOpen && !resumeOpen && !pluginOpen && !updateOpen && !scheduleOpen && !jobsOpen && !statuslineOpen && !themeOpen && !languageOpen && !historyOpen && !queueOpen && !agentsOpen && !subagentOpen && !todosOpen && !usageOpen && !verboseOpen && diffView === undefined && !reviewPickerOpen && !approvalPending && !questionPending
-  const transcriptVisible = !modelOpen && !helpOpen && !modeOpen && !permissionOpen && !resumeOpen && !pluginOpen && !updateOpen && !scheduleOpen && !jobsOpen && !statuslineOpen && !themeOpen && !languageOpen && !historyOpen && !queueOpen && !agentsOpen && !subagentOpen && !todosOpen && !usageOpen && !verboseOpen && diffView === undefined && !reviewPickerOpen && !approvalPending && !questionPending
+    : !modalVisible
+  const transcriptVisible = !modalVisible
 
-  // Human questions outrank local inspectors. Close the lower modal instead
-  // of leaving an approval/question visible but keyboard-locked behind it.
+  // Human questions outrank local inspectors. Close every open surface instead
+  // of leaving it visible but keyboard-locked behind the approval.
   useEffect(() => {
     if (!approvalPending && !questionPending) return
-    setModelOpen(false)
-    setProviderOpen(false)
-    setProviderAction(undefined)
-    setEffortFor(undefined)
-    setHelpOpen(false)
-    setModeOpen(false)
-    setPermissionOpen(false)
-    setResumeOpen(false)
-    setPluginOpen(false)
-    setUpdateOpen(false)
-    setScheduleOpen(false)
-    setStatuslineOpen(false)
-    setThemeOpen(false)
-    setHistoryOpen(false)
-    setQueueOpen(false)
-    setAgentsOpen(false)
-    setSubagentOpen(false)
-    setTodosOpen(false)
+    for (const surface of panelSurfaces) {
+      if (surface.open) surface.close()
+    }
     setDeleteConfirmId(undefined)
     setVerboseOpen(false)
-    setDiffView(undefined)
-  }, [approvalPending, questionPending])
+  }, [approvalPending, questionPending, panelSurfaces])
 
   // Append-only transcript: everything up to the first still-mutable entry
   // (a running tool/retry/command) flushes through Ink's `<Static>` into native
@@ -5774,8 +5801,6 @@ export function App(props: AppProps): ReactElement {
     : visibleLiveLines.slice(-liveAudit.allocation.live)
   const auditedReasoningRows = liveAudit.allocation.reasoning
   const auditedAnswerRows = liveAudit.allocation.answer
-  const inspectorVisible = verboseOpen && !approvalPending && !questionPending
-  const modalVisible = modelOpen || helpOpen || modeOpen || permissionOpen || resumeOpen || pluginOpen || updateOpen || scheduleOpen || jobsOpen || statuslineOpen || themeOpen || languageOpen || historyOpen || queueOpen || agentsOpen || subagentOpen || todosOpen || usageOpen || inspectorVisible || diffView !== undefined || reviewPickerOpen || approvalPending || questionPending
   // The surface that currently owns the keyboard, named in the frozen band:
   // an empty composer under a panel must not advertise typing it cannot
   // accept — every key actually feeds the panel (which may or may not
@@ -5784,47 +5809,17 @@ export function App(props: AppProps): ReactElement {
     ? 'the approval prompt'
     : questionPending
       ? 'the question'
-      : diffView !== undefined
-        ? 'the diff review'
-        : reviewPickerOpen
-          ? 'the review picker'
-        : modelOpen
-          ? '/model'
-          : helpOpen
-            ? '/help'
-            : modeOpen
-              ? '/mode'
-              : permissionOpen
-                ? '/permission'
-                : resumeOpen
-                  ? '/resume'
-                  : pluginOpen
-                    ? '/plugin'
-                    : updateOpen
-                      ? '/update'
-                      : scheduleOpen
-                        ? '/schedule'
-                        : jobsOpen
-                          ? '/jobs'
-                        : statuslineOpen
-                          ? '/statusline'
-                          : themeOpen
-                            ? '/theme'
-                            : languageOpen
-                              ? '/language'
-                            : historyOpen
-                              ? '/history'
-                              : agentsOpen
-                                ? '/agents'
-                                : subagentOpen
-                                  ? '/subagent'
-                                  : todosOpen
-                                    ? '/todos'
-                                    : usageOpen
-                                      ? '/usage'
-                                      : inspectorVisible
-                                        ? 'history details'
-                                        : undefined
+      : openPanel?.hint ?? (inspectorVisible ? 'history details' : undefined)
+  // One way out of every panel, matching Esc: while a panel owns the keys,
+  // Ctrl+C closes it instead of silently doing nothing. The composer keeps its
+  // own three states (interrupt the turn / clear the draft / quit) whenever no
+  // panel is open, and the approval and question bars keep theirs.
+  useStableInput((input, key) => {
+    if (!(key.ctrl && input === 'c')) return
+    if (approvalPending || questionPending || deleteConfirmId !== undefined) return
+    if (openPanel !== undefined) openPanel.close()
+    else if (inspectorVisible) setVerboseOpen(false)
+  }, true)
   const frozenHint = keyboardOwner === undefined
     ? undefined
     : `keys go to ${keyboardOwner} · esc ${approvalPending ? 'rejects' : questionPending ? 'cancels' : 'closes'}`

@@ -12,6 +12,7 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { DEFAULT_STATUSLINE_ITEMS } from '../src/render/status.ts'
 import type { ModelRow } from '../src/models.ts'
 import type { ApprovalSnapshot } from '../src/approval.ts'
+import { SessionSeq } from '@deepseek-ai/dsh-session'
 import type { PendingQuestion, QuestionSnapshot } from '../src/questions.ts'
 import type { ReviewSelection } from '../src/git-workflow.ts'
 
@@ -2940,6 +2941,170 @@ describe('/model typing filter — late directory and compact copy', () => {
       instance.unmount()
       stdin.destroy()
       stdout.destroy()
+    }
+  })
+})
+
+/**
+ * Every panel is mutually exclusive with the composer. These cases pin the
+ * single panel-state list: a panel added to the app has to own the keys, name
+ * itself in the frozen band, and get out of the way when a human approval
+ * arrives — without those three drifting apart again.
+ */
+describe('panel keyboard ownership', () => {
+  /** One TTY plus a mutable approval snapshot the test can drive. */
+  function harness(overrides: Partial<AppProps> = {}) {
+    const stdin = Object.assign(new PassThrough(), {
+      isTTY: true,
+      isRaw: false,
+      setRawMode(value: boolean) {
+        this.isRaw = value
+        return this
+      },
+      ref() {},
+      unref() {},
+    }) as unknown as NodeJS.ReadStream
+    const stdout = Object.assign(new PassThrough(), {
+      isTTY: true,
+      columns: 100,
+      rows: 30,
+    }) as unknown as NodeJS.WriteStream
+    const state = {
+      output: '',
+      approval: approvalSnapshot as ApprovalSnapshot,
+      listeners: new Set<() => void>(),
+    }
+    stdout.on('data', chunk => {
+      state.output += chunk.toString()
+    })
+    const instance = render(createElement(App, appProps({
+      ...overrides,
+      approval: {
+        subscribe: (listener: () => void) => {
+          state.listeners.add(listener)
+          return () => state.listeners.delete(listener)
+        },
+        getSnapshot: () => state.approval,
+      },
+    })), { stdin, stdout, stderr: stdout, exitOnCtrlC: false, patchConsole: false })
+    return {
+      stdin,
+      stdout,
+      state,
+      instance,
+      setApproval(snapshot: ApprovalSnapshot): void {
+        state.approval = snapshot
+        state.listeners.forEach(listener => listener())
+      },
+    }
+  }
+
+  it('gives /search the keyboard: no composer write, no dispatch, no interrupt', async () => {
+    const dispatched: string[] = []
+    let interrupts = 0
+    // A running turn makes the composer's Esc branch meaningful: without the
+    // panel owning the keys it would abort the turn.
+    const store = createTranscriptStore([
+      { type: 'turn/start', seq: SessionSeq(1), time: 1, data: { turn: 1 } },
+    ])
+    const h = harness({
+      store,
+      dispatch: text => dispatched.push(text),
+      interrupt: () => {
+        interrupts += 1
+        return true
+      },
+      searchSessions: async () => [],
+    })
+    try {
+      await wait()
+      h.stdin.write('/search')
+      await wait()
+      h.stdin.write('\r')
+      await wait()
+      h.state.output = ''
+      h.stdin.write('login bug')
+      await wait()
+      expect(h.state.output).toContain('keys go to /search · esc closes')
+      // The query belongs to the panel: the composer must stay untouched.
+      expect(h.state.output).not.toContain('❯ login bug')
+      h.stdin.write('\r')
+      await wait()
+      expect(dispatched).toEqual([])
+      h.stdin.write('\x1b')
+      await wait()
+      expect(interrupts).toBe(0)
+    } finally {
+      h.instance.unmount()
+      h.stdin.destroy()
+      h.stdout.destroy()
+    }
+  })
+
+  it('names /queue as the keyboard owner while it is open', async () => {
+    const h = harness()
+    try {
+      await wait()
+      h.stdin.write('/queue')
+      await wait()
+      h.stdin.write('\r')
+      await wait()
+      expect(h.state.output).toContain('keys go to /queue · esc closes')
+    } finally {
+      h.instance.unmount()
+      h.stdin.destroy()
+      h.stdout.destroy()
+    }
+  })
+
+  it('closes an open panel for an approval and does not resurrect it', async () => {
+    const h = harness({ loadJobs: () => [] })
+    try {
+      await wait()
+      h.stdin.write('/jobs')
+      await wait()
+      h.stdin.write('\r')
+      await wait()
+      expect(h.state.output).toContain('/jobs · background tasks · 0')
+      h.setApproval({
+        pending: { headline: 'run a command', toolName: 'shell_command', command: 'ls', answer: noop },
+        answered: false,
+        queued: 0,
+      })
+      await wait()
+      expect(h.state.output).toContain('keys go to the approval prompt · esc rejects')
+      h.setApproval(approvalSnapshot)
+      await wait()
+      h.state.output = ''
+      await wait()
+      // Answering the approval must leave the composer in charge: the closed
+      // /jobs panel may not come back on its own.
+      expect(h.state.output).not.toContain('/jobs · background tasks')
+      expect(h.state.output).not.toContain('keys go to /jobs')
+    } finally {
+      h.instance.unmount()
+      h.stdin.destroy()
+      h.stdout.destroy()
+    }
+  })
+
+  it('closes any panel on Ctrl+C, the same way Esc does', async () => {
+    const h = harness()
+    try {
+      await wait()
+      h.stdin.write('/help')
+      await wait()
+      h.stdin.write('\r')
+      await wait()
+      expect(h.state.output).toContain('keys go to /help · esc closes')
+      h.state.output = ''
+      h.stdin.write('\x03')
+      await wait()
+      expect(h.state.output).not.toContain('keys go to /help')
+    } finally {
+      h.instance.unmount()
+      h.stdin.destroy()
+      h.stdout.destroy()
     }
   })
 })
