@@ -120,7 +120,29 @@ Levels above `high` include `xhigh`, `x-high`, `very-high`, `max`, `maximum`, an
 - Handle tool approvals, structured questions, plan reviews, multiple selections, and custom answers
 - Control what the Agent may do with permission Presets and sandboxes; add instructions or interrupt while a task is running
 
-### 5. Commands and key bindings
+### 5. Queued and steered messages
+
+While a turn is running you can keep typing. There are two ways to send what you type:
+
+- **Queue** — it waits until the turn finishes and then runs as a new turn. Use it for "do this once you are done with that".
+- **Steer** — it reaches the model before the next step of the running turn, as part of that request. Use it when the work has gone the wrong way and you want it corrected now.
+
+The difference is **when the model sees it**: a queued message is read once the turn has finished, a steered one before the turn makes its next move.
+
+How to send each way:
+
+- Press `Tab` on an empty composer to switch between them. The prompt glyph (`❯` / `↳`), the placeholder text, and the notice shown on switching all say which one is selected. With text in the box, `Tab` still completes commands and references.
+- `/queue` opens the queue panel: press `Enter` on a message to send it as steering instead, `e` to edit its text (attachments are kept as they are), or `d` to remove it.
+- Press `Delete` on an empty composer to cancel the newest queued message.
+- Pressing `Esc` to cancel the turn keeps **queued messages and sends them next**, while steered messages are dropped with the turn.
+
+Every prompt in the transcript is a full-width coloured row, and the colour says how it was sent: the theme's bright brand colour for an ordinary message, its warning colour for a queued one, and its third accent for a steered one, each labelled with "queued" or "steered". The colour is computed from the theme, so switching themes or rerolling rainbow changes it too.
+
+A message counts as queued or steered only when a turn was **already running** at the moment you sent it. A message sent while idle is an ordinary one even if the composer is set to steer, because it starts a new turn straight away.
+
+See [Queued and steered messages](docs/message-queue.md) for the queue behaviour, the order the upstream queues are read in, and the colour values per theme.
+
+### 6. Commands and key bindings
 
 Start the TUI:
 
@@ -166,6 +188,7 @@ The following built-in commands are available inside the TUI. Additional Harness
 | `/diff [--staged\|ref]` | Inspect the working-tree, staged, or specified-ref Git diff by file |
 | `/review [note]` | Bare /review opens a candidate picker (uncommitted changes / pick a branch / pick a commit / custom focus); any argument becomes a review note over the uncommitted diff (`/review in Chinese`). The diff is pasted into the current session under read-only permissions, and findings arrive with P0-P3 priorities and file anchors |
 | `/todos` | View the complete todo list for the current session |
+| `/queue` | See the messages waiting for the next turn: enter sends one as steering instead, `e` edits its text, `d` removes it; `↑↓`/`PageUp`/`PageDown`/`g`/`G` move |
 | `/agents` | View subagent sessions created by the current session |
 | `/jobs` | View background jobs and their runtime status |
 | `/schedule` | Inspect active reminders (created through the model's schedule tools; read-only, overdue first) |
@@ -193,16 +216,16 @@ The following built-in commands are available inside the TUI. Additional Harness
 | `Enter` | Submit the current input |
 | `Ctrl+J` / `Alt+Enter` | Insert a newline in the composer (with the enhanced keyboard protocol, `Shift+Enter` / `Ctrl+Enter` work too) |
 | `Up` / `Down` | Recall the previous or next input-history entry |
-| `Tab` | Complete commands, skills, or `@` references |
+| `Tab` | Complete commands, skills, or `@` references; on an empty composer, switch the next message between queue and steer |
 | `@` | Reference workspace files or existing sessions; image files are sent as attachments |
 | `Ctrl+O` | Inspect full history and tool details, with a kind label on each entry (user prompt / reply / tool call, and so on) |
 | `Ctrl/Alt+R` | Fold or expand model reasoning; run /vscode-keys first in VS Code-family terminals to pass Ctrl+R through |
 | `Shift+Tab` | Cycle permission Presets, and the plan station when `/plan` is available |
-| `Delete` | Cancel the newest queued message when the composer is empty |
+| `Delete` | Cancel the newest queued message when the composer is empty (steering is not in the queue; press `Esc` to end the turn instead) |
 | `Ctrl+K` | Delete from the cursor to the end of the line |
 | `Ctrl+U` | Clear the current input line |
 | `Ctrl+A` / `Ctrl+E` | Move to the beginning or end of the current line |
-| `Esc` | Close the current menu or interrupt the running turn |
+| `Esc` | Close the current menu or interrupt the running turn; queued messages are kept and sent next, steered ones are dropped with the turn |
 | `Ctrl+C` | Cancel a task, clear the input, or exit, depending on the current state |
 | `Ctrl+D` | Exit DSH-Code |
 
