@@ -3487,6 +3487,16 @@ interface CompletionCandidate {
 }
 
 /**
+ * Wrap one completion-menu cursor step. An empty menu keeps the index at 0:
+ * `% 0` is NaN, and a NaN index silently disables the highlight, the accept
+ * key, and any later Enter that runs through the menu.
+ */
+export function stepCompletionIndex(index: number, delta: number, count: number): number {
+  if (count <= 0) return 0
+  return ((index + delta) % count + count) % count
+}
+
+/**
  * Resolve completion candidates for the current input: TUI-local commands,
  * the live registry descriptors, and user-invocable skills, filtered by the
  * typed prefix. Command names win collisions (the dispatch tries the
@@ -4097,6 +4107,23 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
   // the App's dynamic budget can reserve it instead of overflowing.
   const menuHeightRows = menuActive ? completionMenuRowCount(inputTerminalRows, menuRows.length) : 0
 
+  /**
+   * What accepting the highlighted completion candidate would insert, or ''
+   * when nothing can be accepted (no rows, or an image row that resolves
+   * asynchronously). The Enter branch uses it to tell a real accept from a
+   * no-op that must fall through to submission.
+   */
+  const highlightedCompletion = (): string => {
+    if (mentionActive) {
+      const row = rankedMentionRows[completionIndex % Math.max(1, rankedMentionRows.length)]
+      if (row === undefined) return ''
+      if (row.kind === 'file' && row.path !== undefined && looksLikeImagePath(row.path)) return ''
+      return row.label.startsWith('@') ? row.label : `@${row.label}${row.kind === 'directory' ? '/' : ''}`
+    }
+    const candidate = candidates[completionIndex % Math.max(1, candidates.length)]
+    return candidate === undefined ? '' : `${candidate.label} `
+  }
+
   /** Accept the highlighted completion-menu candidate into the draft. */
   const acceptMenuCandidate = (): void => {
     if (mentionActive && mentionToken !== undefined) {
@@ -4417,8 +4444,19 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
       // exactly, in which case Enter submits it (typing a full "/effort" and
       // pressing return must run the command, not re-accept its own text).
       if (menuActive) {
+        // Accepting can be a no-op: the menu is open with no matches yet, the
+        // slash line already spells its candidate, or a mention insertion
+        // repeats the token already in the draft. Enter must reach the submit
+        // path in every one of those cases, or the message cannot be sent.
+        const highlighted = highlightedCompletion()
+        const repeatsToken = mentionActive && mentionToken !== undefined && cursor === liveValue.length
+          && liveValue.slice(mentionToken.start, cursor) === highlighted
+        // The slash rule is a whole-list exact match, not a highlighted-row
+        // comparison: typing `/mode` once the list is open must run the
+        // command even when the highlight happens to rest on `/model`.
         const exactSlash = !mentionActive && candidates.some(candidate => candidate.label === liveValue)
-        if (!exactSlash) {
+        const acceptNoop = highlighted === '' || repeatsToken || exactSlash
+        if (!acceptNoop) {
           acceptMenuCandidate()
           return
         }
@@ -4708,11 +4746,11 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
       return
     }
     if (menuActive && key.upArrow) {
-      setCompletionIndex(index => (index + menuRows.length - 1) % menuRows.length)
+      setCompletionIndex(index => stepCompletionIndex(index, -1, menuRows.length))
       return
     }
     if (menuActive && key.downArrow) {
-      setCompletionIndex(index => (index + 1) % menuRows.length)
+      setCompletionIndex(index => stepCompletionIndex(index, 1, menuRows.length))
       return
     }
     // Batched Home/End/Delete/Backspace sequences bypass Ink's one-key parser
@@ -4805,10 +4843,13 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
       return
     }
     if (input !== '' && !key.ctrl && !key.meta) {
-      // Bracketed-paste wrappers arrive as unknown escape sequences stripped
-      // of their ESC. Markers may ride their own chunk or the edges of a
-      // content chunk; strip every occurrence and track the open-paste flag
-      // so a chunk that is exactly LF inserts instead of submitting.
+      // Bracketed-paste wrappers arrive as escape sequences Ink has stripped
+      // only ONE leading ESC from, so the tail marker still carries its own:
+      // strip both spellings before the payload is read, or a dragged path
+      // reaches the attachment parser with a trailing control byte and fails.
+      // Markers may ride their own chunk or the edges of a content chunk; the
+      // open-paste flag is tracked so a chunk that is exactly LF inserts
+      // instead of submitting.
       let text = input
       if (text.includes(PASTE_START_MARKER)) {
         pasteBracketRef.current = true
@@ -4823,13 +4864,12 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
           clearTimeout(timer)
           pasteBracketCancelRef.current = undefined
         }
-        text = text.replaceAll(PASTE_START_MARKER, '')
       }
       if (text.includes(PASTE_END_MARKER)) {
         pasteBracketRef.current = false
         pasteBracketCancelRef.current?.()
-        text = text.replaceAll(PASTE_END_MARKER, '')
       }
+      text = stripPasteMarkers(text)
       if (text === '') return
       if (text.length > 1) {
         // A path-list paste splits into images and files; prose falls through

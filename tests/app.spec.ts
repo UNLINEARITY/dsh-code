@@ -12,7 +12,7 @@ import { AttachmentId } from '@deepseek-ai/dsh-attachment'
 import { createAssistantMessage, createToolResultMessage, createUserMessage, type ImageBlock, type ToolCallId, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type { TodoItem } from '@deepseek-ai/dsh-tool-todo'
-import { App, computeSettledRows, queuedInboxRows, type AppProps } from '../src/app.ts'
+import { App, computeSettledRows, queuedInboxRows, stepCompletionIndex, type AppProps } from '../src/app.ts'
 import { createSplitStdin } from '../src/input-split.ts'
 import { createTranscriptStore, type TranscriptStore } from '../src/store.ts'
 
@@ -371,6 +371,86 @@ describe('composer image attachments', () => {
         expect.objectContaining({ type: 'image' }),
         expect.objectContaining({ type: 'image' }),
       ]), 'session-12345678')
+    } finally {
+      instance.unmount()
+    }
+  })
+
+  it('reads a dragged path out of a real bracketed paste, tail escape and all', async () => {
+    const harness = createTty(120, 24)
+    const dispatch = vi.fn()
+    const inspectImages = vi.fn(async (paths: readonly string[]) => paths.map(path => ({
+      path,
+      name: path.split(/[\\/]/u).at(-1) ?? 'shot.png',
+      mediaType: 'image/png' as const,
+      bytes: 8,
+    })))
+    const prepareImages = vi.fn(async (paths: readonly string[]) => paths.map((path, index) => ({
+      type: 'image' as const,
+      attachment: {
+        attachmentId: AttachmentId(`dragged-${index}`),
+        mediaType: 'image/png' as const,
+        bytes: 8,
+        width: 1,
+        height: 1,
+        name: path.split(/[\\/]/u).at(-1),
+      },
+    })))
+    const instance = renderApp(harness, appProps({ dispatch, inspectImages, prepareImages }))
+    try {
+      await wait()
+      // A drag into the terminal arrives as one bracketed paste, and Ink strips
+      // only the LEADING escape: the tail marker still carries its own ESC, so
+      // the payload has to be cleaned before the path is parsed.
+      harness.stdin.write('\x1b[200~/tmp/shot.png\x1b[201~')
+      await wait(180)
+      expect(harness.output.text).toContain('[image: shot.png]')
+      harness.stdin.write('\r')
+      await wait(180)
+      expect(prepareImages).toHaveBeenCalledWith(['/tmp/shot.png'], expect.anything())
+      expect(dispatch).toHaveBeenCalledWith('[image: shot.png]', [expect.objectContaining({ type: 'image' })], 'session-12345678')
+    } finally {
+      instance.unmount()
+    }
+  })
+
+  it('submits a draft ending in an unmatched @token instead of swallowing Enter', async () => {
+    const harness = createTty(120, 24)
+    const dispatch = vi.fn()
+    const instance = renderApp(harness, appProps({
+      dispatch,
+      loadMentions: async () => [],
+    }))
+    try {
+      await wait()
+      // The mention menu opens on the trailing token even with zero matches;
+      // Enter has nothing to accept, so it must submit the line.
+      harness.stdin.write('hello @zzz')
+      await wait(180)
+      harness.stdin.write('\r')
+      await wait(180)
+      expect(dispatch.mock.calls.at(-1)?.[0]).toBe('hello @zzz')
+    } finally {
+      instance.unmount()
+    }
+  })
+
+  it('submits a mention token that already spells the only candidate', async () => {
+    const harness = createTty(120, 24)
+    const dispatch = vi.fn()
+    const instance = renderApp(harness, appProps({
+      dispatch,
+      loadMentions: async () => [{ label: 'src/app.ts', description: 'File', kind: 'file', path: 'src/app.ts' }],
+    }))
+    try {
+      await wait()
+      harness.stdin.write('@src/app.ts')
+      await wait(240)
+      harness.stdin.write('\r')
+      await wait(180)
+      // Accepting would re-insert the same token; Enter submits instead.
+      expect(dispatch).toHaveBeenCalled()
+      expect(dispatch.mock.calls.at(-1)?.[0]).toBe('@src/app.ts')
     } finally {
       instance.unmount()
     }
@@ -3920,6 +4000,17 @@ describe('/agents panel', () => {
       harness.stdin.destroy()
       harness.stdout.destroy()
     }
+  })
+})
+
+describe('completion menu cursor step', () => {
+  it('keeps an empty menu at zero instead of computing NaN', () => {
+    expect(stepCompletionIndex(0, -1, 0)).toBe(0)
+    expect(stepCompletionIndex(3, 1, 0)).toBe(0)
+    expect(stepCompletionIndex(0, 1, 3)).toBe(1)
+    expect(stepCompletionIndex(0, -1, 3)).toBe(2)
+    // A stale negative index still lands on a real row.
+    expect(stepCompletionIndex(-1, 1, 3)).toBe(0)
   })
 })
 
