@@ -46,7 +46,7 @@ function applyStreamDeltas(
 import type { TranscriptEntry } from '../src/render/projection.ts'
 import { DEFAULT_STATUSLINE_ITEMS } from '../src/render/status.ts'
 import { DEFAULT_TERMINAL_TITLE } from '../src/terminal-title.ts'
-import { DARK_PALETTE, setTheme } from '../src/theme.ts'
+import { DARK_PALETTE, rowBackground, setTheme } from '../src/theme.ts'
 import { DSH_CODE_VERSION, _resetDshKernelVersionForTests } from '../src/version.ts'
 import type { PendingQuestion, QuestionSnapshot } from '../src/questions.ts'
 
@@ -123,6 +123,7 @@ function appProps(overrides: Partial<AppProps> = {}): AppProps {
     mode: 'standard',
     permission: 'workspace-write',
     dispatch: noop,
+    steer: noop,
     interrupt: () => false,
     quit: noop,
     loadModels: async () => ({ rows: [], failures: [] }),
@@ -3543,6 +3544,90 @@ describe('queued inbox rows in a mixed mutable tail', () => {
       await wait()
       expect(cancelled).toEqual([third.id, second.id, first.id])
       expect(output.text).not.toContain('\x1b[2J')
+    } finally {
+      instance.unmount()
+      stdin.destroy()
+      stdout.destroy()
+    }
+  })
+
+  it('paints each prompt delivery kind as its own full-width bar', async () => {
+    const harness = createTty(100, 30)
+    const { stdin, stdout } = harness
+    const level = chalk.level
+    // Ink only emits truecolor sequences at level 3; the bar tints are RGB.
+    chalk.level = 3
+    const store = createTranscriptStore()
+    const plain = createUserMessage({ content: [{ type: 'text', text: 'typed idle' }], source: { kind: 'user' } })
+    const queued = createUserMessage({ content: [{ type: 'text', text: 'after the turn' }], source: { kind: 'user' } })
+    const steered = createUserMessage({ content: [{ type: 'text', text: 'mid turn' }], source: { kind: 'user' } })
+    store.apply({ type: 'user/message', seq: 1, time: 1, data: plain } as SessionEvent)
+    // A submission only counts as queued/steered when a turn is already
+    // running; `followup` on an idle driver is the ordinary path.
+    store.apply({ type: 'turn/start', seq: 2, time: 2, data: { turn: 1 } } as SessionEvent)
+    store.apply({ type: 'agent/inbox/spliced', seq: 3, time: 3, data: { target: 'next-turn', start: 0, inserted: [queued] } } as SessionEvent)
+    store.apply({ type: 'user/message', seq: 4, time: 4, data: queued } as SessionEvent)
+    store.apply({ type: 'agent/inbox/spliced', seq: 5, time: 5, data: { target: 'next-step', start: 0, inserted: [steered] } } as SessionEvent)
+    store.apply({ type: 'user/message', seq: 6, time: 6, data: steered } as SessionEvent)
+    const instance = renderApp(harness, appProps({ store }))
+    try {
+      await wait()
+      // One derived background per delivery kind, straight through Ink's
+      // renderer. The RGB comes from the palette color blended over the
+      // surface, so a theme change repaints the bars.
+      const bar = (color: 'prompt' | 'queued' | 'steered'): string => {
+        const [r, g, b] = rowBackground(color)!.replace(/[^0-9,]/gu, '').split(',').map(Number)
+        return `48;2;${r};${g};${b}`
+      }
+      expect(harness.output.text).toContain(bar('prompt'))
+      expect(harness.output.text).toContain(bar('queued'))
+      expect(harness.output.text).toContain(bar('steered'))
+      expect(harness.output.text).toContain('typed idle')
+      expect(harness.output.text).toContain('after the turn')
+      expect(harness.output.text).toContain('mid turn')
+    } finally {
+      chalk.level = level
+      instance.unmount()
+      stdin.destroy()
+      stdout.destroy()
+    }
+  })
+
+  it('flips queue and steer with Tab on an empty composer and submits accordingly', async () => {
+    const harness = createTty()
+    const { stdin, stdout } = harness
+    const dispatched: string[] = []
+    const steered: string[] = []
+    const instance = renderApp(harness, appProps({
+      dispatch: text => { dispatched.push(text) },
+      steer: text => { steered.push(text) },
+    }))
+    try {
+      await wait()
+      // Empty composer + Tab: the prompt glyph and the placeholder both name
+      // the mode, and the toggle reports itself.
+      expect(harness.output.text).toContain('❯ ')
+      stdin.write('\t')
+      await wait()
+      expect(harness.output.text).toContain('↳ ')
+      expect(harness.output.text).toContain('steer into this turn')
+
+      stdin.write('join the running turn')
+      await wait()
+      stdin.write('\r')
+      await wait()
+      expect(steered).toEqual(['join the running turn'])
+      expect(dispatched).toEqual([])
+
+      // Tab again returns to the queue, and the next submission follows it.
+      stdin.write('\t')
+      await wait()
+      stdin.write('wait for the next turn')
+      await wait()
+      stdin.write('\r')
+      await wait()
+      expect(dispatched).toEqual(['wait for the next turn'])
+      expect(steered).toEqual(['join the running turn'])
     } finally {
       instance.unmount()
       stdin.destroy()

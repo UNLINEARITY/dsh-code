@@ -7,7 +7,7 @@ import {
   brand, brandBright, brandDeep, dim, error, success, warn,
   ACCENT_RING, DARK_PALETTE, FLOW_ANCHORS, LIGHT_PALETTE, PALETTES, PRISMATIC_PALETTE,
   THEMES, THEME_NAMES, diffBackground, getPalette, getTheme, inkColor, isPrismatic, isRainbow,
-  parseThemeName, resolveTheme, setTheme, surfaceAccent, themeFlow, type RgbTriple,
+  parseThemeName, promptRowTokens, resolveTheme, rowBackground, setTheme, surfaceAccent, themeFlow, type RgbTriple,
 } from '../src/theme.ts'
 
 describe('tui theme', () => {
@@ -293,6 +293,59 @@ describe('tui theme contrast (WCAG 2.x)', () => {
       expect(ratio(DARK_PALETTE[token], BLACK)).toBeGreaterThanOrEqual(3)
       expect(ratio(LIGHT_PALETTE[token], WHITE)).toBeGreaterThanOrEqual(3)
       expect(ratio(PRISMATIC_PALETTE[token], BLACK)).toBeGreaterThanOrEqual(3)
+    }
+  })
+
+  it('derives each prompt-row bar from the palette and keeps it AA-legible', () => {
+    const level = chalk.level
+    chalk.level = 3
+    try {
+      const parse = (ink: string): RgbTriple => {
+        const [r, g, b] = ink.replace(/[^0-9,]/gu, '').split(',').map(Number)
+        return [r ?? 0, g ?? 0, b ?? 0]
+      }
+      for (const [name, palette, surface] of [
+        ['dark', DARK_PALETTE, BLACK],
+        ['light', LIGHT_PALETTE, WHITE],
+        ['prismatic', PRISMATIC_PALETTE, BLACK],
+      ] as const) {
+        setTheme(name === 'light' ? 'light' : name)
+        const colors = ['prompt', 'queued', 'steered'] as const
+        for (const color of colors) {
+          const background = rowBackground(color)
+          expect(background).toBeDefined()
+          const tint = parse(background!)
+          // The bar is the palette's own color laid over the surface, and the
+          // color stays AA both on the bar and alone on the terminal (16-color
+          // terminals drop the background).
+          expect(ratio(palette[color], tint)).toBeGreaterThanOrEqual(4.5)
+          expect(ratio(palette[color], surface)).toBeGreaterThanOrEqual(4.5)
+          // Derived, never hardcoded: the tint differs from both endpoints.
+          expect(tint).not.toEqual(palette[color])
+          expect(tint).not.toEqual(surface)
+        }
+        // The three kinds must stay distinguishable from one another.
+        const tints = colors.map(color => String(rowBackground(color)))
+        expect(new Set(tints).size).toBe(3)
+        expect(promptRowTokens(undefined).fg).toBe('prompt')
+        expect(promptRowTokens('queued').fg).toBe('queued')
+        expect(promptRowTokens('steered').fg).toBe('steered')
+      }
+      // A rolled rainbow carries its own three colors, not a fixed triple.
+      const rainbow = rainbowRoll().palette
+      // The roll supplies the three row colors, so a reroll repaints them.
+      expect(rainbow.prompt).toEqual(rainbow.brandBright)
+      expect(rainbow.queued).toEqual(rainbow.warn)
+      expect(new Set([String(rainbow.prompt), String(rainbow.queued), String(rainbow.steered)]).size).toBe(3)
+
+      // 16-color terminals keep the foreground-only look.
+      chalk.level = 1
+      setTheme('dark')
+      expect(rowBackground('prompt')).toBeUndefined()
+      expect(rowBackground('steered')).toBeUndefined()
+    } finally {
+      chalk.level = level
+      setTheme('dark')
     }
   })
 

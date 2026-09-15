@@ -90,6 +90,21 @@ describe('buildExportMarkdown', () => {
     expect(buildExportMarkdown(view, 's')).toContain('> ⤷ context: files changed')
   })
 
+  it('records how a prompt was delivered and leaves ordinary prompts bare', () => {
+    const view = {
+      ...createTranscriptView(),
+      entries: [
+        { kind: 'user', text: 'typed idle', notice: false },
+        { kind: 'user', text: 'after the turn', notice: false, delivery: 'queued' },
+        { kind: 'user', text: 'mid turn', notice: false, delivery: 'steered' },
+      ],
+    } as const
+    const markdown = buildExportMarkdown(view, 's')
+    expect(markdown).toContain('## user\n')
+    expect(markdown).toContain('## user (queued)')
+    expect(markdown).toContain('## user (steered)')
+  })
+
   it('exports bounded image metadata without attachment ids', () => {
     const view = {
       ...createTranscriptView(),

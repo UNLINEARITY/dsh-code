@@ -6,9 +6,18 @@ import { renderMarkdown, visibleColumns, type MdStyle } from './markdown.ts'
 import { graphemeWidth, splitGraphemes } from './width.ts'
 import { formatTokens } from './status.ts'
 import { displayText, truncateColumns } from './text.ts'
+import { t } from '../i18n.ts'
+
+/** Trailing marker naming how a settled prompt was delivered; '' for ordinary. */
+function deliveryMarker(delivery: 'queued' | 'steered' | undefined): string {
+  if (delivery === 'queued') return t('entry.delivery.queued')
+  if (delivery === 'steered') return t('entry.delivery.steered')
+  return ''
+}
 
 /** Presentation classes mapped to Ink colors by the app boundary. */
 export type LineStyle = MdStyle | 'brand' | 'success' | 'error' | 'warn' | 'dimItalic' | 'diffAdd' | 'diffDel'
+  | 'promptRow' | 'promptQueuedRow' | 'promptSteeredRow'
 
 /** One styled run within a physical terminal row. */
 export interface StyledSegment {
@@ -340,6 +349,52 @@ function paintDiffRowBars(lines: readonly StyledLine[], columns: number): readon
 /** Default compact tool-card window used while the Ctrl+R fold is closed. */
 const DEFAULT_TOOL_ROWS = 3
 
+/** The bar style one prompt row wears, chosen by how it was delivered. */
+function promptRowStyle(delivery: 'queued' | 'steered' | undefined): LineStyle {
+  if (delivery === 'queued') return 'promptQueuedRow'
+  if (delivery === 'steered') return 'promptSteeredRow'
+  return 'promptRow'
+}
+
+/**
+ * Extend every row to the full width with the row's own style, so a prompt
+ * bar reads as one unbroken block instead of stopping at the last glyph.
+ * Rows already at width (or past it) pass through untouched.
+ */
+function fillRowBars(lines: readonly StyledLine[], columns: number, row: LineStyle): readonly StyledLine[] {
+  const width = Math.max(1, Math.floor(columns))
+  let changed = false
+  const filled = lines.map(line => {
+    const used = visibleColumns(line.segments.map(segment => segment.text).join(''))
+    const pad = width - used
+    if (pad <= 0) return line
+    changed = true
+    return { segments: [...line.segments, lineSegment(' '.repeat(pad), row)] }
+  })
+  return changed ? filled : lines
+}
+
+/**
+ * Render one prompt as a full-width bar: the row style paints the glyph, the
+ * text, the delivery marker, and the padding, while a ```diff fence pasted
+ * into the prompt keeps its own green/red tint so the inner diff still reads
+ * as a diff.
+ */
+function paintPromptRow(
+  segments: readonly StyledSegment[],
+  columns: number,
+  row: LineStyle,
+  glyph: string,
+): readonly StyledLine[] {
+  const width = Math.max(1, Math.floor(columns))
+  const recolored = segments.map(segment =>
+    segment.style === 'diffAdd' || segment.style === 'diffDel' ? segment : { ...segment, style: row })
+  const lines = hangingStyledLines(recolored, width, glyph, row, '  ', row)
+  // Diff bars pad themselves to the full width; only the remaining rows need
+  // the prompt bar's padding.
+  return fillRowBars(paintDiffRowBars(lines, width), width, row)
+}
+
 /** Format one sub-dispatch duration in seconds at tenth resolution. */
 function subDispatchSeconds(durationMs: number): string {
   if (durationMs < 100) return ''
@@ -391,21 +446,32 @@ export function transcriptEntryLines(
 ): readonly StyledLine[] {
   const width = Math.max(1, Math.floor(columns))
   switch (entry.kind) {
-    case 'user':
-      return entry.notice
-        ? hangingStyledLines([lineSegment(promptDisplayText(entry), 'dim')], width, '⤷ ', 'dim', '  ', 'dim')
-        : paintDiffRowBars(hangingStyledLines(userPromptSegments(promptDisplayText(entry)), width, '❯ ', 'brand', '  ', 'plain'), width)
-    case 'pending':
-      // Next-turn queue uses the user prompt; next-step steering uses ↳ so
-      // the two inbox lists stay visually distinct until they retire.
-      return hangingStyledLines(
-        [lineSegment(promptDisplayText(entry), 'plain')],
+    case 'user': {
+      if (entry.notice) {
+        return hangingStyledLines([lineSegment(promptDisplayText(entry), 'dim')], width, '⤷ ', 'dim', '  ', 'dim')
+      }
+      // A settled prompt is one full-width bar whose color says how it was
+      // delivered, and a steered one switches to the ↳ prompt as well.
+      const row = promptRowStyle(entry.delivery)
+      const marker = deliveryMarker(entry.delivery)
+      const segments = userPromptSegments(promptDisplayText(entry))
+      const tagged = marker === '' ? segments : [...segments, lineSegment(`  ${marker}`, row)]
+      return paintPromptRow(tagged, width, row, entry.delivery === 'steered' ? '↳ ' : '❯ ')
+    }
+    case 'pending': {
+      // The queued/steered preview uses the same bar it will keep once the
+      // durable message retires it, so nothing shifts under the reader.
+      const row = promptRowStyle(entry.target === 'next-step' ? 'steered' : 'queued')
+      const lines = hangingStyledLines(
+        [{ ...lineSegment(promptDisplayText(entry), 'plain'), style: row }],
         width,
         entry.target === 'next-step' ? '↳ ' : '❯ ',
-        'brand',
+        row,
         '  ',
-        'plain',
+        row,
       )
+      return fillRowBars(paintDiffRowBars(lines, width), width, row)
+    }
     case 'assistant': {
       const reasoning = entry.reasoning === ''
         ? []

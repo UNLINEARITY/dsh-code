@@ -282,7 +282,8 @@ export async function runQuitSequence(
 /** One composer submission waiting behind the startup delivery. */
 export interface QueuedSubmission {
   readonly text: string
-  readonly mode: 'followup'
+  /** `steer` inserts into the running turn; `followup` waits for the next one. */
+  readonly mode: 'followup' | 'steer'
   readonly images: readonly ContentBlock[]
 }
 
@@ -1214,7 +1215,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   let deliveryChain: { epoch: number; tail: Promise<void> } = { epoch: 0, tail: Promise.resolve() }
 
   /** Deliver one trimmed line to the live session, expanding mentions first. */
-  const deliverLine = (line: string, images: readonly ContentBlock[] = []): void => {
+  const deliverLine = (line: string, images: readonly ContentBlock[] = [], mode: 'followup' | 'steer' = 'followup'): void => {
     const currentAgent = agent!
     const currentMentions = mentions
     // The command registry is a closed namespace: slash lines run out of
@@ -1246,7 +1247,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       if (epoch !== atEpoch || agent !== currentAgent) return
       // Session snapshots ride the inbox as model-facing context ahead of
       // the readable message (upstream README wiring: inject before the
-      // followup that wakes the driver).
+      // followup/steer that wakes the driver).
       try {
         if (context !== undefined) currentAgent.inject(context)
         const content: ContentBlock[] = [
@@ -1257,9 +1258,12 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
           content,
           source: { kind: 'user' },
         })
-        currentAgent.followup(message)
+        // Steering is consumed at the next step boundary of the turn already
+        // running; a followup becomes its own turn instead.
+        if (mode === 'steer') currentAgent.steer(message)
+        else currentAgent.followup(message)
       } catch (error: unknown) {
-        bridge.notify(`message failed: ${error instanceof Error ? error.message : String(error)}`, 'error')
+        bridge.notify(`${mode === 'steer' ? 'steering' : 'message'} failed: ${error instanceof Error ? error.message : String(error)}`, 'error')
       }
     }
     if (parsed.references.length === 0) {
@@ -1287,7 +1291,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   // arrives during creation is delivered in order afterwards. A creation
   // failure reports and clears the queue, leaving the transient state ready
   // for the next attempt.
-  const pendingInputs: Array<{ text: string; images: readonly ContentBlock[] }> = []
+  const pendingInputs: Array<{ text: string; mode: 'followup' | 'steer'; images: readonly ContentBlock[] }> = []
   // A creation is queued/running: further submissions must not mint more
   // fresh sessions (their lines queue into pendingInputs instead).
   let creating = false
@@ -1305,7 +1309,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
         // (which would orphan the live one without a dispose).
         if (session !== undefined) {
           const queued = pendingInputs.splice(0)
-          for (const item of queued) deliverLine(item.text, item.images)
+          for (const item of queued) deliverLine(item.text, item.images, item.mode)
           return
         }
         const next = await prepare({
@@ -1367,7 +1371,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
           // of the user's opening message already runs in plan mode.
           deliverLine('/plan')
         }
-        for (const item of queued) deliverLine(item.text, item.images)
+        for (const item of queued) deliverLine(item.text, item.images, item.mode)
       } finally {
         creating = false
       }
@@ -1378,7 +1382,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   }
 
   /** Deliver one readable line to the agent, expanding session mentions first. */
-  const sendNow = (text: string, images: readonly ContentBlock[] = []): void => {
+  const sendNow = (text: string, images: readonly ContentBlock[] = [], mode: 'followup' | 'steer' = 'followup'): void => {
     // Blank check on the trimmed form; the payload itself keeps the draft's
     // exact whitespace unless the line is a syntactic slash command.
     const line = submissionPayload(text)
@@ -1400,18 +1404,20 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       return
     }
     if (session === undefined) {
-      pendingInputs.push({ text: line, images })
+      // The delivery mode rides the buffered line: a steer picked before the
+      // first session exists must still steer once that session composes.
+      pendingInputs.push({ text: line, mode, images })
       ensureSession()
       return
     }
-    deliverLine(line, images)
+    deliverLine(line, images, mode)
   }
 
   // Startup serialization: input submitted while the startup prompt/images
   // are still preparing queues behind the initial request.
-  const inputGate = new StartupInputGate(({ text, images }) => sendNow(text, images))
-  const send = (text: string, images: readonly ContentBlock[] = []): void => {
-    inputGate.submit({ text, mode: 'followup', images })
+  const inputGate = new StartupInputGate(({ text, mode, images }) => sendNow(text, images, mode))
+  const send = (text: string, images: readonly ContentBlock[] = [], mode: 'followup' | 'steer' = 'followup'): void => {
+    inputGate.submit({ text, mode, images })
   }
 
   /** Dispatch one submitted line: slash commands to the registry, other text to the agent. */
@@ -1421,6 +1427,16 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     // delivery is dropped instead of landing in the new session's inbox.
     if (!submissionBelongsToSession(origin, session?.id)) return
     send(text, images)
+  }
+
+  /**
+   * Deliver one line as steering: a running driver consumes it at its next
+   * step boundary, an idle one starts a turn with it. The composer's Tab
+   * toggle picks this over {@link dispatch} for the next submission.
+   */
+  const steer = (text: string, images: readonly ContentBlock[] = [], origin?: string): void => {
+    if (!submissionBelongsToSession(origin, session?.id)) return
+    send(text, images, 'steer')
   }
 
   /**
@@ -2102,6 +2118,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       /** Pre-session plan choice for the status badge until a session composes. */
       pendingPlan: session === undefined && pendingPlan,
       dispatch,
+      steer,
       interrupt,
       quit,
       loadModels: () => loadModelDirectory(ctx),

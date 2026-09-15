@@ -1,6 +1,7 @@
 /** Physical-row virtualization inputs for scrolling terminal panels. */
 
 import { describe, expect, it } from 'vitest'
+import { setLanguage } from '../src/i18n.ts'
 import { visibleColumns } from '../src/render/markdown.ts'
 import { stringWidth } from '../src/render/width.ts'
 import { clampLiveAllocation, diffLineStyle, fillDiffLineBars, markdownLines, settledEntryLines, styledLines, lineSegment, reasoningLines, transcriptEntryLines, userPromptSegments } from '../src/render/lines.ts'
@@ -10,6 +11,84 @@ import type { StyledLine } from '../src/render/lines.ts'
 const textOf = (lines: ReturnType<typeof styledLines>): string => lines
   .map(line => line.segments.map(segment => segment.text).join(''))
   .join('\n')
+
+describe('settled prompt delivery markers', () => {
+  it('marks queued and steered prompts and leaves ordinary ones plain', () => {
+    try {
+      setLanguage('en')
+      const queued = transcriptEntryLines({ kind: 'user', text: 'after this turn', notice: false, delivery: 'queued' }, 60)
+      const steered = transcriptEntryLines({ kind: 'user', text: 'into this turn', notice: false, delivery: 'steered' }, 60)
+      const plain = transcriptEntryLines({ kind: 'user', text: 'typed while idle', notice: false }, 60)
+      expect(textOf(queued)).toContain('❯ after this turn')
+      expect(textOf(queued)).toContain('queued')
+      // Steering switches the glyph as well as adding the marker, so the order
+      // it was consumed in stays readable at a glance.
+      expect(textOf(steered)).toContain('↳ into this turn')
+      expect(textOf(steered)).toContain('steered')
+      expect(textOf(plain)).toContain('❯ typed while idle')
+      expect(textOf(plain)).not.toContain('queued')
+      expect(textOf(plain)).not.toContain('steered')
+    } finally {
+      setLanguage('en')
+    }
+  })
+
+  it('translates the markers with the interface language', () => {
+    try {
+      setLanguage('zh')
+      const queued = transcriptEntryLines({ kind: 'user', text: '下一轮', notice: false, delivery: 'queued' }, 60)
+      const steered = transcriptEntryLines({ kind: 'user', text: '本轮', notice: false, delivery: 'steered' }, 60)
+      expect(textOf(queued)).toContain('排队')
+      expect(textOf(steered)).toContain('插队')
+    } finally {
+      setLanguage('en')
+    }
+  })
+})
+
+describe('prompt row bars', () => {
+  it('paints every row of a prompt in one style and pads it to full width', () => {
+    const cases = [
+      [{ kind: 'user', text: 'typed idle', notice: false }, 'promptRow', '❯ typed idle'],
+      [{ kind: 'user', text: 'after the turn', notice: false, delivery: 'queued' }, 'promptQueuedRow', '❯ after the turn'],
+      [{ kind: 'user', text: 'mid turn', notice: false, delivery: 'steered' }, 'promptSteeredRow', '↳ mid turn'],
+    ] as const
+    for (const [entry, style, expected] of cases) {
+      const lines = transcriptEntryLines(entry, 40)
+      // The bar is the row: glyph, text, marker, and padding share one style,
+      // and every physical row spans the exact column budget.
+      for (const line of lines) {
+        for (const segment of line.segments) expect(segment.style).toBe(style)
+        expect(visibleColumns(line.segments.map(segment => segment.text).join(''))).toBe(40)
+      }
+      expect(textOf(lines)).toContain(expected)
+    }
+  })
+
+  it('bars the queued and steered preview before the message settles', () => {
+    const queued = transcriptEntryLines({ kind: 'pending', messageId: 'a' as never, target: 'next-turn', text: 'later' }, 40)
+    const steered = transcriptEntryLines({ kind: 'pending', messageId: 'b' as never, target: 'next-step', text: 'now' }, 40)
+    for (const line of queued) for (const segment of line.segments) expect(segment.style).toBe('promptQueuedRow')
+    for (const line of steered) for (const segment of line.segments) expect(segment.style).toBe('promptSteeredRow')
+    expect(textOf(queued)).toContain('❯ later')
+    expect(textOf(steered)).toContain('↳ now')
+  })
+
+  it('keeps a pasted diff fence inside a prompt on its own tint', () => {
+    const prompt = transcriptEntryLines({
+      kind: 'user',
+      text: 'look:\n```diff\n+added\n-removed\n```',
+      notice: false,
+      delivery: 'queued',
+    }, 40)
+    const styles = new Set(prompt.flatMap(line => line.segments.map(segment => segment.style)))
+    // The prompt bar owns the prose, the fence keeps green/red so an inner
+    // diff still reads as a diff.
+    expect(styles.has('promptQueuedRow')).toBe(true)
+    expect(styles.has('diffAdd')).toBe(true)
+    expect(styles.has('diffDel')).toBe(true)
+  })
+})
 
 describe('pending inbox glyphs', () => {
   it('paints next-turn queue with ❯ and next-step steering with ↳', () => {

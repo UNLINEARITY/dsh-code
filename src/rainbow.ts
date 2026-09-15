@@ -151,6 +151,13 @@ export function rollRainbow(seed: number): RainbowRoll {
     diffDel: darkTint(delHue),
     diffAddFg: addHue,
     diffDelFg: delHue,
+    // Prompt-row bars ride the roll's own colors: the bright brand hue for an
+    // ordinary prompt, the rolled warning hue for a queued one, and the rolled
+    // code hue for a steered one. Each bar is that color over the surface.
+    surface: [0, 0, 0],
+    prompt: brandBright,
+    queued: warn,
+    steered: code,
   }
   const ring = shuffle(RAINBOW_POOL, rng).slice(0, 4)
   // Adjacency by construction: consecutive tones take consecutive slots of a

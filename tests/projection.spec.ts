@@ -1385,6 +1385,7 @@ describe('queued inbox projection', () => {
     start: number,
     removedCount: number | undefined,
     inserted: ReturnType<typeof createUserMessage>[],
+    outcome?: 'canceled',
   ): SessionEvent {
     return {
       type: 'agent/inbox/spliced',
@@ -1395,8 +1396,14 @@ describe('queued inbox projection', () => {
         start,
         ...(removedCount === undefined ? {} : { removedCount }),
         inserted,
+        ...(outcome === undefined ? {} : { outcome }),
       },
     } as unknown as SessionEvent
+  }
+
+  /** Open a turn so a later inbox insertion counts as queued/steered. */
+  function runningTurnEvent(): SessionEvent {
+    return { type: 'turn/start', seq: seq++, time: 0, data: { turn: 1 } } as SessionEvent
   }
 
   function userMessageEvent(message: ReturnType<typeof createUserMessage>): SessionEvent {
@@ -1420,13 +1427,85 @@ describe('queued inbox projection', () => {
   it('retires a pending row when its durable user message lands', () => {
     const steering = pendingMessage('steer me')
     const view = projectEvents([
+      runningTurnEvent(),
       spliceEvent('next-step', 0, undefined, [steering]),
       userMessageEvent(steering),
     ])
     expect(view.entries).toEqual([
-      { kind: 'user', text: 'steer me', notice: false },
+      { kind: 'user', text: 'steer me', notice: false, delivery: 'steered' },
     ])
     expect(view.pending).toEqual({ 'next-turn': [], 'next-step': [] })
+  })
+
+  it('marks how a prompt was delivered once the claim retires its queue row', () => {
+    const queued = pendingMessage('next turn')
+    const steered = pendingMessage('mid turn')
+    // The upstream claim is a plain splice (no outcome) that empties the
+    // pending row BEFORE the durable message lands, so the settled row can
+    // only be labelled if the origin outlives that removal.
+    const view = projectEvents([
+      runningTurnEvent(),
+      spliceEvent('next-turn', 0, undefined, [queued]),
+      spliceEvent('next-step', 0, undefined, [steered]),
+      spliceEvent('next-turn', 0, 1, []),
+      spliceEvent('next-step', 0, 1, []),
+      userMessageEvent(queued),
+      userMessageEvent(steered),
+    ])
+    expect(view.entries).toEqual([
+      { kind: 'user', text: 'next turn', notice: false, delivery: 'queued' },
+      { kind: 'user', text: 'mid turn', notice: false, delivery: 'steered' },
+    ])
+    expect(view.claimOrigin.size).toBe(0)
+  })
+
+  it('leaves an idle submission unmarked even though it lands in next-turn', () => {
+    // `followup` is the ordinary submission path, so an idle submission is
+    // inserted into next-turn exactly like a queued one. Only the running
+    // turn at insertion time tells them apart; without one there is no label.
+    const typed = pendingMessage('typed idle')
+    const view = projectEvents([
+      spliceEvent('next-turn', 0, undefined, [typed]),
+      userMessageEvent(typed),
+    ])
+    expect(view.entries).toEqual([{ kind: 'user', text: 'typed idle', notice: false }])
+  })
+
+  it('forgets a canceled origin so a later message is not mislabelled', () => {
+    const canceled = pendingMessage('canceled')
+    const view = projectEvents([
+      runningTurnEvent(),
+      spliceEvent('next-step', 0, undefined, [canceled]),
+      spliceEvent('next-step', 0, 1, [], 'canceled'),
+      userMessageEvent(canceled),
+    ])
+    expect(view.entries).toEqual([{ kind: 'user', text: 'canceled', notice: false }])
+  })
+
+  it('replays the same delivery labels as the live fold', () => {
+    const queued = pendingMessage('next turn')
+    const steered = pendingMessage('mid turn')
+    const canceled = pendingMessage('canceled')
+    const events = [
+      runningTurnEvent(),
+      spliceEvent('next-turn', 0, undefined, [queued]),
+      spliceEvent('next-step', 0, undefined, [steered, canceled]),
+      spliceEvent('next-step', 1, 1, [], 'canceled'),
+      spliceEvent('next-turn', 0, 1, []),
+      spliceEvent('next-step', 0, 1, []),
+      userMessageEvent(queued),
+      userMessageEvent(steered),
+      userMessageEvent(canceled),
+    ]
+    const acc = createReplayAccumulator()
+    for (const event of events) replayProjectEvent(acc, event)
+    const replayed = finishReplay(acc)
+    expect(replayed.entries).toEqual(projectEvents(events).entries)
+    expect(replayed.entries.filter(entry => entry.kind === 'user').map(entry => entry.delivery)).toEqual([
+      'queued',
+      'steered',
+      undefined,
+    ])
   })
 
   it('drops pending rows at their inbox coordinates on a removal splice', () => {
@@ -1481,13 +1560,15 @@ describe('queued inbox projection', () => {
     // Everything before a pending row is final; the pending row and anything
     // after it (the agent is still mutating the queue) stay live.
     const queued = projectEvents([
+      runningTurnEvent(),
       spliceEvent('next-turn', 0, undefined, [first]),
     ])
     expect(settledEntryCount(queued.entries)).toBe(0)
     // A durable user message retires the pending row: once the row is gone
-    // from the view, everything is final again.
+    // from the view, everything is final again. It keeps the delivery label
+    // the retired row carried.
     const landed = projectEvent(queued, userMessageEvent(first))
-    expect(landed.entries).toEqual([{ kind: 'user', text: 'first', notice: false }])
+    expect(landed.entries).toEqual([{ kind: 'user', text: 'first', notice: false, delivery: 'queued' }])
     expect(settledEntryCount(landed.entries)).toBe(1)
     // A later message behind a still-queued one cannot flush past the queue.
     const mixed = projectEvent(landed, spliceEvent('next-turn', 0, undefined, [second]))

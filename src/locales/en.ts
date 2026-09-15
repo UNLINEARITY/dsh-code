@@ -148,7 +148,7 @@ export const en = {
   'help.key.mentions': '@ mentions workspace files and sessions',
   'help.key.inspector': 'ctrl+o history details · ctrl/alt+r thinking · shift+tab permission preset',
   'help.key.cancel': 'esc interrupt the running turn · ctrl+c cancel / clear / quit · ctrl+d exit',
-  'help.key.queue': '/queue manages next-turn messages · delete cancels the newest queued message',
+  'help.key.queue': 'empty tab picks queue or steer · /queue manages queued messages · delete cancels the newest one',
   'help.key.edit': 'ctrl+k cut to end of line · ctrl+u clear line · ctrl+a / ctrl+e line ends',
   'help.commandsTitle': ' commands',
   'help.skillsTitle': ' skills',
@@ -181,7 +181,13 @@ export const en = {
 
 
   // Composer and status chrome
-  'composer.placeholder': 'type a message · / commands · @ mentions',
+  'composer.placeholder': 'type a message · / commands · @ mentions · tab steers',
+  'composer.placeholderSteer': 'steer into this turn · tab queues for the next one',
+  'notice.submitMode.queue': 'send \u2192 queue for the next turn',
+  'notice.submitMode.steer': 'send \u2192 steer into this turn (only while one runs; idle it sends normally)',
+  // Transcript markers on a settled prompt that was not submitted idle.
+  'entry.delivery.queued': 'queued',
+  'entry.delivery.steered': 'steered',
   'status.shiftTabHint': '(shift+tab to cycle)',
   'status.label.turns': 'turns',
   'status.label.steps': 'steps',

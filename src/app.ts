@@ -27,6 +27,8 @@ import type { AuthorizationInteraction, AuthorizationStatus } from '@deepseek-ai
 import {
   dim,
   diffBackground,
+  promptRowTokens,
+  rowBackground,
   FLOW_ANCHORS,
   getPalette,
   getTheme,
@@ -326,6 +328,12 @@ export interface AppProps {
    * session, and the runner drops the stale delivery then.
    */
   dispatch: (text: string, attachments?: readonly ContentBlock[], origin?: string) => void
+  /**
+   * Submit one line as steering: it joins the turn already running at its next
+   * step boundary instead of waiting for the next turn. Same stale-delivery
+   * guard as {@link dispatch}.
+   */
+  steer: (text: string, attachments?: readonly ContentBlock[], origin?: string) => void
   /**
    * The FULL current session identity ('' while the first session is pending)
    * — the stale-delivery origin above. Distinct from the short display id.
@@ -723,6 +731,23 @@ function lineStyleProps(style: LineStyle): {
       return { color: inkColor(getPalette().diffAddFg), bold: undefined, italic: undefined, strikethrough: undefined, dimColor: undefined, backgroundColor: diffBackground('diffAdd') }
     case 'diffDel':
       return { color: inkColor(getPalette().diffDelFg), bold: undefined, italic: undefined, strikethrough: undefined, dimColor: undefined, backgroundColor: diffBackground('diffDel') }
+    // Prompt rows: one full-width bar per delivery kind. The tint comes from
+    // the row token and the foreground from its AA-tuned twin; the depth gate
+    // inside rowBackground degrades this to foreground-only on 16-color
+    // terminals, matching the diff rows.
+    case 'promptRow':
+    case 'promptQueuedRow':
+    case 'promptSteeredRow': {
+      const tokens = promptRowTokens(style === 'promptQueuedRow' ? 'queued' : style === 'promptSteeredRow' ? 'steered' : undefined)
+      return {
+        color: inkColor(getPalette()[tokens.fg]),
+        bold: undefined,
+        italic: undefined,
+        strikethrough: undefined,
+        dimColor: undefined,
+        backgroundColor: rowBackground(tokens.fg),
+      }
+    }
     default:
       return { ...segmentProps(style), dimColor: undefined, backgroundColor: undefined }
   }
@@ -2954,7 +2979,8 @@ function verboseLine(text: string, columns: number): string {
 }
 
 /** The empty-composer placeholder text (shared by the static and wave paths). */
-const composerPlaceholder = (): string => t('composer.placeholder')
+const composerPlaceholder = (mode: 'queue' | 'steer'): string =>
+  t(mode === 'steer' ? 'composer.placeholderSteer' : 'composer.placeholder')
 
 /** One physical cell of the wave-painted composer row: a char plus styles. */
 interface ComposerCell {
@@ -3085,6 +3111,8 @@ interface ComposerWaveProps {
   value: string
   /** Tier prompt glyph and accent color (persistent, like Codex's charge). */
   promptGlyph: string
+  /** Empty-composer placeholder for the delivery mode in force. */
+  placeholder: string
   promptColor: string
   /** Fires EXACTLY ONCE when this sweep ends for any reason — completed,
    * cancelled by the gate, or unmounted (a modal panel froze the composer) —
@@ -3157,7 +3185,7 @@ function ComposerWave(props: ComposerWaveProps): ReactElement {
     }
     for (const span of splitGraphemes(parts.before)) push(span.text)
     if (parts.hasCaret) push(parts.caret, { inverse: props.caretVisible })
-    const tail = placeholder ? composerPlaceholder() : parts.after
+    const tail = placeholder ? props.placeholder : parts.after
     for (const span of splitGraphemes(tail)) push(span.text, placeholder ? { dim: true } : {})
     while (usedColumns < props.bandWidth) push(' ')
 
@@ -3256,7 +3284,7 @@ function ComposerRainbowBurst(props: Omit<ComposerWaveProps, 'tier' | 'style'>):
     }
     for (const span of splitGraphemes(parts.before)) push(span.text)
     if (parts.hasCaret) push(parts.caret, { inverse: props.caretVisible })
-    const tail = placeholder ? composerPlaceholder() : parts.after
+    const tail = placeholder ? props.placeholder : parts.after
     for (const span of splitGraphemes(tail)) push(span.text, placeholder ? { dim: true } : {})
     while (usedColumns < props.bandWidth) push(' ')
     return createElement(Text, { key: `editor-${sourceIndex}`, wrap: 'truncate-end' }, ...waveRowSpans(cells))
@@ -3619,7 +3647,7 @@ interface DraftFile extends FilePathInspection {
  * While a modal (approval / question / model panel) owns the keys, the
  * box passes every key through untouched.
  */
-function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch, interrupt, quit, openModel, openEffort, openHelp, openMode, openPermission, openResume, openSearch, openPlugin, openUpdate, openSchedule, openJobs, openStatusline, openTheme, openLanguage, saveLanguage, openHistory, openQueue, openAgents, openSubagent, openTodos, openDelete, openDiff, openReviewPicker, reviewChanges, deleteConfirm, confirmDelete, cancelDelete, createSession, forkSession, cancelSessionSwitch, notify, applyEditorKeys, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, inspectImages, prepareImages, inspectFiles, prepareFiles, cycleMode, exportTranscript, renameTitle, copyLastResponse, recallSpace, recordLocal, recordHistory, queued, updateQueued, historyFill, historyConsumed, animations, applyAnimations, applyRainbow, rainbowBurstId, waveTier, waveStyle, maxRows, anchorRowsBelow, tabTitle, onEditorRows, onMenuRows, sessionKey }: {
+function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch, steer, submitMode, cycleSubmitMode, interrupt, quit, openModel, openEffort, openHelp, openMode, openPermission, openResume, openSearch, openPlugin, openUpdate, openSchedule, openJobs, openStatusline, openTheme, openLanguage, saveLanguage, openHistory, openQueue, openAgents, openSubagent, openTodos, openDelete, openDiff, openReviewPicker, reviewChanges, deleteConfirm, confirmDelete, cancelDelete, createSession, forkSession, cancelSessionSwitch, notify, applyEditorKeys, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, inspectImages, prepareImages, inspectFiles, prepareFiles, cycleMode, exportTranscript, renameTitle, copyLastResponse, recallSpace, recordLocal, recordHistory, queued, updateQueued, historyFill, historyConsumed, animations, applyAnimations, applyRainbow, rainbowBurstId, waveTier, waveStyle, maxRows, anchorRowsBelow, tabTitle, onEditorRows, onMenuRows, sessionKey }: {
   active: boolean
   frozen: boolean
   /** Frozen-band hint naming the surface that owns the keyboard; an empty
@@ -3629,6 +3657,12 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
   descriptors: readonly CommandDescriptor[]
   skills: readonly SkillRow[]
   dispatch: (text: string, attachments?: readonly ContentBlock[], origin?: string) => void
+  /** Submit as steering into the running turn (see {@link AppProps.steer}). */
+  steer: (text: string, attachments?: readonly ContentBlock[], origin?: string) => void
+  /** Delivery mode the next submission uses; Tab on an empty composer flips it. */
+  submitMode: 'queue' | 'steer'
+  /** Flip {@link submitMode} and report the new mode. */
+  cycleSubmitMode: () => void
   /** The full current session identity ('' while pending); the delivery origin. */
   sessionKey: string
   interrupt: () => boolean
@@ -4281,6 +4315,14 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
       }
       return
     }
+    // Tab on an EMPTY composer picks how the next submission is delivered:
+    // queue for the next turn, or steer into the turn already running. With a
+    // draft present Tab stays the completion key (handled with the menu
+    // below), so this only claims the keypress when nothing is being typed.
+    if (key.tab && liveValue === '' && !menuActive) {
+      cycleSubmitMode()
+      return
+    }
     // Ctrl+R toggles the thinking display (Claude-Code reasoning fold).
     // Alt+R is the zero-config alias: VS Code never intercepts Alt chords,
     // so the toggle stays reachable before /vscode-keys has been applied.
@@ -4423,7 +4465,8 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
           }
           recall.current = beginRecall(recallSpace, '')
           const blocks: readonly ContentBlock[] = [...images, ...files]
-          dispatch(text, blocks, originSession)
+          if (submitMode === 'steer') steer(text, blocks, originSession)
+          else dispatch(text, blocks, originSession)
         }, (reason: unknown) => {
           if (controller.signal.aborted || prepareEpochRef.current !== epoch) return
           prepareAbortRef.current = undefined
@@ -4625,7 +4668,12 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
         openDelete(text.slice(7).trim())
         return
       }
-      dispatch(text)
+      // Delivery mode: everything above this point is a local command or a
+      // panel opener and always runs out of band. A real prompt follows the
+      // composer's Tab choice — `steer` joins the running turn, the default
+      // queues it for the next one.
+      if (submitMode === 'steer') steer(text)
+      else dispatch(text)
       return
     }
     // The modified-Enter newline family: Ctrl+J arrives as a bare LF (Ink
@@ -4822,7 +4870,11 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
   const tierActive = waveTier !== null
   const tierHues = waveTier === null ? null : deepseekWaveHues(waveTier)
   const promptColor = tierHues === null ? inkColor(getPalette().brand) : inkColor(tierHues[0])
-  const promptGlyph = waveTier === 'flash' ? '›' : waveTier === 'deepseek' ? '»' : '❯'
+  const waveGlyph = waveTier === 'flash' ? '›' : waveTier === 'deepseek' ? '»' : '❯'
+  // Steer mode owns the prompt glyph in every paint path (static band, wave,
+  // rainbow burst), so the mode is visible without reading the placeholder.
+  const promptGlyph = submitMode === 'steer' ? '↳' : waveGlyph
+  const placeholderText = composerPlaceholder(submitMode)
   // The multiline editor model: the sanitized draft hard-wrapped into
   // column-safe physical rows, with the caret mapped to its exact row and
   // column. Computed before the frozen path so the row report below runs
@@ -4896,7 +4948,7 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
     return band(createElement(
       Text,
       { backgroundColor: bandBg, wrap: 'truncate-end' },
-      createElement(Text, { color: promptColor, bold: tierActive ? true : undefined }, busy ? '… ' : `${promptGlyph} `),
+      createElement(Text, { color: promptColor, bold: tierActive ? true : undefined }, submitMode === 'steer' ? '↳ ' : busy ? '… ' : `${promptGlyph} `),
       frozenLine,
       bandFill(2 + visibleColumns(frozenLine)),
     ))
@@ -4917,7 +4969,7 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
     const row = editorViewModel.rows[index]
     const parts = editorRowParts(row, index, caret.row, clampedCursor, !preparingImages)
     const placeholder = index === 0 && value === '' && !busy && !preparingImages
-    const tail = placeholder ? composerPlaceholder() : parts.after
+    const tail = placeholder ? placeholderText : parts.after
     const consumed = 2 + visibleColumns(parts.before) + visibleColumns(parts.caret) + visibleColumns(tail)
     editorRows.push(createElement(
       Text,
@@ -4925,9 +4977,11 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
       index === 0
         ? preparingImages
           ? createElement(Text, { color: inkColor(getPalette().warn), bold: true }, '… ')
-          : busy
-            ? createElement(BusyChase, { animated: animations })
-            : createElement(Text, { color: promptColor, bold: tierActive ? true : undefined }, `${promptGlyph} `)
+          : submitMode === 'steer'
+            ? createElement(Text, { color: promptColor, bold: true }, '↳ ')
+            : busy
+              ? createElement(BusyChase, { animated: animations })
+              : createElement(Text, { color: promptColor, bold: tierActive ? true : undefined }, `${promptGlyph} `)
         : '  ',
       parts.before,
       parts.hasCaret
@@ -4967,6 +5021,7 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
         caretVisible: cursorVisible,
         value,
         promptGlyph,
+        placeholder: placeholderText,
         promptColor,
       })
       : createElement(ComposerWave, {
@@ -4987,6 +5042,7 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
         caretVisible: cursorVisible,
         value,
         promptGlyph,
+        placeholder: placeholderText,
         promptColor,
       }),
   )
@@ -5399,6 +5455,12 @@ export function App(props: AppProps): ReactElement {
   const budgetWarnRef = useRef<string | undefined>(undefined)
   const [verboseOpen, setVerboseOpen] = useState(false)
   const [queueOpen, setQueueOpen] = useState(false)
+  /**
+   * How the composer delivers its next submission: `queue` waits for the next
+   * turn, `steer` joins the turn already running. Tab on an empty composer
+   * flips it; the prompt glyph and the placeholder both name the current mode.
+   */
+  const [submitMode, setSubmitMode] = useState<'queue' | 'steer'>('queue')
   const [diffView, setDiffView] = useState<GitDiffView | undefined>(undefined)
   const [reviewPickerOpen, setReviewPickerOpen] = useState(false)
   const [helpOpen, setHelpOpen] = useState(false)
@@ -6333,6 +6395,13 @@ export function App(props: AppProps): ReactElement {
         descriptors,
         skills,
         dispatch: props.dispatch,
+        steer: props.steer,
+        submitMode,
+        cycleSubmitMode: () => {
+          const next = submitMode === 'queue' ? 'steer' : 'queue'
+          setSubmitMode(next)
+          notify(t(next === 'steer' ? 'notice.submitMode.steer' : 'notice.submitMode.queue'))
+        },
         applyEditorKeys: props.applyEditorKeys,
         interrupt: props.interrupt,
         quit: props.quit,

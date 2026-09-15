@@ -150,7 +150,7 @@ export const zh: MessageCatalog = {
   'help.key.mentions': '@ 引用工作区文件或历史会话',
   'help.key.inspector': 'ctrl+o 历史详情 · ctrl/alt+r 思考 · shift+tab 权限预设',
   'help.key.cancel': 'esc 中断运行中的回合 · ctrl+c 取消/清空/退出 · ctrl+d 退出',
-  'help.key.queue': '/queue 管理下一轮消息 · Delete 取消最新排队消息',
+  'help.key.queue': '空输入框 tab 选择排队或插队 · /queue 管理已排队消息 · Delete 取消最新一条',
   'help.key.edit': 'ctrl+k 剪切到行尾 · ctrl+u 清空行 · ctrl+a / ctrl+e 行首尾',
   'help.commandsTitle': ' 命令',
   'help.skillsTitle': ' 技能',
@@ -159,7 +159,7 @@ export const zh: MessageCatalog = {
   'panel.queue.title': '/queue — {count} 条排队消息 · 行 {from}-{to}',
   'panel.queue.empty': '  下一轮没有排队消息',
   'panel.queue.attachments': '[含附件：只读]',
-  'panel.queue.footerBusy': '↑↓ 选择 · enter 插话 · e 编辑文本 · d 删除 · esc/q 关闭',
+  'panel.queue.footerBusy': '↑↓ 选择 · enter 插队 · e 编辑文本 · d 删除 · esc/q 关闭',
   'panel.queue.footerIdle': '↑↓ 选择 · e 编辑文本 · d 删除 · esc/q 关闭',
   'panel.queue.editFooter': '输入 · ←→ 移动 · enter 保存 · esc 取消',
   'panel.queue.compact': '/queue · esc/q 关闭',
@@ -183,7 +183,13 @@ export const zh: MessageCatalog = {
 
 
   // Composer and status chrome
-  'composer.placeholder': '输入消息 · / 命令 · @ 引用',
+  'composer.placeholder': '输入消息 · / 命令 · @ 引用 · tab 插队',
+  'composer.placeholderSteer': '插队进本轮 · tab 改为排队等下一轮',
+  'notice.submitMode.queue': '发送 → 排队等下一轮',
+  'notice.submitMode.steer': '发送 → 插队进本轮（仅回合运行中；空闲时直接发出）',
+  // 结算后的消息标记：不是空闲时直接发送的那种
+  'entry.delivery.queued': '排队',
+  'entry.delivery.steered': '插队',
   'status.shiftTabHint': '（shift+tab 切换）',
   'status.label.turns': '回合',
   'status.label.steps': '步骤',
@@ -220,7 +226,7 @@ export const zh: MessageCatalog = {
   'notice.queueCancelled': '已取消排队消息',
   'notice.queueActionFailed': '队列操作失败：{message}',
   'notice.queueUnavailable': '该消息已不在队列中',
-  'notice.queueSteerUnavailable': '仅运行中的回合可以插话',
+  'notice.queueSteerUnavailable': '仅运行中的回合可以插队',
   'notice.queueEditEmpty': '排队消息不能为空',
   'notice.queueEdited': '已编辑排队消息',
   'notice.queueSteered': '已将排队消息插入本轮',

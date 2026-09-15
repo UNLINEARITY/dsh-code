@@ -63,6 +63,12 @@ export interface UserEntry {
   images?: readonly ImageBlock['attachment'][]
   /** Durable file references carried by this prompt (0.1.5 file blocks). */
   files?: readonly FileAttachmentRef[]
+  /**
+   * How the prompt reached the agent, when it did not arrive as an ordinary
+   * submission: `queued` waited for this turn, `steered` joined it mid-flight.
+   * Absent for a prompt typed straight into an idle composer.
+   */
+  delivery?: 'queued' | 'steered'
 }
 
 /** One user message waiting in the agent inbox (the web's queued-message row). */
@@ -572,6 +578,14 @@ export interface TranscriptView {
    */
   pending: { 'next-turn': readonly string[]; 'next-step': readonly string[] }
   /**
+   * In-flight inbox messages by the list they were inserted into, kept until
+   * the durable user message that claims them lands. The claim itself is a
+   * plain splice that empties the pending row first, so this map — not
+   * {@link pending} — is what lets a settled prompt say it was queued or
+   * steered rather than typed into an idle composer.
+   */
+  claimOrigin: ReadonlyMap<string, 'next-turn' | 'next-step'>
+  /**
    * Fold-internal timing anchors, never rendered: open step and tool-call
    * start timestamps the next `assistant/message` / `tool/result` resolves
    * against. Keyed `turn:step` and by call id. `turnSteps`/`turnTools`
@@ -742,6 +756,7 @@ export function createTranscriptView(): TranscriptView {
     goal: undefined,
     schedules: [],
     pending: { 'next-turn': [], 'next-step': [] },
+    claimOrigin: new Map(),
     stats: { turns: 0, steps: 0, llmMs: 0, toolMs: 0, usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 }, lastPromptTokens: 0, contextWindow: 0, contextSegments: { system: 0, prompt: 0, assistant: 0, thinking: 0, tools: 0 }, ttftMs: 0, ttftSteps: 0, decodeMs: 0, decodeTokens: 0, reasoningEffort: '' },
     anchors: { stepStart: new Map(), toolStart: new Map(), subStart: new Map(), firstChunkAt: new Map(), compactionTokens: new Map(), lastPruneTokens: 0, turnFiles: new Map(), turnSteps: new Map(), turnTools: new Map(), systemNodes: new Map() },
   }
@@ -788,6 +803,18 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
         pending = { ...pending, [target]: pending[target].filter((_, i) => i !== index) }
         entries = entries.filter(entry => !(entry.kind === 'pending' && entry.messageId === message.id))
       }
+      // How this message reached the agent. The claim that precedes this event
+      // is a plain splice (no `canceled` outcome), so it has already emptied
+      // the pending row above; `claimOrigin` is what survives to say whether
+      // the prompt was queued for this turn or steered into it.
+      const origin = view.claimOrigin.get(message.id)
+      let claimOrigin = view.claimOrigin
+      if (origin !== undefined) {
+        const next = new Map(claimOrigin)
+        next.delete(message.id)
+        claimOrigin = next
+      }
+      const delivery = origin === undefined ? {} : { delivery: origin === 'next-turn' ? 'queued' as const : 'steered' as const }
       // Injected context (plugin/model-continuation sources) stays collapsed
       // to a bounded notice row, exactly like collapsed transcript context
       // elsewhere in the product; only direct human prompts render in full.
@@ -798,7 +825,8 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
         return {
           ...view,
           pending,
-          entries: [...entries, { kind: 'user', text, notice: false, ...(images.length === 0 ? {} : { images }), ...(files.length === 0 ? {} : { files }) }],
+          claimOrigin,
+          entries: [...entries, { kind: 'user', text, notice: false, ...delivery, ...(images.length === 0 ? {} : { images }), ...(files.length === 0 ? {} : { files }) }],
           stats: {
             ...view.stats,
             contextSegments: {
@@ -815,6 +843,7 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
         return {
           ...view,
           pending,
+          claimOrigin,
           entries,
           stats: {
             ...view.stats,
@@ -829,7 +858,8 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
         return {
           ...view,
           pending,
-          entries: [...entries, { kind: 'user', text, notice: false, ...(images.length === 0 ? {} : { images }), ...(files.length === 0 ? {} : { files }) }],
+          claimOrigin,
+          entries: [...entries, { kind: 'user', text, notice: false, ...delivery, ...(images.length === 0 ? {} : { images }), ...(files.length === 0 ? {} : { files }) }],
           stats: {
             ...view.stats,
             contextSegments: {
@@ -848,6 +878,7 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
       return {
         ...view,
         pending,
+        claimOrigin,
         entries: [...entries, { kind: 'user', text: summary, notice: true }],
         stats: {
           ...view.stats,
@@ -862,9 +893,29 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
       // The durable inbox mutation (web queue-mirror contract, event-sourced):
       // removals drop the projected rows at their inbox coordinates, inserted
       // messages gain a pending row at their log position.
-      const { target, start, removedCount = 0, inserted } = event.data
+      const { target, start, removedCount = 0, inserted, outcome } = event.data
       const ids = view.pending[target]
       const removed = ids.slice(start, start + removedCount)
+      // Which list each in-flight message came from, so the durable user
+      // message it later becomes can say how it was delivered. Only messages
+      // that arrived while a turn was already running count: `followup` is
+      // the ordinary submission path too, so an idle submission lands in
+      // next-turn exactly like a queued one and must stay unmarked. A claim
+      // (no `outcome`) keeps the entry because the user message is still
+      // coming; a real cancellation retires it.
+      const inFlight = view.busy
+      let claimOrigin: ReadonlyMap<string, 'next-turn' | 'next-step'> = view.claimOrigin
+      let mutableOrigins: Map<string, 'next-turn' | 'next-step'> | undefined
+      const remember = (id: string): void => {
+        mutableOrigins ??= new Map(claimOrigin)
+        mutableOrigins.set(id, target)
+        claimOrigin = mutableOrigins
+      }
+      if (outcome === 'canceled' && removed.length > 0) {
+        const next = new Map(claimOrigin)
+        for (const id of removed) next.delete(id)
+        claimOrigin = next
+      }
       // In-place upstream semantics: the kernel's authoritative fold is
       // `inbox.splice(start, removedCount, ...inserted)` — inserted ids land
       // AT the splice position (prepend/replace shapes), never at the tail.
@@ -883,6 +934,7 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
           !(entry.kind === 'pending' && entry.target === target && removedSet.has(entry.messageId)))
       }
       for (const message of inserted) {
+        if (inFlight) remember(message.id)
         entries = [...entries, {
           kind: 'pending',
           messageId: message.id,
@@ -892,7 +944,7 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
           ...filesOf(message.content).length === 0 ? {} : { files: filesOf(message.content) },
         }]
       }
-      return { ...view, entries, pending: { ...view.pending, [target]: nextIds } }
+      return { ...view, entries, claimOrigin, pending: { ...view.pending, [target]: nextIds } }
     }
     case 'system/message': {
       // Session-log v3 carries the system prompt as surface nodes (the
@@ -1460,6 +1512,8 @@ export interface ReplayAccumulator {
   /** Mutable inbox id lists, mirroring `view.pending` order per target. */
   pendingTurn: string[]
   pendingStep: string[]
+  /** Mutable mirror of `view.claimOrigin` (see the reducer's field doc). */
+  claimOrigin: Map<string, 'next-turn' | 'next-step'>
   streaming: string
   streamingReasoning: string
   todos: readonly TodoItem[]
@@ -1504,6 +1558,7 @@ export function createReplayAccumulator(): ReplayAccumulator {
     removedCount: 0,
     pendingTurn: [],
     pendingStep: [],
+    claimOrigin: new Map(),
     streaming: '',
     streamingReasoning: '',
     todos: [],
@@ -1652,8 +1707,14 @@ export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent):
       const text = textOf(message.content)
       const images = imagesOf(message.content)
       const files = filesOf(message.content)
+      // Same delivery-origin rule as the reducer: the claim splice that
+      // precedes this event never carried the origin, so `claimOrigin` is the
+      // only surviving record of how the prompt was submitted.
+      const origin = acc.claimOrigin.get(message.id)
+      const delivery = origin === undefined ? {} : { delivery: origin === 'next-turn' ? 'queued' as const : 'steered' as const }
+      acc.claimOrigin.delete(message.id)
       if (message.source.kind === 'user' || (message.source.kind === 'plugin' && REMINDER_PLUGINS.has(message.source.plugin))) {
-        appendReplayEntry(acc, { kind: 'user', text, notice: false, ...(images.length === 0 ? {} : { images }), ...(files.length === 0 ? {} : { files }) })
+        appendReplayEntry(acc, { kind: 'user', text, notice: false, ...delivery, ...(images.length === 0 ? {} : { images }), ...(files.length === 0 ? {} : { files }) })
         acc.stats = {
           ...acc.stats,
           contextSegments: {
@@ -1690,12 +1751,15 @@ export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent):
       return true
     }
     case 'agent/inbox/spliced': {
-      const { target, start, removedCount = 0, inserted } = event.data
+      const { target, start, removedCount = 0, inserted, outcome } = event.data
       const ids = target === 'next-turn' ? acc.pendingTurn : acc.pendingStep
       const removed = ids.slice(start, start + removedCount)
       acc.ops += removed.length
       ids.splice(start, removedCount)
       acc.ops += removed.length
+      // A claim keeps the origin for the user message still to come; a real
+      // cancellation retires it with the row.
+      if (outcome === 'canceled') for (const id of removed) acc.claimOrigin.delete(id)
       for (const id of removed) {
         const list = acc.pendingIndex.get(id)
         if (list === undefined) continue
@@ -1712,6 +1776,9 @@ export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent):
       // later inbox event.
       ids.splice(start, 0, ...inserted.map(message => message.id))
       for (const message of inserted) {
+        // Same rule as the reducer: only a submission that arrived while a
+        // turn was running is "queued"/"steered" rather than ordinary.
+        if (acc.busy) acc.claimOrigin.set(message.id, target)
         const images = imagesOf(message.content)
         const files = filesOf(message.content)
         appendReplayEntry(acc, { kind: 'pending', messageId: message.id, target, text: pendingText(message.content), ...(images.length === 0 ? {} : { images }), ...(files.length === 0 ? {} : { files }) })
@@ -2188,6 +2255,7 @@ function materializeReplayView(acc: ReplayAccumulator, copy: boolean): Transcrip
     goal: acc.goal,
     schedules: acc.schedules,
     pending: { 'next-turn': [...acc.pendingTurn], 'next-step': [...acc.pendingStep] },
+    claimOrigin: new Map(acc.claimOrigin),
     stats: acc.stats,
     // Handed-out views get their own anchors snapshot: the accumulator keeps
     // folding its live containers, and no consumer may observe that.

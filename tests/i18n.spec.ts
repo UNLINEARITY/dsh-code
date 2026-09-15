@@ -19,12 +19,12 @@ describe('i18n catalog', () => {
     try {
       setLanguage('en')
       expect(getLanguage()).toBe('en')
-      expect(t('composer.placeholder')).toBe('type a message · / commands · @ mentions')
+      expect(t('composer.placeholder')).toBe('type a message · / commands · @ mentions · tab steers')
       setLanguage('zh')
       expect(getLanguage()).toBe('zh')
-      expect(t('composer.placeholder')).toBe('输入消息 · / 命令 · @ 引用')
+      expect(t('composer.placeholder')).toBe('输入消息 · / 命令 · @ 引用 · tab 插队')
       setLanguage('en')
-      expect(t('composer.placeholder')).toBe('type a message · / commands · @ mentions')
+      expect(t('composer.placeholder')).toBe('type a message · / commands · @ mentions · tab steers')
     } finally {
       setLanguage('en')
     }

@@ -38,6 +38,10 @@ export type ThemeToken =
   | 'diffDel'
   | 'diffAddFg'
   | 'diffDelFg'
+  | 'surface'
+  | 'prompt'
+  | 'queued'
+  | 'steered'
 
 /** One full color palette: every token key mapped to an RGB triple. */
 export type ThemePalette = Readonly<Record<ThemeToken, RgbTriple>>
@@ -107,6 +111,16 @@ export const DARK_PALETTE = {
   diffAddFg: [34, 197, 94],
   /** Diff removed-line foreground — red-400, 4.9:1 on the diffDel tint (error's red-500 sinks to 3.6:1 on it). */
   diffDelFg: [248, 113, 113],
+  /** Terminal background this palette is designed against; row tints blend toward it. */
+  surface: [0, 0, 0],
+  /**
+   * The three prompt-row colors, one per delivery kind. They are the palette's
+   * own accents (bright brand, warning amber, violet) rather than fixed RGBs,
+   * and every row's bar is these colors laid over {@link surface}.
+   */
+  prompt: [103, 158, 254],
+  queued: [245, 158, 11],
+  steered: [167, 139, 250],
 } as const satisfies ThemePalette
 
 /**
@@ -147,6 +161,16 @@ export const LIGHT_PALETTE = {
   diffAddFg: [22, 101, 52],
   /** Diff removed-line foreground — red-700, 5.6:1 on the pastel tint (error's red-600 is 3.9:1). */
   diffDelFg: [185, 28, 28],
+  /** Terminal background this palette is designed against; row tints blend toward it. */
+  surface: [255, 255, 255],
+  /**
+   * Prompt-row colors deepened for white: the amber and violet the dark theme
+   * uses sit at the AA edge on their own pastel bars, so each kind carries a
+   * value that clears 4.5:1 both on the bar and on plain white.
+   */
+  prompt: [47, 76, 143],
+  queued: [124, 53, 10],
+  steered: [109, 40, 217],
 } as const satisfies ThemePalette
 
 /**
@@ -189,6 +213,12 @@ export const PRISMATIC_PALETTE = {
   diffAddFg: [34, 197, 94],
   /** Diff removed-line foreground — unchanged from dark. */
   diffDelFg: [248, 113, 113],
+  /** Terminal background this palette is designed against; row tints blend toward it. */
+  surface: [0, 0, 0],
+  /** Prompt rows in the skin's own neon: fuchsia, amber, cyan. */
+  prompt: [240, 171, 252],
+  queued: [245, 158, 11],
+  steered: [103, 232, 249],
 } as const satisfies ThemePalette
 
 /**
@@ -275,6 +305,47 @@ export function inkColor(triple: RgbTriple): string {
 export function diffBackground(token: 'diffAdd' | 'diffDel'): string | undefined {
   if (chalk.level < 2) return undefined
   return inkColor(activePalette[token])
+}
+
+/** One prompt-row color: the palette token whose color paints the row. */
+export interface PromptRowTokens {
+  readonly fg: 'prompt' | 'queued' | 'steered'
+}
+
+/** How far one prompt-row tint leans toward its color, over the surface. */
+const PROMPT_ROW_TINT = 0.22
+
+/**
+ * The color family one prompt row wears, chosen by how it was delivered: the
+ * ordinary brand accent, the warning amber for a queued prompt, and the
+ * palette's own third accent for a steered one. The bar behind it is derived
+ * from that same color, so every theme — including a freshly rolled rainbow —
+ * carries its own look instead of a fixed triple.
+ * @param delivery - how the prompt was delivered; undefined is an ordinary one.
+ * @returns the palette token whose color paints the row.
+ */
+export function promptRowTokens(delivery: 'queued' | 'steered' | undefined): PromptRowTokens {
+  if (delivery === 'queued') return { fg: 'queued' }
+  if (delivery === 'steered') return { fg: 'steered' }
+  return { fg: 'prompt' }
+}
+
+/**
+ * Blended prompt-row background for one row color: the palette color laid
+ * over the surface the palette is designed for (dark themes over black, light
+ * over white), depth-gated exactly like {@link diffBackground} — a 16-color
+ * terminal keeps the foreground-only look rather than painting a saturated
+ * system background behind the text.
+ * @param color - the row's palette token.
+ * @returns the Ink background color, or undefined to paint foreground-only.
+ */
+export function rowBackground(color: PromptRowTokens['fg']): string | undefined {
+  if (chalk.level < 2) return undefined
+  const surface = activePalette.surface
+  const tint = activePalette[color]
+  const blend = (index: number): number =>
+    Math.round(surface[index] + (tint[index] - surface[index]) * PROMPT_ROW_TINT)
+  return inkColor([blend(0), blend(1), blend(2)] as RgbTriple)
 }
 
 /**

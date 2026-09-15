@@ -8,6 +8,7 @@
 
 import { assertNever } from '@deepseek-ai/dsh-util-values'
 import { fileLabels, imageLabels, type TranscriptView } from './projection.ts'
+import { t } from '../i18n.ts'
 
 /**
  * Render the transcript as a standalone markdown document.
@@ -39,7 +40,11 @@ export function buildExportMarkdown(view: TranscriptView, sessionId: string): st
           out.push(`> ⤷ context: ${entry.text}`, '')
         } else {
           const attachments = attachmentLabels(entry)
-          out.push('## user', '', entry.text, ...(attachments === '' ? [] : [attachments]), '')
+          // How the prompt was delivered is part of the record: a queued or
+          // steered message reads differently from one typed into an idle
+          // composer. Ordinary prompts keep the bare heading.
+          const marker = entry.delivery === undefined ? '' : ` (${t(entry.delivery === 'queued' ? 'entry.delivery.queued' : 'entry.delivery.steered')})`
+          out.push(`## user${marker}`, '', entry.text, ...(attachments === '' ? [] : [attachments]), '')
         }
         break
       case 'assistant':
