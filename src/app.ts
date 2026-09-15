@@ -159,6 +159,12 @@ function readSettledRowCap(): number {
 
 /** Reset region/style, clear the visible screen and scrollback, then home. */
 const RESIZE_REFLOW_CLEAR = '\x1b[r\x1b[0m\x1b[H\x1b[2J\x1b[3J\x1b[H'
+/**
+ * Same as {@link RESIZE_REFLOW_CLEAR} without wiping native scrollback.
+ * History-cap trims remount `<Static>` but must not `\x1b[3J` a user who is
+ * reading earlier messages above the fold.
+ */
+const TRIM_REFLOW_CLEAR = '\x1b[r\x1b[0m\x1b[H\x1b[2J\x1b[H'
 /** Ask terminals supporting DEC synchronized updates to hold the frame. */
 const SYNCHRONIZED_UPDATE_BEGIN = '\x1b[?2026h'
 /** Release the held frame after Ink has replayed the source-backed Static rows. */
@@ -5898,27 +5904,27 @@ export function App(props: AppProps): ReactElement {
   }, true)
   const frozenHint = keyboardOwner === undefined
     ? undefined
-    : `keys go to ${keyboardOwner} · esc ${
-      approvalPending
-        ? 'rejects'
+    : t('frozen.keysGoTo', {
+      owner: keyboardOwner,
+      action: approvalPending
+        ? t('frozen.action.rejects')
         : questionPending
-          ? 'cancels'
+          ? t('frozen.action.cancels')
           : updateApplying && updateOpen
-            ? 'waits'
-            : 'closes'
-    }`
+            ? t('frozen.action.waits')
+            : t('frozen.action.closes'),
+    })
   const closeInspector = useCallback((): void => {
     setVerboseOpen(false)
   }, [])
-  const refreshScreen = (): void => {
-    // Same source-backed clear the resize path uses: reset the scroll region
-    // (`\x1b[r`) before wiping screen AND scrollback, then home the cursor.
-    // A bare `\x1b[2J\x1b[3J\x1b[H` leaves a previously set scroll region in
-    // place, so Ink's next repaint positions against stale bounds — the
-    // stale-position flicker where the screen keeps redrawing.
+  const refreshScreen = (opts?: { wipeScrollback?: boolean }): void => {
+    // Resize / Ctrl+L wipe screen AND scrollback. A history-cap trim remounts
+    // Static at the current width, so native scrollback must stay — the user
+    // may be reading messages above the fold.
+    const clear = opts?.wipeScrollback === false ? TRIM_REFLOW_CLEAR : RESIZE_REFLOW_CLEAR
     if (appStdout !== undefined) {
       synchronizedReplayPending.current = true
-      appStdout.write(SYNCHRONIZED_UPDATE_BEGIN + RESIZE_REFLOW_CLEAR)
+      appStdout.write(SYNCHRONIZED_UPDATE_BEGIN + clear)
     }
     setRefreshEpoch(epoch => epoch + 1)
   }
@@ -5950,7 +5956,7 @@ export function App(props: AppProps): ReactElement {
   const settledNeedsTrim = settledRowsCache.current?.needsTrim === true
   useEffect(() => {
     if (!settledNeedsTrim || busy || streamingActive) return
-    refreshScreen()
+    refreshScreen({ wipeScrollback: false })
   }, [settledNeedsTrim, busy, streamingActive])
 
   const sessionHasImages = useMemo(() => view.entries.some(entry =>

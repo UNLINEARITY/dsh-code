@@ -229,12 +229,18 @@ export const zh: MessageCatalog = {
   'status.label.out': '出',
   'status.label.mode': '/mode',
   'status.label.context': '上下文',
+  'status.label.sandbox': '沙箱',
+  'status.plan.on': '计划开',
+  'status.plan.mark': '⧉ 计划',
+  'status.goal.round': '◎ 第 {current}/{max} 轮',
+  'status.goal.phase': '◎ {phase}',
 
   // Frozen band
   'frozen.keysGoTo': '按键交给{owner} · esc {action}',
   'frozen.action.rejects': '拒绝',
   'frozen.action.cancels': '取消',
   'frozen.action.closes': '关闭',
+  'frozen.action.waits': '等待',
 
   // Relative time (panel list timestamps)
   'time.justNow': '刚刚',

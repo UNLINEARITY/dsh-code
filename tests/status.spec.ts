@@ -336,7 +336,13 @@ describe('status layout', () => {
     try {
       setLanguage('zh')
       const layout = layoutStatusBar(
-        { ...baseFacts, mode: 'standard' },
+        {
+          ...baseFacts,
+          mode: 'standard',
+          plan: true,
+          sandbox: 'danger-full-access',
+          goal: { phase: 'active', rounds: 2, max: 8 },
+        },
         {
           ...emptyStats,
           turns: 93,
@@ -351,7 +357,7 @@ describe('status layout', () => {
           contextWindow: 128_000,
           usage: { uncachedInputTokens: 2_432, outputTokens: 2_400, cacheReadTokens: 9_728, cacheWriteTokens: 0 },
         },
-        200,
+        240,
       )
       expect(groupText(layout.row1).some(group => group.includes('/mode standard'))).toBe(true)
       expect(groupText(layout.row1).some(group => group.startsWith('上下文 '))).toBe(true)
@@ -360,6 +366,9 @@ describe('status layout', () => {
         '模型 45.2s · 延迟 0.6s · 20 tokens/秒 · 工具 2m42s',
         '缓存 9.7K · 80%',
         '入 2.4K · 出 2.4K',
+        '◎ 第 2/8 轮',
+        '沙箱 danger-full-access',
+        '⧉ 计划',
       ]))
     } finally {
       setLanguage('en')

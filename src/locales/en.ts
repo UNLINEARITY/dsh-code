@@ -227,12 +227,18 @@ export const en = {
   'status.label.out': 'out',
   'status.label.mode': '/mode',
   'status.label.context': 'context',
+  'status.label.sandbox': 'sandbox',
+  'status.plan.on': 'plan on',
+  'status.plan.mark': '⧉ plan',
+  'status.goal.round': '◎ round {current}/{max}',
+  'status.goal.phase': '◎ {phase}',
 
   // Frozen band
   'frozen.keysGoTo': 'keys go to {owner} · esc {action}',
   'frozen.action.rejects': 'rejects',
   'frozen.action.cancels': 'cancels',
   'frozen.action.closes': 'closes',
+  'frozen.action.waits': 'waits',
 
   // Relative time (panel list timestamps)
   'time.justNow': 'now',

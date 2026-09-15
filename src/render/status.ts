@@ -540,8 +540,8 @@ function buildCandidates(
       group: {
         spans: [{
           text: facts.goal.phase === 'active'
-            ? '◎ round ' + facts.goal.rounds + '/' + facts.goal.max
-            : '◎ ' + safe(facts.goal.phase),
+            ? t('status.goal.round', { current: facts.goal.rounds, max: facts.goal.max })
+            : t('status.goal.phase', { phase: safe(facts.goal.phase) }),
           tone: 'accent',
         }],
       },
@@ -552,7 +552,7 @@ function buildCandidates(
   // The sandbox override stays implicit when it merely echoes the preset.
   const sandbox = safe(facts.sandbox ?? '')
   if (sandbox !== '' && sandbox.toLowerCase() !== facts.permission.toLowerCase() && enabled.has('sandbox')) {
-    row2.push({ group: { spans: [{ text: 'sandbox ' + sandbox, tone: 'warn' }] }, rank: RANK_SANDBOX, id: 'sandbox' })
+    row2.push({ group: { spans: [{ text: t('status.label.sandbox') + ' ' + sandbox, tone: 'warn' }] }, rank: RANK_SANDBOX, id: 'sandbox' })
   }
   const permission = safe(facts.permission)
   let badge = -1
@@ -565,7 +565,7 @@ function buildCandidates(
   if (permission !== '' && enabled.has('permission')) {
     right.push({
       span: planStation
-        ? { text: 'plan on', tone: 'plan' }
+        ? { text: t('status.plan.on'), tone: 'plan' }
         : { text: permission, tone: permissionTone(permission) },
       rank: RANK_BADGE,
       id: 'permission',
@@ -573,7 +573,7 @@ function buildCandidates(
     badge = right.length - 1
   }
   if (facts.plan && enabled.has('plan')) {
-    row2.push({ group: { spans: [{ text: '⧉ plan', tone: 'accent' }] }, rank: RANK2_PLAN, id: 'plan' })
+    row2.push({ group: { spans: [{ text: t('status.plan.mark'), tone: 'accent' }] }, rank: RANK2_PLAN, id: 'plan' })
   }
   return { left, right, badge, row2 }
 }
