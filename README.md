@@ -29,12 +29,20 @@ DeepSeek Harness 将模型、工具、存储、策略和界面作为插件，通
 
 ### 1. 安装与更新
 
-初次安装和更新使用 GitHub Release tarball（打 tag 时 CI 构建并挂到 Release，lib 已预构建，安装机无需工具链）。npm 渠道仍暂停；`/update` 与 `deepseek update --apply` 只查询 npm，此时请不要用它们升级，按下面的 URL 重装即可：
+从 npm 安装（推荐）。装好后 `/update` 和 `deepseek update --apply` 都能用：它们查询 npm 上的新版本，确认后按提示升级。
 
 ```sh
 npm install -g @deepseek-ai/dsh@0.1.5-rc.2 pnpm
-npm install -g https://github.com/unlinearity/dsh-code/releases/download/1.1.0/dsh-code-1.1.0.tgz
-dsh plugin --profile cli add https://github.com/unlinearity/dsh-code/releases/download/1.1.0/dsh-code-1.1.0.tgz
+npm install -g dsh-code@1.2.0
+dsh plugin --profile cli add dsh-code@1.2.0
+```
+
+npm 不可达时（网络受限、镜像临时故障），改用 GitHub Release tarball。每次打 tag 由 CI 构建并挂到 Release，lib 已预构建，安装机不需要工具链：
+
+```sh
+npm install -g @deepseek-ai/dsh@0.1.5-rc.2 pnpm
+npm install -g https://github.com/unlinearity/dsh-code/releases/download/1.2.0/dsh-code-1.2.0.tgz
+dsh plugin --profile cli add https://github.com/unlinearity/dsh-code/releases/download/1.2.0/dsh-code-1.2.0.tgz
 ```
 
 > npm 脚本提示：npm 11.6+ 可能在全局安装时提示 `npm warn install-scripts`（node-pty、koffi 等原生依赖的构建脚本未获批准）。宿主随包自带预编译产物，常规平台可直接忽略；若安装后出现原生模块报错，按 npm 提示执行 `npm install -g --allow-scripts=<包名列表>` 后重装。
@@ -43,15 +51,7 @@ dsh plugin --profile cli add https://github.com/unlinearity/dsh-code/releases/do
 >
 > 升级说明：旧会话与旧参数中记录的 `code` 预设会自动映射到上游已改名的 `ptc`，无需手动迁移。会话日志读取端随上游升级到格式 v3：旧格式日志在读取时由内核自动迁移，磁盘上的原始文件保持不变。
 >
-> 通过 GitHub 安装的版本会领先 npm。更新器只认 npm，因此会显示「新于 npm，不降级」，而不是「已是最新」。npm 恢复后再用 `/update`。
-
-npm 渠道恢复后可改用：
-
-```sh
-npm install -g @deepseek-ai/dsh@0.1.5-rc.2 pnpm
-npm install -g dsh-code@1.1.0
-dsh plugin --profile cli add dsh-code@1.1.0
-```
+> 从 GitHub tarball 装的版本可能领先 npm 一步（npm 上还没同步这个版本时）。更新器只认 npm，这种情况会写明「新于 npm，不降级」而不是「已是最新」；等 npm 同步后再用 `/update`。
 
 ### 2. 启动指令
 
@@ -209,7 +209,7 @@ dsh --profile cli --session my-id    # 使用指定 id 新建会话
 | 命令 | 用途 |
 | --- | --- |
 | `/plugin [query]` | 查看已加载扩展及其状态 |
-| `/update` | 只查询 npm。npm 暂停期间请用上面的 GitHub tarball 安装；当前比 npm 新时会写明不降级 |
+| `/update` | 查询 npm 上的新版本并确认升级。从 GitHub tarball 装的版本可能领先 npm，此时会写明不降级 |
 | `/statusline` | 选择状态栏显示的项目 |
 | `/vscode-keys` | 将 Ctrl+R 放行进 VS Code 系终端（幂等写入用户级 keybindings.json） |
 | `/theme` | 切换配色：`dark` / `light` / `prismatic` / `rainbow` / `auto` |

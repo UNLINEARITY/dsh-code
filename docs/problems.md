@@ -146,27 +146,20 @@ pnpm 在 `dsh-code_tmp_*` 目录中报 `ENOENT`，例如无法扫描 `node_modul
 
 ### 原因
 
-npm 渠道仍暂停。`/update` 只查询 npm；从 GitHub Release 安装的 1.1.0 会领先注册表，更新器拒绝降级。`link:` 挂载时升级全局宿主会把新主机配上旧 checkout，因此也直接拒绝。
+更新器只认 npm。从 GitHub Release tarball 装的版本会领先注册表一步（npm 上还没同步这个版本），更新器因此拒绝降级。`link:` 挂载时升级全局宿主会把新主机配上旧 checkout，所以也直接拒绝。
 
 ### 解决
 
-- npm 恢复前请用 GitHub tarball 安装，不要依赖 `/update`：
+- 这种情况不是故障：已经在用比 npm 更新的版本，无需升级。等 npm 同步后 `/update` 会恢复正常。
+- 想立刻升级到某个更新版本，直接用 npm 装：
 
   ```sh
-  npm install -g https://github.com/unlinearity/dsh-code/releases/download/1.1.0/dsh-code-1.1.0.tgz
-  dsh plugin --profile cli add https://github.com/unlinearity/dsh-code/releases/download/1.1.0/dsh-code-1.1.0.tgz
+  npm install -g dsh-code@latest
+  dsh plugin --profile cli add dsh-code@latest
   ```
 
-- 开发挂载请先 `git pull && pnpm install && pnpm build`。
-- npm 恢复后，等注册表出现更新版本再 `/update`。
-
-若只是使用 DSH-Code，而非参与源码开发，推荐改用 npm 发布包：
-
-```sh
-dsh plugin --profile cli add dsh-code
-```
-
-发布包已包含运行所需的构建产物，不需要 Git 包的准备阶段。
+- 开发挂载请先 `git pull && pnpm install && pnpm build`，不要对开发挂载跑更新器。
+- 只使用 DSH-Code、不参与源码开发时，推荐始终走 npm 发布包；它自带运行所需的构建产物，不需要 Git 包的准备阶段。
 
 ## 找不到 `pnpm`
 

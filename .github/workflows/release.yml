@@ -2,10 +2,10 @@ name: Release
 
 # Only a tag push builds the tarball and attaches it to a GitHub Release.
 # Pushing main runs CI tests only — it never creates a release or publishes
-# to npm. npm publish stays a manual step after the registry channel is
-# restored. Re-pushing the same tag, if GitHub allows it, uploads the
-# tarball onto the existing release (`gh release upload --clobber`) and
-# does not create a second release.
+# to npm. npm is the primary install channel again, and `npm publish` stays
+# a manual step run beside the tag. Re-pushing the same tag, if GitHub
+# allows it, uploads the tarball onto the existing release
+# (`gh release upload --clobber`) and does not create a second release.
 
 on:
   push:
