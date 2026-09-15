@@ -11,7 +11,7 @@
 
 import { createElement, useEffect, useState, type ReactElement } from 'react'
 import { Box, Text, useInput, useStdout } from 'ink'
-import type { LauncherUpdateStatus } from './update.ts'
+import type { LauncherUpdatePlan, LauncherUpdateStatus } from './update.ts'
 import { clampScroll, panelViewport } from './render/inspector.ts'
 import { singleLineText, truncateColumns } from './render/text.ts'
 import { panelAccent } from './panel-accent.ts'
@@ -24,6 +24,80 @@ export const UPDATE_OUTPUT_CAP = 800
 /** Keep the newest UPDATE_OUTPUT_CAP lines of streamed update output. */
 export function clipUpdateLines(lines: readonly string[]): readonly string[] {
   return lines.length <= UPDATE_OUTPUT_CAP ? lines : lines.slice(lines.length - UPDATE_OUTPUT_CAP)
+}
+
+/** One in-flight `update --apply`. Closing the panel must not start a second. */
+interface UpdateApplyJob {
+  readonly promise: Promise<number>
+  readonly lines: string[]
+  readonly lineListeners: Set<(line: string) => void>
+}
+
+let updateApplyJob: UpdateApplyJob | undefined
+const updateApplyRunningListeners = new Set<(running: boolean) => void>()
+
+function emitUpdateApplyRunning(running: boolean): void {
+  for (const listener of updateApplyRunningListeners) listener(running)
+}
+
+/** True while an apply child is alive, even if the /update panel is closed. */
+export function isUpdateApplyRunning(): boolean {
+  return updateApplyJob !== undefined
+}
+
+/** Subscribe to apply-running changes (frozen-hint "esc waits"). */
+export function subscribeUpdateApplyRunning(listener: (running: boolean) => void): () => void {
+  updateApplyRunningListeners.add(listener)
+  listener(updateApplyJob !== undefined)
+  return () => { updateApplyRunningListeners.delete(listener) }
+}
+
+/** The live apply job, if any: lines already streamed plus the shared promise. */
+export function currentUpdateApply(): UpdateApplyJob | undefined {
+  return updateApplyJob
+}
+
+/**
+ * Run `apply` once. A second call while the child is alive reuses the same
+ * promise and replays buffered lines — closing /update and opening it again
+ * must not spawn a second `npm install`.
+ */
+export function runUpdateApply(
+  apply: (onLine: (line: string) => void, plan: LauncherUpdatePlan) => Promise<number>,
+  plan: LauncherUpdatePlan,
+  onLine?: (line: string) => void,
+): Promise<number> {
+  if (updateApplyJob !== undefined) {
+    if (onLine !== undefined) {
+      for (const line of updateApplyJob.lines) onLine(line)
+      updateApplyJob.lineListeners.add(onLine)
+    }
+    return updateApplyJob.promise
+  }
+  const lines: string[] = []
+  const lineListeners = new Set<(line: string) => void>()
+  if (onLine !== undefined) lineListeners.add(onLine)
+  const promise = apply(line => {
+    const text = singleLineText(line)
+    lines.push(text)
+    if (lines.length > UPDATE_OUTPUT_CAP) lines.splice(0, lines.length - UPDATE_OUTPUT_CAP)
+    for (const listener of lineListeners) listener(text)
+  }, plan)
+  updateApplyJob = { promise, lines, lineListeners }
+  emitUpdateApplyRunning(true)
+  void promise.finally(() => {
+    if (updateApplyJob?.promise === promise) {
+      updateApplyJob = undefined
+      emitUpdateApplyRunning(false)
+    }
+  })
+  return promise
+}
+
+/** Drop a leftover job between tests. */
+export function resetUpdateApply(): void {
+  updateApplyJob = undefined
+  emitUpdateApplyRunning(false)
 }
 
 /** One display row of the update surface. */
@@ -139,8 +213,35 @@ export function UpdatePanel({ probe, apply, close, notify }: {
   // visible row (up moves away from the tail, down onto it re-follows).
   const [anchor, setAnchor] = useState<'tail' | number>('tail')
   const [epoch, setEpoch] = useState(0)
+  const appendLine = (line: string): void => {
+    setLines(previous => clipUpdateLines([...previous, line]))
+  }
   useEffect(() => {
     let disposed = false
+    const existing = currentUpdateApply()
+    if (existing !== undefined) {
+      // The apply child outlives the panel: closing for an approval or
+      // Ctrl+C must reconnect to the same job, not probe-and-confirm again.
+      setPhase('apply')
+      setLines(existing.lines)
+      setExit(undefined)
+      setApplyError(undefined)
+      setAnchor('tail')
+      existing.lineListeners.add(appendLine)
+      void existing.promise.then(code => {
+        if (disposed) return
+        setExit(code)
+        setPhase('done')
+      }, reason => {
+        if (disposed) return
+        setApplyError(reason instanceof Error ? reason.message : String(reason))
+        setPhase('done')
+      })
+      return () => {
+        disposed = true
+        existing.lineListeners.delete(appendLine)
+      }
+    }
     setPhase('probe')
     setStatus(undefined)
     setProbeError(undefined)
@@ -154,21 +255,23 @@ export function UpdatePanel({ probe, apply, close, notify }: {
       setProbeError(reason instanceof Error ? reason.message : String(reason))
       setPhase('error')
     })
-    return () => { disposed = true }
+    return () => {
+      disposed = true
+      currentUpdateApply()?.lineListeners.delete(appendLine)
+    }
   }, [epoch, probe])
   const stdout = useStdout().stdout
   const viewport = panelViewport(stdout?.columns ?? 80, stdout?.rows ?? 30)
   const start = (): void => {
     if (phase !== 'plan' || status === undefined) return
     if (!updatePlanView(status).runnable) return
+    if (isUpdateApplyRunning()) return
     setPhase('apply')
     setLines([])
     setExit(undefined)
     setApplyError(undefined)
     setAnchor('tail')
-    apply(line => {
-      setLines(previous => clipUpdateLines([...previous, singleLineText(line)]))
-    }, status.plan).then(code => {
+    runUpdateApply(apply, status.plan, appendLine).then(code => {
       setExit(code)
       setPhase('done')
       notify(code === 0 ? 'update installed — restart dsh to activate' : `update failed (exit ${code})`, code === 0 ? 'info' : 'error')

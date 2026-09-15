@@ -1,8 +1,17 @@
 import { PassThrough } from 'node:stream'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { render } from 'ink'
 import { createElement } from 'react'
-import { UpdatePanel, clipUpdateLines, updateFooter, updatePlanView, UPDATE_OUTPUT_CAP } from '../src/update-panel.ts'
+import {
+  UpdatePanel,
+  clipUpdateLines,
+  isUpdateApplyRunning,
+  resetUpdateApply,
+  runUpdateApply,
+  updateFooter,
+  updatePlanView,
+  UPDATE_OUTPUT_CAP,
+} from '../src/update-panel.ts'
 import type { LauncherUpdateStatus } from '../src/update.ts'
 
 const wait = async (ms = 120): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
@@ -136,7 +145,51 @@ describe('updateFooter and clipUpdateLines', () => {
   })
 })
 
+describe('runUpdateApply', () => {
+  afterEach(() => { resetUpdateApply() })
+
+  it('reuses the in-flight promise so a second confirm cannot spawn another child', async () => {
+    let starts = 0
+    let resolveApply: (code: number) => void = () => {}
+    const apply = (): Promise<number> => {
+      starts += 1
+      return new Promise(resolve => { resolveApply = resolve })
+    }
+    const plan = upgradeStatus().plan
+    const first = runUpdateApply(apply, plan)
+    const second = runUpdateApply(apply, plan)
+    expect(first).toBe(second)
+    expect(starts).toBe(1)
+    expect(isUpdateApplyRunning()).toBe(true)
+    resolveApply(0)
+    await expect(first).resolves.toBe(0)
+    expect(isUpdateApplyRunning()).toBe(false)
+  })
+
+  it('replays buffered lines to a listener that attaches after the child started', async () => {
+    let resolveApply: (code: number) => void = () => {}
+    let onLine: (line: string) => void = () => {}
+    const apply = (emit: (line: string) => void): Promise<number> => {
+      onLine = emit
+      return new Promise(resolve => { resolveApply = resolve })
+    }
+    const early: string[] = []
+    const promise = runUpdateApply(apply, upgradeStatus().plan, line => early.push(line))
+    onLine('first')
+    const late: string[] = []
+    void runUpdateApply(apply, upgradeStatus().plan, line => late.push(line))
+    expect(late).toEqual(['first'])
+    onLine('second')
+    expect(early).toEqual(['first', 'second'])
+    expect(late).toEqual(['first', 'second'])
+    resolveApply(0)
+    await promise
+  })
+})
+
 describe('UpdatePanel lifecycle', () => {
+  afterEach(() => { resetUpdateApply() })
+
   it("probes, confirms, streams apply output, and lands on the restart hint", async () => {
     const harness = tty(100, 24)
     const notices: string[] = []
@@ -203,6 +256,43 @@ describe('UpdatePanel lifecycle', () => {
     await wait()
     expect(closed).toBe(true)
     instance.unmount()
+  })
+
+  it("reconnects to the running apply after unmount and does not start a second child", async () => {
+    const harness = tty(100, 24)
+    let starts = 0
+    let releaseApply: (code: number) => void = () => {}
+    const apply = (): Promise<number> => {
+      starts += 1
+      return new Promise(resolve => { releaseApply = resolve })
+    }
+    const first = render(createElement(UpdatePanel, {
+      probe: () => Promise.resolve(upgradeStatus()),
+      apply,
+      close: () => {},
+      notify: () => {},
+    }), { stdin: harness.stdin, stdout: harness.stdout, stderr: harness.stdout, exitOnCtrlC: false })
+    await wait()
+    harness.stdin.write('\r')
+    await wait()
+    expect(starts).toBe(1)
+    first.unmount()
+    harness.reset()
+    const second = render(createElement(UpdatePanel, {
+      probe: () => Promise.resolve(upgradeStatus()),
+      apply,
+      close: () => {},
+      notify: () => {},
+    }), { stdin: harness.stdin, stdout: harness.stdout, stderr: harness.stdout, exitOnCtrlC: false })
+    await wait()
+    expect(harness.text()).toContain('updating…')
+    harness.stdin.write('\r')
+    await wait()
+    expect(starts).toBe(1)
+    releaseApply(0)
+    await wait()
+    expect(harness.text()).toContain('restart dsh to load the new version')
+    second.unmount()
   })
 
   it("shows the probe failure with a retry hint and keeps the panel open", async () => {

@@ -45,7 +45,7 @@ import { parseRainbowArgument, rainbowRoll, rainbowSeedLabel, rerollRainbow } fr
 import { ThemePanel } from './theme-panel.ts'
 import { LanguagePanel } from './language-panel.ts'
 import { getLanguage, parseLanguageName, t, type LanguageName, type MessageKey } from './i18n.ts'
-import { UpdatePanel } from './update-panel.ts'
+import { UpdatePanel, subscribeUpdateApplyRunning } from './update-panel.ts'
 import type { LauncherUpdateStatus } from './update.ts'
 import { WHALE_GLYPH, WHALE_GLYPH_COLUMNS } from './whale-glyph.ts'
 import { DSH_CODE_VERSION, dshKernelVersion } from './version.ts'
@@ -5524,6 +5524,8 @@ export function App(props: AppProps): ReactElement {
   const [pluginOpen, setPluginOpen] = useState(false)
   const [pluginQuery, setPluginQuery] = useState('')
   const [updateOpen, setUpdateOpen] = useState(false)
+  const [updateApplying, setUpdateApplying] = useState(false)
+  useEffect(() => subscribeUpdateApplyRunning(setUpdateApplying), [])
   const [scheduleOpen, setScheduleOpen] = useState(false)
   const [jobsOpen, setJobsOpen] = useState(false)
   const [statuslineOpen, setStatuslineOpen] = useState(false)
@@ -5864,7 +5866,15 @@ export function App(props: AppProps): ReactElement {
   }, true)
   const frozenHint = keyboardOwner === undefined
     ? undefined
-    : `keys go to ${keyboardOwner} · esc ${approvalPending ? 'rejects' : questionPending ? 'cancels' : 'closes'}`
+    : `keys go to ${keyboardOwner} · esc ${
+      approvalPending
+        ? 'rejects'
+        : questionPending
+          ? 'cancels'
+          : updateApplying && updateOpen
+            ? 'waits'
+            : 'closes'
+    }`
   const closeInspector = useCallback((): void => {
     setVerboseOpen(false)
   }, [])
