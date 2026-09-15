@@ -11,6 +11,27 @@ const textOf = (lines: ReturnType<typeof styledLines>): string => lines
   .map(line => line.segments.map(segment => segment.text).join(''))
   .join('\n')
 
+describe('pending inbox glyphs', () => {
+  it('paints next-turn queue with ❯ and next-step steering with ↳', () => {
+    const queued = transcriptEntryLines({
+      kind: 'pending',
+      messageId: 'q' as never,
+      target: 'next-turn',
+      text: 'after this turn',
+    }, 40)
+    const steered = transcriptEntryLines({
+      kind: 'pending',
+      messageId: 's' as never,
+      target: 'next-step',
+      text: 'into this turn',
+    }, 40)
+    expect(textOf(queued)).toContain('❯ ')
+    expect(textOf(queued)).toContain('after this turn')
+    expect(textOf(steered)).toContain('↳ ')
+    expect(textOf(steered)).toContain('into this turn')
+  })
+})
+
 describe('styled terminal lines', () => {
   it('keeps ZWJ emoji families and flags whole inside the column budget', () => {
     const family = '👨‍👩‍👧'

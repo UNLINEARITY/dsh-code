@@ -21,9 +21,9 @@ describe('completionCandidates', () => {
       skill('agentic-workflow'),
     ]
     const rows = completionCandidates('/', descriptors, skills)
-    // 31 local commands + 1 registry command + 1 unshadowed skill (/review is local).
-    expect(rows).toHaveLength(33)
-    expect(rows.filter(row => row.origin === 'command')).toHaveLength(32)
+    // 32 local commands + 1 registry command + 1 unshadowed skill (/review is local).
+    expect(rows).toHaveLength(34)
+    expect(rows.filter(row => row.origin === 'command')).toHaveLength(33)
     expect(rows.filter(row => row.origin === 'skill').map(row => row.label))
       .toEqual(['/agentic-workflow'])
     expect(rows[0]).toMatchObject({ label: '/help', origin: 'command' })

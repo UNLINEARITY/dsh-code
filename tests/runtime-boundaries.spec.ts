@@ -1,10 +1,15 @@
 /** Runtime boundary policy: CLI target resolution, /export naming, quit sequencing. */
 
 import { describe, expect, it } from 'vitest'
-import type { SessionHeader } from '@deepseek-ai/dsh-session'
+import type { AgentStatus, Inbox } from '@deepseek-ai/dsh-agent'
+import { createUserMessage, type ContentBlock } from '@deepseek-ai/dsh-llm'
+import type { SessionHeader, UserMessage } from '@deepseek-ai/dsh-session'
 import type { SessionPersistence } from '@deepseek-ai/dsh-session-persistence'
 import {
+  applyQueueMutation,
+  cancelPreservingQueue,
   exportSessionIdSuffix,
+  queueEditContent,
   resolveTarget,
   runQuitSequence,
   searchHitToRow,
@@ -265,5 +270,133 @@ describe('searchHitToRow (/search panel mapping)', () => {
     expect(row.resumable).toBe(false)
     expect(row.snippet.length).toBeLessThanOrEqual(158)
     expect(row.snippet.endsWith('…')).toBe(true)
+  })
+})
+
+describe('queue mutations', () => {
+  /** An inbox double recording every mutation it is asked to perform. */
+  function inboxOf(messages: readonly UserMessage[]): {
+    inbox: Pick<Inbox, 'nextTurn' | 'append' | 'remove' | 'replace'>
+    replaced: UserMessage[]
+    removed: string[]
+    appended: UserMessage[]
+  } {
+    const replaced: UserMessage[] = []
+    const removed: string[] = []
+    const appended: UserMessage[] = []
+    return {
+      replaced,
+      removed,
+      appended,
+      inbox: {
+        nextTurn: messages,
+        append: (_target, message) => { appended.push(message) },
+        remove: id => {
+          removed.push(String(id))
+          return messages.some(message => message.id === id)
+        },
+        replace: (id, next) => {
+          replaced.push(next)
+          return messages.some(message => message.id === id)
+        },
+      },
+    }
+  }
+
+  const pend = (text: string, extra: readonly ContentBlock[] = []): UserMessage => createUserMessage({
+    content: [{ type: 'text', text }, ...extra],
+    source: { kind: 'user' },
+  })
+
+  it('keeps attachments in delivery order when only the text is edited', () => {
+    const image = { type: 'image', attachment: { id: 'img-1' } } as unknown as ContentBlock
+    const content = queueEditContent([{ type: 'text', text: 'before' }, image], 'after')
+    expect(content).toEqual([{ type: 'text', text: 'after' }, image])
+  })
+
+  it('rejects an edit that would blank the queued text and never touches the inbox', () => {
+    const message = pend('keep me')
+    const { inbox, replaced } = inboxOf([message])
+    expect(applyQueueMutation(inbox, 'idle', message.id, { kind: 'edit', text: '   ' }, () => {})).toBe('empty')
+    expect(replaced).toEqual([])
+  })
+
+  it('edits text while carrying the queued attachments through the replacement', () => {
+    const image = { type: 'image', attachment: { id: 'img-1' } } as unknown as ContentBlock
+    const message = pend('before', [image])
+    const { inbox, replaced } = inboxOf([message])
+    expect(applyQueueMutation(inbox, 'idle', message.id, { kind: 'edit', text: 'after' }, () => {})).toBe('edited')
+    expect(replaced).toHaveLength(1)
+    expect(replaced[0]!.content).toEqual([{ type: 'text', text: 'after' }, image])
+    expect(replaced[0]!.source).toEqual({ kind: 'user' })
+  })
+
+  it('removes an exact pending message and reports a vanished one as unavailable', () => {
+    const message = pend('drop me')
+    const { inbox, removed } = inboxOf([message])
+    expect(applyQueueMutation(inbox, 'idle', message.id, { kind: 'remove' }, () => {})).toBe('removed')
+    expect(removed).toEqual([message.id])
+    expect(applyQueueMutation(inbox, 'idle', 'gone', { kind: 'remove' }, () => {})).toBe('unavailable')
+  })
+
+  it('refuses to steer an idle agent and leaves the queue intact', () => {
+    const message = pend('later')
+    const { inbox, removed } = inboxOf([message])
+    const steered: UserMessage[] = []
+    expect(applyQueueMutation(inbox, 'idle', message.id, { kind: 'steer' }, m => steered.push(m))).toBe('steerUnavailable')
+    expect(removed).toEqual([])
+    expect(steered).toEqual([])
+  })
+
+  it('hands a running agent the removed message as steering', () => {
+    const message = pend('interrupt this turn')
+    const { inbox, removed } = inboxOf([message])
+    const steered: UserMessage[] = []
+    expect(applyQueueMutation(inbox, 'running', message.id, { kind: 'steer' }, m => steered.push(m))).toBe('steered')
+    expect(removed).toEqual([message.id])
+    expect(steered).toEqual([message])
+  })
+
+  it('restores the queued message when the steering submit itself fails', () => {
+    const message = pend('keep me if steer breaks')
+    const { inbox, appended } = inboxOf([message])
+    expect(() => applyQueueMutation(inbox, 'running', message.id, { kind: 'steer' }, () => {
+      throw new Error('session append failed')
+    })).toThrow('session append failed')
+    expect(appended).toEqual([message])
+  })
+})
+
+describe('cancelPreservingQueue', () => {
+  it('cancels first, then re-submits the same messages so the queue wakes again', () => {
+    const first = createUserMessage({ content: [{ type: 'text', text: 'one' }], source: { kind: 'user' } })
+    const second = createUserMessage({ content: [{ type: 'text', text: 'two' }], source: { kind: 'user' } })
+    const order: string[] = []
+    const followed: UserMessage[] = []
+    const agent = {
+      inbox: { nextTurn: [first, second] },
+      cancel: () => { order.push('cancel') },
+      followup: (message: UserMessage) => {
+        order.push(`followup:${message.id}`)
+        followed.push(message)
+      },
+    }
+    // Cancel clears pending work and never wakes the driver, so the followups
+    // must come after it and carry the identical messages (same ids, same
+    // content) — that re-submission is what latches the wake.
+    expect(cancelPreservingQueue(agent)).toBe(2)
+    expect(order).toEqual(['cancel', `followup:${first.id}`, `followup:${second.id}`])
+    expect(followed).toEqual([first, second])
+  })
+
+  it('reports an empty queue without inventing a wake', () => {
+    const order: string[] = []
+    const agent = {
+      inbox: { nextTurn: [] },
+      cancel: () => { order.push('cancel') },
+      followup: () => { order.push('followup') },
+    }
+    expect(cancelPreservingQueue(agent)).toBe(0)
+    expect(order).toEqual(['cancel'])
   })
 })

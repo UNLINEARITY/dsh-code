@@ -145,7 +145,6 @@ describe('App tab label over real streams', () => {
       mode: 'standard',
       permission: 'workspace-write',
       dispatch: noop,
-      steer: noop,
       interrupt: () => false,
       quit: noop,
       loadModels: async () => ({ rows: [], failures: [] }),
@@ -185,7 +184,6 @@ describe('App tab label over real streams', () => {
       applyEditorKeys: async () => 'ctrl+r passthrough written to test',
       history: [],
       recordHistory: noop,
-      cancelQueued: noop,
       onBridgeReady: noop,
     } as unknown as AppProps
   }

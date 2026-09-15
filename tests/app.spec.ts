@@ -11,7 +11,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { createAssistantMessage, createToolResultMessage, createUserMessage, type CallId, type ImageBlock } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type { TodoItem } from '@deepseek-ai/dsh-session'
-import { App, computeSettledRows, type AppProps } from '../src/app.ts'
+import { App, computeSettledRows, queuedInboxRows, type AppProps } from '../src/app.ts'
 import { createSplitStdin } from '../src/input-split.ts'
 import { createTranscriptStore, type TranscriptStore } from '../src/store.ts'
 
@@ -122,7 +122,6 @@ function appProps(overrides: Partial<AppProps> = {}): AppProps {
     mode: 'standard',
     permission: 'workspace-write',
     dispatch: noop,
-    steer: noop,
     interrupt: () => false,
     quit: noop,
     loadModels: async () => ({ rows: [], failures: [] }),
@@ -162,7 +161,7 @@ function appProps(overrides: Partial<AppProps> = {}): AppProps {
     applyEditorKeys: async () => 'ctrl+r passthrough written to test',
     history: [],
     recordHistory: noop,
-    cancelQueued: noop,
+    updateQueued: noop,
     onBridgeReady: noop,
     ...overrides,
   }
@@ -183,6 +182,18 @@ function renderApp(harness: TtyHarness, props: AppProps): ReturnType<typeof rend
 function assistantEntry(text: string, reasoning = ''): TranscriptEntry {
   return { kind: 'assistant', text, reasoning }
 }
+
+describe('queuedInboxRows', () => {
+  it('uses next-turn inbox order and excludes next-step rows', () => {
+    const entries: readonly TranscriptEntry[] = [
+      { kind: 'pending', messageId: 'turn-second' as never, target: 'next-turn', text: 'second' },
+      { kind: 'pending', messageId: 'step-only' as never, target: 'next-step', text: 'steer' },
+      { kind: 'pending', messageId: 'turn-first' as never, target: 'next-turn', text: 'first' },
+    ]
+    expect(queuedInboxRows(entries, ['turn-first', 'turn-second', 'missing']))
+      .toMatchObject([{ text: 'first' }, { text: 'second' }])
+  })
+})
 
 describe('pre-session controls', () => {
   it('shows defaults and handles mode/permission choices before a session exists', async () => {
@@ -1571,7 +1582,6 @@ describe('Ctrl+O history details', () => {
       dispatch: (text: string) => {
         dispatched = text
       },
-      steer: noop,
       interrupt: () => false,
       quit: noop,
       loadModels: async () => ({ rows: models, failures: [] }),
@@ -1600,7 +1610,6 @@ describe('Ctrl+O history details', () => {
       saveStatusline: noop,
       history: [],
       recordHistory: noop,
-      cancelQueued: noop,
       onBridgeReady: noop,
     }), {
       stdin,
@@ -1824,7 +1833,6 @@ describe('DeepSeek model-switch easter egg', () => {
       mode: 'standard',
       permission: 'workspace-write',
       dispatch: noop,
-      steer: noop,
       interrupt: () => false,
       quit: noop,
       loadModels: async () => ({ rows: models, failures: [] }),
@@ -1853,7 +1861,6 @@ describe('DeepSeek model-switch easter egg', () => {
       saveStatusline: noop,
       history: [],
       recordHistory: noop,
-      cancelQueued: noop,
       onBridgeReady: noop,
     }), {
       stdin,
@@ -2018,7 +2025,6 @@ describe('DeepSeek model-switch easter egg', () => {
       mode: 'standard',
       permission: 'workspace-write',
       dispatch: noop,
-      steer: noop,
       interrupt: () => false,
       quit: noop,
       loadModels: async () => ({ rows: models, failures: [] }),
@@ -2047,7 +2053,6 @@ describe('DeepSeek model-switch easter egg', () => {
       saveStatusline: noop,
       history: [],
       recordHistory: noop,
-      cancelQueued: noop,
       onBridgeReady: noop,
     }), {
       stdin,
@@ -2200,7 +2205,6 @@ describe('DeepSeek model-switch easter egg', () => {
       mode: 'standard',
       permission: 'workspace-write',
       dispatch: noop,
-      steer: noop,
       interrupt: () => false,
       quit: noop,
       loadModels: async () => ({ rows: models, failures: [] }),
@@ -2229,7 +2233,6 @@ describe('DeepSeek model-switch easter egg', () => {
       saveStatusline: noop,
       history: [],
       recordHistory: noop,
-      cancelQueued: noop,
       onBridgeReady: noop,
     }), {
       stdin,
@@ -2367,7 +2370,6 @@ describe('DeepSeek model-switch easter egg', () => {
       mode: 'standard',
       permission: 'workspace-write',
       dispatch: noop,
-      steer: noop,
       interrupt: () => false,
       quit: noop,
       loadModels: async () => ({ rows: models, failures: [] }),
@@ -2396,7 +2398,6 @@ describe('DeepSeek model-switch easter egg', () => {
       saveStatusline: noop,
       history: [],
       recordHistory: noop,
-      cancelQueued: noop,
       onBridgeReady: noop,
     }), {
       stdin,
@@ -2508,7 +2509,6 @@ describe('DeepSeek model-switch easter egg', () => {
       mode: 'standard',
       permission: 'workspace-write',
       dispatch: noop,
-      steer: noop,
       interrupt: () => false,
       quit: noop,
       loadModels: async () => ({ rows: models, failures: [] }),
@@ -2537,7 +2537,6 @@ describe('DeepSeek model-switch easter egg', () => {
       saveStatusline: noop,
       history: [],
       recordHistory: noop,
-      cancelQueued: noop,
       onBridgeReady: noop,
     }), {
       stdin,
@@ -2613,7 +2612,6 @@ describe('bracketed paste safety', () => {
       dispatch: text => {
         dispatched.push(text)
       },
-      steer: noop,
       interrupt: () => false,
       quit: noop,
       loadModels: async () => ({ rows: [], failures: [] }),
@@ -2642,7 +2640,6 @@ describe('bracketed paste safety', () => {
       saveStatusline: noop,
       history: [],
       recordHistory: noop,
-      cancelQueued: noop,
       onBridgeReady: noop,
     }), {
       stdin,
@@ -2947,7 +2944,6 @@ describe('Ctrl+R reasoning fold', () => {
       mode: 'standard',
       permission: 'workspace-write',
       dispatch: noop,
-      steer: noop,
       interrupt: () => false,
       quit: noop,
       loadModels: async () => ({ rows: [], failures: [] }),
@@ -2976,7 +2972,6 @@ describe('Ctrl+R reasoning fold', () => {
       saveStatusline: noop,
       history: [],
       recordHistory: noop,
-      cancelQueued: noop,
       onBridgeReady: noop,
     }), {
       stdin,
@@ -3077,7 +3072,6 @@ describe('Ctrl+R reasoning fold', () => {
       mode: 'standard',
       permission: 'workspace-write',
       dispatch: noop,
-      steer: noop,
       interrupt: () => false,
       quit: noop,
       loadModels: async () => ({ rows: [], failures: [] }),
@@ -3106,7 +3100,6 @@ describe('Ctrl+R reasoning fold', () => {
       saveStatusline: noop,
       history: [],
       recordHistory: noop,
-      cancelQueued: noop,
       onBridgeReady: noop,
     }), {
       stdin,
@@ -3196,7 +3189,6 @@ describe('Ctrl+R reasoning fold', () => {
       mode: 'standard',
       permission: 'workspace-write',
       dispatch: noop,
-      steer: noop,
       interrupt: () => false,
       quit: noop,
       loadModels: async () => ({ rows: [], failures: [] }),
@@ -3225,7 +3217,6 @@ describe('Ctrl+R reasoning fold', () => {
       saveStatusline: noop,
       history: [],
       recordHistory: noop,
-      cancelQueued: noop,
       onBridgeReady: noop,
     }), {
       stdin,
@@ -3312,7 +3303,6 @@ describe('Ctrl+R reasoning fold', () => {
       mode: 'standard',
       permission: 'workspace-write',
       dispatch: noop,
-      steer: noop,
       interrupt: () => false,
       quit: noop,
       loadModels: async () => ({ rows: [], failures: [] }),
@@ -3341,7 +3331,6 @@ describe('Ctrl+R reasoning fold', () => {
       saveStatusline: noop,
       history: [],
       recordHistory: noop,
-      cancelQueued: noop,
       onBridgeReady: noop,
     }), {
       stdin,
@@ -3450,7 +3439,6 @@ describe('deferred session remount', () => {
       mode: 'standard',
       permission: 'workspace-write',
       dispatch: noop,
-      steer: noop,
       interrupt: () => false,
       quit: noop,
       loadModels: async () => ({ rows: models, failures: [] }),
@@ -3479,7 +3467,6 @@ describe('deferred session remount', () => {
       saveStatusline: noop,
       history: [],
       recordHistory: noop,
-      cancelQueued: noop,
       onBridgeReady: noop,
     }
     const instance = render(createElement(App, { key: 'pending', ...props }), {
@@ -3578,7 +3565,6 @@ describe('deferred session remount', () => {
       mode: 'standard',
       permission: 'workspace-write',
       dispatch: noop,
-      steer: noop,
       interrupt: () => false,
       quit: noop,
       loadModels: async () => ({ rows: models, failures: [] }),
@@ -3607,7 +3593,6 @@ describe('deferred session remount', () => {
       saveStatusline: noop,
       history: [],
       recordHistory: noop,
-      cancelQueued: noop,
       onBridgeReady: noop,
     }
     const instance = render(createElement(App, { key: 'pending', ...props }), {
@@ -3747,7 +3732,6 @@ describe('context stepless bar', () => {
       mode: 'standard',
       permission: 'workspace-write',
       dispatch: noop,
-      steer: noop,
       interrupt: () => false,
       quit: noop,
       loadModels: async () => ({ rows: [], failures: [] }),
@@ -3776,7 +3760,6 @@ describe('context stepless bar', () => {
       saveStatusline: noop,
       history: [],
       recordHistory: noop,
-      cancelQueued: noop,
       onBridgeReady: noop,
     }), {
       stdin,
@@ -3862,7 +3845,6 @@ describe('light theme rendering', () => {
       mode: 'standard',
       permission: 'workspace-write',
       dispatch: noop,
-      steer: noop,
       interrupt: () => false,
       quit: noop,
       loadModels: async () => ({ rows: [], failures: [] }),
@@ -3891,7 +3873,6 @@ describe('light theme rendering', () => {
       saveStatusline: noop,
       history: [],
       recordHistory: noop,
-      cancelQueued: noop,
       onBridgeReady: noop,
     }), {
       stdin,
@@ -4197,8 +4178,9 @@ describe('queued inbox rows in a mixed mutable tail', () => {
     const first = createUserMessage({ content: [{ type: 'text', text: 'one' }], source: { kind: 'user' } })
     const second = createUserMessage({ content: [{ type: 'text', text: 'two' }], source: { kind: 'user' } })
     const third = createUserMessage({ content: [{ type: 'text', text: 'three' }], source: { kind: 'user' } })
-    // Mirror the runner's cancel path: the durable splice retires the pending
-    // row, so the next Delete sees a shrunken queue (newest-first).
+    // Mirror the runner's remove path: the durable splice retires the pending
+    // row, so the next Delete sees a shrunken queue (newest-first). Only the
+    // remove action retires a row — edit and steer must reuse the same splice.
     const retire = (id: string): void => {
       cancelled.push(id)
       const index = [first.id, second.id, third.id].indexOf(id)
@@ -4237,7 +4219,12 @@ describe('queued inbox rows in a mixed mutable tail', () => {
       time: 4,
       data: { target: 'next-turn', start: 2, inserted: [third] },
     } as SessionEvent)
-    const instance = renderApp(harness, appProps({ store, cancelQueued: retire }))
+    const instance = renderApp(harness, appProps({
+      store,
+      updateQueued: (id, action) => {
+        if (action.kind === 'remove') retire(id)
+      },
+    }))
     try {
       await wait()
       // Delete on the empty composer cancels the NEWEST queued message each
@@ -4251,6 +4238,33 @@ describe('queued inbox rows in a mixed mutable tail', () => {
       await wait()
       expect(cancelled).toEqual([third.id, second.id, first.id])
       expect(output.text).not.toContain('\x1b[2J')
+    } finally {
+      instance.unmount()
+      stdin.destroy()
+      stdout.destroy()
+    }
+  })
+
+  it('queues a busy submission for the next turn instead of steering the running one', async () => {
+    const harness = createTty()
+    const { stdin, stdout } = harness
+    const dispatched: string[] = []
+    const store = createTranscriptStore()
+    // A running turn makes the composer's submission path the interesting one.
+    store.apply({ type: 'turn/start', seq: 1, time: 1, data: { turn: 1 } } as SessionEvent)
+    const instance = renderApp(harness, appProps({
+      store,
+      dispatch: text => { dispatched.push(text) },
+    }))
+    try {
+      await wait()
+      stdin.write('queue this for later')
+      await wait()
+      stdin.write('\r')
+      await wait()
+      // The runner owns `followup`; the composer only dispatches. Steering a
+      // running turn is a deliberate `/queue` + enter action, never implicit.
+      expect(dispatched).toEqual(['queue this for later'])
     } finally {
       instance.unmount()
       stdin.destroy()

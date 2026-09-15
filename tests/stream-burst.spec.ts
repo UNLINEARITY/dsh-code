@@ -65,7 +65,6 @@ describe('streaming token bursts', () => {
       mode: 'standard',
       permission: 'workspace-write',
       dispatch: noop,
-      steer: noop,
       interrupt: () => false,
       quit: noop,
       loadModels: async () => ({ rows: [], failures: [] }),
@@ -95,7 +94,6 @@ describe('streaming token bursts', () => {
       applyEditorKeys: async () => '',
       history: [],
       recordHistory: noop,
-      cancelQueued: noop,
       onBridgeReady: noop,
     }
 
@@ -183,7 +181,6 @@ describe('streaming token bursts', () => {
       mode: 'standard',
       permission: 'workspace-write',
       dispatch: noop,
-      steer: noop,
       interrupt: () => false,
       quit: noop,
       loadModels: async () => ({ rows: [], failures: [] }),
@@ -213,7 +210,6 @@ describe('streaming token bursts', () => {
       applyEditorKeys: async () => '',
       history: [],
       recordHistory: noop,
-      cancelQueued: noop,
       onBridgeReady: noop,
     }
 

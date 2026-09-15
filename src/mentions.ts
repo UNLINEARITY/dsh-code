@@ -6,7 +6,10 @@
  * canonical `@[label](dsh-session:…)` tokens; on submit the text is parsed
  * back into readable `@label` text plus structured references, snapshots are
  * injected via `agent.inject()` before the readable message wakes the driver
- * (`followup` idle, `steer` running) — exactly the upstream README's wiring.
+ * (`followup`, which queues the next turn whether or not one is running) —
+ * exactly the upstream README's wiring. Steering the current turn is a
+ * deliberate user action through the `/queue` panel, never an implicit
+ * consequence of submitting while busy.
  *
  * File discovery lives entirely in the Harness service (per-agent bounded
  * index, `@dir/` listing, symlink guards, tool/result invalidation); this

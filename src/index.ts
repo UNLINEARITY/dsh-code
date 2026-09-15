@@ -18,7 +18,7 @@ import { createElement } from 'react'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { installModelSelection } from '@deepseek-ai/dsh-agent'
-import type { Agent, AgentHandle, ModelSelection, ModelSelectionRef } from '@deepseek-ai/dsh-agent'
+import type { Agent, AgentHandle, AgentStatus, Inbox, ModelSelection, ModelSelectionRef } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
 import type {} from '@deepseek-ai/dsh-attachment'
 import { createUserMessage, MessageId, type ContentBlock } from '@deepseek-ai/dsh-llm'
@@ -31,7 +31,7 @@ import type {} from '@deepseek-ai/dsh-session-title'
 // and the cmdline Context merge for the appExit host value.
 import type {} from '@deepseek-ai/cordis-plugin-loader'
 import type {} from '@deepseek-ai/dsh-cmdline'
-import { App, type NoticeTone } from './app.ts'
+import { App, type NoticeTone, type QueueMutation } from './app.ts'
 import { mountApprovalAnswerer, type ApprovalStore } from './approval.ts'
 import { isSlashLine, submissionPayload, watchCommands, type CommandsView } from './commands.ts'
 import { internals, type TuiMount } from './internals.ts'
@@ -265,8 +265,97 @@ export async function runQuitSequence(
 /** One composer submission waiting behind the startup delivery. */
 export interface QueuedSubmission {
   readonly text: string
-  readonly mode: 'followup' | 'steer'
+  readonly mode: 'followup'
   readonly images: readonly ContentBlock[]
+}
+
+/** What one requested queue mutation did; the runner maps it to one notice. */
+export type QueueMutationOutcome =
+  | 'removed'
+  | 'edited'
+  | 'steered'
+  | 'unavailable'
+  | 'empty'
+  | 'steerUnavailable'
+
+/**
+ * Replace one queued message's text while keeping its attachments. A queue
+ * edit rewrites what the user typed, not what they attached: image and file
+ * blocks ride through in delivery order (text first, then attachments, the
+ * shape {@link deliverLine} submits). Dropping them here would silently strip
+ * an attachment the user already confirmed, so this is the edit's single
+ * definition and the panel's read-only marker only mirrors it.
+ */
+export function queueEditContent(content: readonly ContentBlock[], text: string): ContentBlock[] {
+  const attachments = content.filter(block => block.type !== 'text')
+  return [{ type: 'text', text }, ...attachments]
+}
+
+/**
+ * Apply one terminal queue mutation to the live inbox. The decision and the
+ * inbox change are pure over the supplied handles so every branch is testable
+ * without an agent; steering itself is injected because it wakes the driver
+ * rather than mutating the inbox. The durable inbox splices remain the UI's
+ * single source of truth — this helper never reports a state the inbox did not
+ * actually reach.
+ * @param inbox - the live agent inbox (pending lists plus its mutators).
+ * @param status - the agent's lifecycle status; steering needs `running`.
+ * @param messageId - identity of the queued message to mutate.
+ * @param action - the requested mutation.
+ * @param steer - submits the removed message as next-step steering.
+ * @returns the outcome the caller reports.
+ */
+export function applyQueueMutation(
+  inbox: Pick<Inbox, 'nextTurn' | 'append' | 'remove' | 'replace'>,
+  status: AgentStatus,
+  messageId: string,
+  action: QueueMutation,
+  steer: (message: UserMessage) => void,
+): QueueMutationOutcome {
+  const id = MessageId(messageId)
+  const message = inbox.nextTurn.find(candidate => candidate.id === id)
+  if (message === undefined) return 'unavailable'
+  switch (action.kind) {
+    case 'remove':
+      return inbox.remove(id) ? 'removed' : 'unavailable'
+    case 'edit':
+      if (action.text.trim() === '') return 'empty'
+      inbox.replace(id, createUserMessage({
+        content: queueEditContent(message.content, action.text),
+        source: message.source,
+      }))
+      return 'edited'
+    case 'steer':
+      if (status !== 'running') return 'steerUnavailable'
+      // Steer promotes the message out of next-turn, so a failing submit must
+      // put it back: the row the user was looking at never just disappears.
+      if (!inbox.remove(id)) return 'unavailable'
+      try {
+        steer(message)
+      } catch (error: unknown) {
+        inbox.append('next-turn', message)
+        throw error
+      }
+      return 'steered'
+  }
+}
+
+/**
+ * Cancel the active turn while keeping the next-turn queue, then wake the
+ * driver again so the preserved messages actually run. `cancel` clears
+ * pending work by default and never wakes the driver on its own, so the queue
+ * is captured first and re-submitted afterwards: a waking submission latches
+ * the wake while the aborted activity converges to idle, which is what turns
+ * "preserved" into "sent next" instead of "parked forever". Next-step
+ * steering is deliberately dropped — it belonged to the cancelled turn.
+ * @param agent - the live agent handle.
+ * @returns how many queued messages were preserved across the abort.
+ */
+export function cancelPreservingQueue(agent: Pick<Agent, 'inbox' | 'cancel' | 'followup'>): number {
+  const queued = [...agent.inbox.nextTurn]
+  agent.cancel({ kind: 'user' })
+  for (const message of queued) agent.followup(message)
+  return queued.length
 }
 
 /**
@@ -975,15 +1064,28 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       })
   }
 
-  /** Cancel one queued inbox message (Delete on the empty composer); the durable splice retires its pending row. */
-  const cancelQueued = (messageId: string): void => {
-    if (agent === undefined) return
+  /** Mutate one next-turn inbox item; durable inbox splices remain the UI truth. */
+  const updateQueued = (messageId: string, action: QueueMutation): void => {
+    const current = agent
+    if (current === undefined) return
     try {
-      if (agent.inbox.remove(MessageId(messageId))) {
-        bridge.notify(t('notice.queueCancelled'))
+      const outcome = applyQueueMutation(
+        current.inbox,
+        current.status,
+        messageId,
+        action,
+        message => current.steer(message),
+      )
+      switch (outcome) {
+        case 'removed': bridge.notify(t('notice.queueCancelled')); return
+        case 'edited': bridge.notify(t('notice.queueEdited')); return
+        case 'steered': bridge.notify(t('notice.queueSteered')); return
+        case 'empty': bridge.notify(t('notice.queueEditEmpty'), 'warning'); return
+        case 'steerUnavailable': bridge.notify(t('notice.queueSteerUnavailable'), 'warning'); return
+        case 'unavailable': bridge.notify(t('notice.queueUnavailable'), 'warning'); return
       }
     } catch (error: unknown) {
-      bridge.notify(t('notice.queueCancelFailed', { message: error instanceof Error ? error.message : String(error) }), 'error')
+      bridge.notify(t('notice.queueActionFailed', { message: error instanceof Error ? error.message : String(error) }), 'error')
     }
   }
 
@@ -1094,13 +1196,12 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   let deliveryChain: { epoch: number; tail: Promise<void> } = { epoch: 0, tail: Promise.resolve() }
 
   /** Deliver one trimmed line to the live session, expanding mentions first. */
-  const deliverLine = (line: string, mode: 'followup' | 'steer', images: readonly ContentBlock[] = []): void => {
+  const deliverLine = (line: string, images: readonly ContentBlock[] = []): void => {
     const currentAgent = agent!
     const currentMentions = mentions!
     // The command registry is a closed namespace: slash lines run out of
-    // band and never reach the model through this path (steering keeps the
-    // registry out of the inbox, so slash lines steer as literal text).
-    if (images.length === 0 && isSlashLine(line) && mode === 'followup') {
+    // band and never reach the model through this path.
+    if (images.length === 0 && isSlashLine(line)) {
       runSlash(line)
       return
     }
@@ -1127,7 +1228,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       if (epoch !== atEpoch || agent !== currentAgent) return
       // Session snapshots ride the inbox as model-facing context ahead of
       // the readable message (upstream README wiring: inject before the
-      // followup/steer that wakes the driver).
+      // followup that wakes the driver).
       try {
         if (context !== undefined) currentAgent.inject(context)
         const content: ContentBlock[] = [
@@ -1138,15 +1239,9 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
           content,
           source: { kind: 'user' },
         })
-        if (mode === 'steer') {
-          // The queued message is visible as a pending transcript row (the
-          // web queue-mirror contract); no notice noise on the happy path.
-          currentAgent.steer(message)
-        } else {
-          currentAgent.followup(message)
-        }
+        currentAgent.followup(message)
       } catch (error: unknown) {
-        bridge.notify(`${mode === 'steer' ? 'steering' : 'message'} failed: ${error instanceof Error ? error.message : String(error)}`, 'error')
+        bridge.notify(`message failed: ${error instanceof Error ? error.message : String(error)}`, 'error')
       }
     }
     if (parsed.references.length === 0) {
@@ -1170,7 +1265,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   // arrives during creation is delivered in order afterwards. A creation
   // failure reports and clears the queue, leaving the transient state ready
   // for the next attempt.
-  const pendingInputs: Array<{ text: string; mode: 'followup' | 'steer'; images: readonly ContentBlock[] }> = []
+  const pendingInputs: Array<{ text: string; images: readonly ContentBlock[] }> = []
   // A creation is queued/running: further submissions must not mint more
   // fresh sessions (their lines queue into pendingInputs instead).
   let creating = false
@@ -1188,7 +1283,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
         // (which would orphan the live one without a dispose).
         if (session !== undefined) {
           const queued = pendingInputs.splice(0)
-          for (const item of queued) deliverLine(item.text, item.mode, item.images)
+          for (const item of queued) deliverLine(item.text, item.images)
           return
         }
         const next = await prepare({
@@ -1248,9 +1343,9 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
           // A pre-session plan choice materializes as the registry command
           // delivered AHEAD of the queued lines, so the first assembled step
           // of the user's opening message already runs in plan mode.
-          deliverLine('/plan', 'followup')
+          deliverLine('/plan')
         }
-        for (const item of queued) deliverLine(item.text, item.mode, item.images)
+        for (const item of queued) deliverLine(item.text, item.images)
       } finally {
         creating = false
       }
@@ -1261,7 +1356,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   }
 
   /** Deliver one readable line to the agent, expanding session mentions first. */
-  const sendNow = (text: string, mode: 'followup' | 'steer', images: readonly ContentBlock[] = []): void => {
+  const sendNow = (text: string, images: readonly ContentBlock[] = []): void => {
     // Blank check on the trimmed form; the payload itself keeps the draft's
     // exact whitespace unless the line is a syntactic slash command.
     const line = submissionPayload(text)
@@ -1283,18 +1378,18 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       return
     }
     if (session === undefined) {
-      pendingInputs.push({ text: line, mode, images })
+      pendingInputs.push({ text: line, images })
       ensureSession()
       return
     }
-    deliverLine(line, mode, images)
+    deliverLine(line, images)
   }
 
   // Startup serialization: input submitted while the startup prompt/images
   // are still preparing queues behind the initial request.
-  const inputGate = new StartupInputGate(({ text, mode, images }) => sendNow(text, mode, images))
-  const send = (text: string, mode: 'followup' | 'steer', images: readonly ContentBlock[] = []): void => {
-    inputGate.submit({ text, mode, images })
+  const inputGate = new StartupInputGate(({ text, images }) => sendNow(text, images))
+  const send = (text: string, images: readonly ContentBlock[] = []): void => {
+    inputGate.submit({ text, mode: 'followup', images })
   }
 
   /** Dispatch one submitted line: slash commands to the registry, other text to the agent. */
@@ -1303,25 +1398,20 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     // session (queued switch): the composing session is gone, so the stale
     // delivery is dropped instead of landing in the new session's inbox.
     if (!submissionBelongsToSession(origin, session?.id)) return
-    send(text, 'followup', images)
+    send(text, images)
   }
 
   /**
-   * Submit steering: a running driver consumes the text at its next step
-   * boundary (the inbox delivers between steps); an idle driver just starts
-   * a turn, so this doubles as the busy-state submit path.
+   * Interrupt the running turn (Esc); true when a turn was actually
+   * cancelled. {@link cancelPreservingQueue} keeps the next-turn queue alive
+   * AND re-wakes the driver, so the preserved messages run instead of
+   * parking; next-step steering dies with the turn.
    */
-  const steer = (text: string, images: readonly ContentBlock[] = [], origin?: string): void => {
-    if (!submissionBelongsToSession(origin, session?.id)) return
-    send(text, 'steer', images)
-  }
-
-  /** Interrupt the running turn (Esc); true when a turn was actually cancelled. */
   const interrupt = (): boolean => {
     if (agent === undefined || agent.status !== 'running') return false
     try {
-      agent.cancel({ kind: 'user' })
-      bridge.notify('turn cancelled — Ctrl+C or /quit to exit')
+      const preserved = cancelPreservingQueue(agent)
+      bridge.notify(t(preserved > 0 ? 'notice.turnCancelledKeepQueue' : 'notice.turnCancelled'))
       return true
     } catch (error: unknown) {
       bridge.notify(`cancel failed: ${error instanceof Error ? error.message : String(error)}`, 'error')
@@ -1392,7 +1482,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
           return 'plan → on (applies to the first session)'
         }
         planIntent = true
-        send('/plan', 'followup')
+        send('/plan')
         return 'plan → on'
       }
       // Leaving plan lands on the station after the most restrictive
@@ -1404,7 +1494,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
         return `plan → off · permission → ${decision.preset}`
       }
       planIntent = false
-      send('/plan off', 'followup')
+      send('/plan off')
       selectPermission(permissionPresets, session, decision.preset)
       return `plan → off · permission → ${decision.preset}`
     } catch (error: unknown) {
@@ -1874,7 +1964,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
         bridge.notify(t('notice.reviewUnavailable', { message: error instanceof Error ? error.message : String(error) }), 'error')
         return
       }
-      send(buildReviewPrompt(files.flatMap(file => file.lines).join('\n'), title, note), 'followup')
+      send(buildReviewPrompt(files.flatMap(file => file.lines).join('\n'), title, note))
       bridge.notify(t('notice.reviewStarted'))
     }, (error: unknown) => {
       finish()
@@ -1990,7 +2080,6 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       /** Pre-session plan choice for the status badge until a session composes. */
       pendingPlan: session === undefined && pendingPlan,
       dispatch,
-      steer,
       interrupt,
       quit,
       loadModels: () => loadModelDirectory(ctx),
@@ -2062,7 +2151,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       saveAnimations,
       history: inputHistory,
       recordHistory,
-      cancelQueued,
+      updateQueued,
       onBridgeReady: (instance: AppBridge) => { bridge.notify = instance.notify },
     })
   }

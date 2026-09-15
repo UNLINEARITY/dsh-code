@@ -91,7 +91,6 @@ function appProps(overrides: Partial<AppProps> = {}): AppProps {
     mode: 'standard',
     permission: 'workspace-write',
     dispatch: noop,
-    steer: noop,
     interrupt: () => false,
     quit: noop,
     loadModels: async () => ({ rows: [], failures: [] }),
@@ -129,7 +128,6 @@ function appProps(overrides: Partial<AppProps> = {}): AppProps {
     applyEditorKeys: async () => 'ok',
     history: [],
     recordHistory: noop,
-    cancelQueued: noop,
     onBridgeReady: noop,
     ...overrides,
   }

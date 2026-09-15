@@ -396,9 +396,16 @@ export function transcriptEntryLines(
         ? hangingStyledLines([lineSegment(promptDisplayText(entry), 'dim')], width, '⤷ ', 'dim', '  ', 'dim')
         : paintDiffRowBars(hangingStyledLines(userPromptSegments(promptDisplayText(entry)), width, '❯ ', 'brand', '  ', 'plain'), width)
     case 'pending':
-      // Codex PendingSteer: a queued prompt renders exactly like an ordinary
-      // user row, so the durable user/message retires it without any flicker.
-      return hangingStyledLines([lineSegment(promptDisplayText(entry), 'plain')], width, '❯ ', 'brand', '  ', 'plain')
+      // Next-turn queue uses the user prompt; next-step steering uses ↳ so
+      // the two inbox lists stay visually distinct until they retire.
+      return hangingStyledLines(
+        [lineSegment(promptDisplayText(entry), 'plain')],
+        width,
+        entry.target === 'next-step' ? '↳ ' : '❯ ',
+        'brand',
+        '  ',
+        'plain',
+      )
     case 'assistant': {
       const reasoning = entry.reasoning === ''
         ? []

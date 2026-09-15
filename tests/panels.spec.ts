@@ -85,7 +85,6 @@ describe('exclusive panel height budgets', () => {
       mode: 'standard',
       permission: 'workspace-write',
       dispatch: noop,
-      steer: noop,
       interrupt: () => false,
       quit: noop,
       loadModels: async () => ({ rows: [], failures: [] }),
@@ -116,7 +115,6 @@ describe('exclusive panel height budgets', () => {
       saveStatusline: noop,
       history: [],
       recordHistory: noop,
-      cancelQueued: noop,
       onBridgeReady: noop,
     }), {
       stdin,
@@ -343,7 +341,6 @@ describe('exclusive panel height budgets', () => {
       mode: 'standard',
       permission: 'workspace-write',
       dispatch: noop,
-      steer: noop,
       interrupt: () => false,
       quit: noop,
       loadModels: async () => ({ rows: [], failures: [] }),
@@ -375,7 +372,6 @@ describe('exclusive panel height budgets', () => {
       },
       history: [],
       recordHistory: noop,
-      cancelQueued: noop,
       onBridgeReady: noop,
     }), {
       stdin,
@@ -472,23 +468,29 @@ describe('queued messages and global recall', () => {
       content: [{ type: 'text', text: 'then run tests' }],
       source: { kind: 'user' },
     })
+    const later = createUserMessage({
+      content: [{ type: 'text', text: 'then inspect the diff' }],
+      source: { kind: 'user' },
+    })
     const cancelled: string[] = []
+    const updates: Array<{ messageId: string; kind: string; text?: string }> = []
+    const store = createTranscriptStore([
+      {
+        type: 'agent/inbox/spliced',
+        seq: 1,
+        time: 0,
+        data: { target: 'next-step', start: 0, inserted: [steering] },
+      } as never,
+      {
+        type: 'agent/inbox/spliced',
+        seq: 2,
+        time: 0,
+        data: { target: 'next-turn', start: 0, inserted: [queued, later] },
+      } as never,
+    ])
     const instance = render(createElement(App, {
       subagents: { subscribe: () => () => {}, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
-      store: createTranscriptStore([
-        {
-          type: 'agent/inbox/spliced',
-          seq: 1,
-          time: 0,
-          data: { target: 'next-step', start: 0, inserted: [steering] },
-        } as never,
-        {
-          type: 'agent/inbox/spliced',
-          seq: 2,
-          time: 0,
-          data: { target: 'next-turn', start: 0, inserted: [queued] },
-        } as never,
-      ]),
+      store,
       approval: {
         subscribe: (listener: () => void) => {
           approvalListeners.add(listener)
@@ -516,7 +518,6 @@ describe('queued messages and global recall', () => {
       mode: 'standard',
       permission: 'workspace-write',
       dispatch: noop,
-      steer: noop,
       interrupt: () => false,
       quit: noop,
       loadModels: async () => ({ rows: [], failures: [] }),
@@ -545,8 +546,9 @@ describe('queued messages and global recall', () => {
       saveStatusline: noop,
       history: [],
       recordHistory: noop,
-      cancelQueued: messageId => {
-        cancelled.push(messageId)
+      updateQueued: (messageId, action) => {
+        updates.push({ messageId, kind: action.kind, ...action.kind === 'edit' ? { text: action.text } : {} })
+        if (action.kind === 'remove') cancelled.push(messageId)
       },
       onBridgeReady: noop,
     }), {
@@ -559,15 +561,60 @@ describe('queued messages and global recall', () => {
 
     try {
       await wait()
-      // Codex PendingSteer: queued prompts render as ordinary user rows.
-      expect(output).toContain('❯ fix the build')
+      // Next-step steering uses ↳; next-turn queue uses ❯.
+      expect(output).toContain('↳ fix the build')
       expect(output).toContain('❯ then run tests')
+
+      // /queue is an exclusive next-turn panel: it follows inbox order,
+      // not transcript append order, and never exposes next-step steering.
+      output = ''
+      stdin.write('/queue')
+      await wait()
+      stdin.write('\r')
+      await wait()
+      expect(output).toContain('2 queued')
+      expect(output).toContain('1. then run tests')
+      expect(output).toContain('2. then inspect the diff')
+
+      // The panel edits one exact row, then permits promotion only once the
+      // durable view says a turn is running.
+      stdin.write('e')
+      await wait()
+      stdin.write('\x7f')
+      await wait()
+      stdin.write('\r')
+      await wait()
+      expect(updates).toContainEqual({ messageId: queued.id, kind: 'edit', text: 'then run test' })
+      store.apply({ type: 'turn/start', seq: 3, time: 1, data: { turn: 1 } } as never)
+      await wait()
+      stdin.write('\r')
+      await wait()
+      expect(updates).toContainEqual({ messageId: queued.id, kind: 'steer' })
+      stdin.write('\x1b')
+      await wait()
+
+      // Reopen the panel: `d` is its only removal key. Ink reports the
+      // forward-delete sequence and a bare Backspace as the same `key.delete`,
+      // so a Delete binding here would erase a row on a habitual Backspace.
+      stdin.write('/queue')
+      await wait()
+      stdin.write('\r')
+      await wait()
+      stdin.write('\x1b[3~')
+      await wait()
+      expect(updates.filter(update => update.kind === 'remove')).toHaveLength(0)
+      stdin.write('d')
+      await wait()
+      expect(updates.filter(update => update.kind === 'remove')).toHaveLength(1)
+      stdin.write('\x1b')
+      await wait()
+      cancelled.length = 0
 
       // Delete on the empty composer cancels the NEWEST queued row.
       output = ''
       stdin.write('\x1b[3~')
       await wait()
-      expect(cancelled).toEqual([queued.id])
+      expect(cancelled).toEqual([later.id])
 
       // A non-empty draft keeps Delete as text editing — no cancellation.
       output = ''
@@ -576,6 +623,160 @@ describe('queued messages and global recall', () => {
       stdin.write('\x1b[3~')
       await wait()
       expect(cancelled).toHaveLength(1)
+    } finally {
+      instance.unmount()
+      stdin.destroy()
+      stdout.destroy()
+    }
+  })
+
+  it('walks a long queue with g/G and paging, keeping the window on the selection', async () => {
+    const stdin = Object.assign(new PassThrough(), {
+      isTTY: true,
+      isRaw: false,
+      setRawMode(value: boolean) {
+        this.isRaw = value
+        return this
+      },
+      ref() {},
+      unref() {},
+    }) as unknown as NodeJS.ReadStream
+    const stdout = Object.assign(new PassThrough(), {
+      isTTY: true,
+      columns: 100,
+      rows: 24,
+    }) as unknown as NodeJS.WriteStream
+    let output = ''
+    stdout.on('data', chunk => {
+      output += chunk.toString()
+    })
+    const approvalListeners = new Set<() => void>()
+    const questionListeners = new Set<() => void>()
+    const noop = (): void => {}
+    const store = createTranscriptStore()
+    for (let index = 1; index <= 30; index += 1) {
+      store.apply({
+        type: 'agent/inbox/spliced',
+        seq: index,
+        time: index,
+        data: {
+          target: 'next-turn',
+          start: index - 1,
+          inserted: [createUserMessage({ content: [{ type: 'text', text: `msg ${index}` }], source: { kind: 'user' } })],
+        },
+      } as never)
+    }
+    const instance = render(createElement(App, {
+      subagents: { subscribe: () => () => {}, getSnapshot: () => EMPTY_AGENTS, getTotalSeen: () => 0 },
+      store,
+      approval: {
+        subscribe: (listener: () => void) => {
+          approvalListeners.add(listener)
+          return () => approvalListeners.delete(listener)
+        },
+        getSnapshot: () => ({ pending: undefined, answered: false, queued: 0 }),
+      },
+      questions: {
+        subscribe: (listener: () => void) => {
+          questionListeners.add(listener)
+          return () => questionListeners.delete(listener)
+        },
+        getSnapshot: () => ({ pending: undefined }),
+        submit: noop,
+        cancel: noop,
+      },
+      commands: { descriptors: [], subscribe: () => noop },
+      skills: { rows: [], subscribe: () => noop },
+      model: 'test/model',
+      cwd: 'dsh-cli',
+      workspaceRoot: 'C:\\repo\\dsh-cli',
+      branch: 'main',
+      sessionId: '12345678',
+      resumed: false,
+      mode: 'standard',
+      permission: 'workspace-write',
+      dispatch: noop,
+      interrupt: () => false,
+      quit: noop,
+      loadModels: async () => ({ rows: [], failures: [] }),
+      loadMentions: async () => [],
+      selectModel: () => 'test/model',
+      subagentModel: '',
+      setSubagentModel: () => '',
+      clearSubagentModel: noop,
+      deleteSession: async () => '',
+      cycleMode: () => '',
+      setPermission: id => id,
+      exportTranscript: async () => {},
+      renameTitle: () => '',
+      loadPresets: async () => [],
+      loadPermissions: async () => [],
+      switchMode: async id => id,
+      createSession: noop,
+      loadSessions: async () => [],
+      loadSubagents: async () => [],
+      loadSessionTranscript: async () => '',
+      switchSession: noop,
+      cancelSessionSwitch: () => false,
+      loadPlugins: () => [],
+      loadJobs: () => [],
+      statusline: DEFAULT_STATUSLINE_ITEMS,
+      saveStatusline: noop,
+      history: [],
+      recordHistory: noop,
+      updateQueued: noop,
+      onBridgeReady: noop,
+    }), {
+      stdin,
+      stdout,
+      stderr: stdout,
+      exitOnCtrlC: false,
+      patchConsole: false,
+    })
+
+    try {
+      await wait()
+      stdin.write('/queue')
+      await wait()
+      stdin.write('\r')
+      await wait()
+      // The window starts at the head and covers exactly one body page.
+      expect(output).toContain('30 queued')
+      const firstWindow = /rows 1-(\d+)/u.exec(output)
+      expect(firstWindow).not.toBeNull()
+      const bodyRows = Number(firstWindow![1])
+      expect(bodyRows).toBeGreaterThan(1)
+      expect(bodyRows).toBeLessThan(30)
+      expect(output).toContain('1. msg 1')
+
+      // G jumps to the tail and the window follows it to the last page.
+      stdin.write('G')
+      await wait()
+      expect(output).toContain(`rows ${30 - bodyRows + 1}-30`)
+      expect(output).toContain('30. msg 30')
+
+      // g returns to the head.
+      stdin.write('g')
+      await wait()
+      expect(output).toContain(`rows 1-${bodyRows}`)
+      expect(output).toContain('1. msg 1')
+
+      // A page down advances the selection by one body page (still inside the
+      // first window), so the selected row carries the cursor mark.
+      output = ''
+      stdin.write('\x1b[6~')
+      await wait()
+      expect(output).toContain(`› ${bodyRows}. msg ${bodyRows}`)
+
+      // A second page pushes past the first window: it scrolls to keep the
+      // selection visible and still spans exactly one body page.
+      output = ''
+      stdin.write('\x1b[6~')
+      await wait()
+      const paged = /rows (\d+)-(\d+)/u.exec(output)
+      expect(paged).not.toBeNull()
+      expect(Number(paged![1])).toBeGreaterThan(1)
+      expect(Number(paged![2])).toBe(Number(paged![1]) + bodyRows - 1)
     } finally {
       instance.unmount()
       stdin.destroy()
@@ -637,7 +838,6 @@ describe('queued messages and global recall', () => {
       mode: 'standard',
       permission: 'workspace-write',
       dispatch: noop,
-      steer: noop,
       interrupt: () => false,
       quit: noop,
       loadModels: async () => ({ rows: [], failures: [] }),
@@ -668,7 +868,6 @@ describe('queued messages and global recall', () => {
       recordHistory: text => {
         recorded.push(text)
       },
-      cancelQueued: noop,
       onBridgeReady: noop,
     }), {
       stdin,
@@ -797,7 +996,6 @@ describe('queued messages and global recall', () => {
       mode: 'standard',
       permission: 'workspace-write',
       dispatch: noop,
-      steer: noop,
       interrupt: () => false,
       quit: noop,
       loadModels: async () => ({ rows: [], failures: [] }),
@@ -831,7 +1029,6 @@ describe('queued messages and global recall', () => {
       saveStatusline: noop,
       history: [],
       recordHistory: noop,
-      cancelQueued: noop,
       onBridgeReady: noop,
     }), {
       stdin,
@@ -968,7 +1165,6 @@ describe('queued messages and global recall', () => {
       mode: 'standard',
       permission: 'workspace-write',
       dispatch: noop,
-      steer: noop,
       interrupt: () => false,
       quit: noop,
       loadModels: async () => ({ rows: [], failures: [] }),
@@ -1009,7 +1205,6 @@ describe('queued messages and global recall', () => {
       saveStatusline: noop,
       history: [],
       recordHistory: noop,
-      cancelQueued: noop,
       onBridgeReady: noop,
     }), {
       stdin,
@@ -1089,7 +1284,6 @@ describe('queued messages and global recall', () => {
       mode: 'standard',
       permission: 'workspace-write',
       dispatch: noop,
-      steer: noop,
       interrupt: () => false,
       quit: noop,
       loadModels: async () => ({ rows: [], failures: [] }),
@@ -1118,7 +1312,6 @@ describe('queued messages and global recall', () => {
       saveStatusline: noop,
       history: [],
       recordHistory: noop,
-      cancelQueued: noop,
       onBridgeReady: noop,
     }), {
       stdin,
@@ -1198,7 +1391,6 @@ describe('queued messages and global recall', () => {
       mode: 'standard',
       permission: 'workspace-write',
       dispatch: noop,
-      steer: noop,
       interrupt: () => false,
       quit: noop,
       loadModels: async () => ({ rows: [], failures: [] }),
@@ -1252,7 +1444,6 @@ describe('queued messages and global recall', () => {
       saveStatusline: noop,
       history: [],
       recordHistory: noop,
-      cancelQueued: noop,
       onBridgeReady: noop,
     }), {
       stdin,
@@ -1351,7 +1542,6 @@ describe('queued messages and global recall', () => {
       mode: 'standard',
       permission: 'workspace-write',
       dispatch: noop,
-      steer: noop,
       interrupt: () => false,
       quit: noop,
       loadModels: async () => ({ rows: [], failures: [] }),
@@ -1380,7 +1570,6 @@ describe('queued messages and global recall', () => {
       saveStatusline: noop,
       history: ['Fix the login bug', 'bump the package version'],
       recordHistory: noop,
-      cancelQueued: noop,
       onBridgeReady: noop,
     }), {
       stdin,
@@ -1485,7 +1674,6 @@ describe('queued messages and global recall', () => {
       mode: 'standard',
       permission: 'workspace-write',
       dispatch: noop,
-      steer: noop,
       interrupt: () => false,
       quit: noop,
       loadModels: async () => ({ rows: [], failures: [] }),
@@ -1514,7 +1702,6 @@ describe('queued messages and global recall', () => {
       saveStatusline: noop,
       history: [],
       recordHistory: noop,
-      cancelQueued: noop,
       onBridgeReady: noop,
     }), {
       stdin,
@@ -1640,7 +1827,6 @@ describe('/model effort stage', () => {
       mode: 'standard',
       permission: 'workspace-write',
       dispatch: noop,
-      steer: noop,
       interrupt: () => false,
       quit: noop,
       loadModels: async () => ({ rows, failures: [] }),
@@ -1668,7 +1854,6 @@ describe('/model effort stage', () => {
       saveStatusline: noop,
       history: [],
       recordHistory: noop,
-      cancelQueued: noop,
       onBridgeReady: noop,
     }), {
       stdin,
@@ -1867,7 +2052,6 @@ describe('/effort command', () => {
       mode: 'standard',
       permission: 'workspace-write',
       dispatch: noop,
-      steer: noop,
       interrupt: () => false,
       quit: noop,
       loadModels: async () => ({ rows, failures: [] }),
@@ -1892,7 +2076,6 @@ describe('/effort command', () => {
       saveStatusline: noop,
       history: [],
       recordHistory: noop,
-      cancelQueued: noop,
       onBridgeReady: noop,
     }), {
       stdin,
@@ -2292,7 +2475,6 @@ describe('/model typing filter', () => {
       mode: 'standard',
       permission: 'workspace-write',
       dispatch: noop,
-      steer: noop,
       interrupt: () => false,
       quit: noop,
       loadModels: async () => ({ rows: [
@@ -2487,7 +2669,6 @@ describe('/model typing filter — late directory and compact copy', () => {
       mode: 'standard',
       permission: 'workspace-write',
       dispatch: noop,
-      steer: noop,
       interrupt: () => false,
       quit: noop,
       loadModels: async () => {
@@ -2602,7 +2783,6 @@ describe('/model typing filter — late directory and compact copy', () => {
       mode: 'standard',
       permission: 'workspace-write',
       dispatch: noop,
-      steer: noop,
       interrupt: () => false,
       quit: noop,
       loadModels: async () => ({ rows: [

@@ -264,6 +264,7 @@ const LOCAL_COMMANDS: readonly LocalCommand[] = [
   { label: '/rainbow', descriptionKey: 'cmd.rainbow' },
   { label: '/animation', descriptionKey: 'cmd.animation' },
   { label: '/history', descriptionKey: 'cmd.history' },
+  { label: '/queue', descriptionKey: 'cmd.queue' },
   { label: '/agents', descriptionKey: 'cmd.agents' },
   { label: '/todos', descriptionKey: 'cmd.todos' },
   { label: '/subagent', descriptionKey: 'cmd.subagent' },
@@ -279,6 +280,12 @@ const LOCAL_COMMANDS: readonly LocalCommand[] = [
 ] as const
 
 const LOCAL_COMMAND_NAMES = new Set(LOCAL_COMMANDS.map(command => command.label.slice(1)))
+
+/** One mutation the terminal may request for a pending next-turn inbox item. */
+export type QueueMutation =
+  | { readonly kind: 'remove' }
+  | { readonly kind: 'edit'; readonly text: string }
+  | { readonly kind: 'steer' }
 
 /** Props the runner hands the app; callbacks stay owned by the runner. */
 export interface AppProps {
@@ -319,8 +326,6 @@ export interface AppProps {
    * session, and the runner drops the stale delivery then.
    */
   dispatch(text: string, attachments?: readonly ContentBlock[], origin?: string): void
-  /** Submit steering, with the same stale-delivery guard as {@link dispatch}. */
-  steer(text: string, attachments?: readonly ContentBlock[], origin?: string): void
   /**
    * The FULL current session identity ('' while the first session is pending)
    * — the stale-delivery origin above. Distinct from the short display id.
@@ -453,8 +458,8 @@ export interface AppProps {
   history: readonly string[]
   /** Persist one submitted prompt to the global history file. */
   recordHistory(text: string): void
-  /** Cancel one queued inbox message by identity (Delete on the empty composer). */
-  cancelQueued(messageId: string): void
+  /** Mutate one next-turn inbox message; durable inbox splices reconcile the result. */
+  updateQueued?(messageId: string, action: QueueMutation): void
   /** Apply the Ctrl+R terminal passthrough to the detected editor (/vscode-keys); resolves to a one-line summary. */
   applyEditorKeys(): Promise<string>
 }
@@ -992,6 +997,154 @@ function TodoListPanel({ todos, onClose }: { todos: readonly TodoItem[]; onClose
 }
 
 const MemoTodoListPanel = memo(TodoListPanel)
+
+/** Rows in the exact next-turn inbox order, never transcript append order. */
+export function queuedInboxRows(
+  entries: readonly TranscriptEntry[],
+  ids: readonly string[],
+): readonly Extract<TranscriptEntry, { kind: 'pending' }>[] {
+  const byId = new Map<string, Extract<TranscriptEntry, { kind: 'pending' }>>()
+  for (const entry of entries) {
+    if (entry.kind === 'pending' && entry.target === 'next-turn') byId.set(entry.messageId, entry)
+  }
+  return ids.flatMap(id => {
+    const row = byId.get(id)
+    return row === undefined ? [] : [row]
+  })
+}
+
+/** A bounded, keyboard-owned management surface for the durable next-turn inbox. */
+function QueuePanel({ rows, busy, update, onClose }: {
+  rows: readonly Extract<TranscriptEntry, { kind: 'pending' }>[]
+  busy: boolean
+  update?: (messageId: string, action: QueueMutation) => void
+  onClose(): void
+}): ReactElement {
+  const stdout = useStdout().stdout
+  const viewport = panelViewport(stdout?.columns ?? 80, stdout?.rows ?? 30)
+  const [selected, setSelected] = useState(0)
+  const [scroll, setScroll] = useState(0)
+  const [editing, setEditing] = useState<{ messageId: string; text: string; cursor: number } | undefined>(undefined)
+  // Ink can deliver a following key before its effect swaps the input
+  // listener after an edit-mode render; this ref keeps the editor's key
+  // stream coherent while the visible state catches up.
+  const editingRef = useRef(editing)
+  const current = rows[selected]
+  const visibleScroll = revealRow(clampScroll(scroll, rows.length, viewport.bodyRows), selected, rows.length, viewport.bodyRows)
+  const move = (delta: number): void => {
+    setSelected(current => Math.max(0, Math.min(rows.length - 1, current + delta)))
+  }
+
+  useEffect(() => {
+    setSelected(current => Math.max(0, Math.min(rows.length - 1, current)))
+    if (editing !== undefined && !rows.some(row => row.messageId === editing.messageId)) {
+      editingRef.current = undefined
+      setEditing(undefined)
+    }
+  }, [rows, editing])
+  useEffect(() => {
+    if (visibleScroll !== scroll) setScroll(visibleScroll)
+  }, [visibleScroll, scroll])
+
+  useStableInput((input, key) => {
+    const activeEdit = editingRef.current
+    if (activeEdit !== undefined) {
+      if (key.escape) {
+        editingRef.current = undefined
+        setEditing(undefined)
+        return
+      }
+      if (key.return) {
+        if (activeEdit.text.trim() !== '') update?.(activeEdit.messageId, { kind: 'edit', text: activeEdit.text })
+        editingRef.current = undefined
+        setEditing(undefined)
+        return
+      }
+      if (key.leftArrow) {
+        const next = { ...activeEdit, cursor: moveCursorBy(activeEdit.text, activeEdit.cursor, -1) }
+        editingRef.current = next
+        setEditing(next)
+        return
+      }
+      if (key.rightArrow) {
+        const next = { ...activeEdit, cursor: moveCursorBy(activeEdit.text, activeEdit.cursor, 1) }
+        editingRef.current = next
+        setEditing(next)
+        return
+      }
+      // Ink 5 reports 0x7F (backspace) and the forward-delete sequence as the
+      // same `key.delete`, so a bare Delete binding here would erase on a
+      // habitual Backspace. This management surface keeps `d` as its only
+      // removal key instead of guessing which byte arrived.
+      if (key.backspace || key.delete) {
+        const edit = deleteBackward(activeEdit.text, activeEdit.cursor)
+        const next = { ...activeEdit, text: edit.value, cursor: edit.cursor }
+        editingRef.current = next
+        setEditing(next)
+        return
+      }
+      if (input !== '' && !key.ctrl && !key.meta) {
+        const edit = insertText(activeEdit.text, activeEdit.cursor, input)
+        const next = { ...activeEdit, text: edit.value, cursor: edit.cursor }
+        editingRef.current = next
+        setEditing(next)
+      }
+      return
+    }
+    if (key.escape || input === 'q') {
+      onClose()
+      return
+    }
+    if (key.upArrow) move(-1)
+    else if (key.downArrow) move(1)
+    else if (key.pageUp) move(-Math.max(1, viewport.bodyRows - 1))
+    else if (key.pageDown) move(Math.max(1, viewport.bodyRows - 1))
+    else if (input === 'g') setSelected(0)
+    else if (input === 'G') setSelected(Math.max(0, rows.length - 1))
+    else if (input === 'e' && current !== undefined) {
+      // Text is editable on every row: an edit rewrites what the user typed
+      // and carries the row's attachments through untouched, which is exactly
+      // what the row's read-only attachment marker promises.
+      const next = { messageId: current.messageId, text: current.text, cursor: current.text.length }
+      editingRef.current = next
+      setEditing(next)
+    }
+    else if (input === 'd' && current !== undefined) update?.(current.messageId, { kind: 'remove' })
+    else if (key.return && current !== undefined && busy) update?.(current.messageId, { kind: 'steer' })
+  }, true)
+
+  if (viewport.maxHeight === 0 || viewport.compact) {
+    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(t('panel.queue.compact'), viewport.contentColumns))
+  }
+  const body = rows.length === 0
+    ? [createElement(Text, { key: 'empty', color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns(t('panel.queue.empty'), viewport.contentColumns))]
+    : rows.map((row, index) => {
+      const selectedRow = index === selected
+      const suffix = (row.images?.length ?? 0) + (row.files?.length ?? 0) > 0 ? ` ${t('panel.queue.attachments')}` : ''
+      if (editing?.messageId === row.messageId) {
+        const before = editing.text.slice(0, editing.cursor)
+        const caret = editing.text.slice(editing.cursor, editing.cursor + 1) || ' '
+        const after = editing.text.slice(editing.cursor + caret.length)
+        return createElement(Text, { key: row.messageId, color: inkColor(getPalette().brandBright), wrap: 'truncate-end' }, truncateColumns(`✎ ${before}[${caret}]${after}`, viewport.contentColumns))
+      }
+      return createElement(Text, { key: row.messageId, color: inkColor(selectedRow ? getPalette().brandBright : getPalette().dim), bold: selectedRow || undefined, wrap: 'truncate-end' }, truncateColumns(`${selectedRow ? '›' : ' '} ${index + 1}. ${singleLineText(row.text)}${suffix}`, viewport.contentColumns))
+    })
+  const footer = editing !== undefined
+    ? t('panel.queue.editFooter')
+    : busy
+      ? t('panel.queue.footerBusy')
+      : t('panel.queue.footerIdle')
+  const accent = panelAccent('queue', getPalette().brand)
+  return createElement(
+    Box,
+    { flexDirection: 'column', width: viewport.outerColumns, paddingX: 1, borderStyle: 'round', borderColor: inkColor(accent.border) },
+    createElement(Text, { color: inkColor(accent.title), bold: true, wrap: 'truncate-end' }, truncateColumns(t('panel.queue.title', { count: rows.length, from: rows.length === 0 ? 0 : visibleScroll + 1, to: Math.min(rows.length, visibleScroll + viewport.bodyRows) }), viewport.contentColumns)),
+    createElement(PanelGap, { visible: viewport.gapRows > 0 }),
+    ...body.slice(visibleScroll, visibleScroll + viewport.bodyRows),
+    createElement(PanelGap, { visible: viewport.gapRows > 0 }),
+    createElement(Text, { color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns(footer, viewport.contentColumns)),
+  )
+}
 
 /**
  * Ink props for one status tone: the Codex status-line accent mapping over
@@ -3466,7 +3619,7 @@ interface DraftFile extends FilePathInspection {
  * While a modal (approval / question / model panel) owns the keys, the
  * box passes every key through untouched.
  */
-function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch, steer, interrupt, quit, openModel, openEffort, openHelp, openMode, openPermission, openResume, openSearch, openPlugin, openUpdate, openSchedule, openJobs, openStatusline, openTheme, openLanguage, saveLanguage, openHistory, openAgents, openSubagent, openTodos, openDelete, openDiff, openReviewPicker, reviewChanges, deleteConfirm, confirmDelete, cancelDelete, createSession, forkSession, cancelSessionSwitch, notify, applyEditorKeys, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, inspectImages, prepareImages, inspectFiles, prepareFiles, cycleMode, exportTranscript, renameTitle, copyLastResponse, recallSpace, recordLocal, recordHistory, queued, cancelQueued, historyFill, historyConsumed, animations, applyAnimations, applyRainbow, rainbowBurstId, waveTier, waveStyle, maxRows, anchorRowsBelow, tabTitle, onEditorRows, onMenuRows, sessionKey }: {
+function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch, interrupt, quit, openModel, openEffort, openHelp, openMode, openPermission, openResume, openSearch, openPlugin, openUpdate, openSchedule, openJobs, openStatusline, openTheme, openLanguage, saveLanguage, openHistory, openQueue, openAgents, openSubagent, openTodos, openDelete, openDiff, openReviewPicker, reviewChanges, deleteConfirm, confirmDelete, cancelDelete, createSession, forkSession, cancelSessionSwitch, notify, applyEditorKeys, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, inspectImages, prepareImages, inspectFiles, prepareFiles, cycleMode, exportTranscript, renameTitle, copyLastResponse, recallSpace, recordLocal, recordHistory, queued, updateQueued, historyFill, historyConsumed, animations, applyAnimations, applyRainbow, rainbowBurstId, waveTier, waveStyle, maxRows, anchorRowsBelow, tabTitle, onEditorRows, onMenuRows, sessionKey }: {
   active: boolean
   frozen: boolean
   /** Frozen-band hint naming the surface that owns the keyboard; an empty
@@ -3476,7 +3629,6 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
   descriptors: readonly CommandDescriptor[]
   skills: readonly SkillRow[]
   dispatch(text: string, attachments?: readonly ContentBlock[], origin?: string): void
-  steer(text: string, attachments?: readonly ContentBlock[], origin?: string): void
   /** The full current session identity ('' while pending); the delivery origin. */
   sessionKey: string
   interrupt(): boolean
@@ -3502,6 +3654,7 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
   /** Apply and persist a language chosen by argument. */
   saveLanguage(name: LanguageName): void
   openHistory(): void
+  openQueue(): void
   /** Open the /agents panel (live subagent feed + transcript entry). */
   openAgents(): void
   /** Open the /subagent model panel. */
@@ -3547,10 +3700,9 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
   recordLocal(text: string): void
   /** Persist one submission to the global history file. */
   recordHistory(text: string): void
-  /** Live queued inbox rows; Delete on the empty composer cancels the newest. */
-  queued: readonly { messageId: string; target: 'next-turn' | 'next-step'; text: string }[]
-  /** Cancel one queued inbox message by identity. */
-  cancelQueued(messageId: string): void
+  /** Next-turn inbox rows, ordered exactly as the durable inbox. */
+  queued: readonly Extract<TranscriptEntry, { kind: 'pending' }>[]
+  updateQueued?(messageId: string, action: QueueMutation): void
   /** Accepted /history entry waiting to be placed into the composer. */
   historyFill: { text: string; index: number } | undefined
   /** Marks the accepted entry consumed (called after the fill is applied). */
@@ -4196,7 +4348,7 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
       const forwardDelete = rawEditorTokens.current?.some(token =>
         token.kind === 'delete-forward' || token.kind === 'delete-word-forward') === true
       if (forwardDelete) {
-        cancelQueued(queued[queued.length - 1]!.messageId)
+        updateQueued?.(queued[queued.length - 1]!.messageId, { kind: 'remove' })
         return
       }
     }
@@ -4267,8 +4419,7 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
           }
           recall.current = beginRecall(recallSpace, '')
           const blocks: readonly ContentBlock[] = [...images, ...files]
-          if (busy) steer(text, blocks, originSession)
-          else dispatch(text, blocks, originSession)
+          dispatch(text, blocks, originSession)
         }, (reason: unknown) => {
           if (controller.signal.aborted || prepareEpochRef.current !== epoch) return
           prepareAbortRef.current = undefined
@@ -4443,6 +4594,10 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
         openHistory()
         return
       }
+      if (text === '/queue') {
+        openQueue()
+        return
+      }
       if (text === '/agents') {
         openAgents()
         return
@@ -4464,13 +4619,6 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
       }
       if (text === '/delete' || text.startsWith('/delete ')) {
         openDelete(text.slice(7).trim())
-        return
-      }
-      if (busy && !text.startsWith('/')) {
-        // A running turn is steered, not blocked: the inbox delivers this
-        // text at the next step boundary (Esc/Ctrl+C still cancels outright).
-        // Slash lines keep the registry path — commands run out of band.
-        steer(text)
         return
       }
       dispatch(text)
@@ -4782,7 +4930,7 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
         ? createElement(Text, { key: 'caret', inverse: cursorVisible || undefined }, parts.caret)
         : null,
       placeholder
-        ? createElement(Text, { dimColor: true }, composerPlaceholder())
+        ? createElement(Text, { dimColor: true }, tail)
         : parts.after,
       bandFill(consumed),
     ))
@@ -5238,6 +5386,7 @@ export function App(props: AppProps): ReactElement {
   // Dedupe for the dynamic-budget tripwire: one warning per distinct shape.
   const budgetWarnRef = useRef<string | undefined>(undefined)
   const [verboseOpen, setVerboseOpen] = useState(false)
+  const [queueOpen, setQueueOpen] = useState(false)
   const [diffView, setDiffView] = useState<GitDiffView | undefined>(undefined)
   const [reviewPickerOpen, setReviewPickerOpen] = useState(false)
   const [helpOpen, setHelpOpen] = useState(false)
@@ -5303,22 +5452,15 @@ export function App(props: AppProps): ReactElement {
   }, [])
   /** The append-only flush boundary (see `settledEntryCount`): entries below
    * this index are final and ride the `<Static>` scrollback; everything at or
-   * beyond stays in the live tree. Pending inbox rows always live at
-   * index >= settled, so the queued-inbox scan below only walks the mutable
-   * tail instead of the whole history. */
+   * beyond stays in the live tree. */
   const settled = useMemo(() => settledEntryCount(view.entries), [view.entries])
-  /** Live queued inbox rows (event-sourced from `agent/inbox/spliced`). The
-   * projection only appends and removes pending rows at index >= settled, so
-   * a bounded tail scan replaces an unconditional O(history) filter on every
-   * event. */
-  const queuedRows = useMemo(() => {
-    const rows: Array<Extract<TranscriptEntry, { kind: 'pending' }>> = []
-    for (let index = settled; index < view.entries.length; index++) {
-      const entry = view.entries[index]
-      if (entry.kind === 'pending') rows.push(entry)
-    }
-    return rows
-  }, [view.entries, settled])
+  /** Next-turn rows in durable inbox order: a running tool row can split the
+   * pending rows, so this maps the inbox id list onto the folded entries
+   * instead of scanning the mutable tail. */
+  const queuedRows = useMemo(
+    () => queuedInboxRows(view.entries, view.pending['next-turn']),
+    [view.entries, view.pending],
+  )
   const [refreshEpoch, setRefreshEpoch] = useState(0)
   const approvalSnapshot = useSyncExternalStore(props.approval.subscribe, props.approval.getSnapshot)
   const questionSnapshot = useSyncExternalStore(props.questions.subscribe, props.questions.getSnapshot)
@@ -5331,8 +5473,8 @@ export function App(props: AppProps): ReactElement {
   // panel keypress.
   const inputActive = deleteConfirmId !== undefined
     ? !approvalPending && !questionPending
-    : !modelOpen && !helpOpen && !modeOpen && !permissionOpen && !resumeOpen && !pluginOpen && !updateOpen && !scheduleOpen && !jobsOpen && !statuslineOpen && !themeOpen && !languageOpen && !historyOpen && !agentsOpen && !subagentOpen && !todosOpen && !verboseOpen && diffView === undefined && !reviewPickerOpen && !approvalPending && !questionPending
-  const transcriptVisible = !modelOpen && !helpOpen && !modeOpen && !permissionOpen && !resumeOpen && !pluginOpen && !updateOpen && !scheduleOpen && !jobsOpen && !statuslineOpen && !themeOpen && !languageOpen && !historyOpen && !agentsOpen && !subagentOpen && !todosOpen && !verboseOpen && diffView === undefined && !reviewPickerOpen && !approvalPending && !questionPending
+    : !modelOpen && !helpOpen && !modeOpen && !permissionOpen && !resumeOpen && !pluginOpen && !updateOpen && !scheduleOpen && !jobsOpen && !statuslineOpen && !themeOpen && !languageOpen && !historyOpen && !queueOpen && !agentsOpen && !subagentOpen && !todosOpen && !verboseOpen && diffView === undefined && !reviewPickerOpen && !approvalPending && !questionPending
+  const transcriptVisible = !modelOpen && !helpOpen && !modeOpen && !permissionOpen && !resumeOpen && !pluginOpen && !updateOpen && !scheduleOpen && !jobsOpen && !statuslineOpen && !themeOpen && !languageOpen && !historyOpen && !queueOpen && !agentsOpen && !subagentOpen && !todosOpen && !verboseOpen && diffView === undefined && !reviewPickerOpen && !approvalPending && !questionPending
 
   // Human questions outrank local inspectors. Close the lower modal instead
   // of leaving an approval/question visible but keyboard-locked behind it.
@@ -5352,6 +5494,7 @@ export function App(props: AppProps): ReactElement {
     setStatuslineOpen(false)
     setThemeOpen(false)
     setHistoryOpen(false)
+    setQueueOpen(false)
     setAgentsOpen(false)
     setSubagentOpen(false)
     setTodosOpen(false)
@@ -5538,7 +5681,7 @@ export function App(props: AppProps): ReactElement {
   const auditedReasoningRows = liveAudit.allocation.reasoning
   const auditedAnswerRows = liveAudit.allocation.answer
   const inspectorVisible = verboseOpen && !approvalPending && !questionPending
-  const modalVisible = modelOpen || helpOpen || modeOpen || permissionOpen || resumeOpen || pluginOpen || updateOpen || scheduleOpen || jobsOpen || statuslineOpen || themeOpen || languageOpen || historyOpen || agentsOpen || subagentOpen || todosOpen || inspectorVisible || diffView !== undefined || reviewPickerOpen || approvalPending || questionPending
+  const modalVisible = modelOpen || helpOpen || modeOpen || permissionOpen || resumeOpen || pluginOpen || updateOpen || scheduleOpen || jobsOpen || statuslineOpen || themeOpen || languageOpen || historyOpen || queueOpen || agentsOpen || subagentOpen || todosOpen || inspectorVisible || diffView !== undefined || reviewPickerOpen || approvalPending || questionPending
   // The surface that currently owns the keyboard, named in the frozen band:
   // an empty composer under a panel must not advertise typing it cannot
   // accept — every key actually feeds the panel (which may or may not
@@ -5931,6 +6074,14 @@ export function App(props: AppProps): ReactElement {
         },
       })
       : undefined,
+    queueOpen && !approvalPending && !questionPending
+      ? createElement(QueuePanel, {
+        rows: queuedRows,
+        busy,
+        update: props.updateQueued,
+        onClose: () => setQueueOpen(false),
+      })
+      : undefined,
     createElement(QuestionBar, { store: props.questions, snapshot: questionSnapshot, locked: false }),
     createElement(ApprovalBar, { snapshot: approvalSnapshot, locked: questionPending, notify, interrupt: props.interrupt, summarize: questionPending }),
     modelSurface,
@@ -6161,7 +6312,6 @@ export function App(props: AppProps): ReactElement {
         skills,
         dispatch: props.dispatch,
         applyEditorKeys: props.applyEditorKeys,
-        steer: props.steer,
         interrupt: props.interrupt,
         quit: props.quit,
         openModel: () => {
@@ -6239,6 +6389,7 @@ export function App(props: AppProps): ReactElement {
         openLanguage: () => setLanguageOpen(true),
         saveLanguage: props.saveLanguage,
         openHistory: () => setHistoryOpen(true),
+        openQueue: () => setQueueOpen(true),
         openAgents: () => setAgentsOpen(true),
         openSubagent: () => setSubagentOpen(true),
         openTodos: () => setTodosOpen(true),
@@ -6298,7 +6449,7 @@ export function App(props: AppProps): ReactElement {
         recordLocal,
         recordHistory: props.recordHistory,
         queued: queuedRows,
-        cancelQueued: props.cancelQueued,
+        updateQueued: props.updateQueued,
         historyFill,
         historyConsumed,
         animations,

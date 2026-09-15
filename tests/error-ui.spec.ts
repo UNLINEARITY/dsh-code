@@ -71,7 +71,6 @@ function renderApp(
     mode: 'standard',
     permission: 'workspace-write',
     dispatch: noop,
-    steer: noop,
     interrupt: () => false,
     quit: noop,
     loadModels: async () => ({ rows: [], failures: [] }),
@@ -102,7 +101,6 @@ function renderApp(
     saveStatusline: noop,
     history: [],
     recordHistory: noop,
-    cancelQueued: noop,
     onBridgeReady: noop,
     ...overrides,
   }
