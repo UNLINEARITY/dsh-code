@@ -91,12 +91,15 @@ describe('status formatting', () => {
     expect(formatTokens(517)).toBe('517')
     expect(formatTokens(12_160)).toBe('12.2K')
     expect(formatTokens(517_000)).toBe('517K')
+    expect(formatTokens(999_999)).toBe('1M')
     expect(formatTokens(1_230_000)).toBe('1.2M')
   })
 
   it('compacts durations under and over a minute', () => {
     expect(formatDuration(45_233)).toBe('45.2s')
     expect(formatDuration(162_000)).toBe('2m42s')
+    expect(formatDuration(3_600_000)).toBe('1h0m')
+    expect(formatDuration(3_660_000)).toBe('1h1m')
   })
 
   it('computes cache hit only over billed input', () => {

@@ -23,7 +23,8 @@ export function formatTokens(n: number): string {
   const scaled = (v: number): string =>
     v >= 100 ? String(Math.round(v)) : String(Math.round(v * 10) / 10)
   if (n < 1_000) return String(n)
-  if (n < 1_000_000) return scaled(n / 1_000) + 'K'
+  // 999,500+ rounds to 1000K; step up to M instead of printing four digits.
+  if (n < 999_500) return scaled(n / 1_000) + 'K'
   return scaled(n / 1_000_000) + 'M'
 }
 

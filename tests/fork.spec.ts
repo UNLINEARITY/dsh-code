@@ -21,6 +21,12 @@ describe('selectForkSeed', () => {
     expect(selectForkSeed(events, 4)).toEqual({ boundarySeq: 6, events })
   })
 
+  it('does not walk forward from between-turn metadata into the next turn', () => {
+    // seq 3 is the title after turn 1 ended; forking there must keep turn 1
+    // plus that trailing metadata, not swallow the whole of turn 2.
+    expect(selectForkSeed(events, 3)).toEqual({ boundarySeq: 2, events: events.slice(0, 4) })
+  })
+
   it('rejects open turns and invalid boundaries', () => {
     expect(() => selectForkSeed(events.slice(0, 2), 1)).toThrow('has not completed')
     expect(() => selectForkSeed([], undefined)).toThrow('no completed turn')

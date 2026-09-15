@@ -5458,6 +5458,8 @@ export function App(props: AppProps): ReactElement {
   const [authorizationDirectory, setAuthorizationDirectory] = useState<ProviderAuthorizationDirectory | undefined>(undefined)
   const [authorizationError, setAuthorizationError] = useState<string | undefined>(undefined)
   const [modelLoadEpoch, setModelLoadEpoch] = useState(0)
+  /** Bumped when /effort's catalog lookup must be ignored (panel closed or superseded). */
+  const effortLookupEpoch = useRef(0)
   const [notice, setNotice] = useState<{ text: string; tone: NoticeTone } | undefined>(undefined)
   const notify = useCallback((text: string, tone: NoticeTone = 'info'): void => {
     setNotice({ text, tone })
@@ -5979,6 +5981,7 @@ export function App(props: AppProps): ReactElement {
     setModelLoadEpoch(epoch => epoch + 1)
   }
   const closeModelSurface = (): void => {
+    effortLookupEpoch.current += 1
     setModelOpen(false)
     setProviderOpen(false)
     setProviderAction(undefined)
@@ -6506,6 +6509,7 @@ export function App(props: AppProps): ReactElement {
         interrupt: props.interrupt,
         quit: props.quit,
         openModel: () => {
+          effortLookupEpoch.current += 1
           setDirectory(undefined)
           setModelError(undefined)
           setProviderDirectory(undefined)
@@ -6528,7 +6532,9 @@ export function App(props: AppProps): ReactElement {
           // never as "the model has no efforts" — the adapter advertises
           // levels for every deepseek model, so "no efforts" is almost
           // always a failed resolveModelInfo, not a fact.
+          const epoch = ++effortLookupEpoch.current
           void props.loadModels().then((loaded) => {
+            if (epoch !== effortLookupEpoch.current) return
             const [provider, model] = modelLabel.split('/')
             const row = loaded.rows.find(candidate => candidate.provider === provider && candidate.model === model)
               ?? loaded.rows.find(candidate => candidate.model === model && candidate.reasoning !== undefined)

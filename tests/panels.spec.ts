@@ -2196,6 +2196,75 @@ describe('/effort command', () => {
       stdout.destroy()
     }
   })
+
+  it('ignores a stale /effort catalog lookup after the model picker takes over', async () => {
+    const stdin = Object.assign(new PassThrough(), {
+      isTTY: true,
+      isRaw: false,
+      setRawMode(value: boolean) {
+        this.isRaw = value
+        return this
+      },
+      ref() {},
+      unref() {},
+    }) as unknown as NodeJS.ReadStream
+    const stdout = Object.assign(new PassThrough(), {
+      isTTY: true,
+      columns: 100,
+      rows: 24,
+    }) as unknown as NodeJS.WriteStream
+    let output = ''
+    stdout.on('data', chunk => {
+      output += chunk.toString()
+    })
+    const rows: readonly ModelRow[] = [
+      {
+        provider: 'deepseek-official',
+        providerName: 'DeepSeek',
+        model: 'deepseek-v4',
+        modelName: 'V4',
+        reasoning: {
+          efforts: [
+            { id: 'off', name: 'Off' },
+            { id: 'high', name: 'High' },
+          ],
+          defaultEffort: 'high',
+        },
+      },
+    ]
+    let resolveEffort: ((value: { rows: readonly ModelRow[]; failures: readonly string[] }) => void) | undefined
+    let loads = 0
+    const instance = render(createElement(App, appProps({
+      model: 'deepseek-official/deepseek-v4',
+      loadModels: async () => {
+        loads += 1
+        if (loads === 1) {
+          return await new Promise(resolve => { resolveEffort = resolve })
+        }
+        return { rows, failures: [] }
+      },
+    })), {
+      stdin,
+      stdout,
+      stderr: stdout,
+      exitOnCtrlC: false,
+      patchConsole: false,
+    })
+    try {
+      await wait()
+      stdin.write('/effort')
+      await wait()
+      stdin.write('/model')
+      await wait()
+      resolveEffort?.({ rows, failures: [] })
+      await wait()
+      expect(output).not.toContain('effort for DeepSeek · V4')
+    } finally {
+      instance.unmount()
+      stdin.destroy()
+      stdout.destroy()
+    }
+  })
 })
 
 describe('panel row sanitization', () => {

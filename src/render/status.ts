@@ -29,7 +29,11 @@ export function formatDuration(ms: number): string {
   const s = ms / 1_000
   if (s < 60) return String(Math.round(s * 10) / 10) + 's'
   const whole = Math.round(s)
-  return Math.floor(whole / 60) + 'm' + (whole % 60) + 's'
+  const hours = Math.floor(whole / 3_600)
+  const minutes = Math.floor((whole % 3_600) / 60)
+  const seconds = whole % 60
+  if (hours > 0) return `${hours}h${minutes}m${seconds === 0 ? '' : `${seconds}s`}`
+  return `${minutes}m${seconds}s`
 }
 
 /**
