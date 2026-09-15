@@ -151,6 +151,25 @@ describe('transcript store', () => {
     expect(listener).toHaveBeenCalledTimes(1)
   })
 
+  it('keeps a live stream after reset so /clear does not freeze later chunks', () => {
+    const store = createTranscriptStore()
+    const attemptId = 'attempt-1' as never
+    store.applyStreamFrame({ type: 'start', attemptId, revision: 1, turn: 1, step: 1 })
+    store.applyStreamFrame({
+      type: 'chunk', attemptId, revision: 1, index: 0, time: 1,
+      chunk: { type: 'text-delta', index: 0, text: 'hello ' },
+    } as never)
+    expect(store.getView().streaming).toBe('hello ')
+    store.reset()
+    expect(store.getView().entries).toEqual([])
+    expect(store.getView().streaming).toBe('hello ')
+    store.applyStreamFrame({
+      type: 'chunk', attemptId, revision: 1, index: 1, time: 2,
+      chunk: { type: 'text-delta', index: 0, text: 'world' },
+    } as never)
+    expect(store.getView().streaming).toBe('hello world')
+  })
+
   it('seeds a resumed session by folding the full log before any live event', () => {
     const store = createTranscriptStore([
       userEvent('hi', 1),

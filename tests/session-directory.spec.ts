@@ -13,6 +13,7 @@ import {
   matchSessionId,
   mergeSessionTitles,
   newestRootForCwd,
+  sessionRowMatchesQuery,
   planSessionDeletion,
   projectSessionRows,
   sessionArtifactDirectory,
@@ -54,6 +55,21 @@ describe('session directory', () => {
       { sessionId: 'a', status: 'fulfilled', value: { title: { title: 'Alpha' } } },
       { sessionId: 'b', status: 'rejected' },
     ])).toMatchObject([{ title: 'Alpha' }, { id: 'b' }])
+  })
+
+  it('matches the displayed title as well as id and path', () => {
+    const rows = projectSessionRows([record('session-abc', 1, { cwd: 'C:\\repo' })], {
+      sessions: 'roots', cwd: 'all', sort: 'newest', currentCwd: '', query: '',
+    })
+    const titled = mergeSessionTitles(rows, [
+      { sessionId: 'session-abc', status: 'fulfilled', value: { title: { title: 'fix the login bug' } } },
+    ])
+    const row = titled[0]
+    if (row === undefined) throw new Error('expected a titled session row')
+    expect(sessionRowMatchesQuery(row, 'login')).toBe(true)
+    expect(sessionRowMatchesQuery(row, 'session-abc')).toBe(true)
+    expect(sessionRowMatchesQuery(row, 'nope')).toBe(false)
+    expect(titled.filter(candidate => sessionRowMatchesQuery(candidate, 'login'))).toHaveLength(1)
   })
 })
 

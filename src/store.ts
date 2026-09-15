@@ -139,8 +139,26 @@ export function createTranscriptStore(replay?: readonly SessionEvent[]): Transcr
       }
     },
     reset(): void {
+      // /clear wipes settled history but must not drop the live attempt map:
+      // chunk frames after reset still name the same attemptId, and clearing
+      // the map froze the stream until settlement dumped the whole reply.
+      const live = {
+        streaming: acc.streaming,
+        streamingReasoning: acc.streamingReasoning,
+        busy: acc.busy,
+        busySince: acc.busySince,
+        model: acc.model,
+        firstChunkAt: acc.firstChunkAt,
+        stepStart: acc.stepStart,
+      }
       acc = createReplayAccumulator()
-      attemptKeys.clear()
+      acc.streaming = live.streaming
+      acc.streamingReasoning = live.streamingReasoning
+      acc.busy = live.busy
+      acc.busySince = live.busySince
+      acc.model = live.model
+      acc.firstChunkAt = live.firstChunkAt
+      acc.stepStart = live.stepStart
       dirty = true
       notify()
     },

@@ -100,6 +100,7 @@ import {
   matchSessionId,
   mergeSessionTitles,
   newestRootForCwd,
+  sessionRowMatchesQuery,
   isSessionArtifactName,
   jsonlSessionRoot,
   planSessionDeletion,
@@ -1692,13 +1693,15 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
         }
       }))
     }
-    const projected = projectSessionRows(records, options, updated)
-    // Titles are the expensive fold. Fetch only the first bounded picker page;
-    // navigation/filter changes trigger a fresh, cancellable observation.
-    const page = projected.slice(0, 32)
+    const projected = projectSessionRows(records, { ...options, query: '' }, updated)
+    // Titles are the expensive fold. Fetch the first picker page when idle;
+    // a non-empty query loads more so the displayed title can match.
+    const titleBudget = options.query.trim() === '' ? 32 : Math.min(projected.length, 128)
+    const page = projected.slice(0, titleBudget)
     if (page.length === 0) return projected
     const observations = await sessionQuery.readTitleSnapshots(page.map(row => row.id), signal)
-    return mergeSessionTitles(projected, observations)
+    const titled = mergeSessionTitles(projected, observations)
+    return titled.filter(row => sessionRowMatchesQuery(row, options.query))
   }
 
   /**

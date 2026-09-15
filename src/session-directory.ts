@@ -151,10 +151,17 @@ export function projectSessionRows(
         preset: record.header.agentPreset ?? 'standard',
       }
     })
-    .filter(row => needle === '' || `${row.id} ${row.cwd} ${row.workspace} ${row.preset}`.toLowerCase().includes(needle))
+    .filter(row => sessionRowMatchesQuery(row, needle))
     .sort((left, right) => options.sort === 'newest'
       ? right.updatedAt - left.updatedAt || right.createdAt - left.createdAt
       : left.updatedAt - right.updatedAt || left.createdAt - right.createdAt)
+}
+
+/** True when the picker query hits id, path, preset, or the displayed title. */
+export function sessionRowMatchesQuery(row: Pick<SessionRow, 'id' | 'cwd' | 'workspace' | 'preset' | 'title'>, query: string): boolean {
+  const needle = query.trim().toLowerCase()
+  if (needle === '') return true
+  return `${row.id} ${row.cwd} ${row.workspace} ${row.preset} ${row.title ?? ''}`.toLowerCase().includes(needle)
 }
 
 /** Merge page-local title observations without disturbing directory order. */
