@@ -5,19 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { writeFileAtomically } from '../src/settings-file.ts'
-import {
-  beginRecall,
-  historyLine,
-  HISTORY_MAX_ENTRIES,
-  needsCompaction,
-  parseHistoryFile,
-  recallEntries,
-  recallNewer,
-  recallOlder,
-  recordLocalEntry,
-  serializeHistoryEntry,
-  serializeHistoryList,
-} from '../src/history.ts'
+import { beginRecall, historyLine, HISTORY_MAX_ENTRIES, needsCompaction, parseHistoryFile, recallEntries, recallNewer, recallOlder, recordLocalEntry, serializeHistoryEntry, serializeHistoryList, appendRecall } from '../src/history.ts'
 
 describe('history persistence', () => {
   it('serializes one entry per JSON line, preserving multi-line drafts', () => {
@@ -180,4 +168,13 @@ describe('concurrent history writers', () => {
       await rm(dir, { recursive: true, force: true }).catch(() => {})
     }
   }, 30_000)
+})
+
+describe('appendRecall', () => {
+  it('extends the draft instead of replacing it', () => {
+    expect(appendRecall('', 'recalled')).toBe('recalled')
+    expect(appendRecall('draft', 'recalled')).toBe('draft\nrecalled')
+    // A draft already ending a line needs no second break.
+    expect(appendRecall('draft\n', 'recalled')).toBe('draft\nrecalled')
+  })
 })

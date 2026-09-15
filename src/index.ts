@@ -1393,6 +1393,14 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     // exact whitespace unless the line is a syntactic slash command.
     const line = submissionPayload(text)
     if (line.trim() === '' && images.length === 0) return
+    // A switch between the idle wait and the handoff keeps the OLD session
+    // installed: a line delivered now would start a turn the handoff discards.
+    // Refusing loudly beats losing it silently — the caller can retry after the
+    // switch, and `switchQueue.cancel()` is the way out.
+    if (switchQueue.activating) {
+      bridge.notify(t('notice.switchInProgress'), 'warning')
+      return
+    }
     if (images.length === 0 && line.startsWith('/mode ')) {
       void switchModeAction(line.slice(6).trim()).then(
         selected => bridge.notify(`mode → ${selected}`),

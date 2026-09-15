@@ -262,6 +262,7 @@ export const en = {
   'notice.usage.animation': 'usage: /animation [on|off]',
   'notice.usage.language': 'usage: /language [en|zh]',
   'notice.usage.rainbow': 'usage: /rainbow [seed]',
+  'notice.switchInProgress': 'switching sessions — send again once the new session is up, or /resume cancel',
   'notice.imageCancelled': 'image submission cancelled',
   'notice.themeConfigUnreadable': 'theme config unreadable, using dark: {message}',
   'notice.languageConfigUnreadable': 'language config unreadable, using english: {message}',

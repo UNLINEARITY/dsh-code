@@ -112,6 +112,7 @@ import {
   recallOlder,
   recordLocalEntry,
   type RecallState,
+  appendRecall,
 } from './history.ts'
 import type { SessionDirectoryOptions, SessionRow } from './session-directory.ts'
 import { parseReviewArgument, type GitDiffView, type ReviewBranch, type ReviewCommit, type ReviewSelection } from './git-workflow.ts'
@@ -3828,27 +3829,28 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
     preferredColumnRef.current = null
   }, [editorColumns])
 
-  // A /history panel acceptance lands as a fill: place the sanitized text at
-  // the end of the composer and resume recall from that entry.
+  // A /history panel acceptance lands as a fill: append the sanitized text to
+  // the composer and resume recall from that entry. Appending (never
+  // replacing) is what keeps a half-written draft and its prepared
+  // attachments from being destroyed by picking a history entry.
   useEffect(() => {
     if (historyFill === undefined) return
     const safe = sanitizeDraftText(historyFill.text)
-    draftImagesRef.current = []
-    setDraftImages([])
-    draftFilesRef.current = []
-    setDraftFiles([])
-    valueRef.current = safe
-    cursorRef.current = safe.length
-    setValue(safe)
-    setCursor(safe.length)
+    const current = valueRef.current
+    const joined = appendRecall(current, safe)
+    valueRef.current = joined
+    cursorRef.current = joined.length
+    setValue(joined)
+    setCursor(joined.length)
     resetCursorBlink()
     preferredColumnRef.current = null
     setDismissedMenuValue(undefined)
     recall.current = {
       entries: recallSpace,
       index: historyFill.index,
-      savedDraft: safe,
-      lastRecalled: safe,
+      // The draft this fill appended to stays reachable: Down walks back to it.
+      savedDraft: current,
+      lastRecalled: joined,
     }
     historyConsumed()
   }, [historyFill, recallSpace, historyConsumed, resetCursorBlink])

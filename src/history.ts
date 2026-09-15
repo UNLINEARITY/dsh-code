@@ -122,6 +122,20 @@ export function beginRecall(entries: readonly string[], draft: string): RecallSt
   return { entries, index: null, savedDraft: draft, lastRecalled: null }
 }
 
+/**
+ * Join a panel-recalled entry onto the draft already in the composer: the
+ * draft is extended, never replaced, so picking a history row cannot discard
+ * work in progress. An empty draft takes the entry as-is; otherwise the entry
+ * starts on its own line unless the draft already ends one.
+ * @param draft - the composer text before the recall.
+ * @param entry - the sanitized text of the accepted row.
+ * @returns the text to place in the composer.
+ */
+export function appendRecall(draft: string, entry: string): string {
+  if (draft === '') return entry
+  return draft.endsWith('\n') ? draft + entry : `${draft}\n${entry}`
+}
+
 /** The outcome of one recall step. */
 export interface RecallStep {
   state: RecallState

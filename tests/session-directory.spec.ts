@@ -153,12 +153,28 @@ describe('session deletion guards', () => {
     expect(jsonlSessionRoot({ config: { root: 42 } })).toBeUndefined()
   })
 
+  it('keeps a fork out of its origin session\'s deletion subtree', () => {
+    const records = [
+      record('root', 1),
+      record('delegate', 2, { parentSession: SessionId('root'), origin: 'subagent' }),
+      // A fork carries lineage but is an independent conversation: deleting
+      // the session it branched from must not take its log with it.
+      record('branch', 3, { parentSession: SessionId('root') }),
+      record('branch-child', 4, { parentSession: SessionId('branch'), origin: 'subagent' }),
+    ]
+    expect(collectDeletionSubtree(records, 'root')).toEqual(expect.arrayContaining(['root', 'delegate']))
+    expect(collectDeletionSubtree(records, 'root')).not.toContain('branch')
+    expect(collectDeletionSubtree(records, 'root')).not.toContain('branch-child')
+    // Deleting the fork itself still takes the subagents it delegated.
+    expect(collectDeletionSubtree(records, 'branch')).toEqual(expect.arrayContaining(['branch', 'branch-child']))
+  })
+
   it('collects the deletion subtree across listing order', () => {
     const records = [
       record('root', 1),
-      record('child', 2, { parentSession: SessionId('root') }),
-      record('grand', 3, { parentSession: SessionId('child') }),
-      record('sibling', 4, { parentSession: SessionId('root') }),
+      record('child', 2, { parentSession: SessionId('root'), origin: 'subagent' }),
+      record('grand', 3, { parentSession: SessionId('child'), origin: 'subagent' }),
+      record('sibling', 4, { parentSession: SessionId('root'), origin: 'subagent' }),
       record('unrelated', 5),
     ]
     expect(collectDeletionSubtree(records, 'root')).toEqual(expect.arrayContaining(['root', 'child', 'grand', 'sibling']))
@@ -183,7 +199,7 @@ describe('session deletion plan', () => {
   it('refuses the whole subtree when any member is live', () => {
     const records = [
       record('root', 1),
-      { ...record('child', 2, { parentSession: SessionId('root') }), live: true },
+      { ...record('child', 2, { parentSession: SessionId('root'), origin: 'subagent' }), live: true },
     ]
     const plan = planSessionDeletion(records, 'root')
     expect(plan.ok).toBe(false)
@@ -196,9 +212,9 @@ describe('session deletion plan', () => {
   it('orders the plan children-first across the lineage', () => {
     const records = [
       record('root', 1),
-      record('child', 2, { parentSession: SessionId('root') }),
-      record('grand', 3, { parentSession: SessionId('child') }),
-      record('sibling', 4, { parentSession: SessionId('root') }),
+      record('child', 2, { parentSession: SessionId('root'), origin: 'subagent' }),
+      record('grand', 3, { parentSession: SessionId('child'), origin: 'subagent' }),
+      record('sibling', 4, { parentSession: SessionId('root'), origin: 'subagent' }),
       record('unrelated', 5),
     ]
     const plan = planSessionDeletion(records, 'root')

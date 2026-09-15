@@ -21,6 +21,21 @@ describe('session switch queue', () => {
     expect(execute).toHaveBeenCalledWith('latest')
   })
 
+  it('reports an activation in flight so a submission can be refused, not lost', async () => {
+    const activation = deferred()
+    const queue = new SessionSwitchQueue<string>(() => activation.promise, () => {})
+    expect(queue.activating).toBe(false)
+    // Waiting for idle is NOT activation: the old session still runs, so a
+    // submission there is still legitimate.
+    queue.request({ status: 'idle', whenIdle: async () => {} }, 'target')
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(queue.activating).toBe(true)
+    activation.resolve()
+    await activation.promise
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(queue.activating).toBe(false)
+  })
+
   it('cancels waiting work and reports activation failures', async () => {
     const idle = deferred()
     const failed = vi.fn()

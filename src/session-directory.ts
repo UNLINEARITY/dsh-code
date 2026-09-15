@@ -300,7 +300,13 @@ export function jsonlSessionRoot(persistence: unknown): string | undefined {
  */
 export function collectDeletionSubtree(records: readonly SessionRecord[], id: string): string[] {
   const parentOf = new Map<string, string | undefined>()
-  for (const record of records) parentOf.set(record.header.id, record.header.parentSession)
+  for (const record of records) {
+    // Only delegated subagents ride their parent's deletion. A fork is an
+    // independent conversation that merely shares lineage: deleting its
+    // origin must never take the branch's own log with it.
+    if (!isSubagentSession(record.header)) continue
+    parentOf.set(record.header.id, record.header.parentSession)
+  }
   const doomed = new Set<string>([id])
   // Iterate to a fixed point: children may be listed before their parents.
   for (let pass = 0; pass < 2; pass += 1) {

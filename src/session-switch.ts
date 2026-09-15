@@ -13,6 +13,7 @@ interface Request<T> {
 export class SessionSwitchQueue<T> {
   private pending: Request<T> | undefined
   private pumping = false
+  private running = false
 
   constructor(
     private readonly execute: (value: T) => Promise<void>,
@@ -34,6 +35,16 @@ export class SessionSwitchQueue<T> {
     return true
   }
 
+  /**
+   * Whether a queued change is being activated right now. Between the idle
+   * wait and the handoff the old session is still installed, so a submission
+   * made in that window would start a turn the handoff then discards; callers
+   * use this to refuse one instead of losing it.
+   */
+  get activating(): boolean {
+    return this.running
+  }
+
   private async pump(): Promise<void> {
     this.pumping = true
     try {
@@ -43,10 +54,13 @@ export class SessionSwitchQueue<T> {
         // Another request replaced this one while the turn was converging.
         if (this.pending !== observed) continue
         this.pending = undefined
+        this.running = true
         try {
           await this.execute(observed.value)
         } catch (error: unknown) {
           this.failed(error)
+        } finally {
+          this.running = false
         }
       }
     } finally {
