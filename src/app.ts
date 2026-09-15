@@ -638,27 +638,33 @@ function DeepDivingLine({ since, animated = true }: { since: number; animated?: 
  * cap counts explicit newlines and terminal wrapping, slicing from the END so
  * the freshest tokens stay visible while a long reply streams; the complete
  * text lands in the flushed scrollback once the turn assembles it.
+ *
+ * Body wrap width for a streaming tail. `rowColumns` is the same width
+ * passed to `transcriptEntryLines` (terminal minus the last-column safety);
+ * the hanging prefix then shrinks the body so streamed text and settled
+ * markdown wrap on the same column.
  */
-function StreamTail({ text, dim, maxRows, prefix = '', continuationPrefix = prefix, children }: {
+export function streamTailBodyColumns(rowColumns: number, prefix: string, continuationPrefix = prefix): number {
+  const width = Math.max(1, Math.floor(rowColumns))
+  const prefixColumns = Math.max(visibleColumns(prefix), visibleColumns(continuationPrefix))
+  return Math.max(1, width - prefixColumns)
+}
+
+function StreamTail({ text, dim, maxRows, prefix = '', continuationPrefix = prefix, children, columns }: {
   text: string
   dim: boolean
   maxRows: number
   prefix?: string
   continuationPrefix?: string
   children?: ReactElement
+  /** Same physical row width `transcriptEntryLines` uses (terminal minus 2). */
+  columns: number
 }): ReactElement {
-  const columns = useStdout().stdout?.columns ?? 80
   const safeRows = Math.max(1, maxRows)
-  // The final extra column keeps a caret from wrapping onto an unbudgeted
-  // row. Both prefixes participate because every physical row repeats its
-  // hanging indent.
-  const prefixColumns = Math.max(visibleColumns(prefix), visibleColumns(continuationPrefix))
-  // Content takes the full physical row minus prefixes and the final wrap
-  // column — a forced 10-column FLOOR on a narrower terminal made every row
-  // autowrap onto a second, unbudgeted row (the live budget then
-  // under-counted and the tree overflowed), so the width now shrinks with
-  // the real terminal instead of flooring at 10.
-  const contentColumns = Math.max(1, columns - 1 - prefixColumns)
+  // Both prefixes participate because every physical row repeats its hanging
+  // indent. The wrap matches settled markdown (row width minus prefix), so
+  // the flush at turn end does not reflow the last paragraph.
+  const contentColumns = streamTailBodyColumns(columns, prefix, continuationPrefix)
   const initial = displayTail(text, contentColumns, safeRows)
   // Reserve one row for the omission marker only when a marker is needed.
   const tail = initial.truncated && safeRows > 1
@@ -3344,10 +3350,13 @@ function entryKindLabel(entry: TranscriptEntry | undefined): string {
  * retained entry is converted to physical rows, but only one viewport slice
  * reaches Ink, so even a huge reasoning block cannot grow the dynamic tree.
  */
-function VerbosePanel({ entries, onClose }: { entries: readonly TranscriptEntry[]; onClose: () => void }): ReactElement {
-  const stdout = useStdout().stdout
-  const columns = stdout?.columns ?? 80
-  const rows = stdout?.rows ?? 30
+function VerbosePanel({ entries, onClose, columns, rows }: {
+  entries: readonly TranscriptEntry[]
+  onClose: () => void
+  /** Live terminal columns from App's resize store — not useStdout, so memo cannot skip a reflow. */
+  columns: number
+  rows: number
+}): ReactElement {
   const viewport = inspectorViewport(columns, rows)
   const [cursor, setCursor] = useState(() => Math.max(0, entries.length - 1))
   const [scroll, setScroll] = useState(0)
@@ -6198,6 +6207,7 @@ export function App(props: AppProps): ReactElement {
               continuationPrefix: '  ',
               dim: true,
               maxRows: auditedReasoningRows,
+              columns: Math.max(1, terminalColumns - 2),
             })
             // The collapsed marker shimmers only while reasoning streams
             // alone: once answer text flows, a periodically re-rendered
@@ -6214,6 +6224,7 @@ export function App(props: AppProps): ReactElement {
                 continuationPrefix: '  ',
                 dim: true,
                 maxRows: auditedReasoningRows,
+                columns: Math.max(1, terminalColumns - 2),
               })
           : undefined,
         view.streaming !== '' && auditedAnswerRows > 0
@@ -6221,7 +6232,7 @@ export function App(props: AppProps): ReactElement {
             StreamTail,
             // The same two-column gutter as settled replies: streamed text
             // lands exactly where the assembled message will render.
-            { text: view.streaming, dim: false, maxRows: auditedAnswerRows, prefix: '  ' },
+            { text: view.streaming, dim: false, maxRows: auditedAnswerRows, prefix: '  ', columns: Math.max(1, terminalColumns - 2) },
             busy ? createElement(Caret, { animated: animations }) : undefined,
           )
           : undefined,
@@ -6288,6 +6299,8 @@ export function App(props: AppProps): ReactElement {
       ? createElement(MemoVerbosePanel, {
         entries: view.entries,
         onClose: closeInspector,
+        columns: terminalColumns,
+        rows: terminalRows,
       })
       : undefined,
     modeOpen && !approvalPending && !questionPending

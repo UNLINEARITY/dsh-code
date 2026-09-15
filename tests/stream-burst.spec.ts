@@ -9,7 +9,7 @@ import { App, type AppProps } from '../src/app.ts'
 import { createTranscriptStore } from '../src/store.ts'
 import { DEFAULT_STATUSLINE_ITEMS } from '../src/render/status.ts'
 
-const wait = async (): Promise<void> => new Promise(resolve => setTimeout(resolve, 60))
+const wait = async (): Promise<void> => new Promise(resolve => setTimeout(resolve, 180))
 const unsubscribe = (): void => {}
 const noop = (): void => {}
 const frozen = <T,>(value: T): T => Object.freeze(value)

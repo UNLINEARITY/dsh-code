@@ -12,7 +12,7 @@ import { AttachmentId } from '@deepseek-ai/dsh-attachment'
 import { createAssistantMessage, createToolResultMessage, createUserMessage, type ImageBlock, type ToolCallId, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type { TodoItem } from '@deepseek-ai/dsh-tool-todo'
-import { App, computeSettledRows, queuedInboxRows, stepCompletionIndex, type AppProps } from '../src/app.ts'
+import { App, computeSettledRows, queuedInboxRows, stepCompletionIndex, streamTailBodyColumns, type AppProps } from '../src/app.ts'
 import { createSplitStdin } from '../src/input-split.ts'
 import { createTranscriptStore, type TranscriptStore } from '../src/store.ts'
 
@@ -1588,6 +1588,41 @@ describe('Ctrl+O history details', () => {
       // Step back to... the store only has one entry, so also confirm the
       // label slot exists even when the walk rests on the only entry.
       expect(harness.output.text).toMatch(/history details · entry 1\/1 · user prompt · lines/)
+    } finally {
+      instance.unmount()
+    }
+  })
+
+  it('reflows the inspector border when the terminal narrows', async () => {
+    const harness = createTty(100, 24)
+    const store = createTranscriptStore()
+    store.apply({
+      type: 'user/message',
+      seq: 1,
+      time: 1,
+      data: createUserMessage({
+        content: [{ type: 'text', text: 'draft' }],
+        source: { kind: 'user' },
+      }),
+    } as never)
+    const instance = renderApp(harness, appProps({ store }))
+    try {
+      await wait()
+      harness.stdin.write('\x0f')
+      await wait()
+      expect(harness.output.text).toContain('history details')
+      harness.output.text = ''
+      Object.assign(harness.stdout, { columns: 40 })
+      harness.stdout.emit('resize')
+      await wait(180)
+      expect(harness.output.text).toContain('history details')
+      const rebuilt = harness.output.text.includes(resizeClear)
+        ? harness.output.text.slice(harness.output.text.lastIndexOf(resizeClear) + resizeClear.length)
+        : harness.output.text
+      const plain = rebuilt.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '')
+      const dashes = Math.max(0, ...plain.split('\n').map(line => (line.match(/─/g) ?? []).length))
+      expect(dashes).toBeGreaterThan(8)
+      expect(dashes).toBeLessThan(50)
     } finally {
       instance.unmount()
     }
@@ -4017,6 +4052,16 @@ describe('/agents panel', () => {
       harness.stdin.destroy()
       harness.stdout.destroy()
     }
+  })
+})
+
+describe('stream wrap budget', () => {
+  it('wraps streamed body text at the same column settled markdown uses', () => {
+    const terminal = 80
+    const row = terminal - 2
+    // Settled assistant markdown wraps at row-2 after the two-column gutter.
+    expect(streamTailBodyColumns(row, '  ')).toBe(row - 2)
+    expect(streamTailBodyColumns(row, '✻ ', '  ')).toBe(row - 2)
   })
 })
 
