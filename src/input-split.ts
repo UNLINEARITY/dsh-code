@@ -62,10 +62,29 @@ export function createKeypressSplitter(): KeypressSplitter {
         }
         const head = buffer[0]
         if (head !== '\x1b') {
-          // Plain bytes key one at a time; a surrogate pair is one grapheme
-          // and must not split into two lone surrogates.
-          const pair = head >= '\uD800' && head <= '\uDBFF' && buffer[1] !== undefined
-          const take = pair ? 2 : 1
+          // C0 / DEL stay one key so a coalesced ` \r` is still space then
+          // Enter. A printable run (Finder drag, unbracketed path paste,
+          // CJK) must stay ONE unit: splitting `/Users/…/截屏 ….png` into
+          // 80 setStates overflows React's update depth and never reaches
+          // the attachment parser. Typed keys still arrive as one-byte
+          // chunks, so this only batches what the OS already coalesced.
+          if (head < ' ' || head === '\x7f') {
+            units.push(head)
+            buffer = buffer.slice(1)
+            continue
+          }
+          let take = 0
+          while (take < buffer.length) {
+            const ch = buffer[take]
+            if (ch === '\x1b' || ch < ' ' || ch === '\x7f') break
+            if (ch >= '\uD800' && ch <= '\uDBFF') {
+              if (buffer[take + 1] === undefined) break
+              take += 2
+              continue
+            }
+            take += 1
+          }
+          if (take === 0) break
           units.push(buffer.slice(0, take))
           buffer = buffer.slice(take)
           continue

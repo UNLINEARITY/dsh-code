@@ -38,9 +38,12 @@ describe('keypress splitter', () => {
     expect(splitter.push('\x1bb😀')).toEqual(['\x1bb', '😀'])
   })
 
-  it('splits plain text into one unit per character', () => {
+  it('keeps a printable run as one insert so a Finder drag is not 80 keypresses', () => {
     const splitter = createKeypressSplitter()
-    expect(splitter.push('abc')).toEqual(['a', 'b', 'c'])
+    expect(splitter.push('abc')).toEqual(['abc'])
+    const path = "'/Users/nonlinear/Desktop/截屏2026-09-15 18.41.07.png'"
+    expect(splitter.push(path)).toEqual([path])
+    expect(splitter.push(' \r')).toEqual([' ', '\r'])
   })
 })
 

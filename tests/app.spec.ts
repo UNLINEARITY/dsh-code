@@ -442,7 +442,7 @@ describe('composer image attachments', () => {
     }
   })
 
-  it('promotes a Finder drag written without paste markers into the same image marker as a copied path', async () => {
+  it('attaches a Finder drag through the production stdin splitter like a copied path', async () => {
     const harness = createTty(120, 24)
     const path = '/Users/nonlinear/Desktop/截屏2026-09-15 18.41.07.png'
     const inspectImages = vi.fn(async (paths: readonly string[]) => paths.map(item => ({
@@ -451,17 +451,32 @@ describe('composer image attachments', () => {
       mediaType: 'image/png' as const,
       bytes: 8,
     })))
-    const instance = renderApp(harness, appProps({ inspectImages }))
+    const errors: string[] = []
+    const spy = vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+      errors.push(args.map(String).join(' '))
+    })
+    const { stdin, dispose } = createSplitStdin(harness.stdin)
+    const instance = render(createElement(App, appProps({ inspectImages })), {
+      stdin: stdin as unknown as NodeJS.ReadStream,
+      stdout: harness.stdout,
+      stderr: harness.stdout,
+      exitOnCtrlC: false,
+      patchConsole: false,
+    })
     try {
       await wait()
-      // VS Code/iTerm drag typically sendText's the quoted path with no 200~/201~.
+      // Production: no 200~/201~. The splitter used to emit one unit per
+      // character (~80 nested setStates → Maximum update depth).
       harness.stdin.write(`'${path}'`)
       await wait(180)
       expect(inspectImages).toHaveBeenCalledWith([path])
       expect(harness.output.text).toContain('[image: 截屏2026-09-15 18.41.07.png]')
       expect(harness.output.text).not.toContain(`'${path}'`)
+      expect(errors.join('\n')).not.toContain('Maximum update depth exceeded')
     } finally {
+      spy.mockRestore()
       instance.unmount()
+      dispose()
     }
   })
 

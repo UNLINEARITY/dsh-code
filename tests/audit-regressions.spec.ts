@@ -41,7 +41,7 @@ describe('audit fix: stale bracketed paste', () => {
     expect(splitter.push('\x1b[200~ab')).toEqual([])
     expect(splitter.openPaste()).toBe(true)
     const released = splitter.releaseStalePaste()
-    expect(released).toEqual(['a', 'b'])
+    expect(released).toEqual(['ab'])
     expect(released.every(unit => !unit.includes('\x1b[200~'))).toBe(true)
     expect(splitter.openPaste()).toBe(false)
     expect(splitter.releaseStalePaste()).toEqual([])
