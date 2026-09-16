@@ -414,6 +414,34 @@ describe('composer image attachments', () => {
     }
   })
 
+  it('attaches a Finder drop of a spaced CJK screenshot without looping', async () => {
+    const harness = createTty(120, 24)
+    const errors: string[] = []
+    const spy = vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+      errors.push(args.map(String).join(' '))
+    })
+    const path = '/Users/nonlinear/Desktop/截屏2026-09-15 18.41.07.png'
+    const inspectImages = vi.fn(async (paths: readonly string[]) => paths.map(item => ({
+      path: item,
+      name: item.split('/').at(-1) ?? 'shot.png',
+      mediaType: 'image/png' as const,
+      bytes: 8,
+    })))
+    const instance = renderApp(harness, appProps({ inspectImages }))
+    try {
+      await wait()
+      harness.stdin.write(`\x1b[200~'${path}'\x1b[201~`)
+      await wait(180)
+      expect(inspectImages).toHaveBeenCalledWith([path])
+      expect(harness.output.text).toContain('[image: 截屏2026-09-15 18.41.07.png]')
+      expect(harness.output.text).not.toContain(`'${path}'`)
+      expect(errors.join('\n')).not.toContain('Maximum update depth exceeded')
+    } finally {
+      spy.mockRestore()
+      instance.unmount()
+    }
+  })
+
   it('submits a draft ending in an unmatched @token instead of swallowing Enter', async () => {
     const harness = createTty(120, 24)
     const dispatch = vi.fn()

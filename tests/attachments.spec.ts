@@ -7,6 +7,7 @@ import {
   inspectFilePaths,
   inspectImagePaths,
   looksLikeImagePath,
+  looksLikePathDraft,
   parsePastedAttachmentPaths,
   saveFilePaths,
   saveImagePaths,
@@ -30,6 +31,16 @@ describe('terminal image attachments', () => {
     expect(parsePastedAttachmentPaths('"C:\\work files\\a.png" "D:\\b.webp"'))
       .toEqual({ images: ['C:\\work files\\a.png', 'D:\\b.webp'], files: [] })
     expect(parsePastedAttachmentPaths('please inspect C:\\a.png')).toEqual({ images: [], files: [] })
+    expect(parsePastedAttachmentPaths("'/Users/nonlinear/Desktop/截屏2026-09-15 18.41.07.png'"))
+      .toEqual({ images: ['/Users/nonlinear/Desktop/截屏2026-09-15 18.41.07.png'], files: [] })
+    expect(parsePastedAttachmentPaths('/Users/nonlinear/Desktop/截屏2026-09-15 18.41.07.png'))
+      .toEqual({ images: ['/Users/nonlinear/Desktop/截屏2026-09-15 18.41.07.png'], files: [] })
+    expect(parsePastedAttachmentPaths('‘/Users/nonlinear/Desktop/截屏2026-09-15 18.41.07.png’'))
+      .toEqual({ images: ['/Users/nonlinear/Desktop/截屏2026-09-15 18.41.07.png'], files: [] })
+    expect(parsePastedAttachmentPaths('/Users/nonlinear/Desktop/截屏\\ 2026-09-15\\ 18.41.07.png'))
+      .toEqual({ images: ['/Users/nonlinear/Desktop/截屏 2026-09-15 18.41.07.png'], files: [] })
+    expect(looksLikePathDraft('/Users/nonlinear/Desktop/shot.png')).toBe(true)
+    expect(looksLikePathDraft('/usage')).toBe(false)
   })
 
   it('validates signature and limits before submission without persisting', async () => {

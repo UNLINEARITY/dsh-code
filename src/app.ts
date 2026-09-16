@@ -126,6 +126,7 @@ import { ProviderAuthorizationLogoutPanel, ProviderAuthorizationPanel } from './
 import {
   looksLikeImagePath,
   parsePastedAttachmentPaths,
+  looksLikePathDraft,
   type FilePathInspection,
   type ImagePathInspection,
 } from './attachments.ts'
@@ -3962,7 +3963,7 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
   const [completionIndex, setCompletionIndex] = useState(0)
   const [dismissedMenuValue, setDismissedMenuValue] = useState<string | undefined>(undefined)
   const candidates = completionCandidates(value, descriptors, skills)
-  const slashActive = candidates.length > 0 && value.startsWith('/') && !value.includes(' ') && !value.includes('\n')
+  const slashActive = candidates.length > 0 && value.startsWith('/') && !value.includes(' ') && !value.includes('\n') && !looksLikePathDraft(value)
 
   // @mention token: the last `@word` on the cursor's line before the cursor.
   const beforeCursor = value.slice(0, cursor)
@@ -4078,8 +4079,8 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
     const requestId = mentionRequestRef.current + 1
     mentionRequestRef.current = requestId
     if (!active || !mentionActive) {
-      setMentionRows([])
-      setMentionError(undefined)
+      setMentionRows(current => current.length === 0 ? current : [])
+      setMentionError(current => current === undefined ? current : undefined)
       return
     }
     setMentionError(undefined)
@@ -4999,7 +5000,9 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
   // the reserve from outliving the menu (unmount or inactive handoff).
   useEffect(() => {
     onMenuRows(menuHeightRows)
-    return () => onMenuRows(0)
+    return () => {
+      if (menuHeightRows !== 0) onMenuRows(0)
+    }
   }, [menuHeightRows, onMenuRows])
   // The composer band: the old border's three-row footprint repainted as a
   // background-color band (the Codex-style shaded composer strip) — one

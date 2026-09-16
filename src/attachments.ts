@@ -64,6 +64,30 @@ export function looksLikeImagePath(path: string): boolean {
  * do. A POSIX absolute path without any dot-suffixed leaf falls through as
  * text — the @ mention route still attaches such files deliberately.
  */
+/** Strip one layer of ASCII or Unicode quotes and Finder backslash-spaces. */
+export function unwrapDroppedPath(token: string): string {
+  const trimmed = token.trim()
+  const wrapped = /^[\u2018\u201C"'](.+)[\u2019\u201D"']$/u.exec(trimmed)
+  return (wrapped?.[1] ?? trimmed).replace(/\\ /gu, ' ')
+}
+
+/** Absolute/relative drop with a dotted leaf — including unquoted spaces. */
+export function looksLikeFilesystemDrop(path: string): boolean {
+  if (path.startsWith('file://')) return true
+  if (!/^(?:\/|[A-Za-z]:[\\/]|\\\\|\.\.?\/)/u.test(path)) return false
+  return looksLikeImagePath(path) || /\.[A-Za-z0-9]{1,16}$/u.test(path)
+}
+
+/**
+ * A composer draft that is a filesystem path, not a slash command.
+ * `/usage` stays a command; `/Users/foo.png` is a dropped Unix path.
+ */
+export function looksLikePathDraft(value: string): boolean {
+  const path = unwrapDroppedPath(value)
+  if (looksLikeFilesystemDrop(path)) return true
+  return /^\/(?:Users|home|tmp|var|etc|opt|mnt|Volumes)\//u.test(path)
+}
+
 export function parsePastedAttachmentPaths(input: string): { readonly images: readonly string[]; readonly files: readonly string[] } {
   const text = input.trim()
   if (text === '') return { images: [], files: [] }
@@ -73,27 +97,43 @@ export function parsePastedAttachmentPaths(input: string): { readonly images: re
     /^[A-Za-z]:[\\/]/u.test(path)
     || /^\\\\/u.test(path)
     || (/^\/|^\.\.?\//u.test(path) && /\.[A-Za-z0-9]{1,16}$/u.test(path))
-  const matcher = /"([^"]+)"|'([^']+)'|(\S+)/gu
-  for (const match of text.matchAll(matcher)) {
-    const token = match[1] ?? match[2] ?? match[3]
-    if (token === undefined) continue
-    let path = token
+  const classify = (raw: string): 'image' | 'file' | 'reject' => {
+    let path = unwrapDroppedPath(raw)
     if (path.startsWith('file://')) {
       try {
         path = fileURLToPath(path)
       } catch {
-        return { images: [], files: [] }
+        return 'reject'
       }
-      if (looksLikeImagePath(path)) images.push(path)
-      else files.push(path)
-      continue
     }
     if (looksLikeImagePath(path)) {
       images.push(path)
-      continue
+      return 'image'
     }
-    if (!looksLikeDroppedFile(path)) return { images: [], files: [] }
-    files.push(path)
+    if (looksLikeDroppedFile(path) || looksLikeFilesystemDrop(path)) {
+      files.push(path)
+      return 'file'
+    }
+    return 'reject'
+  }
+  // Finder drops of a single spaced path often arrive unquoted. Use the
+  // whole paste only when there is one path start and the text actually
+  // contains spaces (or wrapping quotes) — two unquoted `C:\a.png D:\b.txt`
+  // tokens must still split.
+  const whole = unwrapDroppedPath(text)
+  const pathStarts = text.match(/(?:^|[\s"'])(?:\/|[A-Za-z]:[\\/]|\\\\|\.\.?\/|file:\/\/)/gu) ?? []
+  const spacedSingleton = pathStarts.length <= 1
+    && looksLikeFilesystemDrop(whole)
+    && (/\s/u.test(whole) || /^[\u2018\u201C"']/u.test(text))
+  if (spacedSingleton) {
+    classify(whole)
+    return { images, files }
+  }
+  const matcher = /"([^"]+)"|'([^']+)'|(\S+)/gu
+  for (const match of text.matchAll(matcher)) {
+    const token = match[1] ?? match[2] ?? match[3]
+    if (token === undefined) continue
+    if (classify(token) === 'reject') return { images: [], files: [] }
   }
   return { images, files }
 }
