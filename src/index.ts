@@ -1235,7 +1235,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     try {
       parsed = currentMentions.parse(line)
     } catch (error: unknown) {
-      bridge.notify(`invalid session reference: ${error instanceof Error ? error.message : String(error)}`, 'error')
+      bridge.notify(t('notice.invalidReference', { message: error instanceof Error ? error.message : String(error) }), 'error')
       return
     }
     // Ordered delivery: the inbox order IS the user's message order. A line
@@ -1270,7 +1270,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
         if (mode === 'steer') currentAgent.steer(message)
         else currentAgent.followup(message)
       } catch (error: unknown) {
-        bridge.notify(`${mode === 'steer' ? 'steering' : 'message'} failed: ${error instanceof Error ? error.message : String(error)}`, 'error')
+        bridge.notify(t('notice.messageFailed', { kind: mode === 'steer' ? 'steering' : 'message', message: error instanceof Error ? error.message : String(error) }), 'error')
       }
     }
     if (parsed.references.length === 0) {
@@ -1288,7 +1288,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       }, (error: unknown) => {
         pendingControllers.delete(controller)
         if (controller.signal.aborted || epoch !== atEpoch) return
-        bridge.notify(`session reference failed: ${error instanceof Error ? error.message : String(error)}`, 'error')
+        bridge.notify(t('notice.referenceFailed', { message: error instanceof Error ? error.message : String(error) }), 'error')
       })
     })
   }
@@ -1365,7 +1365,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
           }
           await next.handle.dispose().catch(() => {})
           if (!quitting) renderCurrent()
-          bridge.notify(`session activation failed: ${error instanceof Error ? error.message : String(error)}`, 'error')
+          bridge.notify(t('notice.activationFailed', { message: error instanceof Error ? error.message : String(error) }), 'error')
           return
         }
         abortPendingControllers()
@@ -1384,7 +1384,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       }
     }).catch((error: unknown) => {
       pendingInputs.length = 0
-      bridge.notify(`session creation failed: ${error instanceof Error ? error.message : String(error)}`, 'error')
+      bridge.notify(t('notice.creationFailed', { message: error instanceof Error ? error.message : String(error) }), 'error')
     })
   }
 
@@ -1404,17 +1404,17 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     }
     if (images.length === 0 && line.startsWith('/mode ')) {
       void switchModeAction(line.slice(6).trim()).then(
-        selected => bridge.notify(`mode → ${selected}`),
-        error => bridge.notify(`mode switch failed: ${error instanceof Error ? error.message : String(error)}`, 'error'),
+        selected => bridge.notify(t('notice.modeChanged', { value: selected })),
+        error => bridge.notify(t('notice.modeChangeFailed', { message: error instanceof Error ? error.message : String(error) }), 'error'),
       )
       return
     }
     if (images.length === 0 && line.startsWith('/permission ')) {
       try {
         const selected = setPermissionAction(line.slice(12).trim())
-        bridge.notify(`permission → ${selected}`)
+        bridge.notify(t('notice.permissionChanged', { value: selected }))
       } catch (error: unknown) {
-        bridge.notify(`permission change failed: ${error instanceof Error ? error.message : String(error)}`, 'error')
+        bridge.notify(t('notice.permissionChangeFailed', { message: error instanceof Error ? error.message : String(error) }), 'error')
       }
       return
     }
@@ -1467,7 +1467,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       bridge.notify(t(preserved > 0 ? 'notice.turnCancelledKeepQueue' : 'notice.turnCancelled'))
       return true
     } catch (error: unknown) {
-      bridge.notify(`cancel failed: ${error instanceof Error ? error.message : String(error)}`, 'error')
+      bridge.notify(t('notice.cancelFailed', { message: error instanceof Error ? error.message : String(error) }), 'error')
       return false
     }
   }
@@ -1500,7 +1500,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
    */
   const cycleMode = (): string => {
     if (permissionPresets === undefined || permissionPresets.names.length === 0) {
-      bridge.notify('permission presets are not mounted in this composition', 'warning')
+      bridge.notify(t('notice.permissionPresetsUnmounted'), 'warning')
       return ''
     }
     try {
@@ -1551,7 +1551,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       selectPermission(permissionPresets, session, decision.preset)
       return `plan → off · permission → ${decision.preset}`
     } catch (error: unknown) {
-      bridge.notify(`mode change failed: ${error instanceof Error ? error.message : String(error)}`, 'error')
+      bridge.notify(t('notice.modeChangeFailed', { message: error instanceof Error ? error.message : String(error) }), 'error')
       return ''
     }
   }
@@ -1577,7 +1577,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     // it. Save failures degrade to a notice — the in-session switch already
     // took effect and must not roll back (the web contract).
     void defaultModel.saveSelection(selection).catch((error: unknown) => {
-      bridge.notify(`model switch applies to this session but was not saved as the default: ${error instanceof Error ? error.message : String(error)}`, 'warning')
+      bridge.notify(t('notice.modelNotDefault', { message: error instanceof Error ? error.message : String(error) }), 'warning')
     })
     // Advisory immediate validation (web selectModel parity): run the same
     // local resolveCallConfig check the request pipeline would, so a stale
@@ -1596,7 +1596,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
         model: selection.model,
         ...selection.reasoningEffort === undefined ? {} : { reasoningEffort: selection.reasoningEffort },
       })).catch((error: unknown) => {
-        bridge.notify(`model selection rejected: ${error instanceof Error ? error.message : String(error)} — reopen /model to pick again`, 'error')
+        bridge.notify(t('notice.modelSelectionRejected', { message: error instanceof Error ? error.message : String(error) }), 'error')
       })
     }
     return `${row.provider}/${row.model}`
@@ -1625,7 +1625,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
    */
   const exportTranscript = async (argument: string): Promise<void> => {
     if (session === undefined) {
-      bridge.notify('no session yet — submit a message to start', 'warning')
+      bridge.notify(t('notice.noSessionYet'), 'warning')
       return
     }
     const wanted = argument.trim()
@@ -1642,9 +1642,9 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     const markdown = buildExportMarkdown(store.getView(), session.id)
     try {
       await writeFileAsync(target, `${markdown}\n`, 'utf8')
-      bridge.notify(`exported to ${target}`)
+      bridge.notify(t('notice.exported', { path: target }))
     } catch (error: unknown) {
-      bridge.notify(`export failed: ${error instanceof Error ? error.message : String(error)}`, 'error')
+      bridge.notify(t('notice.exportFailed', { message: error instanceof Error ? error.message : String(error) }), 'error')
     }
   }
 
@@ -1941,7 +1941,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
 
   const switchQueue = new SessionSwitchQueue<PendingSwitch>(
     async request => { if (!quitting) await activate(request.target) },
-    error => bridge.notify(`session switch failed: ${error instanceof Error ? error.message : String(error)}`, 'error'),
+    error => bridge.notify(t('notice.sessionSwitchFailed', { message: error instanceof Error ? error.message : String(error) }), 'error'),
   )
 
   const requestSwitch = (request: PendingSwitch): void => {
@@ -1950,17 +1950,17 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       // the target directly — there is no running turn to wait on and nothing
       // to flush.
       void activate(request.target).catch((error: unknown) => {
-        bridge.notify(`session switch failed: ${error instanceof Error ? error.message : String(error)}`, 'error')
+        bridge.notify(t('notice.sessionSwitchFailed', { message: error instanceof Error ? error.message : String(error) }), 'error')
       })
       return
     }
     if (request.target.sessionId === session.id) {
-      bridge.notify('that session is already active', 'warning')
+      bridge.notify(t('notice.alreadyActive'), 'warning')
       return
     }
     const outcome = switchQueue.request(agent!, request)
     if (outcome === 'queued') {
-      bridge.notify(`will switch to ${request.label} when the current turn finishes · /resume cancel to abort`)
+      bridge.notify(t('notice.switchQueued', { label: request.label }))
     }
   }
 
@@ -1986,7 +1986,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   const requestResume = (wanted: string): void => {
     void resolveResumeId(wanted).then(id => {
       requestSwitch({ target: { sessionId: id, resume: true }, label: id.slice(-12) })
-    }, (error: unknown) => bridge.notify(`resume failed: ${error instanceof Error ? error.message : String(error)}`, 'error'))
+    }, (error: unknown) => bridge.notify(t('notice.resumeFailed', { message: error instanceof Error ? error.message : String(error) }), 'error'))
   }
 
   const createSession = (mode?: string): void => {
@@ -2050,7 +2050,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
 
   const forkSession = (argument: string): void => {
     if (session === undefined || active === undefined) {
-      bridge.notify('no session yet - submit a message to start', 'warning')
+      bridge.notify(t('notice.noSessionYet'), 'warning')
       return
     }
     try {
@@ -2074,13 +2074,13 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
         label: id.slice(-12),
       })
     } catch (error: unknown) {
-      bridge.notify(`fork failed: ${error instanceof Error ? error.message : String(error)}`, 'error')
+      bridge.notify(t('notice.forkFailed', { message: error instanceof Error ? error.message : String(error) }), 'error')
     }
   }
 
   const switchSession = (row: SessionRow): void => {
     if (!row.resumable) {
-      bridge.notify('subagent conversations are read-only', 'warning')
+      bridge.notify(t('notice.subagentsReadOnly'), 'warning')
       return
     }
     requestSwitch({ target: { sessionId: row.id, resume: true }, label: row.title ?? row.id.slice(-12) })
@@ -2245,14 +2245,14 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   // the agent always receives the startup prompt first.
   if (startup.prompt !== undefined || (startup.images?.length ?? 0) > 0) {
     if ((startup.images?.length ?? 0) > 0) {
-      bridge.notify(`processing ${startup.images!.length} startup image${startup.images!.length === 1 ? '' : 's'}…`)
+      bridge.notify(t('notice.startupImages', { count: startup.images!.length, plural: startup.images!.length === 1 ? '' : 's' }))
     }
     void inputGate.run(async deliver => {
       const images = await saveImagePaths(startup.images ?? [], ctx.get('attachments'))
-      if (images.length > 0) bridge.notify(`${images.length} startup image${images.length === 1 ? '' : 's'} attached`)
+      if (images.length > 0) bridge.notify(t('notice.startupImagesAttached', { count: images.length, plural: images.length === 1 ? '' : 's' }))
       deliver({ text: startup.prompt ?? '', mode: 'followup', images })
     }).catch((error: unknown) => {
-      bridge.notify(`initial prompt failed: ${error instanceof Error ? error.message : String(error)}`, 'error')
+      bridge.notify(t('notice.initialPromptFailed', { message: error instanceof Error ? error.message : String(error) }), 'error')
     })
   }
 
@@ -2267,7 +2267,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   // the notice channel is live, after the first frame settles.
   if (statuslineWarning !== undefined) {
     setTimeout(() => {
-      bridge.notify('statusline config unreadable, using defaults: ' + statuslineWarning, 'warning')
+      bridge.notify(t('notice.statuslineConfigUnreadable', { message: statuslineWarning }), 'warning')
     }, 50)
   }
   // Same one-shot surface for a corrupt theme file (dark fallback stays live).
@@ -2278,13 +2278,13 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   }
   if (themeWarning !== undefined) {
     setTimeout(() => {
-      bridge.notify('theme config unreadable, using dark: ' + themeWarning, 'warning')
+      bridge.notify(t('notice.themeConfigUnreadable', { message: themeWarning }), 'warning')
     }, 50)
   }
   // And for a corrupt animations file (on-by-default fallback stays live).
   if (animationsWarning !== undefined) {
     setTimeout(() => {
-      bridge.notify('animations config unreadable, animations stay on: ' + animationsWarning, 'warning')
+      bridge.notify(t('notice.animationsConfigUnreadable', { message: animationsWarning }), 'warning')
     }, 50)
   }
 

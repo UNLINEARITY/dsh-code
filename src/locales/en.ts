@@ -63,6 +63,9 @@ export const en = {
   'search.footer': '↑↓ move · enter search/resume · esc close',
 
   // /statusline panel
+  'header.hint': '/help · Esc interrupt · Ctrl+C quit',
+  'header.hintResumed': 'resumed · /help · Esc interrupt',
+
   'statusline.title': '/statusline · items apply to the live status line below',
   'statusline.item.model': 'model',
   'statusline.item.model.desc': 'provider/model serving this session',
@@ -282,6 +285,7 @@ export const en = {
   'notice.themeSaveFailed': 'theme save failed: {message}',
   'notice.languageSaveFailed': 'language save failed: {message}',
   'notice.alreadyActive': 'that session is already active',
+  'notice.permissionPresetsUnmounted': 'permission presets are not mounted in this composition',
   'notice.queueCancelled': 'queued message cancelled',
   'notice.queueActionFailed': 'queue action failed: {message}',
   'notice.queueUnavailable': 'queued message is no longer pending',

@@ -896,7 +896,7 @@ function Header({ resumed }: { resumed: boolean }): ReactElement {
   })()
   const title = headerBrandTitle()
   const slogan = 'Into the Unknown  探索未至之境'
-  const hint = resumed ? 'resumed · /help · Esc interrupt' : '/help · Esc interrupt · Ctrl+C quit'
+  const hint = resumed ? t('header.hintResumed') : t('header.hint')
   const copyWidths = [visibleColumns(title), visibleColumns(slogan), visibleColumns(hint)]
   if (kernelLine !== undefined) copyWidths.push(visibleColumns(kernelLine))
   const copyColumns = Math.max(...copyWidths)

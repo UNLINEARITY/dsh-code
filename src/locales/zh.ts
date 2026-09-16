@@ -65,6 +65,9 @@ export const zh: MessageCatalog = {
   'search.footer': '↑↓ 移动 · 回车 搜索/恢复 · esc 关闭',
 
   // /statusline panel
+  'header.hint': '/help · Esc 中断 · Ctrl+C 退出',
+  'header.hintResumed': '已恢复 · /help · Esc 中断',
+
   'statusline.title': '/statusline · 选项实时应用到下方状态栏',
   'statusline.item.model': '模型',
   'statusline.item.model.desc': '本会话使用的 provider/model',
@@ -284,6 +287,7 @@ export const zh: MessageCatalog = {
   'notice.themeSaveFailed': '主题保存失败：{message}',
   'notice.languageSaveFailed': '语言保存失败：{message}',
   'notice.alreadyActive': '该会话已是当前会话',
+  'notice.permissionPresetsUnmounted': '当前组合未挂载权限预设',
   'notice.queueCancelled': '已取消排队消息',
   'notice.queueActionFailed': '队列操作失败：{message}',
   'notice.queueUnavailable': '该消息已不在队列中',

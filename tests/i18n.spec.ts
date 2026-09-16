@@ -52,6 +52,21 @@ describe('i18n catalog', () => {
     expect(LANGUAGES.map(language => language.id)).toEqual(['en', 'zh'])
   })
 
+  it('translates startup notices and the welcome hint', () => {
+    try {
+      setLanguage('en')
+      expect(t('notice.noSessionYet')).toMatch(/no session yet/)
+      expect(t('notice.themeConfigUnreadable', { message: 'boom' })).toContain('boom')
+      expect(t('header.hint')).toContain('/help')
+      setLanguage('zh')
+      expect(t('notice.noSessionYet')).toContain('会话')
+      expect(t('header.hint')).toContain('中断')
+      expect(t('header.hintResumed')).toContain('已恢复')
+    } finally {
+      setLanguage('en')
+    }
+  })
+
   it('translates model/provider chrome while preserving technical values', () => {
     try {
       setLanguage('zh')
