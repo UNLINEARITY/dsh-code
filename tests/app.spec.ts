@@ -414,7 +414,7 @@ describe('composer image attachments', () => {
     }
   })
 
-  it('attaches a Finder drop of a spaced CJK screenshot without looping', async () => {
+  it('attaches a spaced CJK screenshot path without looping', async () => {
     const harness = createTty(120, 24)
     const errors: string[] = []
     const spy = vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
@@ -442,7 +442,7 @@ describe('composer image attachments', () => {
     }
   })
 
-  it('attaches a Finder drag through the production stdin splitter like a copied path', async () => {
+  it('attaches a file drag through the production stdin splitter like a copied path', async () => {
     const harness = createTty(120, 24)
     const path = '/Users/nonlinear/Desktop/截屏2026-09-15 18.41.07.png'
     const inspectImages = vi.fn(async (paths: readonly string[]) => paths.map(item => ({
@@ -466,7 +466,7 @@ describe('composer image attachments', () => {
     try {
       await wait()
       // Production: no 200~/201~. The splitter used to emit one unit per
-      // character (~80 nested setStates → Maximum update depth).
+      // character (a long path nested tens of setStates → Maximum update depth).
       harness.stdin.write(`'${path}'`)
       await wait(180)
       expect(inspectImages).toHaveBeenCalledWith([path])

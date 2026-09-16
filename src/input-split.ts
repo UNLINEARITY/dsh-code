@@ -63,11 +63,12 @@ export function createKeypressSplitter(): KeypressSplitter {
         const head = buffer[0]
         if (head !== '\x1b') {
           // C0 / DEL stay one key so a coalesced ` \r` is still space then
-          // Enter. A printable run (Finder drag, unbracketed path paste,
-          // CJK) must stay ONE unit: splitting `/Users/…/截屏 ….png` into
-          // 80 setStates overflows React's update depth and never reaches
-          // the attachment parser. Typed keys still arrive as one-byte
-          // chunks, so this only batches what the OS already coalesced.
+          // Enter. A printable run (file drag or unbracketed path paste on
+          // any platform, including CJK) must stay ONE unit: splitting a
+          // long path into tens of setStates overflows React's update depth
+          // and never reaches the attachment parser. Typed keys still
+          // arrive as one-byte chunks, so this only batches what the OS
+          // already coalesced.
           if (head < ' ' || head === '\x7f') {
             units.push(head)
             buffer = buffer.slice(1)

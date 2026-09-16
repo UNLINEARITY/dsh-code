@@ -52,19 +52,7 @@ export function looksLikeImagePath(path: string): boolean {
   return IMAGE_EXTENSIONS.has(extname(path).toLowerCase())
 }
 
-/**
- * Parse a paste/drop into its image and file paths: image-suffixed tokens
- * stay images, other path-shaped tokens ride as file attachments (0.1.5
- * file blocks), and anything that is neither leaves both empty — the caller
- * then treats the paste as plain text.
- *
- * File tokens are held to an absolute-path-with-shape bar (drive/backslash
- * or a dot-suffixed leaf after a separator): a dropped terminal path always
- * carries one of those, while prose, slash commands, and option flags never
- * do. A POSIX absolute path without any dot-suffixed leaf falls through as
- * text — the @ mention route still attaches such files deliberately.
- */
-/** Strip one layer of ASCII or Unicode quotes and Finder backslash-spaces. */
+/** Strip one layer of ASCII or Unicode quotes and shell-escaped spaces. */
 export function unwrapDroppedPath(token: string): string {
   const trimmed = token.trim()
   const wrapped = /^[\u2018\u201C"'](.+)[\u2019\u201D"']$/u.exec(trimmed)
@@ -80,7 +68,7 @@ export function looksLikeFilesystemDrop(path: string): boolean {
 
 /**
  * A composer draft that is a filesystem path, not a slash command.
- * `/usage` stays a command; `/Users/foo.png` is a dropped Unix path.
+ * `/usage` stays a command; `/Users/foo.png` and `C:\temp\a.png` are drops.
  */
 export function looksLikePathDraft(value: string): boolean {
   const path = unwrapDroppedPath(value)
@@ -88,6 +76,18 @@ export function looksLikePathDraft(value: string): boolean {
   return /^\/(?:Users|home|tmp|var|etc|opt|mnt|Volumes)\//u.test(path)
 }
 
+/**
+ * Parse a paste or file-drop into image and file paths: image-suffixed
+ * tokens stay images, other path-shaped tokens ride as file attachments
+ * (0.1.5 file blocks), and anything that is neither leaves both empty —
+ * the caller then treats the paste as plain text.
+ *
+ * File tokens are held to an absolute-path-with-shape bar (drive/backslash
+ * or a dotted leaf after a separator): a dropped terminal path always
+ * carries one of those, while prose, slash commands, and option flags never
+ * do. A POSIX absolute path without a dotted leaf falls through as text —
+ * the @ mention route still attaches such files deliberately.
+ */
 export function parsePastedAttachmentPaths(input: string): { readonly images: readonly string[]; readonly files: readonly string[] } {
   const text = input.trim()
   if (text === '') return { images: [], files: [] }
@@ -122,10 +122,10 @@ export function parsePastedAttachmentPaths(input: string): { readonly images: re
     }
     return 'reject'
   }
-  // Finder drops of a single spaced path often arrive unquoted. Use the
-  // whole paste only when there is one path start and the text actually
-  // contains spaces (or wrapping quotes) — two unquoted `C:\a.png D:\b.txt`
-  // tokens must still split.
+  // A single dropped path with spaces often arrives unquoted (macOS, Windows
+  // Explorer, VS Code sendText). Use the whole paste only when there is one
+  // path start and the text actually contains spaces (or wrapping quotes) —
+  // two unquoted `C:\a.png D:\b.txt` tokens must still split.
   const whole = unwrapDroppedPath(text)
   const pathStarts = text.match(/(?:^|[\s"'])(?:\/|[A-Za-z]:[\\/]|\\\\|\.\.?\/|file:\/\/)/gu) ?? []
   const spacedSingleton = pathStarts.length <= 1

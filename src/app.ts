@@ -4245,9 +4245,10 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
     preferredColumnRef.current = null
     setCompletionIndex(0)
     setDismissedMenuValue(undefined)
-    // Finder drag often writes the path without bracketed-paste wrappers, so
-    // it lands as ordinary insert. If the whole draft is one drop path, attach
-    // it the same way a copied pathname paste would.
+    // A file drag (any OS / terminal) often writes the path without
+    // bracketed-paste wrappers, so it lands as ordinary insert. If the whole
+    // draft is one drop path, attach it the same way a copied pathname paste
+    // would.
     const dropped = parsePastedAttachmentPaths(edit.value)
     if (dropped.images.length > 0 || dropped.files.length > 0) {
       valueRef.current = ''

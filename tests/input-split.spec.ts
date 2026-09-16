@@ -38,7 +38,7 @@ describe('keypress splitter', () => {
     expect(splitter.push('\x1bb😀')).toEqual(['\x1bb', '😀'])
   })
 
-  it('keeps a printable run as one insert so a Finder drag is not 80 keypresses', () => {
+  it('keeps a printable run as one insert so a file drag is not tens of keypresses', () => {
     const splitter = createKeypressSplitter()
     expect(splitter.push('abc')).toEqual(['abc'])
     const path = "'/Users/nonlinear/Desktop/截屏2026-09-15 18.41.07.png'"
