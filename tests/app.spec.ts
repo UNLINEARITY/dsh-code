@@ -442,6 +442,29 @@ describe('composer image attachments', () => {
     }
   })
 
+  it('promotes a Finder drag written without paste markers into the same image marker as a copied path', async () => {
+    const harness = createTty(120, 24)
+    const path = '/Users/nonlinear/Desktop/截屏2026-09-15 18.41.07.png'
+    const inspectImages = vi.fn(async (paths: readonly string[]) => paths.map(item => ({
+      path: item,
+      name: item.split('/').at(-1) ?? 'shot.png',
+      mediaType: 'image/png' as const,
+      bytes: 8,
+    })))
+    const instance = renderApp(harness, appProps({ inspectImages }))
+    try {
+      await wait()
+      // VS Code/iTerm drag typically sendText's the quoted path with no 200~/201~.
+      harness.stdin.write(`'${path}'`)
+      await wait(180)
+      expect(inspectImages).toHaveBeenCalledWith([path])
+      expect(harness.output.text).toContain('[image: 截屏2026-09-15 18.41.07.png]')
+      expect(harness.output.text).not.toContain(`'${path}'`)
+    } finally {
+      instance.unmount()
+    }
+  })
+
   it('submits a draft ending in an unmatched @token instead of swallowing Enter', async () => {
     const harness = createTty(120, 24)
     const dispatch = vi.fn()

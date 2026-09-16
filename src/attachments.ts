@@ -105,6 +105,12 @@ export function parsePastedAttachmentPaths(input: string): { readonly images: re
       } catch {
         return 'reject'
       }
+    } else if (/%[0-9A-Fa-f]{2}/u.test(path)) {
+      try {
+        path = decodeURIComponent(path)
+      } catch {
+        // Keep the raw token when it is not a valid percent-encoding.
+      }
     }
     if (looksLikeImagePath(path)) {
       images.push(path)
