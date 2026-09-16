@@ -10,6 +10,7 @@ import {
   contextGroupSpans,
   CONTEXT_BAR_WIDTH,
   DEFAULT_STATUSLINE_ITEMS,
+  localizedStatusItems,
   formatDuration,
   formatTokens,
   layoutStatusBar,
@@ -492,6 +493,18 @@ describe('statusline item configuration', () => {
     expect(groupText(layout.row1)).toEqual(['○ m · r'])
     expect(layout.row1.right.map(span => span.text)).toEqual(['workspace-write'])
     expect(groupText(layout.row2)).toEqual(['turns 1 · steps 1', '◎ round 1/4'])
+  })
+
+  it('translates /statusline picker labels in Chinese', () => {
+    try {
+      setLanguage('zh')
+      const items = localizedStatusItems()
+      expect(items.find(item => item.id === 'model')?.label).toBe('模型')
+      expect(items.find(item => item.id === 'sandbox')?.description).toContain('沙箱')
+      expect(items.map(item => item.id)).toEqual([...DEFAULT_STATUSLINE_ITEMS])
+    } finally {
+      setLanguage('en')
+    }
   })
 })
 

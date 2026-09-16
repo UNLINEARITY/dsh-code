@@ -75,6 +75,14 @@ describe('rainbow roll', () => {
     }
   })
 
+  it('never paints live and error the same color', () => {
+    for (let seed = 0; seed < 64; seed += 1) {
+      const { toneColors } = rollRainbow(seed)
+      expect(toneColors.live).not.toEqual(toneColors.error)
+      expect(toneColors.error).not.toEqual(toneColors.warn)
+    }
+  })
+
   it('rolls a four-color ring of distinct pool hues', () => {
     const { ring } = rollRainbow(4242)
     expect(ring).toHaveLength(4)

@@ -16,7 +16,7 @@ import { markdownLines, textLines, type LineStyle, type StyledLine } from './ren
 import { usageLines, type UsageView } from './render/usage.ts'
 import { deleteLastGrapheme } from './render/editor.ts'
 import { stripPasteMarkers } from './keyboard.ts'
-import { DEFAULT_STATUSLINE_ITEMS, STATUS_ITEMS, type StatusItemId } from './render/status.ts'
+import { DEFAULT_STATUSLINE_ITEMS, localizedStatusItems, type StatusItemId } from './render/status.ts'
 import { singleLineText, truncateColumns } from './render/text.ts'
 import { panelAccent } from './panel-accent.ts'
 import { t } from './i18n.ts'
@@ -951,7 +951,7 @@ export function StatuslinePanel({ enabled, change, close }: {
   const bodyRows = Math.max(1, viewport.bodyRows - 1)
   const offset = revealRow(0, cursor, order.length, bodyRows)
   const visible = order.slice(offset, offset + bodyRows)
-  const meta = new Map(STATUS_ITEMS.map(item => [item.id, item]))
+  const meta = new Map(localizedStatusItems().map(item => [item.id, item]))
   const accent = panelAccent('statusline', getPalette().dim, getPalette().brandBright)
   return createElement(
     Box,

@@ -115,6 +115,11 @@ function hueOf([r, g, b]: RgbTriple): number {
   return (60 * (r - g) / span + 240) % 360
 }
 
+/** Strict RGB equality for the wrap-collision repair. */
+function sameRgb(left: RgbTriple, right: RgbTriple): boolean {
+  return left[0] === right[0] && left[1] === right[1] && left[2] === right[2]
+}
+
 /** A dark row tint for diff backgrounds: the hue at 22% strength over black. */
 function darkTint(hue: RgbTriple): RgbTriple {
   return [Math.round(hue[0] * 0.22), Math.round(hue[1] * 0.22), Math.round(hue[2] * 0.22)]
@@ -160,14 +165,19 @@ export function rollRainbow(seed: number): RainbowRoll {
     steered: code,
   }
   const ring = shuffle(RAINBOW_POOL, rng).slice(0, 4)
-  // Adjacency by construction: consecutive tones take consecutive slots of a
-  // 12-distinct shuffle, so neighbors can never match (13 tones wrap the
-  // first color onto 'error', which is never adjacent to 'live' on screen).
+  // Consecutive tones take consecutive slots of a 12-distinct shuffle, so
+  // on-screen neighbors never match. 13 tones wrap: live (index 0) and error
+  // (index 12) would share a color. Reassign error to a pool hue that is
+  // neither live nor its neighbor warn — error must not look like the busy dot.
   const offset = Math.floor(rng() * RAINBOW_POOL.length)
   const toneColors = {} as Record<StatusTone, RgbTriple>
   TONE_ORDER.forEach((tone, index) => {
     toneColors[tone] = pool[(offset + index) % pool.length]!
   })
+  if (sameRgb(toneColors.live, toneColors.error)) {
+    const replacement = pool.find(hue => !sameRgb(hue, toneColors.live) && !sameRgb(hue, toneColors.warn))
+    if (replacement !== undefined) toneColors.error = replacement
+  }
   const flowAnchors = [...RAINBOW_POOL].sort((a, b) => hueOf(a) - hueOf(b))
   const flowPhaseMs = Math.floor(rng() * 2400)
   return { seed, palette, ring, toneColors, flowAnchors, flowPhaseMs }

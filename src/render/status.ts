@@ -17,7 +17,7 @@ import { singleLineText, truncateColumns, formatTokens } from './text.ts'
 
 // Re-exported for the callers that have always read the formatter here.
 export { formatTokens }
-import { t } from '../i18n.ts'
+import { t, type MessageKey } from '../i18n.ts'
 
 
 /**
@@ -254,6 +254,31 @@ export const STATUS_ITEMS: readonly StatusItemInfo[] = [
   { id: 'goal', label: 'goal', description: 'live goal phase and round progress', side: 'left' },
   { id: 'sandbox', label: 'sandbox', description: 'divergent sandbox-mode override', side: 'left' },
 ]
+
+const STATUSLINE_ITEM_KEYS: Record<StatusItemId, { label: MessageKey; description: MessageKey }> = {
+  model: { label: 'statusline.item.model', description: 'statusline.item.model.desc' },
+  cwd: { label: 'statusline.item.cwd', description: 'statusline.item.cwd.desc' },
+  mode: { label: 'statusline.item.mode', description: 'statusline.item.mode.desc' },
+  branch: { label: 'statusline.item.branch', description: 'statusline.item.branch.desc' },
+  context: { label: 'statusline.item.context', description: 'statusline.item.context.desc' },
+  permission: { label: 'statusline.item.permission', description: 'statusline.item.permission.desc' },
+  plan: { label: 'statusline.item.plan', description: 'statusline.item.plan.desc' },
+  turns: { label: 'statusline.item.turns', description: 'statusline.item.turns.desc' },
+  durations: { label: 'statusline.item.durations', description: 'statusline.item.durations.desc' },
+  cache: { label: 'statusline.item.cache', description: 'statusline.item.cache.desc' },
+  tokens: { label: 'statusline.item.tokens', description: 'statusline.item.tokens.desc' },
+  title: { label: 'statusline.item.title', description: 'statusline.item.title.desc' },
+  goal: { label: 'statusline.item.goal', description: 'statusline.item.goal.desc' },
+  sandbox: { label: 'statusline.item.sandbox', description: 'statusline.item.sandbox.desc' },
+}
+
+/** Picker rows with labels/descriptions in the active interface language. */
+export function localizedStatusItems(): readonly StatusItemInfo[] {
+  return STATUS_ITEMS.map(item => {
+    const keys = STATUSLINE_ITEM_KEYS[item.id]
+    return { ...item, label: t(keys.label), description: t(keys.description) }
+  })
+}
 
 /**
  * Default order: the whole catalog (matches the pre-customization bar).
