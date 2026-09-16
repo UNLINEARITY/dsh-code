@@ -1917,7 +1917,10 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
         // effect AFTER it, so an immediate notice reaches the UNMOUNTED
         // instance and React drops it silently. Defer past the commit.
         setTimeout(() => {
-          bridge.notify(`${next.resumed ? 'resumed' : 'created'} ${next.session.id.slice(-12)} · mode ${next.mode}`)
+          bridge.notify(t(next.resumed ? 'notice.sessionResumed' : 'notice.sessionCreated', {
+            id: next.session.id.slice(-12),
+            mode: next.mode,
+          }))
         }, 0)
         return
       }
@@ -1925,16 +1928,18 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       try {
         await sessions.flush(previous.session)
       } catch (error: unknown) {
-        cleanupWarning = `previous session flush failed: ${error instanceof Error ? error.message : String(error)}`
+        cleanupWarning = t('notice.flushFailed', { message: error instanceof Error ? error.message : String(error) })
       }
       try {
         await previous.handle.dispose()
       } catch (error: unknown) {
-        cleanupWarning = `${cleanupWarning === undefined ? '' : `${cleanupWarning}; `}previous agent release failed: ${error instanceof Error ? error.message : String(error)}`
+        const release = t('notice.agentReleaseFailed', { message: error instanceof Error ? error.message : String(error) })
+        cleanupWarning = cleanupWarning === undefined ? release : `${cleanupWarning}; ${release}`
       }
+      const shortId = next.session.id.slice(-12)
       bridge.notify(cleanupWarning === undefined
-        ? `${next.resumed ? 'resumed' : 'created'} ${next.session.id.slice(-12)} · mode ${next.mode}`
-        : `switched to ${next.session.id.slice(-12)}, but ${cleanupWarning}`,
+        ? t(next.resumed ? 'notice.sessionResumed' : 'notice.sessionCreated', { id: shortId, mode: next.mode })
+        : t('notice.sessionSwitchedDirty', { id: shortId, detail: cleanupWarning }),
       cleanupWarning === undefined ? 'info' : 'warning')
     })
   }
@@ -2258,9 +2263,9 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
 
   async function copyLastResponse(): Promise<string> {
     const text = latestAssistantText(store.getView())
-    if (text === undefined) return 'nothing to copy yet'
+    if (text === undefined) return t('notice.copyEmpty')
     await copyText(text)
-    return 'copied latest response'
+    return t('notice.copied')
   }
 
   // A corrupt statusline config must not vanish silently: surface it once

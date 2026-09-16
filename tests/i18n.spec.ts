@@ -62,6 +62,9 @@ describe('i18n catalog', () => {
       expect(t('notice.noSessionYet')).toContain('会话')
       expect(t('header.hint')).toContain('中断')
       expect(t('header.hintResumed')).toContain('已恢复')
+      expect(t('notice.sessionCreated', { id: 'abc', mode: 'standard' })).toContain('abc')
+      expect(t('notice.copied')).toContain('回复')
+      expect(t('notice.copyEmpty')).toContain('复制')
     } finally {
       setLanguage('en')
     }

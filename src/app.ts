@@ -4601,7 +4601,7 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
       if (text === '/copy') {
         void copyLastResponse().then(
           outcome => notify(outcome),
-          error => notify(`copy failed: ${error instanceof Error ? error.message : String(error)}`, 'error'),
+          error => notify(t('notice.copyFailed', { message: error instanceof Error ? error.message : String(error) }), 'error'),
         )
         return
       }
