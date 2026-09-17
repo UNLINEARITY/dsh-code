@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { pathToFileURL } from 'node:url'
 import {
   detectImageMediaType,
   inspectFilePaths,
@@ -41,11 +42,9 @@ describe('terminal image attachments', () => {
       .toEqual({ images: ['/Users/nonlinear/Desktop/截屏 2026-09-15 18.41.07.png'], files: [] })
     expect(looksLikePathDraft('/Users/nonlinear/Desktop/shot.png')).toBe(true)
     expect(looksLikePathDraft('/usage')).toBe(false)
-    const encoded = 'file:///Users/nonlinear/Desktop/%E6%88%AA%E5%B1%8F2026-09-15%2018.41.07.png'
-    expect(parsePastedAttachmentPaths(encoded)).toEqual({
-      images: ['/Users/nonlinear/Desktop/截屏2026-09-15 18.41.07.png'],
-      files: [],
-    })
+    const localImagePath = join(tmpdir(), '截屏2026-09-15 18.41.07.png')
+    const encoded = pathToFileURL(localImagePath).href
+    expect(parsePastedAttachmentPaths(encoded)).toEqual({ images: [localImagePath], files: [] })
   })
 
   it('validates signature and limits before submission without persisting', async () => {

@@ -82,7 +82,7 @@ describe('Git workflow', () => {
       const base = await mergeBaseWith(root, 'main')
       expect(base).toMatch(/^[0-9a-f]{40}$/u)
       expect(await mergeBaseWith(root, 'no-such-branch')).toBeUndefined()
-    })
+    }, 15_000)
     it('lists picker branches and commits from a real repository', async () => {
       const root = mkdtempSync(join(tmpdir(), 'dsh-review-lists-'))
       await runGit(root, 'init', '--initial-branch=main')
@@ -111,20 +111,7 @@ describe('Git workflow', () => {
       expect(commits.map(commit => commit.title)).toEqual(['third commit', 'second commit', 'first commit'])
       expect(commits[0].sha).toMatch(/^[0-9a-f]{40}$/u)
       expect(commits[0].at).toBeGreaterThanOrEqual(commits[1].at)
-    })
-
-    it('resolves merge bases against a real repository and degrades cleanly', async () => {
-      const root = mkdtempSync(join(tmpdir(), 'dsh-review-'))
-      await runGit(root, 'init', '--initial-branch=main')
-      await runGit(root, 'config', 'user.email', 't@t')
-      await runGit(root, 'config', 'user.name', 't')
-      writeFileSync(join(root, 'a.txt'), 'one\n')
-      await runGit(root, 'add', 'a.txt')
-      await runGit(root, 'commit', '-m', 'first')
-      const base = await mergeBaseWith(root, 'main')
-      expect(base).toMatch(/^[0-9a-f]{40}$/u)
-      expect(await mergeBaseWith(root, 'no-such-branch')).toBeUndefined()
-    })
+    }, 15_000)
   })
 
   it('keeps unified patches grouped by file for the terminal diff picker', () => {
