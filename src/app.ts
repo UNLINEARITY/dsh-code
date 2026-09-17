@@ -1331,25 +1331,19 @@ function StatusLine({ facts, stats, busy, columns, items, onRows, animated }: {
   const flowTick = useFrames(BUSY_CHASE_TICK_MS, flowActive)
   const flowMs = flowActive ? flowTick * BUSY_CHASE_TICK_MS + (flow?.phaseMs ?? 0) : undefined
   const language = getLanguage()
-  const layout = useMemo(() => layoutStatusBar(facts, stats, Math.max(8, columns - 2), {
-    busy,
-    items,
-    // Match the composer content budget: border + horizontal padding are
-    // already excluded, and layoutStatusBar shrinks this ceiling as needed.
-    contextWidth: Math.max(5, columns - 6),
-  }), [
-    facts.model,
-    facts.mode,
-    facts.cwd,
-    facts.branch,
-    facts.sessionId,
-    facts.title,
-    facts.sandbox,
-    facts.plan,
-    facts.permission,
-    facts.goal?.phase,
-    facts.goal?.rounds,
-    facts.goal?.max,
+  const layout = useMemo(() => {
+    // The layout reads translations through t(); naming the current language
+    // here makes that external store value an explicit cache invalidator.
+    void language
+    return layoutStatusBar(facts, stats, Math.max(8, columns - 2), {
+      busy,
+      items,
+      // Match the composer content budget: border + horizontal padding are
+      // already excluded, and layoutStatusBar shrinks this ceiling as needed.
+      contextWidth: Math.max(5, columns - 6),
+    })
+  }, [
+    facts,
     stats,
     busy,
     columns,
@@ -1670,7 +1664,7 @@ function QuestionBar({ store, snapshot, locked }: { store: QuestionStore; snapsh
   }, [request])
 
   const question = pending?.request.questions[index]
-  const options = question?.options ?? []
+  const options = useMemo(() => question?.options ?? [], [question])
   const isPlan = question?.intent?.kind === 'plan-review'
   const isMulti = question?.multiSelect === true
   const currentDraft = drafts[index] ?? initialQuestionDraft(question)
@@ -2006,7 +2000,7 @@ function ModelPanel({ directory, error, current, onSelect, onProviders, onRetry,
   const [cursor, setCursor] = useState(0)
   const stdout = useStdout().stdout
   const viewport = panelViewport(stdout?.columns ?? 80, stdout?.rows ?? 30)
-  const rows = directory?.rows ?? []
+  const rows = useMemo(() => directory?.rows ?? [], [directory])
   // Direct-typing filter over provider and model names (the /mode contract):
   // printable keys edit the query, so a long directory is searchable without
   // a separate search mode. With a query active, q/r/g/G stop acting as
@@ -3376,6 +3370,8 @@ function VerbosePanel({ entries, onClose, columns, rows }: {
     [entry, viewport.contentColumns],
   )
   const visibleScroll = clampScroll(scroll, allLines.length, viewport.bodyRows)
+  const visibleScrollRef = useRef(visibleScroll)
+  visibleScrollRef.current = visibleScroll
 
   useEffect(() => {
     cursorRef.current = cursor
@@ -3385,7 +3381,7 @@ function VerbosePanel({ entries, onClose, columns, rows }: {
     const current = cursorRef.current
     const next = followInspectorCursor(current, previousLength.current, entries.length)
     if (next !== current) {
-      savedScroll.current.set(current, visibleScroll)
+      savedScroll.current.set(current, visibleScrollRef.current)
       setCursor(next)
       setScroll(savedScroll.current.get(next) ?? 0)
     }
@@ -3949,7 +3945,7 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
     return () => {
       stdin.read = originalRead
     }
-  }, [focusReporting, stdin])
+  }, [focusReporting, inputStdout, stdin])
 
   // Keep the navigation's recall space fresh while browsing state survives
   // (new local submissions extend the space; the index stays valid unless
@@ -4103,7 +4099,7 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
       clearTimeout(timer)
       controller.abort()
     }
-  }, [active, mentionActive, mentionToken?.query])
+  }, [active, loadMentions, mentionActive, mentionToken?.query])
 
   // Codex routes keys to the topmost surface first. Completion therefore
   // remains available while a turn runs, and Esc dismisses it before the
@@ -5486,9 +5482,15 @@ export function App(props: AppProps): ReactElement {
     setNotice({ text, tone })
   }, [])
 
+  const {
+    loadModels,
+    loadModelProviders,
+    loadProviderAuthorizations,
+    onBridgeReady,
+  } = props
   useEffect(() => {
-    props.onBridgeReady({ notify })
-  }, [])
+    onBridgeReady({ notify })
+  }, [notify, onBridgeReady])
   useEffect(() => {
     if (!modelOpen) return
     let cancelled = false
@@ -5497,7 +5499,7 @@ export function App(props: AppProps): ReactElement {
     // Enter the promise chain before invoking the loader so a provider that
     // throws synchronously becomes an in-panel error instead of escaping the
     // React effect and tearing down Ink.
-    Promise.resolve().then(() => props.loadModels()).then((loaded) => {
+    Promise.resolve().then(() => loadModels()).then((loaded) => {
       if (!cancelled) setDirectory(loaded)
     }, (error: unknown) => {
       if (!cancelled) setModelError(error instanceof Error ? error.message : String(error))
@@ -5505,13 +5507,13 @@ export function App(props: AppProps): ReactElement {
     return () => {
       cancelled = true
     }
-  }, [modelOpen, modelLoadEpoch, props.loadModels])
+  }, [loadModels, modelOpen, modelLoadEpoch])
   useEffect(() => {
-    if (!modelOpen || props.loadModelProviders === undefined) return
+    if (!modelOpen || loadModelProviders === undefined) return
     let cancelled = false
     setProviderDirectory(undefined)
     setProviderError(undefined)
-    Promise.resolve().then(() => props.loadModelProviders!()).then((loaded) => {
+    Promise.resolve().then(() => loadModelProviders()).then((loaded) => {
       if (!cancelled) setProviderDirectory(loaded)
     }, (error: unknown) => {
       if (!cancelled) setProviderError(error instanceof Error ? error.message : String(error))
@@ -5519,13 +5521,13 @@ export function App(props: AppProps): ReactElement {
     return () => {
       cancelled = true
     }
-  }, [modelOpen, modelLoadEpoch, props.loadModelProviders])
+  }, [loadModelProviders, modelOpen, modelLoadEpoch])
   useEffect(() => {
-    if (!modelOpen || props.loadProviderAuthorizations === undefined) return
+    if (!modelOpen || loadProviderAuthorizations === undefined) return
     let cancelled = false
     setAuthorizationDirectory(undefined)
     setAuthorizationError(undefined)
-    Promise.resolve().then(() => props.loadProviderAuthorizations!()).then((loaded) => {
+    Promise.resolve().then(() => loadProviderAuthorizations()).then((loaded) => {
       if (!cancelled) setAuthorizationDirectory(loaded)
     }, (error: unknown) => {
       if (!cancelled) setAuthorizationError(error instanceof Error ? error.message : String(error))
@@ -5533,7 +5535,7 @@ export function App(props: AppProps): ReactElement {
     return () => {
       cancelled = true
     }
-  }, [modelOpen, modelLoadEpoch, props.loadProviderAuthorizations])
+  }, [loadProviderAuthorizations, modelOpen, modelLoadEpoch])
   useEffect(() => {
     const subscribe = props.subscribeModelProviders
     if (!modelOpen || subscribe === undefined) return
@@ -5603,11 +5605,12 @@ export function App(props: AppProps): ReactElement {
   const cancelDelete = useCallback((): void => {
     setDeleteConfirmId(undefined)
   }, [])
+  const deleteSession = props.deleteSession
   const confirmDelete = useCallback((): void => {
     const id = deleteConfirmId
     if (id === undefined) return
     setDeleteConfirmId(undefined)
-    void props.deleteSession(id).then(outcome => {
+    void deleteSession(id).then(outcome => {
       notify(outcome)
       // Keep the picker open and reload: a successful deletion must vanish
       // from the list immediately, not look like a no-op.
@@ -5615,7 +5618,7 @@ export function App(props: AppProps): ReactElement {
     }, (reason: unknown) => {
       notify(t('notice.deleteFailed', { message: reason instanceof Error ? reason.message : String(reason) }), 'error')
     })
-  }, [deleteConfirmId, props.deleteSession, notify])
+  }, [deleteSession, deleteConfirmId, notify])
   /** The /history panel's accepted entry: text plus its recall-space index. */
   const [historyFill, setHistoryFill] = useState<{ text: string; index: number } | undefined>(undefined)
   /** Submissions recorded in this process (Codex local history; persistent file stays in the runner). */
@@ -5693,6 +5696,8 @@ export function App(props: AppProps): ReactElement {
     { hint: '/todos', open: todosOpen, close: () => setTodosOpen(false) },
     { hint: '/usage', open: usageOpen, close: () => setUsageOpen(false) },
   ]
+  const panelSurfacesRef = useRef(panelSurfaces)
+  panelSurfacesRef.current = panelSurfaces
   const openPanel = panelSurfaces.find(surface => surface.open)
   // The Ctrl+O inspector is the one surface the composer already yields to
   // through verboseOpen; it rides the same gate without a panel row.
@@ -5710,12 +5715,12 @@ export function App(props: AppProps): ReactElement {
   // of leaving it visible but keyboard-locked behind the approval.
   useEffect(() => {
     if (!approvalPending && !questionPending) return
-    for (const surface of panelSurfaces) {
+    for (const surface of panelSurfacesRef.current) {
       if (surface.open) surface.close()
     }
     setDeleteConfirmId(undefined)
     setVerboseOpen(false)
-  }, [approvalPending, questionPending, panelSurfaces])
+  }, [approvalPending, questionPending])
 
   // Append-only transcript: everything up to the first still-mutable entry
   // (a running tool/retry/command) flushes through Ink's `<Static>` into native
@@ -5932,7 +5937,7 @@ export function App(props: AppProps): ReactElement {
   const closeInspector = useCallback((): void => {
     setVerboseOpen(false)
   }, [])
-  const refreshScreen = (opts?: { wipeScrollback?: boolean }): void => {
+  const refreshScreen = useCallback((opts?: { wipeScrollback?: boolean }): void => {
     // Resize / Ctrl+L wipe screen AND scrollback. A history-cap trim remounts
     // Static at the current width, so native scrollback must stay — the user
     // may be reading messages above the fold.
@@ -5942,7 +5947,7 @@ export function App(props: AppProps): ReactElement {
       appStdout.write(SYNCHRONIZED_UPDATE_BEGIN + clear)
     }
     setRefreshEpoch(epoch => epoch + 1)
-  }
+  }, [appStdout])
   const applyRainbow = (seed?: number): void => {
     // Replace the memoized roll, then setTheme so getPalette() and the
     // painters pick the new values; persist rainbow as the active theme
@@ -5972,7 +5977,7 @@ export function App(props: AppProps): ReactElement {
   useEffect(() => {
     if (!settledNeedsTrim || busy || streamingActive) return
     refreshScreen({ wipeScrollback: false })
-  }, [settledNeedsTrim, busy, streamingActive])
+  }, [busy, refreshScreen, settledNeedsTrim, streamingActive])
 
   const sessionHasImages = useMemo(() => view.entries.some(entry =>
     (entry.kind === 'user' || entry.kind === 'pending') && (entry.images?.length ?? 0) > 0), [view.entries])

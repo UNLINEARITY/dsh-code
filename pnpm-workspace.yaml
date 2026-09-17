@@ -1,3 +1,7 @@
+overrides:
+  # GHSA-2883-xcg3-v3hh: every Cordis/Harness path must use the patched
+  # merge-key limiter, not only this workspace's direct development copy.
+  js-yaml: 4.3.2
 allowBuilds:
   # esbuild ships the native binary tsdown/vitest resolve through; its install
   # script only downloads/links that binary.

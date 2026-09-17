@@ -331,7 +331,7 @@ pnpm lint            # type-aware ESLint over src, tests, scripts, and the root 
 pnpm typecheck       # the build project (src)
 pnpm typecheck:tests # the spec suite and scripts
 pnpm test
-pnpm test:coverage   # coverage report (reporting only, no threshold)
+pnpm test:coverage   # coverage report with a conservative regression floor
 pnpm build
 pnpm verify          # lint + both typechecks + tests in one pass
 pnpm run gen:whale   # regenerate src/whale-glyph.ts from the vendored logo path

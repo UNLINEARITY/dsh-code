@@ -339,7 +339,7 @@ pnpm lint            # ESLint（类型敏感）：src、tests、scripts、根配
 pnpm typecheck       # 构建项目的类型检查（src）
 pnpm typecheck:tests # 测试套件与 scripts 的类型检查
 pnpm test
-pnpm test:coverage   # 覆盖率报告（只报告，不设门槛）
+pnpm test:coverage   # 覆盖率报告，并执行保守的防退化门槛
 pnpm build
 pnpm verify          # lint + 两个类型检查 + 测试，一次跑完
 pnpm run gen:whale   # 从 vendored Logo 路径重新生成 src/whale-glyph.ts

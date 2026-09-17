@@ -1,6 +1,6 @@
 /** Bounded, composer-safe panels for preset, session, and plugin kernel views. */
 
-import { createElement, useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
+import { createElement, useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
 import { Box, Text, useInput, useStdout } from 'ink'
 import type { ModelDirectory, ModelRow } from './models.ts'
 import type { SubagentRow } from './subagents.ts'
@@ -119,13 +119,13 @@ export function ModePanel({ current, load, select, close }: {
   const [cursor, setCursor] = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string>()
-  const refresh = (): void => {
+  const refresh = useCallback((): void => {
     setLoading(true); setError(undefined)
     Promise.resolve().then(load).then(value => { setRows(value); setLoading(false) }, reason => {
       setError(reason instanceof Error ? reason.message : String(reason)); setLoading(false)
     })
-  }
-  useEffect(refresh, [])
+  }, [load])
+  useEffect(refresh, [refresh])
   const visible = useMemo(() => rows.filter(row => `${row.id} ${row.name ?? ''} ${row.description ?? ''}`.toLowerCase().includes(query.toLowerCase())), [rows, query])
   useEffect(() => setCursor(value => Math.min(value, Math.max(0, visible.length - 1))), [visible.length])
   useInput((input, key) => {
@@ -160,13 +160,13 @@ export function PermissionPanel({ current, load, select, close }: {
   const [cursor, setCursor] = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string>()
-  const refresh = (): void => {
+  const refresh = useCallback((): void => {
     setLoading(true); setError(undefined)
     Promise.resolve().then(load).then(value => { setRows(value); setLoading(false) }, reason => {
       setError(reason instanceof Error ? reason.message : String(reason)); setLoading(false)
     })
-  }
-  useEffect(refresh, [])
+  }, [load])
+  useEffect(refresh, [refresh])
   const visible = useMemo(() => rows.filter(row => `${row.id} ${row.description ?? ''}`.toLowerCase().includes(query.toLowerCase())), [rows, query])
   useEffect(() => setCursor(value => Math.min(value, Math.max(0, visible.length - 1))), [visible.length])
   useInput((input, key) => {
@@ -192,7 +192,8 @@ export function PluginPanel({ load, close, initialQuery = '' }: { load: () => re
   const [query, setQuery] = useState(initialQuery)
   const [cursor, setCursor] = useState(0)
   const [expanded, setExpanded] = useState(false)
-  const rows = useMemo(() => load().filter(row => `${row.entryId} ${row.moduleName} ${row.phase ?? ''}`.toLowerCase().includes(query.toLowerCase())), [epoch, query])
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- epoch is the panel's explicit registry refresh trigger
+  const rows = useMemo(() => load().filter(row => `${row.entryId} ${row.moduleName} ${row.phase ?? ''}`.toLowerCase().includes(query.toLowerCase())), [epoch, load, query])
   useEffect(() => setCursor(value => Math.min(value, Math.max(0, rows.length - 1))), [rows.length])
   useInput((input, key) => {
     if (key.escape) return close()
@@ -321,6 +322,7 @@ export function ResumePanel({ currentCwd, load, readTranscript, select, requestD
   /** Ctrl+F-gated search: typing filters only while searching (codex). */
   const [searching, setSearching] = useState(false)
   /** Reference clock pinned per row render, so relative times never drift mid-list. */
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally re-pin when the listing or its options change
   const now = useMemo(() => Date.now(), [rows, options])
   const transcriptLoad = useRef<AbortController>()
   useEffect(() => () => transcriptLoad.current?.abort(), [])
@@ -333,7 +335,7 @@ export function ResumePanel({ currentCwd, load, readTranscript, select, requestD
       if (!controller.signal.aborted) { setError(reason instanceof Error ? reason.message : String(reason)); setLoading(false) }
     })
     return () => controller.abort()
-  }, [options, reloadToken])
+  }, [load, options, reloadToken])
   useEffect(() => setCursor(value => Math.min(value, Math.max(0, rows.length - 1))), [rows.length])
   const presetArmed = useRef(false)
   useEffect(() => {
@@ -602,6 +604,7 @@ export function ReviewPickerPanel({ loadBranches, loadCommits, choose, close }: 
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string>()
   const loadRef = useRef<AbortController>()
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally re-pin when review rows change
   const now = useMemo(() => Date.now(), [rows])
 
   useEffect(() => {
@@ -837,6 +840,7 @@ export function SearchPanel({ load, select, initialQuery = '', close }: {
   })
   const stdout = useStdout().stdout
   const viewport = panelViewport(stdout?.columns ?? 80, stdout?.rows ?? 30)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally re-pin when a search result set lands
   const now = useMemo(() => Date.now(), [rows, searched])
   if (viewport.maxHeight === 0 || viewport.compact) {
     const state = loading ? 'searching…' : error !== undefined ? `error: ${error}` : rows.length === 0 ? 'no results yet' : `❯ ${rows[cursor]?.label ?? ''}`
@@ -1097,7 +1101,7 @@ export function AgentsPanel({ live, load, readTranscript, close }: {
   const [transcript, setTranscript] = useState<{ id: string; text?: string; error?: string }>()
   const transcriptLoad = useRef<AbortController>()
   useEffect(() => () => transcriptLoad.current?.abort(), [])
-  const refresh = (): void => {
+  const refresh = useCallback((): void => {
     setLoading(true)
     setError(undefined)
     Promise.resolve().then(load).then(value => {
@@ -1107,8 +1111,8 @@ export function AgentsPanel({ live, load, readTranscript, close }: {
       setError(reason instanceof Error ? reason.message : String(reason))
       setLoading(false)
     })
-  }
-  useEffect(refresh, [])
+  }, [load])
+  useEffect(refresh, [refresh])
   // Live feed rows first (they carry the running state), then persisted
   // children only the directory knows — settled subagents from earlier turns.
   const rows = useMemo<readonly AgentsEntry[]>(() => {
@@ -1209,7 +1213,7 @@ export function SubagentPanel({ current, load, pick, inherit, close }: {
   const [loading, setLoading] = useState(true)
   const [cursor, setCursor] = useState(0)
   const [effortFor, setEffortFor] = useState<ModelRow | undefined>(undefined)
-  const refresh = (): void => {
+  const refresh = useCallback((): void => {
     setLoading(true)
     setError(undefined)
     Promise.resolve().then(load).then(value => {
@@ -1219,8 +1223,8 @@ export function SubagentPanel({ current, load, pick, inherit, close }: {
       setError(reason instanceof Error ? reason.message : String(reason))
       setLoading(false)
     })
-  }
-  useEffect(refresh, [])
+  }, [load])
+  useEffect(refresh, [refresh])
   const rows = useMemo(() => directory?.rows ?? [], [directory])
   // The list opens on the override's own row (index 0 is the inherit row).
   useEffect(() => {

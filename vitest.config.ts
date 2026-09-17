@@ -19,10 +19,15 @@ export default defineConfig({
       // render helpers are pure, and both are what the suite exercises.
       include: ['src/**/*.ts'],
       exclude: ['src/**/*.d.ts', 'src/whale-glyph.ts'],
-      // A reporting baseline, not a gate: the suite predates coverage
-      // instrumentation and adding a threshold would fail CI on day one. The
-      // report is here to make the number visible and comparable per change.
-      thresholds: undefined,
+      // Conservative global floor from the measured Node 24 baseline
+      // (83.51% lines/statements, 83.25% branches, 89.55% functions). The
+      // margin avoids platform noise while preventing material regression.
+      thresholds: {
+        lines: 82,
+        statements: 82,
+        branches: 82,
+        functions: 88,
+      },
     },
   },
 })

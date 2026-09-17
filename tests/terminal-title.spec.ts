@@ -239,12 +239,14 @@ describe('vscodeSettingsPath (per-platform VS Code settings location)', () => {
   it('resolves the macOS bundle data folder, not XDG config', () => {
     // The bug this pins: macOS VS Code reads ~/Library/Application Support,
     // and a write to ~/.config silently no-ops (tab kept showing "node").
-    expect(vscodeSettingsPath('darwin', { HOME: '/Users/u' }))
+    // node:path uses the HOST separator even when this test exercises a
+    // different target platform; normalize only the assertion surface.
+    expect(vscodeSettingsPath('darwin', { HOME: '/Users/u' })?.replaceAll('\\', '/'))
       .toBe('/Users/u/Library/Application Support/Code/User/settings.json')
   })
 
   it('resolves XDG config on Linux and APPDATA on Windows', () => {
-    expect(vscodeSettingsPath('linux', { HOME: '/home/u' }))
+    expect(vscodeSettingsPath('linux', { HOME: '/home/u' })?.replaceAll('\\', '/'))
       .toBe('/home/u/.config/Code/User/settings.json')
     // node:path joins with the HOST separator; compare the structure
     // normalized so the win32 branch is verifiable from any dev platform.

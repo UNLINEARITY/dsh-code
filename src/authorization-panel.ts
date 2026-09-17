@@ -75,14 +75,17 @@ export function ProviderAuthorizationPanel(props: ProviderAuthorizationPanelProp
     decline()
   }
 
+  const propsRef = useRef(props)
+  propsRef.current = props
+  const rowKey = props.row.key
   useEffect(() => () => {
     controllerRef.current?.abort()
-    props.cancel(props.row.key)
+    propsRef.current.cancel(rowKey)
     const reply = replyRef.current
     replyRef.current = undefined
     reply?.detach()
     reply?.reject(new AuthorizationDeclinedError())
-  }, [props.row.key])
+  }, [rowKey])
 
   const start = (method: string): void => {
     setPhase('running')
