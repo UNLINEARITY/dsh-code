@@ -84,6 +84,12 @@ export function truncateColumns(text: string, columns: number): string {
   return `${result}…`
 }
 
+/** Sanitize, clip, and right-pad one cell to an exact terminal-column width. */
+export function padColumns(text: string, columns: number): string {
+  const clipped = truncateColumns(singleLineText(text), columns)
+  return clipped + ' '.repeat(Math.max(0, columns - stringWidth(clipped)))
+}
+
 /** A display-safe suffix bounded by terminal rows and columns. */
 export interface DisplayTail {
   /** Sanitized suffix suitable for direct terminal rendering. */

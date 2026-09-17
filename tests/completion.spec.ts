@@ -1,7 +1,7 @@
 /** Slash-command completion: full default list (skills included), prefix filter, shadowing, dedup. */
 
 import { describe, expect, it } from 'vitest'
-import { completionCandidates } from '../src/app.ts'
+import { completionCandidates } from '../src/completion.ts'
 import type { CommandDescriptor } from '@deepseek-ai/dsh-commands'
 import type { SkillRow } from '../src/skills.ts'
 

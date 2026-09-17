@@ -19,6 +19,8 @@ import { stripPasteMarkers } from './keyboard.ts'
 import { DEFAULT_STATUSLINE_ITEMS, localizedStatusItems, type StatusItemId } from './render/status.ts'
 import { singleLineText, truncateColumns } from './render/text.ts'
 import { panelAccent } from './panel-accent.ts'
+import { editQuery } from './query-editor.ts'
+export { editQuery } from './query-editor.ts'
 import { t } from './i18n.ts'
 import { getPalette, inkColor } from './theme.ts'
 
@@ -94,18 +96,6 @@ function ListFrame(props: ListFrameProps): ReactElement {
     }),
     createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns(singleLineText(props.footer), viewport.contentColumns)),
   )
-}
-
-/**
- * Apply one keystroke to a panel search query. IME commits arrive as one
- * multi-character chunk, so the whole printable run is appended; paste
- * markers are stripped and control-laden chunks are ignored.
- */
-export function editQuery(query: string, input: string, key: { backspace?: boolean; delete?: boolean }): string | undefined {
-  if (key.backspace || key.delete) return deleteLastGrapheme(query)
-  const text = stripPasteMarkers(input)
-  if (text !== '' && !/[\u0000-\u001f\u007f]/u.test(text)) return query + text
-  return undefined
 }
 
 export function ModePanel({ current, load, select, close }: {
