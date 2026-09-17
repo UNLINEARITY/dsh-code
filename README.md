@@ -33,16 +33,16 @@ DeepSeek Harness 将模型、工具、存储、策略和界面作为插件，通
 
 ```sh
 npm install -g @deepseek-ai/dsh@0.1.5-rc.2 pnpm
-npm install -g dsh-code@1.2.0
-dsh plugin --profile cli add dsh-code@1.2.0
+npm install -g dsh-code@1.3.0
+dsh plugin --profile cli add dsh-code@1.3.0
 ```
 
 npm 不可达时（网络受限、镜像临时故障），改用 GitHub Release tarball。每次打 tag 由 CI 构建并挂到 Release，lib 已预构建，安装机不需要工具链：
 
 ```sh
 npm install -g @deepseek-ai/dsh@0.1.5-rc.2 pnpm
-npm install -g https://github.com/unlinearity/dsh-code/releases/download/1.2.0/dsh-code-1.2.0.tgz
-dsh plugin --profile cli add https://github.com/unlinearity/dsh-code/releases/download/1.2.0/dsh-code-1.2.0.tgz
+npm install -g https://github.com/unlinearity/dsh-code/releases/download/1.3.0/dsh-code-1.3.0.tgz
+dsh plugin --profile cli add https://github.com/unlinearity/dsh-code/releases/download/1.3.0/dsh-code-1.3.0.tgz
 ```
 
 > npm 脚本提示：npm 11.6+ 可能在全局安装时提示 `npm warn install-scripts`（node-pty、koffi 等原生依赖的构建脚本未获批准）。宿主随包自带预编译产物，常规平台可直接忽略；若安装后出现原生模块报错，按 npm 提示执行 `npm install -g --allow-scripts=<包名列表>` 后重装。

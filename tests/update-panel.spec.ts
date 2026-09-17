@@ -8,6 +8,7 @@ import {
   isUpdateApplyRunning,
   resetUpdateApply,
   runUpdateApply,
+  subscribeUpdateApplyRunning,
   updateFooter,
   updatePlanView,
   UPDATE_OUTPUT_CAP,
@@ -184,6 +185,21 @@ describe('runUpdateApply', () => {
     expect(late).toEqual(['first', 'second'])
     resolveApply(0)
     await promise
+  })
+
+  it('clears a rejected apply without leaving an unhandled cleanup rejection', async () => {
+    const states: boolean[] = []
+    const unsubscribe = subscribeUpdateApplyRunning(running => { states.push(running) })
+    try {
+      const failure = new Error('update failed to start')
+      const promise = runUpdateApply(async () => { throw failure }, upgradeStatus().plan)
+      await expect(promise).rejects.toThrow('update failed to start')
+      await new Promise<void>(resolve => setImmediate(resolve))
+      expect(isUpdateApplyRunning()).toBe(false)
+      expect(states).toEqual([false, true, false])
+    } finally {
+      unsubscribe()
+    }
   })
 })
 

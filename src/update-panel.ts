@@ -85,12 +85,16 @@ export function runUpdateApply(
   }, plan)
   updateApplyJob = { promise, lines, lineListeners }
   emitUpdateApplyRunning(true)
-  void promise.finally(() => {
+  const settle = (): void => {
     if (updateApplyJob?.promise === promise) {
       updateApplyJob = undefined
       emitUpdateApplyRunning(false)
     }
-  })
+  }
+  // Handle both outcomes directly. `finally()` mirrors a rejected source
+  // promise onto its returned promise; discarding that returned promise would
+  // create an unhandled rejection when the update child cannot start.
+  void promise.then(settle, settle)
   return promise
 }
 

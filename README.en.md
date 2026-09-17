@@ -31,16 +31,16 @@ Install from npm (recommended). `/update` and `deepseek update --apply` both wor
 
 ```sh
 npm install -g @deepseek-ai/dsh@0.1.5-rc.2 pnpm
-npm install -g dsh-code@1.2.0
-dsh plugin --profile cli add dsh-code@1.2.0
+npm install -g dsh-code@1.3.0
+dsh plugin --profile cli add dsh-code@1.3.0
 ```
 
 When npm is unreachable (restricted network, a mirror outage), install the GitHub Release tarball instead. CI builds it on every tag and attaches it to the release; lib is prebuilt, so the installing machine needs no toolchain:
 
 ```sh
 npm install -g @deepseek-ai/dsh@0.1.5-rc.2 pnpm
-npm install -g https://github.com/unlinearity/dsh-code/releases/download/1.2.0/dsh-code-1.2.0.tgz
-dsh plugin --profile cli add https://github.com/unlinearity/dsh-code/releases/download/1.2.0/dsh-code-1.2.0.tgz
+npm install -g https://github.com/unlinearity/dsh-code/releases/download/1.3.0/dsh-code-1.3.0.tgz
+dsh plugin --profile cli add https://github.com/unlinearity/dsh-code/releases/download/1.3.0/dsh-code-1.3.0.tgz
 ```
 
 > npm script prompts: npm 11.6+ may print `npm warn install-scripts` during a global install (unapproved build scripts for node-pty, koffi, and friends). The host ships prebuilt artifacts, so common platforms can ignore the warning; if a native-module error appears after installing, follow npm's own hint and rerun with `npm install -g --allow-scripts=<package list>`.
