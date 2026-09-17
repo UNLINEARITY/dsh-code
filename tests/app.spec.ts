@@ -4398,9 +4398,10 @@ describe('approval dialog', () => {
 })
 
 describe('/delete and /subagent', () => {
-  it('opens the resume picker in delete mode and confirms a deletion with y', async () => {
+  it('opens a dedicated delete picker where enter can only select deletion', async () => {
     const harness = createTty(100, 24)
     const removed: string[] = []
+    const switched: string[] = []
     const instance = renderApp(harness, appProps({
       loadSessions: async () => [{
         id: 's-1', createdAt: 1, updatedAt: 1, cwd: 'C:\\repo', workspace: 'repo',
@@ -4410,6 +4411,7 @@ describe('/delete and /subagent', () => {
         removed.push(id)
         return 'deleted 1 session'
       },
+      switchSession: row => { switched.push(row.id) },
     }))
     try {
       await wait()
@@ -4417,15 +4419,55 @@ describe('/delete and /subagent', () => {
       await wait()
       harness.stdin.write('\r')
       await wait()
-      expect(harness.output.text).toContain('delete mode')
-      harness.stdin.write('d')
+      expect(harness.output.text).toContain('/delete')
+      expect(harness.output.text).toContain('enter delete')
+      expect(harness.output.text).not.toContain('enter resume')
+      harness.stdin.write('\r')
       await wait()
+      expect(switched).toEqual([])
       // The confirm prompt moves into the composer box (warn-styled).
       expect(harness.output.text).toContain('permanently delete')
       expect(harness.output.text).toContain('y delete · any other key cancels')
       harness.stdin.write('y')
       await wait()
       expect(removed).toEqual(['s-1'])
+    } finally {
+      instance.unmount()
+      harness.stdin.destroy()
+      harness.stdout.destroy()
+    }
+  })
+
+  it('keeps deletion unavailable from the resume picker', async () => {
+    const harness = createTty(100, 24)
+    const removed: string[] = []
+    const switched: string[] = []
+    const instance = renderApp(harness, appProps({
+      loadSessions: async () => [{
+        id: 'resume-only', createdAt: 1, updatedAt: 1, cwd: 'C:\\repo', workspace: 'repo',
+        subagent: false, resumable: true, live: false, persisted: true, preset: 'standard',
+      }],
+      deleteSession: async (id: string) => {
+        removed.push(id)
+        return 'deleted 1 session'
+      },
+      switchSession: row => { switched.push(row.id) },
+    }))
+    try {
+      await wait()
+      harness.stdin.write('/resume')
+      await wait()
+      harness.stdin.write('\r')
+      await wait()
+      expect(harness.output.text).toContain('enter resume')
+      expect(harness.output.text).not.toContain('d delete')
+      harness.stdin.write('d')
+      await wait()
+      expect(removed).toEqual([])
+      expect(switched).toEqual([])
+      harness.stdin.write('\r')
+      await wait()
+      expect(switched).toEqual(['resume-only'])
     } finally {
       instance.unmount()
       harness.stdin.destroy()

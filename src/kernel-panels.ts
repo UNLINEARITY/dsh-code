@@ -387,7 +387,6 @@ export function ResumePanel({ currentCwd, load, readTranscript, select, requestD
     if (key.pageDown) return setCursor(value => Math.min(rows.length - 1, value + 8))
     if (input === 'g') return setCursor(0)
     if (input === 'G') return setCursor(Math.max(0, rows.length - 1))
-    if (input === 'd' && rows[cursor] !== undefined && requestDelete !== undefined) return requestDelete(rows[cursor])
     if (input === 'e' && rows[cursor] !== undefined) {
       return setExpanded(value => value === rows[cursor].id ? undefined : rows[cursor].id)
     }
@@ -403,7 +402,13 @@ export function ResumePanel({ currentCwd, load, readTranscript, select, requestD
       )
       return
     }
-    if (key.return && rows[cursor]?.resumable === true) return select(rows[cursor])
+    if (key.return && rows[cursor] !== undefined) {
+      if (deleteMode) {
+        if (requestDelete !== undefined && !rows[cursor].live) requestDelete(rows[cursor])
+        return
+      }
+      if (rows[cursor].resumable) select(rows[cursor])
+    }
   }, { isActive: transcript === undefined })
   if (transcript !== undefined) {
     return createElement(DocumentPanel, {
@@ -416,15 +421,17 @@ export function ResumePanel({ currentCwd, load, readTranscript, select, requestD
   const pendingRow = deleteConfirmId === undefined ? undefined : rows.find(row => row.id === deleteConfirmId)
   const toolbar = `[${focus === 0 ? '>' : ''}${options.sessions}] [${focus === 1 ? '>' : ''}${options.cwd} cwd] [${focus === 2 ? '>' : ''}${options.sort}] [${focus === 3 ? '>' : ''}${density}]`
   return createElement(ListFrame, {
-    title: deleteConfirmId === undefined
-      ? `/resume${deleteMode ? ' — delete mode' : ''}${searching ? ' — searching' : ''} · ${toolbar}`
-      : `permanently delete ${pendingRow === undefined ? deleteConfirmId.slice(-12) : pendingRow.title ?? pendingRow.id}? this cannot be undone · subagent threads go too`,
+    title: deleteConfirmId !== undefined
+      ? t('panel.resume.deleteTitle', { target: pendingRow === undefined ? deleteConfirmId.slice(-12) : pendingRow.title ?? pendingRow.id })
+      : deleteMode
+        ? t('panel.delete.title', { search: searching ? ` — ${t('panel.searching')}` : '', toolbar })
+        : t('panel.resume.title', { mode: '', search: searching ? ` — ${t('panel.searching')}` : '', toolbar }),
     rows: rows.map(row => ({
       key: row.id,
-      disabled: !row.resumable,
+      disabled: deleteMode ? row.live : !row.resumable,
       text: `${row.subagent ? '↳' : '○'} ${row.title ?? row.id.slice(-12)}${density === 'comfortable' ? ` · ${formatRelativeTime(row.updatedAt ?? row.createdAt, now)} · ${row.workspace} · ${row.preset}` : ''}${row.live ? ' · live' : ''}${expanded === row.id ? ` · ${row.id} · ${row.cwd}${row.parent === undefined ? '' : ` · parent ${row.parent}`}` : ''}`,
     })), cursor, loading, error, query: options.query, searching,
-    footer: t('panel.footer.resume'),
+    footer: t(deleteMode ? 'panel.footer.delete' : 'panel.footer.resume'),
   })
 }
 

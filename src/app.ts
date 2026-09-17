@@ -3739,7 +3739,7 @@ function Input({ active, frozen, frozenHint, busy, descriptors, skills, dispatch
   /** Open the /todos subpage (full todo list in one bounded panel). */
   openTodos: () => void
   openUsage: () => void
-  /** Open the /resume picker in delete mode, optionally pre-armed on one id. */
+  /** Open the dedicated /delete picker, optionally pre-armed on one id. */
   openDelete: (id?: string) => void
   openDiff: (argument: string) => void
   reviewChanges: (selection: ReviewSelection) => void
@@ -5592,7 +5592,7 @@ export function App(props: AppProps): ReactElement {
   const [subagentOpen, setSubagentOpen] = useState(false)
   const [todosOpen, setTodosOpen] = useState(false)
   const [usageOpen, setUsageOpen] = useState(false)
-  /** /delete state: delete-mode hint plus an optional pre-armed row id. */
+  /** /delete state: dedicated picker mode plus an optional pre-armed row id. */
   const [resumeDelete, setResumeDelete] = useState<{ mode: boolean; id?: string }>({ mode: false })
   /** The row id awaiting y/n in the COMPOSER (codex delete confirm): the
    * composer takes the keys, the resume panel yields until it settles. */
@@ -6366,12 +6366,18 @@ export function App(props: AppProps): ReactElement {
         currentCwd: props.workspaceRoot,
         load: props.loadSessions,
         readTranscript: props.loadSessionTranscript,
-        requestDelete,
+        requestDelete: resumeDelete.mode ? requestDelete : undefined,
         deleteConfirmId,
         reloadToken: deleteReloadToken,
         deleteMode: resumeDelete.mode,
         presetId: resumeDelete.id,
-        select: (row: SessionRow) => { props.switchSession(row); setResumeOpen(false) },
+        select: (row: SessionRow) => {
+          // Defense in depth: the dedicated delete picker must never turn a
+          // selection into a session switch, even if its key routing regresses.
+          if (resumeDelete.mode) return
+          props.switchSession(row)
+          setResumeOpen(false)
+        },
         close: () => setResumeOpen(false),
       })
       : undefined,
