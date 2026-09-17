@@ -5,19 +5,17 @@ import type { Inbox, InboxTarget } from '@deepseek-ai/dsh-agent'
 import { createUserMessage, type ContentBlock } from '@deepseek-ai/dsh-llm'
 import { SessionId, type SessionHeader, type UserMessage } from '@deepseek-ai/dsh-session'
 import type { SessionPersistence } from '@deepseek-ai/dsh-session-persistence'
+import { searchHitToRow } from '../src/runner/search-rows.ts'
+import { runQuitSequence, type QuitCleanupStep } from '../src/runner/quit.ts'
+import { exportSessionIdSuffix, resolveTarget } from '../src/runner/session-target.ts'
 import {
   applyQueueMutation,
   cancelPreservingQueue,
-  exportSessionIdSuffix,
   queueEditContent,
-  resolveTarget,
-  runQuitSequence,
-  searchHitToRow,
   StartupInputGate,
   submissionBelongsToSession,
   type QueuedSubmission,
-  type QuitCleanupStep,
-} from '../src/index.ts'
+} from '../src/runner/submissions.ts'
 
 function header(id: string, createdAt: number, extra: Partial<SessionHeader> = {}): SessionHeader {
   return { version: 0, id, createdAt, ...extra } as SessionHeader

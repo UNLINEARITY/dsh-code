@@ -4,6 +4,8 @@ import { createElement, useCallback, useEffect, useMemo, useRef, useState, type 
 import { Box, Text, useInput, useStdout } from 'ink'
 import type { ModelDirectory, ModelRow } from './models.ts'
 import type { SubagentRow } from './subagents.ts'
+import type { SearchRow } from './runner/search-rows.ts'
+export type { SearchRow } from './runner/search-rows.ts'
 import type { ScheduleRow } from './render/projection.ts'
 import type { PermissionRow } from './permissions.ts'
 import type { PresetRow } from './presets.ts'
@@ -735,24 +737,6 @@ export function ReviewPickerPanel({ loadBranches, loadCommits, choose, close }: 
           })),
     createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns(t('review.picker.footer'), viewport.contentColumns)),
   )
-}
-
-/** One cross-session full-text search hit mapped from the session-query engine. */
-export interface SearchRow {
-  /** Session id (Enter resumes it through the switch machinery). */
-  readonly id: string
-  /** Display label: session title or the short id form. */
-  readonly label: string
-  /** Secondary facts line (workspace · preset markers). */
-  readonly detail: string
-  /** Bounded plain-text excerpt around the strongest match. */
-  readonly snippet: string
-  /** Match timestamp (relative labels derive from it). */
-  readonly updatedAt: number
-  /** Whether the hit is a delegated subagent conversation (not resumable). */
-  readonly subagent: boolean
-  /** Whether Enter may switch into it. */
-  readonly resumable: boolean
 }
 
 /**

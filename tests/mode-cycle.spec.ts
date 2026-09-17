@@ -1,7 +1,7 @@
 /** Shift+Tab mode cycle: station decisions over permission presets plus plan. */
 
 import { describe, expect, it } from 'vitest'
-import { planCycleDecision } from '../src/index.ts'
+import { planCycleDecision } from '../src/runner/mode-cycle.ts'
 
 const names = ['read-only', 'workspace-write', 'danger-full-access']
 

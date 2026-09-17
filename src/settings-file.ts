@@ -17,8 +17,9 @@
  */
 
 import { randomUUID } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import { mkdir, rename, writeFile } from 'node:fs/promises'
-import { dirname } from 'node:path'
+import { basename, dirname } from 'node:path'
 
 /**
  * Run one file operation with a bounded retry: one initial try plus at
@@ -85,4 +86,21 @@ export function createUserSettingsPersistence(): UserSettingsPersistence {
       return chain
     },
   }
+}
+
+/**
+ * Read one user-level settings file as a plain object. The callers all treat a
+ * missing file as "unset" and a corrupt one as "warn and fall back", so this
+ * helper owns the one distinction they share: readable JSON that is not an
+ * object is corruption, not an absent preference, and must not surface as a
+ * cryptic property access on `null`.
+ * @param path - absolute path of the settings file.
+ * @returns the parsed object; the caller narrows each field itself.
+ */
+export function readSettingsObject(path: string): Record<string, unknown> {
+  const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'))
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new Error(`${basename(path)} must contain a JSON object`)
+  }
+  return parsed as Record<string, unknown>
 }

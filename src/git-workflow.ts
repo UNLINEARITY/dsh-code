@@ -6,6 +6,8 @@
  */
 
 import { execFile } from 'node:child_process'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { t } from './i18n.ts'
 
 export interface GitDiffSpec {
@@ -333,4 +335,20 @@ export function reviewSummaryLine(conclusion: ReviewConclusion): string {
   }
   const params = { count: total, parts: parts.join(' ') }
   return verdict === undefined ? t('review.summary.count', params) : t('review.summary.countVerdict', { ...params, verdict })
+}
+
+/**
+ * Resolve the working directory's git branch for the status line.
+ * @param cwd - the session's working directory.
+ * @returns the branch name, or '' outside a repository or on a detached HEAD.
+ */
+export function gitBranch(cwd: string): string {
+  try {
+    const ref = readFileSync(join(cwd, '.git', 'HEAD'), 'utf8').trim().match(/^ref: refs\/heads\/(.+)$/)
+    return ref?.[1] ?? ''
+  } catch {
+    // Only the single HEAD read is attempted, so the sole reachable failure is
+    // a missing repository (or unreadable HEAD file): the branch group drops out.
+    return ''
+  }
 }

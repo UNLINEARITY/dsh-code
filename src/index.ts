@@ -10,22 +10,21 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { appendFile as appendFileAsync, mkdir, readdir, rm, stat, writeFile as writeFileAsync } from 'node:fs/promises'
-import { basename, dirname, join } from 'node:path'
+import { readdir, rm, stat, writeFile as writeFileAsync } from 'node:fs/promises'
+import { basename, join } from 'node:path'
 import { createElement } from 'react'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { installModelSelection } from '@deepseek-ai/dsh-agent'
-import type { Agent, AgentHandle, AgentStatus, Inbox, ModelSelection, ModelSelectionRef } from '@deepseek-ai/dsh-agent'
+import type { Agent, AgentHandle, ModelSelection, ModelSelectionRef } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
 import type {} from '@deepseek-ai/dsh-attachment'
-import { createUserMessage, MessageId, type ContentBlock } from '@deepseek-ai/dsh-llm'
+import { createUserMessage, type ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { JobSnapshot } from '@deepseek-ai/dsh-jobs'
-import { SessionId, SessionLogOffset, type Session, type SessionEvent, type SessionHeader, type UserMessage } from '@deepseek-ai/dsh-session'
+import { SessionId, SessionLogOffset, type Session, type SessionEvent, type UserMessage } from '@deepseek-ai/dsh-session'
 import { deriveTurnTokenUsage } from '@deepseek-ai/dsh-token-meter/client'
-import { SessionAlreadyOwnedError, type SessionPersistence } from '@deepseek-ai/dsh-session-persistence'
+import { SessionAlreadyOwnedError } from '@deepseek-ai/dsh-session-persistence'
 // Type-only: carries the ctx.sessionTitle service merge for /title.
 import type {} from '@deepseek-ai/dsh-session-title'
 // Empty type imports carry the loader Context merge for the settlement await
@@ -34,6 +33,27 @@ import type {} from '@deepseek-ai/cordis-plugin-loader'
 import type {} from '@deepseek-ai/dsh-cmdline'
 import { App } from './app.ts'
 import type { NoticeTone, QueueMutation } from './ui-contract.ts'
+import { planCycleDecision } from './runner/mode-cycle.ts'
+export { planCycleDecision, type ModeCycleDecision } from './runner/mode-cycle.ts'
+import { runQuitSequence, type QuitCleanupStep } from './runner/quit.ts'
+export { runQuitSequence, type QuitCleanupStep } from './runner/quit.ts'
+import { exportSessionIdSuffix, resolveTarget, type Target } from './runner/session-target.ts'
+export { exportSessionIdSuffix, resolveTarget } from './runner/session-target.ts'
+import {
+  applyQueueMutation,
+  cancelPreservingQueue,
+  StartupInputGate,
+  submissionBelongsToSession,
+} from './runner/submissions.ts'
+export {
+  applyQueueMutation,
+  cancelPreservingQueue,
+  queueEditContent,
+  StartupInputGate,
+  submissionBelongsToSession,
+  type QueuedSubmission,
+  type QueueMutationOutcome,
+} from './runner/submissions.ts'
 import { mountApprovalAnswerer, type ApprovalStore } from './approval.ts'
 import { isSlashLine, submissionPayload, watchCommands, type CommandsView } from './commands.ts'
 import { internals, type TuiMount } from './internals.ts'
@@ -54,9 +74,9 @@ import { mountQuestionProvider, type QuestionStore } from './questions.ts'
 // 'settings/document-updated') into this program's Cordis bus typing.
 import type {} from '@deepseek-ai/dsh-settings'
 import { createTranscriptStore, type TranscriptStore } from './store.ts'
-import { createSubagentFeed, type SubagentFeedView } from './subagents.ts'
+import { createSubagentFeed, subagentCatalogSeed, type SubagentFeedView } from './subagents.ts'
+export { subagentCatalogSeed } from './subagents.ts'
 import { parseStatuslineItems } from './render/status.ts'
-import { historyLine, HISTORY_MAX_ENTRIES, needsCompaction, parseHistoryFile, serializeHistoryList } from './history.ts'
 import { watchSkills, type SkillsView } from './skills.ts'
 import { toolArgumentsPreview } from './render/tool-preview.ts'
 import { buildExportMarkdown } from './render/export.ts'
@@ -72,6 +92,7 @@ import {
   subscribeProviderAuthorizations,
 } from './authorization.ts'
 import { selectForkSeed } from './fork.ts'
+import { gitBranch } from './git-workflow.ts'
 import {
   buildReviewPrompt,
   listReviewBranches,
@@ -99,9 +120,7 @@ import { parseLanguageName, setLanguage, t, type LanguageName } from './i18n.ts'
 import {
   acquireSessionDeletionLeases,
   isSubagentSession,
-  matchSessionId,
   mergeSessionTitles,
-  newestRootForCwd,
   sessionRowMatchesQuery,
   isSessionArtifactName,
   jsonlSessionRoot,
@@ -114,8 +133,12 @@ import {
   type SessionQueryService,
   type SessionRow,
 } from './session-directory.ts'
-import type { JobRow, SearchRow } from './kernel-panels.ts'
-import { createUserSettingsPersistence, writeFileAtomically } from './settings-file.ts'
+import type { JobRow } from './kernel-panels.ts'
+import { searchHitToRow, type SearchRow } from './runner/search-rows.ts'
+export { searchHitToRow } from './runner/search-rows.ts'
+import { createUserSettingsPersistence } from './settings-file.ts'
+import { preferencePath, readPreference, savePreference } from './runner/preferences.ts'
+import { createInputHistory } from './runner/input-history.ts'
 import { turnUsages, type UsageView } from './render/usage.ts'
 // Type-only import: merges the projection registry into the Context type so
 // `ctx.get('sessionProjections')` is typed (the service itself is mounted by
@@ -185,373 +208,16 @@ function listJobs(ctx: Context, caller: Agent | undefined): readonly JobRow[] {
   }
 }
 
-/**
- * Read one user-level settings file as a plain object. The callers all treat a
- * missing file as "unset" and a corrupt one as "warn and fall back", so this
- * helper owns the one distinction they share: readable JSON that is not an
- * object is corruption, not an absent preference, and must not surface as a
- * cryptic property access on `null`.
- * @param path - absolute path of the settings file.
- * @returns the parsed object; the caller narrows each field itself.
- */
-function readSettingsObject(path: string): Record<string, unknown> {
-  const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'))
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-    throw new Error(`${basename(path)} must contain a JSON object`)
-  }
-  return parsed as Record<string, unknown>
-}
 
-/**
- * Resolve the working directory's git branch for the status line.
- * @param cwd - the session's working directory.
- * @returns the branch name, or '' outside a repository or on a detached HEAD.
- */
-function gitBranch(cwd: string): string {
-  try {
-    const ref = readFileSync(join(cwd, '.git', 'HEAD'), 'utf8').trim().match(/^ref: refs\/heads\/(.+)$/)
-    return ref?.[1] ?? ''
-  } catch {
-    // Only the single HEAD read is attempted, so the sole reachable failure is
-    // a missing repository (or unreadable HEAD file): the branch group drops out.
-    return ''
-  }
-}
 
-/** The session identity this invocation will run, plus whether it is resumed. */
-interface Target {
-  sessionId: string
-  resume: boolean
-  mode?: string
-  cwd?: string
-  seed?: readonly SessionEvent[]
-  parentSession?: SessionId
-  /** Marks the session as a subagent conversation in the durable header. */
-  origin?: 'subagent'
-  seedLength?: number
-}
 
-/**
- * Reduce a session id to a filename-safe /export default-name suffix. Session
- * ids are normally minted `session-<uuid>`, but `--session` accepts arbitrary
- * user text: path separators must never leak into the default export filename
- * (which would escape the session cwd).
- * @param id - the session id.
- * @returns at most the last 8 filename-safe characters.
- */
-export function exportSessionIdSuffix(id: string): string {
-  return id.replace(/[^a-zA-Z0-9._-]/gu, '_').slice(-8)
-}
 
-/** One ordered step of the terminal quit cleanup. */
-export interface QuitCleanupStep {
-  /** Step label used in diagnostics and tests. */
-  readonly name: string
-  /** The step's async work; a rejection is contained by the sequence. */
-  readonly run: () => Promise<void>
-}
 
-/**
- * Run the ordered quit cleanup, then request exit. Every step rejection is
- * contained (reported through `onError`) so a failed flush or dispose never
- * skips the remaining cleanup; the exit request is always reached exactly
- * once.
- * @param steps - the cleanup steps in dependency order (settle the visible
- * session, await the final in-flight composition, await durable recall).
- * @param exit - the terminal exit request (code 0).
- * @param onError - optional failure sink; called once per failing step and
- * itself contained, so a throwing sink cannot abort the sequence.
- * @returns the names of the steps that started, in order (for tests).
- */
-export async function runQuitSequence(
-  steps: readonly QuitCleanupStep[],
-  exit: (code: number) => void,
-  onError?: (name: string, error: unknown) => void,
-): Promise<readonly string[]> {
-  const started: string[] = []
-  for (const step of steps) {
-    started.push(step.name)
-    try {
-      await step.run()
-    } catch (error) {
-      try {
-        onError?.(step.name, error)
-      } catch {
-        // The failure sink must never abort the cleanup sequence.
-      }
-    }
-  }
-  try {
-    exit(0)
-  } catch {
-    // The exit request itself must not become an unhandled rejection.
-  }
-  return started
-}
 
-/** One composer submission waiting behind the startup delivery. */
-export interface QueuedSubmission {
-  readonly text: string
-  /** `steer` inserts into the running turn; `followup` waits for the next one. */
-  readonly mode: 'followup' | 'steer'
-  readonly images: readonly ContentBlock[]
-}
 
-/** What one requested queue mutation did; the runner maps it to one notice. */
-export type QueueMutationOutcome =
-  | 'removed'
-  | 'edited'
-  | 'steered'
-  | 'unavailable'
-  | 'empty'
-  | 'steerUnavailable'
 
-/**
- * Replace one queued message's text while keeping its attachments. A queue
- * edit rewrites what the user typed, not what they attached: image and file
- * blocks ride through in delivery order (text first, then attachments, the
- * shape {@link deliverLine} submits). Dropping them here would silently strip
- * an attachment the user already confirmed, so this is the edit's single
- * definition and the panel's read-only marker only mirrors it.
- */
-export function queueEditContent(content: readonly ContentBlock[], text: string): ContentBlock[] {
-  const attachments = content.filter(block => block.type !== 'text')
-  return [{ type: 'text', text }, ...attachments]
-}
 
-/**
- * Apply one terminal queue mutation to the live inbox. The decision and the
- * inbox change are pure over the supplied handles so every branch is testable
- * without an agent; steering itself is injected because it wakes the driver
- * rather than mutating the inbox. The durable inbox splices remain the UI's
- * single source of truth — this helper never reports a state the inbox did not
- * actually reach.
- * @param inbox - the live agent inbox (pending lists plus its mutators).
- * @param status - the agent's lifecycle status; steering needs `running`.
- * @param messageId - identity of the queued message to mutate.
- * @param action - the requested mutation.
- * @param steer - submits the removed message as next-step steering.
- * @returns the outcome the caller reports.
- */
-export function applyQueueMutation(
-  inbox: Pick<Inbox, 'nextTurn' | 'append' | 'remove' | 'replace'>,
-  status: AgentStatus,
-  messageId: string,
-  action: QueueMutation,
-  steer: (message: UserMessage) => void,
-): QueueMutationOutcome {
-  const id = MessageId(messageId)
-  const message = inbox.nextTurn.find(candidate => candidate.id === id)
-  if (message === undefined) return 'unavailable'
-  switch (action.kind) {
-    case 'remove':
-      return inbox.remove(id) ? 'removed' : 'unavailable'
-    case 'edit':
-      if (action.text.trim() === '') return 'empty'
-      inbox.replace(id, createUserMessage({
-        content: queueEditContent(message.content, action.text),
-        source: message.source,
-      }))
-      return 'edited'
-    case 'steer':
-      if (status !== 'running') return 'steerUnavailable'
-      // Steer promotes the message out of next-turn, so a failing submit must
-      // put it back: the row the user was looking at never just disappears.
-      if (!inbox.remove(id)) return 'unavailable'
-      try {
-        steer(message)
-      } catch (error: unknown) {
-        inbox.append('next-turn', message)
-        throw error
-      }
-      return 'steered'
-  }
-}
 
-/**
- * Cancel the active turn while keeping the next-turn queue, then wake the
- * driver again so the preserved messages actually run. `cancel` clears
- * pending work by default and never wakes the driver on its own, so the queue
- * is captured first and re-submitted afterwards: a waking submission latches
- * the wake while the aborted activity converges to idle, which is what turns
- * "preserved" into "sent next" instead of "parked forever". Next-step
- * steering is deliberately dropped — it belonged to the cancelled turn.
- * @param agent - the live agent handle.
- * @returns how many queued messages were preserved across the abort.
- */
-export function cancelPreservingQueue(agent: Pick<Agent, 'inbox' | 'cancel' | 'followup'>): number {
-  const queued = [...agent.inbox.nextTurn]
-  agent.cancel({ kind: 'user' })
-  for (const message of queued) agent.followup(message)
-  return queued.length
-}
-
-/**
- * Whether a tagged submission still belongs to the active session. Attachment
- * prepares resolve on the microtask timeline, while a queued session switch
- * remounts the app asynchronously — the composing instance's unmount cleanup
- * runs too late to abort, so the delivery itself carries the composing
- * session's full id and the runner drops it here when the world moved on.
- * An untagged (synchronous) or pending-session ('') submission always passes.
- */
-export function submissionBelongsToSession(origin: string | undefined, activeSessionId: string | undefined): boolean {
-  return origin === undefined || origin === '' || origin === activeSessionId
-}
-
-/**
- * Root-log catalog facts a resumed session must replay into the subagent
- * feed: constructor seeds never fire on the live bus, so without this the
- * children of a resumed session vanish behind a restart. The empty-child
- * placeholder row (childId '') is a placeholder, not a child, and stays out.
- */
-export function subagentCatalogSeed(events: readonly SessionEvent[]): readonly SessionEvent<'subagent/catalog'>[] {
-  return events.filter((event): event is SessionEvent<'subagent/catalog'> =>
-    event.type === 'subagent/catalog' && event.data.childId !== '')
-}
-
-/**
- * Map one cross-session full-text hit onto the /search panel's row (pure).
- * Labels fall back to the short id form — the engine's hit carries the
- * strongest matching event, not the title observation.
- */
-export function searchHitToRow(hit: {
-  header: SessionHeader
-  bestMatch: { snippet: string; time: number }
-}): SearchRow {
-  const subagent = hit.header.origin === 'subagent'
-  const cwd = hit.header.cwd ?? ''
-  // Session cwds may arrive in either separator style regardless of the
-  // observing host (a workspace synced from Windows), so split on both.
-  const workspace = cwd.split(/[\\/]/u).filter(part => part !== '').at(-1) ?? ''
-  const preset = hit.header.agentPreset ?? ''
-  const flat = hit.bestMatch.snippet.replace(/\s+/gu, ' ').trim()
-  return {
-    id: hit.header.id,
-    label: hit.header.id.slice(-12),
-    detail: [workspace, preset].filter(part => part !== '').join(' · '),
-    snippet: flat.length > 158 ? `${flat.slice(0, 157)}…` : flat,
-    updatedAt: hit.bestMatch.time,
-    subagent,
-    resumable: !subagent,
-  }
-}
-
-/** One Shift+Tab station decision for the mode cycle. */
-export type ModeCycleDecision =
-  | { readonly kind: 'permission'; readonly preset: string }
-  | { readonly kind: 'plan-on' }
-  | { readonly kind: 'plan-off'; readonly preset: string }
-
-/**
- * Decide the next Shift+Tab station. The cycle keeps the preset table's
- * own order (most restrictive first) and inserts ONE plan station between
- * the most restrictive preset and the wrap target: with the shipped three
- * presets the user sees workspace-write → danger-full-access → read-only
- * → plan → workspace-write. Plan IS the most restrictive preset plus the
- * plan prompt layer — entering it switches nothing (the cycle is already
- * parked on read-only), and leaving it lands on the next preset after the
- * most restrictive one. Without the /plan command the cycle is exactly the
- * preset table.
- *
- * `planIntent` covers the committed fold's commit lag: upstream queues a
- * plan switch during an open turn (and the command pipeline is async even
- * idle), so the durable plan/mode event lands AFTER the press that chose
- * it. While an intent from an earlier press is in flight it — not the
- * stale committed fold — decides the station, so repeated presses advance
- * the cycle instead of re-issuing the same plan transition (the stuck
- * plan-on/plan-off toggle). Undefined falls back to the committed fold.
- */
-export function planCycleDecision(input: {
-  readonly names: readonly string[]
-  readonly current: string
-  readonly inPlan: boolean
-  readonly planAvailable: boolean
-  readonly planIntent?: boolean
-}): ModeCycleDecision | undefined {
-  const names = input.names
-  if (names.length === 0) return undefined
-  const first = names[0]
-  if ((input.planIntent ?? input.inPlan) === true) return { kind: 'plan-off', preset: names[1] ?? first }
-  const at = names.indexOf(input.current)
-  if (at === 0 && input.planAvailable) return { kind: 'plan-on' }
-  return { kind: 'permission', preset: names[(at + 1) % names.length] ?? first }
-}
-
-/**
- * Order-preserving gate for composer input while the startup prompt/images
- * are still preparing. Anything submitted before the startup delivery settles
- * queues and flushes afterwards in submit order, so the initial request can
- * never be overtaken by typing that raced a slow image preparation. The flush
- * also runs when the startup delivery fails: user input is never stranded.
- */
-export class StartupInputGate {
-  private readonly queued: QueuedSubmission[] = []
-  private pending = false
-  constructor(private readonly deliver: (submission: QueuedSubmission) => void) {}
-
-  /** Submit one line: delivered now while idle, queued behind the startup delivery otherwise. */
-  submit(submission: QueuedSubmission): void {
-    if (this.pending) this.queued.push(submission)
-    else this.deliver(submission)
-  }
-
-  /**
-   * Run the startup delivery — the callback receives the direct-delivery sink
-   * for the startup prompt itself — then flush everything that queued behind
-   * it, in order, even when the callback rejects.
-   */
-  async run(startup: (deliver: (submission: QueuedSubmission) => void) => Promise<void>): Promise<void> {
-    this.pending = true
-    try {
-      await startup(submission => this.deliver(submission))
-    } finally {
-      this.pending = false
-      const queued = this.queued.splice(0)
-      for (const submission of queued) this.deliver(submission)
-    }
-  }
-}
-
-/**
- * Resolve the invocation's target session against the persisted headers.
- * @param startup - the parsed startup flags.
- * @param persistence - the persistence service; required for resume/latest.
- * @param cwd - the working directory `--continue` filters by.
- * @returns the target identity.
- * @throws with a user-facing message when the flags name nothing resolvable.
- */
-export async function resolveTarget(startup: TuiStartup, persistence: SessionPersistence | undefined, cwd: string): Promise<Target> {
-  if (startup.kind === 'fresh') return { sessionId: `session-${randomUUID()}`, resume: false, mode: startup.mode }
-  if (startup.kind === 'named') {
-    // The id must not exist yet: reject before any Agent composition when the
-    // backend can tell us (a live collision is still caught by the session
-    // store at create time).
-    if (persistence !== undefined) {
-      const headers: readonly SessionHeader[] = (await persistence.list()).map(snapshot => snapshot.header)
-      if (headers.some(header => header.id === startup.sessionId)) {
-        throw new Error(`session "${startup.sessionId}" already exists; use --resume to continue it`)
-      }
-    }
-    return { sessionId: startup.sessionId, resume: false, mode: startup.mode }
-  }
-  if (persistence === undefined) {
-    throw new Error('cannot resolve the requested session: session persistence is not configured')
-  }
-  const headers: readonly SessionHeader[] = (await persistence.list()).map(snapshot => snapshot.header)
-  if (startup.kind === 'resume') {
-    const matched = matchSessionId(headers, startup.sessionId)
-    // Subagent conversations are read-only everywhere else; the CLI must not
-    // be a back door into appending root turns to a child's durable log.
-    if (isSubagentSession(matched)) {
-      throw new Error('subagent conversations are read-only; resume a root session')
-    }
-    return { sessionId: matched.id, resume: true }
-  }
-  // --continue: the newest persisted ROOT session whose header pins this cwd.
-  const newest = newestRootForCwd(headers, cwd)
-  if (newest === undefined) throw new Error(`no persisted session for this directory (${cwd}); start one without --continue`)
-  return { sessionId: newest.id, resume: true }
-}
 
 /**
  * Resolve a bounded command preview for one pending approval: the request
@@ -945,17 +611,10 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   // /statusline persistence: one user-level JSON file under the DSH home.
   // Missing file means defaults; a corrupt file degrades to defaults with a
   // surfaced warning (the customization is user-authored, never silent).
-  const statuslinePath = join(homedir(), '.dsh', 'dsh-code', 'statusline.json')
-  let statuslineWarning: string | undefined
-  let statuslineItems: readonly string[] = []
-  try {
-    statuslineItems = parseStatuslineItems(readSettingsObject(statuslinePath).items)
-  } catch (error) {
-    statuslineItems = parseStatuslineItems(undefined)
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-      statuslineWarning = error instanceof Error ? error.message : String(error)
-    }
-  }
+  const statuslinePath = preferencePath('statusline.json')
+  const statuslineRead = readPreference(statuslinePath, 'items', parseStatuslineItems)
+  const statuslineWarning: string | undefined = statuslineRead.warning
+  let statuslineItems: readonly string[] = statuslineRead.value ?? parseStatuslineItems(undefined)
   // Serialized, crash-atomic writes for the user-level JSON files: the chain
   // orders rapid consecutive saves (the LAST snapshot wins on disk), each
   // write goes through a sibling temp file + rename, and quit waits for the
@@ -963,10 +622,9 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   const settingsPersistence = createUserSettingsPersistence()
   const saveStatusline = (items: readonly string[]): void => {
     statuslineItems = [...items]
-    void settingsPersistence.save(statuslinePath, JSON.stringify({ items }, null, 2) + '\n')
-      .catch((writeError: unknown) => {
-        bridge.notify(t('notice.statuslineSaveFailed', { message: writeError instanceof Error ? writeError.message : String(writeError) }), 'error')
-      })
+    savePreference(settingsPersistence, statuslinePath, 'items', items, message => {
+      bridge.notify(t('notice.statuslineSaveFailed', { message }), 'error')
+    })
   }
 
   // /vscode-keys: detect the hosting editor's user keybindings.json and pass
@@ -975,7 +633,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   const editorKeysEnv: EditorKeysEnv = {
     env: process.env,
     paths: { homedir: homedir(), appdata: process.env.APPDATA, platform: process.platform },
-    flagPath: join(homedir(), '.dsh', 'dsh-code', 'editor-keys.json'),
+    flagPath: preferencePath('editor-keys.json'),
   }
   const applyEditorKeys = (): Promise<string> => applyCtrlRPassthrough(editorKeysEnv)
 
@@ -984,45 +642,36 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   // degrades to dark with a surfaced warning. Precedence: CLI --theme > file >
   // auto detection > dark (auto detection itself is a later enhancement and
   // currently falls back to dark inside theme.ts).
-  const themePath = join(homedir(), '.dsh', 'dsh-code', 'theme.json')
+  const themePath = preferencePath('theme.json')
   let themeWarning: string | undefined
   if (startup.theme === undefined) {
-    try {
-      setTheme(parseThemeName(readSettingsObject(themePath).theme))
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        themeWarning = error instanceof Error ? error.message : String(error)
-      }
-    }
+    const read = readPreference(themePath, 'theme', parseThemeName)
+    themeWarning = read.warning
+    // A missing or corrupt file leaves theme.ts on its own dark default.
+    if (read.value !== undefined) setTheme(read.value)
   } else {
     setTheme(startup.theme)
   }
   const saveTheme = (name: ThemeName): void => {
     setTheme(name)
-    void settingsPersistence.save(themePath, JSON.stringify({ theme: name }, null, 2) + '\n')
-      .catch((writeError: unknown) => {
-        bridge.notify(t('notice.themeSaveFailed', { message: writeError instanceof Error ? writeError.message : String(writeError) }), 'error')
-      })
+    savePreference(settingsPersistence, themePath, 'theme', name, message => {
+      bridge.notify(t('notice.themeSaveFailed', { message }), 'error')
+    })
   }
 
   // /language persistence: one user-level JSON file beside theme.json. A
   // missing file means English; a corrupt file degrades to English with a
   // surfaced warning.
-  const languagePath = join(homedir(), '.dsh', 'dsh-code', 'language.json')
-  let languageWarning: string | undefined
-  try {
-    setLanguage(parseLanguageName(readSettingsObject(languagePath).language))
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-      languageWarning = error instanceof Error ? error.message : String(error)
-    }
-  }
+  const languagePath = preferencePath('language.json')
+  const languageRead = readPreference(languagePath, 'language', parseLanguageName)
+  const languageWarning: string | undefined = languageRead.warning
+  // A missing or corrupt file leaves i18n on its own English default.
+  if (languageRead.value !== undefined) setLanguage(languageRead.value)
   const saveLanguage = (name: LanguageName): void => {
     setLanguage(name)
-    void settingsPersistence.save(languagePath, JSON.stringify({ language: name }, null, 2) + '\n')
-      .catch((writeError: unknown) => {
-        bridge.notify(t('notice.languageSaveFailed', { message: writeError instanceof Error ? writeError.message : String(writeError) }), 'error')
-      })
+    savePreference(settingsPersistence, languagePath, 'language', name, message => {
+      bridge.notify(t('notice.languageSaveFailed', { message }), 'error')
+    })
   }
 
   // /animation persistence: one user-level JSON file under the DSH home,
@@ -1030,68 +679,25 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   // corrupt file degrades to on with a surfaced warning. Only an explicit
   // `false` disables (parseAnimationsPref), so hand-edited or partial files
   // never silently freeze the UI.
-  const animationsPath = join(homedir(), '.dsh', 'dsh-code', 'animations.json')
-  let animationsEnabled = true
-  let animationsWarning: string | undefined
-  try {
-    // A literal `null` file reads as corruption and surfaces the warning the
-    // block above promises, instead of a property access on `null`.
-    animationsEnabled = parseAnimationsPref(readSettingsObject(animationsPath).animations)
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-      animationsWarning = error instanceof Error ? error.message : String(error)
-    }
-  }
+  const animationsPath = preferencePath('animations.json')
+  // A literal `null` file reads as corruption and surfaces a warning, instead
+  // of a property access on `null`.
+  const animationsRead = readPreference(animationsPath, 'animations', parseAnimationsPref)
+  const animationsWarning: string | undefined = animationsRead.warning
+  const animationsEnabled = animationsRead.value ?? true
   const saveAnimations = (enabled: boolean): void => {
-    void settingsPersistence.save(animationsPath, JSON.stringify({ animations: enabled }, null, 2) + '\n')
-      .catch((writeError: unknown) => {
-        bridge.notify(t('notice.animationsSaveFailed', { message: writeError instanceof Error ? writeError.message : String(writeError) }), 'error')
-      })
+    savePreference(settingsPersistence, animationsPath, 'animations', enabled, message => {
+      bridge.notify(t('notice.animationsSaveFailed', { message }), 'error')
+    })
   }
 
   // Global input recall (Codex composer-history contract): one JSONL file
   // under the DSH home. A missing file means an empty history; unreadable or
   // corrupt content degrades to the valid lines it could parse, silently —
   // recall is a convenience surface, never a gate.
-  const historyPath = join(homedir(), '.dsh', 'dsh-code', 'history.jsonl')
-  let inputHistory: readonly string[] = []
-  let historyWriteChain: Promise<void> = Promise.resolve()
-  try {
-    const rawHistory = readFileSync(historyPath, 'utf8')
-    inputHistory = parseHistoryFile(rawHistory)
-    // Stale lines (adjacent duplicates, dropped garbage, an over-cap tail)
-    // accumulate in an append-only file; rewrite the canonical form once
-    // per boot. The rewrite rides the same chain, so it lands before any
-    // submission the user types next. An entry another terminal appends
-    // inside the read-to-rename window is dropped — a millisecond-scale
-    // gap at boot that recall tolerates by design.
-    if (needsCompaction(rawHistory)) {
-      historyWriteChain = historyWriteChain
-        .then(() => writeFileAtomically(historyPath, serializeHistoryList(inputHistory)))
-        .catch(() => {})
-    }
-  } catch {
-    inputHistory = []
-  }
-  /**
-   * Serialized history writes: each submission appends one JSON line at the
-   * end of the file, so concurrent terminals add entries after each other
-   * instead of overwriting snapshots they read at their own boot. A
-   * multi-line draft still occupies one physical line (JSON escapes the
-   * newline), and a regular-length line reaches the disk as one positioned
-   * write; an oversized paste may interleave mid-line, which the next
-   * parse simply drops.
-   */
-  const recordHistory = (text: string): void => {
-    if (text === '') return
-    inputHistory = [...inputHistory, text].slice(-HISTORY_MAX_ENTRIES)
-    historyWriteChain = historyWriteChain
-      .then(() => mkdir(dirname(historyPath), { recursive: true }))
-      .then(() => appendFileAsync(historyPath, historyLine(text), 'utf8'))
-      .catch((writeError: unknown) => {
-        bridge.notify(t('notice.historySaveFailed', { message: writeError instanceof Error ? writeError.message : String(writeError) }), 'error')
-      })
-  }
+  const inputHistory = createInputHistory(preferencePath('history.jsonl'), message => {
+    bridge.notify(t('notice.historySaveFailed', { message }), 'error')
+  })
 
   /** Mutate one next-turn inbox item; durable inbox splices remain the UI truth. */
   const updateQueued = (messageId: string, action: QueueMutation): void => {
@@ -1163,7 +769,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
           { name: 'dispose', run: () => currentActive.handle.dispose() },
         ]),
       { name: 'composing', run: () => composing ?? Promise.resolve() },
-      { name: 'history', run: () => historyWriteChain },
+      { name: 'history', run: () => inputHistory.flush() },
       { name: 'settings', run: () => settingsPersistence.flush() },
     ]
     void runQuitSequence(steps, io.exit, report)
@@ -2255,8 +1861,8 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       saveLanguage,
       animations: animationsEnabled,
       saveAnimations,
-      history: inputHistory,
-      recordHistory,
+      history: inputHistory.entries(),
+      recordHistory: inputHistory.record,
       updateQueued,
       onBridgeReady: (instance: AppBridge) => { bridge.notify = instance.notify },
     })

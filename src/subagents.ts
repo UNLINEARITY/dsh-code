@@ -227,3 +227,14 @@ export function createSubagentFeed(): SubagentFeedView & {
     },
   }
 }
+
+/**
+ * Root-log catalog facts a resumed session must replay into the subagent
+ * feed: constructor seeds never fire on the live bus, so without this the
+ * children of a resumed session vanish behind a restart. The empty-child
+ * placeholder row (childId '') is a placeholder, not a child, and stays out.
+ */
+export function subagentCatalogSeed(events: readonly SessionEvent[]): readonly SessionEvent<'subagent/catalog'>[] {
+  return events.filter((event): event is SessionEvent<'subagent/catalog'> =>
+    event.type === 'subagent/catalog' && event.data.childId !== '')
+}
