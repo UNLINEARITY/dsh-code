@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
 type PackageManifest = {
+  packageManager: string
   dependencies: Record<string, string>
   peerDependencies: Record<string, string>
   peerDependenciesMeta: Record<string, { optional?: boolean }>
@@ -11,6 +12,12 @@ type PackageManifest = {
 const manifest = JSON.parse(
   readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
 ) as PackageManifest
+
+describe('package tooling contract', () => {
+  it('pins the pnpm release used by local and CI installs', () => {
+    expect(manifest.packageManager).toBe('pnpm@12.4.1')
+  })
+})
 
 describe('package peer dependencies', () => {
   it('leaves Harness peers for the DSH profile instead of npm auto-installation', () => {

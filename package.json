@@ -2,6 +2,7 @@
   "name": "dsh-code",
   "description": "DeepSeek Harness CLI core bundle: interactive coding terminal, durable sessions, and model management for dsh --profile cli",
   "version": "1.2.0",
+  "packageManager": "pnpm@12.4.1",
   "type": "module",
   "bin": {
     "deepseek": "./bin/deepseek.mjs",
