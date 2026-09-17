@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { SessionId, type SessionHeader } from '@deepseek-ai/dsh-session'
 import { setLanguage } from '../src/i18n.ts'
 import {
+  acquireSessionDeletionLeases,
   collectDeletionSubtree,
   encodeProjectKey,
   encodeSessionSegment,
@@ -17,9 +18,11 @@ import {
   sessionRowMatchesQuery,
   planSessionDeletion,
   projectSessionRows,
+  releaseSessionDeletionLeases,
   sessionArtifactDirectory,
   sessionArtifactNames,
   sessionDirectoryFor,
+  type SessionDeletionPersistence,
   type SessionRecord,
 } from '../src/session-directory.ts'
 
@@ -209,6 +212,51 @@ describe('session deletion guards', () => {
     expect(collectDeletionSubtree(records, 'root')).toEqual(expect.arrayContaining(['root', 'child', 'grand', 'sibling']))
     expect(collectDeletionSubtree(records, 'child')).toEqual(['child', 'grand'])
     expect(collectDeletionSubtree(records, 'unrelated')).toEqual(['unrelated'])
+  })
+})
+
+describe('session deletion leases', () => {
+  it('holds every write lease and releases them in reverse order', async () => {
+    const events: string[] = []
+    const persistence: SessionDeletionPersistence = {
+      open: async (id, access) => {
+        events.push(`open:${id}:${access}`)
+        return { close: async () => { events.push(`close:${id}`) } }
+      },
+    }
+
+    const leases = await acquireSessionDeletionLeases(persistence, ['root', 'child'])
+    expect(events).toEqual(['open:root:write', 'open:child:write'])
+    await releaseSessionDeletionLeases(leases)
+    expect(events).toEqual(['open:root:write', 'open:child:write', 'close:child', 'close:root'])
+  })
+
+  it('rolls back acquired leases when a later session is already owned', async () => {
+    const events: string[] = []
+    const persistence: SessionDeletionPersistence = {
+      open: async (id) => {
+        events.push(`open:${id}`)
+        if (id === 'child') throw new Error('already owned')
+        return { close: async () => { events.push(`close:${id}`) } }
+      },
+    }
+
+    await expect(acquireSessionDeletionLeases(persistence, ['root', 'child', 'grand']))
+      .rejects.toThrow('already owned')
+    expect(events).toEqual(['open:root', 'open:child', 'close:root'])
+  })
+
+  it('attempts every release and reports close failures together', async () => {
+    const events: string[] = []
+    const leases = ['root', 'child'].map(id => ({
+      close: async () => {
+        events.push(`close:${id}`)
+        throw new Error(`close ${id}`)
+      },
+    }))
+
+    await expect(releaseSessionDeletionLeases(leases)).rejects.toThrow('failed to release session deletion leases')
+    expect(events).toEqual(['close:child', 'close:root'])
   })
 })
 

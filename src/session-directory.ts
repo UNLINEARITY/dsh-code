@@ -2,13 +2,59 @@
 
 import { basename, dirname, resolve } from 'node:path'
 import { realpathSync } from 'node:fs'
-import { SESSION_FORMAT_VERSION, type SessionEvent, type SessionHeader } from '@deepseek-ai/dsh-session'
+import { SESSION_FORMAT_VERSION, SessionId, type SessionEvent, type SessionHeader } from '@deepseek-ai/dsh-session'
 import { t } from './i18n.ts'
 
 export interface SessionRecord {
   readonly header: SessionHeader
   readonly live: boolean
   readonly persisted: boolean
+}
+
+/** Minimal write handle retained while a planned deletion touches artifacts. */
+export interface SessionDeletionLease {
+  close(): Promise<void>
+}
+
+/** Public persistence operation used to acquire the backend's write lease. */
+export interface SessionDeletionPersistence {
+  open(id: SessionId, access: 'write'): Promise<SessionDeletionLease>
+}
+
+/**
+ * Acquire every subtree member's cross-process write lease before deleting
+ * any artifact. A partial acquisition is rolled back, so callers either hold
+ * the whole deletion boundary or touch nothing.
+ */
+export async function acquireSessionDeletionLeases(
+  persistence: SessionDeletionPersistence,
+  ids: readonly string[],
+): Promise<readonly SessionDeletionLease[]> {
+  const leases: SessionDeletionLease[] = []
+  try {
+    for (const id of ids) leases.push(await persistence.open(SessionId(id), 'write'))
+    return leases
+  } catch (error: unknown) {
+    try {
+      await releaseSessionDeletionLeases(leases)
+    } catch (releaseError: unknown) {
+      throw new AggregateError([error, releaseError], 'session deletion lease acquisition and rollback failed')
+    }
+    throw error
+  }
+}
+
+/** Release deletion leases in reverse acquisition order. */
+export async function releaseSessionDeletionLeases(leases: readonly SessionDeletionLease[]): Promise<void> {
+  const failures: unknown[] = []
+  for (const lease of [...leases].reverse()) {
+    try {
+      await lease.close()
+    } catch (error: unknown) {
+      failures.push(error)
+    }
+  }
+  if (failures.length > 0) throw new AggregateError(failures, 'failed to release session deletion leases')
 }
 
 export interface TitleObservationResult {

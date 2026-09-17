@@ -25,7 +25,7 @@ import { createUserMessage, MessageId, type ContentBlock } from '@deepseek-ai/ds
 import type { JobSnapshot } from '@deepseek-ai/dsh-jobs'
 import { SessionId, SessionLogOffset, type Session, type SessionEvent, type SessionHeader, type UserMessage } from '@deepseek-ai/dsh-session'
 import { deriveTurnTokenUsage } from '@deepseek-ai/dsh-token-meter/client'
-import type { SessionPersistence } from '@deepseek-ai/dsh-session-persistence'
+import { SessionAlreadyOwnedError, type SessionPersistence } from '@deepseek-ai/dsh-session-persistence'
 // Type-only: carries the ctx.sessionTitle service merge for /title.
 import type {} from '@deepseek-ai/dsh-session-title'
 // Empty type imports carry the loader Context merge for the settlement await
@@ -96,6 +96,7 @@ import { parseAnimationsPref } from './render/animations.ts'
 import { parseThemeName, setTheme, type ThemeName } from './theme.ts'
 import { parseLanguageName, setLanguage, t, type LanguageName } from './i18n.ts'
 import {
+  acquireSessionDeletionLeases,
   isSubagentSession,
   matchSessionId,
   mergeSessionTitles,
@@ -105,6 +106,7 @@ import {
   jsonlSessionRoot,
   planSessionDeletion,
   projectSessionRows,
+  releaseSessionDeletionLeases,
   sessionArtifactDirectory,
   sessionDirectoryFor,
   type SessionDirectoryOptions,
@@ -1719,9 +1721,12 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
    *    Backends without a derivable artifact (non-JSONL) refuse the WHOLE
    *    deletion here — no file has been touched yet, so a backend or layout
    *    surprise can never strand a half-deleted subtree.
-   * 3. Artifacts are removed children-first: only an I/O error mid-delete
-   *    can stop it short (reported with removed/total counts), leaving the
-   *    shallowest lineage intact.
+   * 3. Acquire every node's public persistence write handle before touching
+   *    files. The JSONL backend holds its cross-process kernel lease for each
+   *    handle, so another terminal's live session refuses the whole deletion.
+   * 4. Artifacts are removed children-first while every lease remains held:
+   *    only an I/O error mid-delete can stop it short (reported with
+   *    removed/total counts), leaving the shallowest lineage intact.
    *
    * @param id - the root session id to delete.
    * @returns the outcome line for the panel/notice.
@@ -1736,7 +1741,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     // layout-check every node up front, so a refusal never leaves a
     // partially removed subtree behind.
     const root = jsonlSessionRoot(persistence)
-    if (root === undefined) {
+    if (root === undefined || persistence === undefined) {
       return 'session backend exposes no deletable artifact (deletion is unsupported on this backend)'
     }
     const byId = new Map<string, (typeof records)[number]>(records.map(record => [record.header.id, record]))
@@ -1750,14 +1755,25 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       }
       dirs.set(node.id, dir)
     }
+    let leases
+    try {
+      leases = await acquireSessionDeletionLeases(persistence, plan.nodes.map(node => node.id))
+    } catch (error: unknown) {
+      if (error instanceof SessionAlreadyOwnedError) {
+        return `cannot delete ${error.sessionId.slice(-12)} — it is open in this or another process`
+      }
+      return `cannot safely lock sessions for deletion: ${error instanceof Error ? error.message : String(error)}`
+    }
+
     let removed = 0
+    let outcome: string | undefined
     for (const node of plan.nodes) {
       const dir = dirs.get(node.id)!
       try {
         // Remove every canonical generation artifact this build knows; other
-        // sibling files are never ours to delete, and the directory itself is
-        // only removed once empty. An unreadable directory counts as a
-        // failure (not a silent success) so the outcome line stays honest.
+        // sibling files are never ours to delete. The POSIX session.lock file
+        // deliberately remains because unlinking a held flock inode would
+        // forfeit the backend's exclusion guarantee.
         const entries = await readdir(dir, { withFileTypes: true })
         for (const entry of entries) {
           if (entry.isFile() && isSessionArtifactName(entry.name)) {
@@ -1767,10 +1783,17 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
         await rm(dir, { force: true, recursive: false }).catch(() => {})
         removed += 1
       } catch (error: unknown) {
-        return `delete failed for ${node.id.slice(-12)} after ${removed} of ${plan.nodes.length}: ${error instanceof Error ? error.message : String(error)}`
+        outcome = `delete failed for ${node.id.slice(-12)} after ${removed} of ${plan.nodes.length}: ${error instanceof Error ? error.message : String(error)}`
+        break
       }
     }
-    return `deleted ${removed} session${removed === 1 ? '' : 's'}`
+    outcome ??= `deleted ${removed} session${removed === 1 ? '' : 's'}`
+    try {
+      await releaseSessionDeletionLeases(leases)
+    } catch (error: unknown) {
+      return `${outcome}; failed to release deletion locks: ${error instanceof Error ? error.message : String(error)}`
+    }
+    return outcome
   }
 
   const loadSessionTranscript = async (id: string, signal?: AbortSignal): Promise<string> => {
