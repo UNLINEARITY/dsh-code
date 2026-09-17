@@ -67,7 +67,7 @@
     "verify": "pnpm lint && pnpm typecheck && pnpm typecheck:tests && pnpm test",
     "gen:whale": "tsx scripts/gen-whale-glyph.ts",
     "prepare": "pnpm build",
-    "prepublishOnly": "pnpm typecheck && pnpm typecheck:tests && pnpm test && pnpm build"
+    "prepublishOnly": "pnpm audit:prod && pnpm exec tsx scripts/check-release.ts --package-version && pnpm verify && pnpm build"
   },
   "engines": {
     "node": "^22.19 || >=24"

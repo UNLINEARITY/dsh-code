@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
 
+# Verification needs repository contents only. Keep the automatic token
+# read-only even if organization defaults are broadened later.
+permissions:
+  contents: read
+
 jobs:
   verify:
     runs-on: ${{ matrix.os }}

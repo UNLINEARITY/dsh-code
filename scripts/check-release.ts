@@ -23,10 +23,15 @@ export function releaseConsistencyErrors(
   return errors
 }
 
+/** Resolve an explicit workflow tag or the package version requested by npm's publish gate. */
+export function releaseTagArgument(argument: string | undefined, version: string): string {
+  return argument === '--package-version' ? version : argument ?? ''
+}
+
 function main(): void {
-  const tag = process.argv[2] ?? ''
   const manifest = JSON.parse(readFileSync(join(process.cwd(), 'package.json'), 'utf8')) as { version?: unknown }
   if (typeof manifest.version !== 'string') throw new Error('package.json has no string version')
+  const tag = releaseTagArgument(process.argv[2], manifest.version)
   const errors = releaseConsistencyErrors(tag, manifest.version, existsSync)
   if (errors.length > 0) {
     for (const error of errors) process.stderr.write(`release check: ${error}\n`)

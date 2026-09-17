@@ -1,10 +1,21 @@
 import { describe, expect, it } from 'vitest'
-import { releaseConsistencyErrors } from '../scripts/check-release.ts'
+import { releaseConsistencyErrors, releaseTagArgument } from '../scripts/check-release.ts'
 
 const notes = (paths: readonly string[]): ((path: string) => boolean) => {
   const existing = new Set(paths)
   return path => existing.has(path)
 }
+
+describe('releaseTagArgument', () => {
+  it('keeps an explicit workflow tag', () => {
+    expect(releaseTagArgument('1.2.1', '9.9.9')).toBe('1.2.1')
+  })
+
+  it('uses package metadata only for the explicit npm publish mode', () => {
+    expect(releaseTagArgument('--package-version', '1.2.1')).toBe('1.2.1')
+    expect(releaseTagArgument(undefined, '1.2.1')).toBe('')
+  })
+})
 
 describe('releaseConsistencyErrors', () => {
   it('accepts an aligned version with bilingual release notes', () => {
