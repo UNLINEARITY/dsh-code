@@ -103,8 +103,15 @@ export const en = {
 
   // Transcript document panel (/resume details)
   'document.loading': 'loading transcript…',
+  'attach.bar': 'observing · {label} · r reload · esc/ctrl+d back',
+  'attach.loading': 'loading {label}\'s conversation…',
+  'attach.status': 'subagent {label} · {id} · {turns} turns',
+  'notice.attachUnavailable': 'subagent attachment is unavailable in this profile',
   'document.compact': 'transcript · esc close',
-  'document.footer': 'lines {from}-{to}/{total} · ↑↓/pg/g/G · t/esc close',
+  'document.expanded': 'expanded',
+  'document.refreshHint': 'r refresh',
+  'document.footerExpanded': 'lines {from}-{to}/{total} · ↑↓/pg/g/G{refresh} · esc/ctrl+d back',
+  'document.footer': 'lines {from}-{to}/{total} · ↑↓/pg/g/G · enter/f expand · t/esc close',
 
   // /review picker
   'review.picker.title': '/review · choose a target',

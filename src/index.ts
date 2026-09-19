@@ -1663,6 +1663,24 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       subscribeModelProviders: listener => subscribeProviderSettings(ctx, listener),
       saveModelProviderCredential: (target, key) => saveProviderCredential(ctx, target, key),
       enableModelProviderSubscription: target => enableProviderSubscription(ctx, target),
+      attachSubagent: sessionQuery === undefined ? undefined : {
+        // The seed is the child's durable log; the two buses are the same
+        // process-local channels the root uses, filtered by the child's id
+        // (an Agent's id IS its SessionId).
+        load: (id, signal) => sessionQuery.readSession(id, signal).then(snapshot => snapshot.events),
+        subscribeEvents: (id, onEvent) => {
+          const off = ctx.on('session/event', (subject: Session, event: SessionEvent) => {
+            if (subject.id === id) onEvent(event)
+          })
+          return off
+        },
+        subscribeStream: (id, onFrame) => {
+          const off = ctx.on('agent/assistant-stream', ({ agent: source, frame }) => {
+            if (source.id === id) onFrame(frame)
+          })
+          return off
+        },
+      },
       saveModelProviderConfiguration: (target, configuration) => saveProviderConfiguration(ctx, target, configuration),
       discoverModelProvider: (target, request, signal) => discoverProviderModels(ctx, target, request, signal),
       unsetModelProviderCredential: target => unsetProviderCredential(ctx, target),

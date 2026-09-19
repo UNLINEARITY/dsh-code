@@ -45,6 +45,7 @@ import { dshKernelVersion, headerBrandTitle } from './version.ts'
 import type { TranscriptStore } from './session/store.ts'
 import { DEFAULT_TERMINAL_TITLE, useTerminalTitle } from './ui/terminal-title.ts'
 import { settledEntryCount, type TranscriptEntry } from './render/projection.ts'
+import { createSubagentAttachment, EMPTY_ATTACH_STORE, type SubagentAttachment, type SubagentAttachmentServices } from './session/attach.ts'
 import { visibleColumns } from './render/markdown.ts'
 import {
   BUSY_CHASE_TICK_MS,
@@ -340,6 +341,8 @@ export interface AppProps {
   searchSessions?: (query: string, signal?: AbortSignal) => Promise<readonly SearchRow[]>
   /** Load this session's subagent conversations (children by lineage). */
   loadSubagents: () => Promise<readonly SessionRow[]>
+  /** Live subagent attachment: seed + the two real-time buses, runner-wired. */
+  attachSubagent?: SubagentAttachmentServices
   switchSession: (row: SessionRow) => void
   cancelSessionSwitch: () => boolean
   loadPlugins: () => readonly PluginRow[]
@@ -2195,6 +2198,77 @@ export function App(props: AppProps): ReactElement {
     synchronizedReplayPending.current = false
     appStdout.write(SYNCHRONIZED_UPDATE_END)
   }, [appStdout, refreshEpoch])
+  /** The live subagent conversation currently attached as the whole view. */
+  const [attachment, setAttachment] = useState<SubagentAttachment | undefined>(undefined)
+  const attachStore = attachment?.store ?? EMPTY_ATTACH_STORE
+  const subscribeAttached = useCallback((listener: () => void) => attachStore.subscribe(listener), [attachStore])
+  const readAttached = useCallback(() => attachStore.getView(), [attachStore])
+  const attachedView = useSyncExternalStore(subscribeAttached, readAttached)
+  const attachedSettled = useMemo(() => settledEntryCount(attachedView.entries), [attachedView.entries])
+  const attachedRowsCache = useRef<SettledRowsCache | undefined>(undefined)
+  const attachedSettledRows = useMemo(() => {
+    const result = computeSettledRows(
+      attachedRowsCache.current,
+      attachedView.entries,
+      attachedSettled,
+      showReasoning,
+      true,
+      refreshEpoch,
+      terminalSize.columns,
+    )
+    attachedRowsCache.current = result.cache
+    return result.cache.flat
+  }, [attachedView.entries, attachedSettled, showReasoning, refreshEpoch, terminalSize.columns])
+  /** Detach and hand the keyboard back to the /agents list. */
+  const detach = useCallback((): void => {
+    setAttachment(current => {
+      current?.dispose()
+      return undefined
+    })
+    refreshScreen()
+    setAgentsOpen(true)
+  }, [refreshScreen])
+  const attachTo = useCallback((id: string, label: string): void => {
+    if (props.attachSubagent === undefined) {
+      notify(t('notice.attachUnavailable'), 'warning')
+      return
+    }
+    setAttachment(current => {
+      current?.dispose()
+      return createSubagentAttachment(props.attachSubagent!, id, label)
+    })
+    setAgentsOpen(false)
+    // The child's Static rows replace the parent's behind one clear + replay,
+    // exactly like a theme switch or resize reflow.
+    refreshScreen()
+  }, [notify, props.attachSubagent, refreshScreen])
+  useEffect(() => () => {
+    setAttachment(current => {
+      current?.dispose()
+      return undefined
+    })
+  }, [])
+
+  // Attachment keys: Esc/Ctrl+D detach (the composer's step-out chord),
+  // Ctrl+C quits like the empty composer, `r` re-seeds from the durable log.
+  useStableInput((input, key) => {
+    if (key.escape || (key.ctrl && input === 'd')) {
+      detach()
+      return
+    }
+    if (key.ctrl && input === 'c') {
+      props.quit()
+      return
+    }
+    if (input === 'r' && attachment !== undefined) {
+      const id = attachment.id
+      const label = attachment.label
+      setAttachment(current => {
+        current?.dispose()
+        return current === undefined ? undefined : createSubagentAttachment(props.attachSubagent!, id, label)
+      })
+    }
+  }, attachment !== undefined)
   // An idle Ctrl+R fold toggle joins resize and explicit Ctrl+L as a deliberate
   // source-backed rebuild of native scrollback.
 
@@ -2532,12 +2606,95 @@ export function App(props: AppProps): ReactElement {
     }
   }
 
+  if (attachment !== undefined) {
+    // The attached child REPLACES the main view: its settled rows already
+    // ride <Static> above (items switch), and the live region mirrors the
+    // main conversation's tail with a simplified chrome budget (readonly
+    // bar band + one status row + one gutter + Ink's two spare rows).
+    const attachDynamicRows = Math.max(1, terminalRows - 3 - 1 - 1 - 2)
+    const attachBusy = attachedView.busySince !== undefined
+    const attachStreaming = attachedView.streaming !== '' || attachedView.streamingReasoning !== ''
+    const attachAllLiveLines = attachedView.entries.slice(attachedSettled).flatMap(
+      entry => transcriptEntryLines(entry, Math.max(1, terminalColumns - 2), showReasoning),
+    )
+    const attachLiveBudget = attachBusy || attachStreaming
+      ? Math.max(1, Math.floor(attachDynamicRows / 3))
+      : Math.max(0, attachDynamicRows - 1)
+    const attachVisibleLive = attachLiveBudget === 0 ? [] : attachAllLiveLines.slice(-attachLiveBudget)
+    const attachStreamRows = Math.max(1, attachDynamicRows - attachVisibleLive.length)
+    const attachReasoningRows = attachedView.streamingReasoning === ''
+      ? 0
+      : attachedView.streaming === ''
+        ? attachStreamRows
+        : attachStreamRows <= 1
+          ? 0
+          : showReasoning
+            ? Math.max(1, Math.floor(attachStreamRows / 3))
+            : 1
+    const attachAnswerRows = attachedView.streaming === '' ? 0 : Math.max(1, attachStreamRows - attachReasoningRows)
+    const attachAudit = clampLiveAllocation(
+      { live: attachVisibleLive.length, reasoning: attachReasoningRows, answer: attachAnswerRows },
+      attachDynamicRows,
+    )
+    const attachTurns = attachedView.entries.filter(entry => entry.kind === 'turn-marker').length
+    return createElement(
+      Box,
+      { flexDirection: 'column' },
+      createElement(MemoStaticTranscript, {
+        key: refreshEpoch,
+        items: attachedSettledRows,
+      }),
+      createElement(
+        Box,
+        { flexDirection: 'column' },
+        attachAudit.allocation.live === attachVisibleLive.length && attachVisibleLive.length > 0
+          ? createElement(StyledRows, { lines: attachVisibleLive })
+          : undefined,
+        attachedView.streamingReasoning !== '' && attachAudit.allocation.reasoning > 0
+          ? createElement(StreamTail, {
+            text: showReasoning ? attachedView.streamingReasoning : 'Thinking…',
+            prefix: '✻ ',
+            continuationPrefix: '  ',
+            dim: true,
+            maxRows: attachAudit.allocation.reasoning,
+            columns: Math.max(1, terminalColumns - 2),
+          })
+          : undefined,
+        attachedView.streaming !== '' && attachAudit.allocation.answer > 0
+          ? createElement(StreamTail, {
+            text: attachedView.streaming,
+            dim: false,
+            maxRows: attachAudit.allocation.answer,
+            prefix: '  ',
+            columns: Math.max(1, terminalColumns - 2),
+          }, attachBusy ? createElement(Caret, { animated: animations }) : undefined)
+          : undefined,
+        attachBusy && attachedView.streaming === '' && attachedView.streamingReasoning === ''
+          ? createElement(DeepDivingLine, { since: attachedView.busySince, animated: animations })
+          : undefined,
+      ),
+      createElement(
+        Box,
+        { borderStyle: 'round', borderColor: inkColor(getPalette().brandMid), paddingX: 1, flexDirection: 'column' },
+        createElement(Text, { color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns(
+          attachment.seeded()
+            ? `❯ ${t('attach.bar', { label: attachment.label })}`
+            : `❯ ${t('attach.loading', { label: attachment.label })}`,
+          Math.max(1, terminalColumns - 4),
+        )),
+      ),
+      createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns(
+        t('attach.status', { id: attachment.id.slice(-12), label: attachment.label, turns: attachTurns }),
+        Math.max(1, terminalColumns - 2),
+      )),
+    )
+  }
   return createElement(
     Box,
     { flexDirection: 'column' },
     createElement(MemoStaticTranscript, {
       key: refreshEpoch,
-      items: settledRows,
+      items: attachment === undefined ? settledRows : attachedSettledRows,
     }),
     transcriptVisible
       ? createElement(
@@ -2803,6 +2960,7 @@ export function App(props: AppProps): ReactElement {
         live: agentRows,
         load: props.loadSubagents,
         readTranscript: props.loadSessionTranscript,
+        attach: props.attachSubagent === undefined ? undefined : attachTo,
         close: () => setAgentsOpen(false),
       })
       : undefined,

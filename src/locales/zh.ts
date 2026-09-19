@@ -105,8 +105,15 @@ export const zh: MessageCatalog = {
 
   // Transcript document panel (/resume details)
   'document.loading': '转录加载中…',
+  'attach.bar': '观察模式 · {label} · r 重载 · esc/ctrl+d 返回',
+  'attach.loading': '载入 {label} 的子会话…',
+  'attach.status': '子代理 {label} · {id} · {turns} 回合',
+  'notice.attachUnavailable': '当前配置无法附加子代理会话',
   'document.compact': '转录 · esc 关闭',
-  'document.footer': '行 {from}-{to}/{total} · ↑↓/pg/g/G · t/esc 关闭',
+  'document.expanded': '全屏',
+  'document.refreshHint': 'r 刷新',
+  'document.footerExpanded': '行 {from}-{to}/{total} · ↑↓/pg/g/G{refresh} · esc/ctrl+d 返回',
+  'document.footer': '行 {from}-{to}/{total} · ↑↓/pg/g/G · enter/f 全屏 · t/esc 关闭',
 
   // /review picker
   'review.picker.title': '/review · 选择审查目标',

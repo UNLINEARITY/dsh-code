@@ -13,7 +13,7 @@ import type { PluginRow } from '../plugin-inventory.ts'
 import type { SessionDirectoryOptions, SessionRow } from '../session/session-directory.ts'
 import { formatRelativeTime, matchSessionRow } from '../session/session-directory.ts'
 import type { ReviewBranch, ReviewCommit, ReviewSelection } from '../git-workflow.ts'
-import { panelViewport, revealRow } from '../render/inspector.ts'
+import { expandedDocumentViewport, panelViewport, revealRow } from '../render/inspector.ts'
 import { markdownLines, textLines, type LineStyle, type StyledLine } from '../render/lines.ts'
 import { usageLines, type UsageView } from '../render/usage.ts'
 import { deleteLastGrapheme } from '../render/editor.ts'
@@ -464,24 +464,50 @@ function DocumentRows({ lines }: { lines: readonly StyledLine[] }): ReactElement
   )
 }
 
-function DocumentPanel({ title, text, error, close }: {
+function DocumentPanel({ title, text, error, close, onRefresh, onExpand }: {
   title: string
   text?: string
   error?: string
   close: () => void
+  /** Re-read the document; offered as `r` (running subagents keep moving). */
+  onRefresh?: () => void
+  /** Replace this preview with a fuller surface (subagent attachment). */
+  onExpand?: () => void
 }): ReactElement {
   const stdout = useStdout().stdout
-  const viewport = panelViewport(stdout?.columns ?? 80, stdout?.rows ?? 30)
+  // Expanded mode: the document replaces the transcript area (near the whole
+  // terminal minus the bottom live region), entered from the preview with
+  // Enter/f. Esc leaves for the caller's list directly — the preview is a
+  // peek step, not a level to back through.
+  const [expanded, setExpanded] = useState(false)
+  const viewport = expanded
+    ? expandedDocumentViewport(stdout?.columns ?? 80, stdout?.rows ?? 30)
+    : panelViewport(stdout?.columns ?? 80, stdout?.rows ?? 30)
   const [scroll, setScroll] = useState(0)
   const lines = useMemo(() => text === undefined ? [] : markdownLines(text, viewport.contentColumns), [text, viewport.contentColumns])
+  const maxScroll = Math.max(0, lines.length - viewport.bodyRows)
   useInput((input, key) => {
     if (key.escape || input === 'q' || input === 't') return close()
+    // Ctrl+D keeps its step-out meaning: empty-draft exit in the composer,
+    // leave-the-document here.
+    if (expanded && key.ctrl && input === 'd') return close()
+    if (!expanded && (key.return || input === 'f')) {
+      if (onExpand !== undefined) {
+        close()
+        onExpand()
+        return
+      }
+      setExpanded(true)
+      setScroll(value => Math.min(value, Math.max(0, lines.length - expandedDocumentViewport(stdout?.columns ?? 80, stdout?.rows ?? 30).bodyRows)))
+      return
+    }
+    if (expanded && input === 'r' && onRefresh !== undefined) return onRefresh()
     if (key.upArrow) return setScroll(value => Math.max(0, value - 1))
-    if (key.downArrow) return setScroll(value => Math.min(Math.max(0, lines.length - viewport.bodyRows), value + 1))
+    if (key.downArrow) return setScroll(value => Math.min(maxScroll, value + 1))
     if (key.pageUp) return setScroll(value => Math.max(0, value - Math.max(1, viewport.bodyRows - 1)))
-    if (key.pageDown) return setScroll(value => Math.min(Math.max(0, lines.length - viewport.bodyRows), value + Math.max(1, viewport.bodyRows - 1)))
+    if (key.pageDown) return setScroll(value => Math.min(maxScroll, value + Math.max(1, viewport.bodyRows - 1)))
     if (input === 'g') return setScroll(0)
-    if (input === 'G') return setScroll(Math.max(0, lines.length - viewport.bodyRows))
+    if (input === 'G') return setScroll(maxScroll)
   })
   if (viewport.compact) return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(t('document.compact'), viewport.contentColumns))
   const body: readonly StyledLine[] = error !== undefined
@@ -492,10 +518,12 @@ function DocumentPanel({ title, text, error, close }: {
   const accent = panelAccent('kernel-transcript', getPalette().dim, getPalette().brandBright)
   return createElement(
     Box,
-    { width: viewport.outerColumns, borderStyle: 'round', borderColor: inkColor(accent.border), flexDirection: 'column', paddingX: 1 },
-    createElement(Text, { color: inkColor(accent.title), wrap: 'truncate-end' }, truncateColumns(singleLineText(title), viewport.contentColumns)),
+    { width: viewport.outerColumns, borderStyle: 'round', borderColor: expanded ? inkColor(accent.title) : inkColor(accent.border), flexDirection: 'column', paddingX: 1 },
+    createElement(Text, { color: inkColor(accent.title), wrap: 'truncate-end' }, truncateColumns(singleLineText(title) + (expanded ? ` · ${t('document.expanded')}` : ''), viewport.contentColumns)),
     createElement(DocumentRows, { lines: body }),
-    createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns(t('document.footer', { from: lines.length === 0 ? 0 : scroll + 1, to: Math.min(lines.length, scroll + viewport.bodyRows), total: lines.length }), viewport.contentColumns)),
+    createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns(expanded
+      ? t('document.footerExpanded', { from: lines.length === 0 ? 0 : scroll + 1, to: Math.min(lines.length, scroll + viewport.bodyRows), total: lines.length, refresh: onRefresh === undefined ? '' : ` · ${t('document.refreshHint')}` })
+      : t('document.footer', { from: lines.length === 0 ? 0 : scroll + 1, to: Math.min(lines.length, scroll + viewport.bodyRows), total: lines.length }), viewport.contentColumns)),
   )
 }
 
@@ -1066,13 +1094,15 @@ interface AgentsEntry {
  * Enter/t opening the child's full transcript in the shared read-only
  * document view (the same projection the exporter uses).
  */
-export function AgentsPanel({ live, load, readTranscript, close }: {
+export function AgentsPanel({ live, load, readTranscript, attach, close }: {
   /** Live feed rows (child sessions observed this process). */
   live: readonly SubagentRow[]
   /** Load this session's persisted child sessions by lineage. */
   load: () => Promise<readonly SessionRow[]>
   /** Read one child session's full transcript as markdown. */
   readTranscript: (id: string, signal?: AbortSignal) => Promise<string>
+  /** Attach to one child as the whole view (the runner's live buses). */
+  attach: ((id: string, label: string) => void) | undefined
   close: () => void
 }): ReactElement {
   const [dirRows, setDirRows] = useState<readonly SessionRow[] | undefined>(undefined)
@@ -1119,21 +1149,25 @@ export function AgentsPanel({ live, load, readTranscript, close }: {
     return [...feedRows, ...persisted]
   }, [live, dirRows])
   useEffect(() => setCursor(value => Math.min(value, Math.max(0, rows.length - 1))), [rows.length])
+  /** (Re-)read one child's transcript; the id is captured, not re-derived. */
+  const readTranscriptOf = (id: string): void => {
+    transcriptLoad.current?.abort()
+    setTranscript({ id })
+    const controller = new AbortController()
+    transcriptLoad.current = controller
+    Promise.resolve().then(() => readTranscript(id, controller.signal)).then(
+      text => {
+        if (!controller.signal.aborted) setTranscript({ id, text })
+      },
+      reason => {
+        if (!controller.signal.aborted) setTranscript({ id, error: reason instanceof Error ? reason.message : String(reason) })
+      },
+    )
+  }
   const openTranscript = (): void => {
     const row = rows[cursor]
     if (row === undefined) return
-    transcriptLoad.current?.abort()
-    setTranscript({ id: row.id })
-    const controller = new AbortController()
-    transcriptLoad.current = controller
-    Promise.resolve().then(() => readTranscript(row.id, controller.signal)).then(
-      text => {
-        if (!controller.signal.aborted) setTranscript({ id: row.id, text })
-      },
-      reason => {
-        if (!controller.signal.aborted) setTranscript({ id: row.id, error: reason instanceof Error ? reason.message : String(reason) })
-      },
-    )
+    readTranscriptOf(row.id)
   }
   useInput((input, key) => {
     if (key.escape || input === 'q') return close()
@@ -1151,6 +1185,17 @@ export function AgentsPanel({ live, load, readTranscript, close }: {
         transcriptLoad.current?.abort()
         setTranscript(undefined)
       },
+      // Running subagents keep moving: `r` re-reads the same child.
+      onRefresh: () => readTranscriptOf(transcript.id),
+      // Enter/f in the preview attaches the child as the whole view when the
+      // runner wired the live buses; without them the bordered expansion
+      // keeps serving the same document.
+      ...(attach === undefined ? {} : {
+        onExpand: () => {
+          const label = rows.find(row => row.id === transcript.id)?.label ?? transcript.id.slice(-12)
+          attach(transcript.id, label)
+        },
+      }),
     })
   }
   return createElement(ListFrame, {

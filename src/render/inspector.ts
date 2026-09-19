@@ -99,6 +99,29 @@ export function panelViewport(columns: number, rows: number): InspectorViewport 
   }
 }
 
+/**
+ * Viewport for an expanded (near-fullscreen) document overlay: the document
+ * replaces the transcript area entirely, so the half-screen overlay cap and
+ * the inter-section gaps drop away while the bottom live region (composer,
+ * status) and the Static-rewrite margin stay reserved. The result stays
+ * below terminal height, which is what keeps Ink off its full-rewrite path.
+ */
+export function expandedDocumentViewport(columns: number, rows: number): InspectorViewport {
+  const safeColumns = Math.max(1, Math.floor(columns))
+  const safeRows = Math.max(1, Math.floor(rows))
+  const maxHeight = Math.max(0, safeRows - 2 - INSPECTOR_CHROME_ROWS - layoutGutterRows(safeRows))
+  const compact = maxHeight < 5 || safeColumns < 8
+  const outerColumns = compact ? safeColumns : Math.max(1, safeColumns - 1)
+  return {
+    maxHeight,
+    bodyRows: compact ? 0 : maxHeight - 4,
+    gapRows: 0,
+    contentColumns: compact ? Math.max(1, safeColumns - 1) : Math.max(1, outerColumns - 4),
+    outerColumns,
+    compact,
+  }
+}
+
 /** Backward-compatible name for the Ctrl+O-specific caller and tests. */
 export function inspectorViewport(columns: number, rows: number): InspectorViewport {
   return panelViewport(columns, rows)
