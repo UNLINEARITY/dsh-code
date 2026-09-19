@@ -11,7 +11,7 @@
 
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
-import { readdir, rm, stat, writeFile as writeFileAsync } from 'node:fs/promises'
+import { writeFile as writeFileAsync } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import { createElement } from 'react'
 import type { Context } from '@deepseek-ai/cordis'
@@ -24,7 +24,6 @@ import { createUserMessage, type ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { JobSnapshot } from '@deepseek-ai/dsh-jobs'
 import { SessionId, SessionLogOffset, type Session, type SessionEvent, type UserMessage } from '@deepseek-ai/dsh-session'
 import { deriveTurnTokenUsage } from '@deepseek-ai/dsh-token-meter/client'
-import { SessionAlreadyOwnedError } from '@deepseek-ai/dsh-session-persistence'
 // Type-only: carries the ctx.sessionTitle service merge for /title.
 import type {} from '@deepseek-ai/dsh-session-title'
 // Empty type imports carry the loader Context merge for the settlement await
@@ -118,18 +117,7 @@ import { parseAnimationsPref } from './render/animations.ts'
 import { parseThemeName, setTheme, type ThemeName } from './theme.ts'
 import { parseLanguageName, setLanguage, t, type LanguageName } from './i18n.ts'
 import {
-  acquireSessionDeletionLeases,
   isSubagentSession,
-  mergeSessionTitles,
-  sessionRowMatchesQuery,
-  isSessionArtifactName,
-  jsonlSessionRoot,
-  planSessionDeletion,
-  projectSessionRows,
-  releaseSessionDeletionLeases,
-  sessionArtifactDirectory,
-  sessionDirectoryFor,
-  type SessionDirectoryOptions,
   type SessionQueryService,
   type SessionRow,
 } from './session-directory.ts'
@@ -139,6 +127,7 @@ export { searchHitToRow } from './runner/search-rows.ts'
 import { createUserSettingsPersistence } from './settings-file.ts'
 import { preferencePath, readPreference, savePreference } from './runner/preferences.ts'
 import { createInputHistory } from './runner/input-history.ts'
+import { createSessionIo } from './runner/session-io.ts'
 import { turnUsages, type UsageView } from './render/usage.ts'
 // Type-only import: merges the projection registry into the Context type so
 // `ctx.get('sessionProjections')` is typed (the service itself is mounted by
@@ -1276,138 +1265,12 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     }
   }
 
-  const loadSessions = async (options: SessionDirectoryOptions, signal?: AbortSignal): Promise<readonly SessionRow[]> => {
-    if (sessionQuery === undefined) throw new Error('session query is unavailable in this profile')
-    const records = await sessionQuery.listSessions(signal)
-    // Last-activity timestamps for sorting (codex UpdatedAt default): the
-    // newest generation artifact's mtime under the JSONL layout. 0.1.5 dropped
-    // the persistence `locate()` query, so paths are derived from the
-    // backend's public config root. Backends without a JSONL config (or
-    // vanished directories) fall back to createdAt inside the projection.
-    const root = jsonlSessionRoot(persistence)
-    const updated = new Map<string, number>()
-    if (root !== undefined) {
-      await Promise.all(records.map(async record => {
-        try {
-          const dir = sessionDirectoryFor(root, record.header.cwd, record.header.id)
-          const entries = await readdir(dir, { withFileTypes: true })
-          const stats = await Promise.all(
-            entries.filter(entry => entry.isFile() && isSessionArtifactName(entry.name))
-              .map(entry => stat(join(dir, entry.name))),
-          )
-          const newest = Math.max(...stats.map(info => info.mtimeMs))
-          if (Number.isFinite(newest)) updated.set(record.header.id, newest)
-        } catch {
-          // Artifact gone or unreadable: the projection falls back to createdAt.
-        }
-      }))
-    }
-    const projected = projectSessionRows(records, { ...options, query: '' }, updated)
-    // Titles are the expensive fold. Fetch the first picker page when idle;
-    // a non-empty query loads more so the displayed title can match.
-    const titleBudget = options.query.trim() === '' ? 32 : Math.min(projected.length, 128)
-    const page = projected.slice(0, titleBudget)
-    if (page.length === 0) return projected
-    const observations = await sessionQuery.readTitleSnapshots(page.map(row => row.id), signal)
-    const titled = mergeSessionTitles(projected, observations)
-    return titled.filter(row => sessionRowMatchesQuery(row, options.query))
-  }
 
-  /**
-   * Delete one session subtree (/delete, codex semantics: subagent threads go
-   * with their root). The kernel persistence seam has NO deletion API by
-   * design — logs accumulate "until removed externally" — so this is the
-   * controlled external removal, in three phases with a hard boundary
-   * between planning and touching the filesystem:
-   *
-   * 1. `planSessionDeletion` collects the subtree and refuses when the root
-   *    or ANY member is live (a live child would outlive its deleted
-   *    parent), ordering the plan children-first.
-   * 2. Every plan node must derive to a guarded artifact directory
-   *    (`encodeSegment(id)` layout beneath the backend's config root).
-   *    Backends without a derivable artifact (non-JSONL) refuse the WHOLE
-   *    deletion here — no file has been touched yet, so a backend or layout
-   *    surprise can never strand a half-deleted subtree.
-   * 3. Acquire every node's public persistence write handle before touching
-   *    files. The JSONL backend holds its cross-process kernel lease for each
-   *    handle, so another terminal's live session refuses the whole deletion.
-   * 4. Artifacts are removed children-first while every lease remains held:
-   *    only an I/O error mid-delete can stop it short (reported with
-   *    removed/total counts), leaving the shallowest lineage intact.
-   *
-   * @param id - the root session id to delete.
-   * @returns the outcome line for the panel/notice.
-   */
-  const deleteSession = async (id: string): Promise<string> => {
-    if (sessionQuery === undefined) return 'session query is unavailable in this profile'
-    if (session !== undefined && session.id === id) return 'cannot delete the session you are using — switch or /new first'
-    const records = await sessionQuery.listSessions()
-    const plan = planSessionDeletion(records, id)
-    if (!plan.ok) return plan.reason
-    // Phase 2 completes the plan before the first rm: derive and
-    // layout-check every node up front, so a refusal never leaves a
-    // partially removed subtree behind.
-    const root = jsonlSessionRoot(persistence)
-    if (root === undefined || persistence === undefined) {
-      return 'session backend exposes no deletable artifact (deletion is unsupported on this backend)'
-    }
-    const byId = new Map<string, (typeof records)[number]>(records.map(record => [record.header.id, record]))
-    const dirs = new Map<string, string>()
-    for (const node of plan.nodes) {
-      const record = byId.get(node.id)
-      if (record === undefined) return `no persisted session matches "${node.id}"`
-      const dir = sessionArtifactDirectory(sessionDirectoryFor(root, record.header.cwd, node.id), node.id)
-      if (dir === undefined) {
-        return `refusing to delete: unexpected artifact layout for ${node.id.slice(-12)}`
-      }
-      dirs.set(node.id, dir)
-    }
-    let leases
-    try {
-      leases = await acquireSessionDeletionLeases(persistence, plan.nodes.map(node => node.id))
-    } catch (error: unknown) {
-      if (error instanceof SessionAlreadyOwnedError) {
-        return `cannot delete ${error.sessionId.slice(-12)} — it is open in this or another process`
-      }
-      return `cannot safely lock sessions for deletion: ${error instanceof Error ? error.message : String(error)}`
-    }
-
-    let removed = 0
-    let outcome: string | undefined
-    for (const node of plan.nodes) {
-      const dir = dirs.get(node.id)!
-      try {
-        // Remove every canonical generation artifact this build knows; other
-        // sibling files are never ours to delete. The POSIX session.lock file
-        // deliberately remains because unlinking a held flock inode would
-        // forfeit the backend's exclusion guarantee.
-        const entries = await readdir(dir, { withFileTypes: true })
-        for (const entry of entries) {
-          if (entry.isFile() && isSessionArtifactName(entry.name)) {
-            await rm(join(dir, entry.name), { force: true })
-          }
-        }
-        await rm(dir, { force: true, recursive: false }).catch(() => {})
-        removed += 1
-      } catch (error: unknown) {
-        outcome = `delete failed for ${node.id.slice(-12)} after ${removed} of ${plan.nodes.length}: ${error instanceof Error ? error.message : String(error)}`
-        break
-      }
-    }
-    outcome ??= `deleted ${removed} session${removed === 1 ? '' : 's'}`
-    try {
-      await releaseSessionDeletionLeases(leases)
-    } catch (error: unknown) {
-      return `${outcome}; failed to release deletion locks: ${error instanceof Error ? error.message : String(error)}`
-    }
-    return outcome
-  }
-
-  const loadSessionTranscript = async (id: string, signal?: AbortSignal): Promise<string> => {
-    if (sessionQuery === undefined) throw new Error('session query is unavailable in this profile')
-    const snapshot = await sessionQuery.readSession(id, signal)
-    return buildExportMarkdown(createTranscriptStore(snapshot.events).getView(), snapshot.session.id)
-  }
+  const { loadSessions, deleteSession, loadSessionTranscript } = createSessionIo({
+    sessionQuery,
+    persistence,
+    activeSessionId: () => session?.id,
+  })
 
   /**
    * Read one session's usage blocks for the /usage panel: the mounted
@@ -1428,7 +1291,6 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       turns: turnUsages(current.snapshotEvents(), deriveTurnTokenUsage),
     })
   }
-
   const switchModeAction = async (id: string): Promise<string> => {
     if (id === '') throw new Error('usage: /mode <preset>')
     const currentAgent = agent
