@@ -28,8 +28,8 @@ import {
   type SessionDirectoryOptions,
   type SessionQueryService,
   type SessionRow,
-} from '../session-directory.ts'
-import { createTranscriptStore } from '../store.ts'
+} from '../session/session-directory.ts'
+import { createTranscriptStore } from '../session/store.ts'
 
 /**
  * The persistence surface this module needs: the JSONL backend's public

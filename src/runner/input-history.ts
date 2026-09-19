@@ -16,7 +16,7 @@ import {
   needsCompaction,
   parseHistoryFile,
   serializeHistoryList,
-} from '../history.ts'
+} from '../session/history.ts'
 import { writeFileAtomically } from '../settings-file.ts'
 
 /** Live recall state plus its serialized durable writes. */

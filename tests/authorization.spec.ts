@@ -15,7 +15,7 @@ import {
   subscribeProviderAuthorizations,
   type ProviderAuthorizationRow,
 } from '../src/authorization.ts'
-import { ProviderAuthorizationPanel } from '../src/authorization-panel.ts'
+import { ProviderAuthorizationPanel } from '../src/panels/authorization-panel.ts'
 
 const wait = (ms = 120): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
 

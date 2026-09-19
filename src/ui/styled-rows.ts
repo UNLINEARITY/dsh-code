@@ -2,15 +2,15 @@
 
 import { createElement, type ReactElement } from 'react'
 import { Box, Text } from 'ink'
-import type { MdSegment } from './render/markdown.ts'
-import type { LineStyle, StyledLine } from './render/lines.ts'
+import type { MdSegment } from '../render/markdown.ts'
+import type { LineStyle, StyledLine } from '../render/lines.ts'
 import {
   diffBackground,
   getPalette,
   inkColor,
   promptRowTokens,
   rowBackground,
-} from './theme.ts'
+} from '../theme.ts'
 
 function segmentProps(style: MdSegment['style']): {
   color: string | undefined

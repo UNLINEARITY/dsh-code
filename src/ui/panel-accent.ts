@@ -11,7 +11,7 @@
  * @module @deepseek-ai/dsh-tui/panel-accent
  */
 
-import { surfaceAccent, type RgbTriple } from './theme.ts'
+import { surfaceAccent, type RgbTriple } from '../theme.ts'
 
 /** First-seen slot per panel id; stable for the process lifetime. */
 const panelSlots = new Map<string, number>()

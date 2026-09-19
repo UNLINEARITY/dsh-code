@@ -10,7 +10,7 @@
 import { createUserMessage, MessageId, type ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { Agent, AgentStatus, Inbox } from '@deepseek-ai/dsh-agent'
 import type { UserMessage } from '@deepseek-ai/dsh-session'
-import type { QueueMutation } from '../ui-contract.ts'
+import type { QueueMutation } from '../ui/ui-contract.ts'
 
 /** One composer submission waiting behind the startup delivery. */
 export interface QueuedSubmission {

@@ -16,7 +16,7 @@ import {
   replayProjectEvent,
   type ScheduleRow,
 } from '../src/render/projection.ts'
-import { SchedulePanel, scheduleDisplayRows, scheduleFrequency, scheduleRelative } from '../src/kernel-panels.ts'
+import { SchedulePanel, scheduleDisplayRows, scheduleFrequency, scheduleRelative } from '../src/panels/kernel-panels.ts'
 
 function scheduleEvent(data: unknown, seq: number): SessionEvent {
   return { type: 'schedule/change', seq, time: 0, data } as SessionEvent

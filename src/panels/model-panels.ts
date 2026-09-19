@@ -2,7 +2,7 @@
 
 import { createElement, useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
 import { Box, Text, useInput, useStdout } from 'ink'
-import type { ModelDirectory, ModelRow } from './models.ts'
+import type { ModelDirectory, ModelRow } from '../models.ts'
 import {
   isDeclaredReasoningEfforts,
   parseReasoningEffortsDraft,
@@ -13,23 +13,23 @@ import {
   type ProviderSettingsDirectory,
   type ProviderTargetView,
   type ReasoningEffortsValue,
-} from './provider-settings.ts'
+} from '../provider-settings.ts'
 import {
   authorizationForProvider,
   providerAuthorizationStatus,
   type ProviderAuthorizationDirectory,
   type ProviderAuthorizationRow,
-} from './authorization.ts'
-import { editQuery } from './query-editor.ts'
-import { stripPasteMarkers } from './keyboard.ts'
-import { PanelGap } from './panel-gap.ts'
-import { panelAccent } from './panel-accent.ts'
-import { deleteLastGrapheme } from './render/editor.ts'
-import { panelViewport, selectionWindow } from './render/inspector.ts'
-import { displayText, singleLineText, truncateColumns } from './render/text.ts'
-import { dim, getPalette, inkColor } from './theme.ts'
-import { t } from './i18n.ts'
-import { useStableInput } from './use-stable-input.ts'
+} from '../authorization.ts'
+import { editQuery } from '../ui/query-editor.ts'
+import { stripPasteMarkers } from '../keyboard.ts'
+import { PanelGap } from '../ui/panel-gap.ts'
+import { panelAccent } from '../ui/panel-accent.ts'
+import { deleteLastGrapheme } from '../render/editor.ts'
+import { panelViewport, selectionWindow } from '../render/inspector.ts'
+import { displayText, singleLineText, truncateColumns } from '../render/text.ts'
+import { dim, getPalette, inkColor } from '../theme.ts'
+import { t } from '../i18n.ts'
+import { useStableInput } from '../ui/use-stable-input.ts'
 
 export function ModelPanel({ directory, error, current, onSelect, onProviders, onRetry, onClose }: {
   directory: ModelDirectory | undefined

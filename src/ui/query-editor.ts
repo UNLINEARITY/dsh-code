@@ -1,7 +1,7 @@
 /** Shared one-line query editor for keyboard-owned filtering panels. */
 
-import { stripPasteMarkers } from './keyboard.ts'
-import { deleteLastGrapheme } from './render/editor.ts'
+import { stripPasteMarkers } from '../keyboard.ts'
+import { deleteLastGrapheme } from '../render/editor.ts'
 
 /**
  * Apply one keystroke to a panel search query. IME commits arrive as one

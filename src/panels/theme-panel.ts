@@ -9,11 +9,11 @@
 
 import { createElement, useState, type ReactElement } from 'react'
 import { Box, Text, useInput, useStdout } from 'ink'
-import { clampScroll, panelViewport } from './render/inspector.ts'
-import { truncateColumns } from './render/text.ts'
-import { panelAccent } from './panel-accent.ts'
-import { getPalette, inkColor, THEMES, type ThemeName } from './theme.ts'
-import { t } from './i18n.ts'
+import { clampScroll, panelViewport } from '../render/inspector.ts'
+import { truncateColumns } from '../render/text.ts'
+import { panelAccent } from '../ui/panel-accent.ts'
+import { getPalette, inkColor, THEMES, type ThemeName } from '../theme.ts'
+import { t } from '../i18n.ts'
 
 /**
  * The /theme list: one row per theme, the current one marked with ●, the

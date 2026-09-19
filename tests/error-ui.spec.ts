@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { credentialKey } from '@deepseek-ai/dsh-credentials'
 import { App, type AppProps } from '../src/app.ts'
-import { createTranscriptStore } from '../src/store.ts'
+import { createTranscriptStore } from '../src/session/store.ts'
 import { DEFAULT_STATUSLINE_ITEMS } from '../src/render/status.ts'
 import type { ProviderTargetView } from '../src/provider-settings.ts'
 

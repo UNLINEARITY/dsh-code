@@ -12,7 +12,7 @@ import {
   type FilePathInspection,
   type ImagePathInspection,
 } from './attachments.ts'
-import { CompletionMenu, completionMenuRowCount } from './completion-panel.ts'
+import { CompletionMenu, completionMenuRowCount } from './panels/completion-panel.ts'
 import {
   BARE_LOCAL_COMMANDS,
   completionCandidates,
@@ -29,7 +29,7 @@ import {
   recallOlder,
   appendRecall,
   type RecallState,
-} from './history.ts'
+} from './session/history.ts'
 import { parseReviewArgument, type ReviewSelection } from './git-workflow.ts'
 import { parseLanguageName, t, type LanguageName } from './i18n.ts'
 import {
@@ -93,7 +93,7 @@ import { rankByName } from './render/fuzzy.ts'
 import { visibleColumns } from './render/markdown.ts'
 import { displayText, singleLineText, truncateColumns } from './render/text.ts'
 import type { TranscriptEntry } from './render/projection.ts'
-import { sanitizeTerminalTitle, terminalTitleSequence } from './terminal-title.ts'
+import { sanitizeTerminalTitle, terminalTitleSequence } from './ui/terminal-title.ts'
 import {
   FLOW_ANCHORS,
   getPalette,
@@ -103,9 +103,9 @@ import {
   themeFlow,
   type RgbTriple,
 } from './theme.ts'
-import type { NoticeTone, QueueMutation } from './ui-contract.ts'
-import { useFrames } from './use-frames.ts'
-import { useStableInput } from './use-stable-input.ts'
+import type { NoticeTone, QueueMutation } from './ui/ui-contract.ts'
+import { useFrames } from './ui/use-frames.ts'
+import { useStableInput } from './ui/use-stable-input.ts'
 
 /** Theme-coordinated hues for the one-shot composer wave. */
 function deepseekWaveHues(tier: DeepseekWaveTier): readonly [RgbTriple, RgbTriple, RgbTriple] {

@@ -10,7 +10,7 @@
  * an empty OSC payload and the terminal falls back to its own default; the
  * previously set title is not portable to read back and is never restored.
  *
- * @module @deepseek-ai/dsh-code/terminal-title
+ * @module @deepseek-ai/dsh-code/ui/terminal-title
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'

@@ -18,7 +18,7 @@ import {
   type SessionLogSnapshot,
   type SessionQueryService,
   type SessionRecord,
-} from '../src/session-directory.ts'
+} from '../src/session/session-directory.ts'
 import { createSessionIo } from '../src/runner/session-io.ts'
 
 let root = ''

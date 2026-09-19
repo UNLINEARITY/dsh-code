@@ -13,7 +13,7 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { ApprovalOutcome, ApprovalRequest } from '@deepseek-ai/dsh-user-approval'
 import { App, type AppProps } from '../src/app.ts'
 import { mountApprovalAnswerer } from '../src/approval.ts'
-import { createTranscriptStore } from '../src/store.ts'
+import { createTranscriptStore } from '../src/session/store.ts'
 import { DEFAULT_STATUSLINE_ITEMS } from '../src/render/status.ts'
 
 type Listener = (request: ApprovalRequest, next: () => Promise<ApprovalOutcome>) => Promise<ApprovalOutcome>

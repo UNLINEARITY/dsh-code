@@ -10,12 +10,12 @@ import {
   type AuthorizationStatus,
 } from '@deepseek-ai/dsh-authorization'
 import type { CredentialKey } from '@deepseek-ai/dsh-credentials'
-import type { ProviderAuthorizationRow } from './authorization.ts'
-import { panelViewport } from './render/inspector.ts'
-import { displayText, singleLineText, truncateColumns } from './render/text.ts'
-import { panelAccent } from './panel-accent.ts'
-import { getPalette, inkColor } from './theme.ts'
-import { t } from './i18n.ts'
+import type { ProviderAuthorizationRow } from '../authorization.ts'
+import { panelViewport } from '../render/inspector.ts'
+import { displayText, singleLineText, truncateColumns } from '../render/text.ts'
+import { panelAccent } from '../ui/panel-accent.ts'
+import { getPalette, inkColor } from '../theme.ts'
+import { t } from '../i18n.ts'
 
 interface PromptReply {
   readonly resolve: (value: string) => void

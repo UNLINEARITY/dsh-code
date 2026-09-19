@@ -9,7 +9,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
-import { createTranscriptStore } from '../src/store.ts'
+import { createTranscriptStore } from '../src/session/store.ts'
 
 /** Outwait the frame-throttled notification (immediate or ~16ms-deferred). */
 const settle = async (): Promise<void> => {

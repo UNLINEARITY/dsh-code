@@ -19,7 +19,7 @@ import {
   shouldEnableKeyboardEnhancement,
 } from './keyboard.ts'
 import { createSplitStdin } from './input-split.ts'
-import { ensureVsCodeTabTitleSetting } from './terminal-title.ts'
+import { ensureVsCodeTabTitleSetting } from './ui/terminal-title.ts'
 
 /** A mounted terminal app instance; the runner owns unmount ordering. */
 export interface TuiMount {

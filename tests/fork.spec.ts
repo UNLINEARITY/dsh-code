@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
-import { selectForkSeed } from '../src/fork.ts'
+import { selectForkSeed } from '../src/session/fork.ts'
 
 const event = (type: string, seq: number): SessionEvent => ({ type, seq, time: seq, data: {} }) as SessionEvent
 

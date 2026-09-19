@@ -39,7 +39,7 @@ import {
   replayProjectEvent,
   snapshotReplayView,
   type TranscriptView,
-} from './render/projection.ts'
+} from '../render/projection.ts'
 
 /** Render frame budget: the notification cadence's upper bound. */
 const NOTIFY_FRAME_MS = 16

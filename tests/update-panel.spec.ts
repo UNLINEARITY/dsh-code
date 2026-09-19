@@ -12,7 +12,7 @@ import {
   updateFooter,
   updatePlanView,
   UPDATE_OUTPUT_CAP,
-} from '../src/update-panel.ts'
+} from '../src/panels/update-panel.ts'
 import type { LauncherUpdateStatus } from '../src/update.ts'
 
 const wait = async (ms = 120): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))

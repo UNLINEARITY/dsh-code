@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { writeFileAtomically } from '../src/settings-file.ts'
-import { beginRecall, historyLine, HISTORY_MAX_ENTRIES, needsCompaction, parseHistoryFile, recallEntries, recallNewer, recallOlder, recordLocalEntry, serializeHistoryEntry, serializeHistoryList, appendRecall } from '../src/history.ts'
+import { beginRecall, historyLine, HISTORY_MAX_ENTRIES, needsCompaction, parseHistoryFile, recallEntries, recallNewer, recallOlder, recordLocalEntry, serializeHistoryEntry, serializeHistoryList, appendRecall } from '../src/session/history.ts'
 
 describe('history persistence', () => {
   it('serializes one entry per JSON line, preserving multi-line drafts', () => {

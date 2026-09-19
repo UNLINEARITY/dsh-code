@@ -31,7 +31,7 @@ import type {} from '@deepseek-ai/dsh-session-title'
 import type {} from '@deepseek-ai/cordis-plugin-loader'
 import type {} from '@deepseek-ai/dsh-cmdline'
 import { App } from './app.ts'
-import type { NoticeTone, QueueMutation } from './ui-contract.ts'
+import type { NoticeTone, QueueMutation } from './ui/ui-contract.ts'
 import { planCycleDecision } from './runner/mode-cycle.ts'
 export { planCycleDecision, type ModeCycleDecision } from './runner/mode-cycle.ts'
 import { runQuitSequence, type QuitCleanupStep } from './runner/quit.ts'
@@ -72,9 +72,9 @@ import { mountQuestionProvider, type QuestionStore } from './questions.ts'
 // Type-only import merges the settings Events declarations ('settings/updated',
 // 'settings/document-updated') into this program's Cordis bus typing.
 import type {} from '@deepseek-ai/dsh-settings'
-import { createTranscriptStore, type TranscriptStore } from './store.ts'
-import { createSubagentFeed, subagentCatalogSeed, type SubagentFeedView } from './subagents.ts'
-export { subagentCatalogSeed } from './subagents.ts'
+import { createTranscriptStore, type TranscriptStore } from './session/store.ts'
+import { createSubagentFeed, subagentCatalogSeed, type SubagentFeedView } from './session/subagents.ts'
+export { subagentCatalogSeed } from './session/subagents.ts'
 import { parseStatuslineItems } from './render/status.ts'
 import { watchSkills, type SkillsView } from './skills.ts'
 import { toolArgumentsPreview } from './render/tool-preview.ts'
@@ -90,7 +90,7 @@ import {
   openAuthorizationUrl,
   subscribeProviderAuthorizations,
 } from './authorization.ts'
-import { selectForkSeed } from './fork.ts'
+import { selectForkSeed } from './session/fork.ts'
 import { gitBranch } from './git-workflow.ts'
 import {
   buildReviewPrompt,
@@ -102,7 +102,7 @@ import {
   type ReviewSelection,
 } from './git-workflow.ts'
 import type { TuiStartup } from './startup.ts'
-import { SessionSwitchQueue } from './session-switch.ts'
+import { SessionSwitchQueue } from './session/session-switch.ts'
 import { agentPresetsFrom, normalizePresetId, resolvePreset, selectPreset } from './presets.ts'
 import {
   applyPendingPermission,
@@ -120,8 +120,8 @@ import {
   isSubagentSession,
   type SessionQueryService,
   type SessionRow,
-} from './session-directory.ts'
-import type { JobRow } from './kernel-panels.ts'
+} from './session/session-directory.ts'
+import type { JobRow } from './panels/kernel-panels.ts'
 import { searchHitToRow, type SearchRow } from './runner/search-rows.ts'
 export { searchHitToRow } from './runner/search-rows.ts'
 import { createUserSettingsPersistence } from './settings-file.ts'

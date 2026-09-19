@@ -11,7 +11,7 @@
 import { randomUUID } from 'node:crypto'
 import type { SessionId, SessionEvent, SessionHeader } from '@deepseek-ai/dsh-session'
 import type { SessionPersistence } from '@deepseek-ai/dsh-session-persistence'
-import { isSubagentSession, matchSessionId, newestRootForCwd } from '../session-directory.ts'
+import { isSubagentSession, matchSessionId, newestRootForCwd } from '../session/session-directory.ts'
 import type { TuiStartup } from '../startup.ts'
 
 /** The session identity this invocation will run, plus whether it is resumed. */

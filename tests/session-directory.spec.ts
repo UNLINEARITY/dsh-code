@@ -24,7 +24,7 @@ import {
   sessionDirectoryFor,
   type SessionDeletionPersistence,
   type SessionRecord,
-} from '../src/session-directory.ts'
+} from '../src/session/session-directory.ts'
 
 function record(id: string, createdAt: number, extra: Partial<SessionHeader> = {}): SessionRecord {
   return { header: { version: 0, id, createdAt, ...extra } as SessionHeader, live: false, persisted: true }

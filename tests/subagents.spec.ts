@@ -6,8 +6,8 @@
 
 import { describe, expect, it } from 'vitest'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
-import { subagentCatalogSeed } from '../src/subagents.ts'
-import { createSubagentFeed, foldSubagentRow, MAX_SUBAGENT_ROWS } from '../src/subagents.ts'
+import { subagentCatalogSeed } from '../src/session/subagents.ts'
+import { createSubagentFeed, foldSubagentRow, MAX_SUBAGENT_ROWS } from '../src/session/subagents.ts'
 
 function event(type: string, data: Record<string, unknown>, time = 1): SessionEvent {
   return { type, seq: time, time, data } as unknown as SessionEvent

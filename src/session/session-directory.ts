@@ -3,7 +3,7 @@
 import { basename, dirname, resolve } from 'node:path'
 import { realpathSync } from 'node:fs'
 import { SESSION_FORMAT_VERSION, SessionId, type SessionEvent, type SessionHeader } from '@deepseek-ai/dsh-session'
-import { t } from './i18n.ts'
+import { t } from '../i18n.ts'
 
 export interface SessionRecord {
   readonly header: SessionHeader

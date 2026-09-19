@@ -10,7 +10,7 @@ import { render, Text } from 'ink'
 import { describe, expect, it } from 'vitest'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { App, type AppProps } from '../src/app.ts'
-import { createTranscriptStore } from '../src/store.ts'
+import { createTranscriptStore } from '../src/session/store.ts'
 import { DEFAULT_STATUSLINE_ITEMS } from '../src/render/status.ts'
 import {
   clearTerminalTitleSequence,
@@ -21,7 +21,7 @@ import {
   sanitizeTerminalTitle,
   terminalTitleSequence,
   useTerminalTitle,
-} from '../src/terminal-title.ts'
+} from '../src/ui/terminal-title.ts'
 
 const wait = async (): Promise<void> => new Promise(resolve => setTimeout(resolve, 80))
 

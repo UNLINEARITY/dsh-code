@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createInputHistory } from '../src/runner/input-history.ts'
-import { HISTORY_MAX_ENTRIES } from '../src/history.ts'
+import { HISTORY_MAX_ENTRIES } from '../src/session/history.ts'
 
 let dir = ''
 

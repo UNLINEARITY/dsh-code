@@ -6,7 +6,7 @@ import { render } from 'ink'
 import { describe, expect, it, vi } from 'vitest'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { App, type AppProps } from '../src/app.ts'
-import { createTranscriptStore } from '../src/store.ts'
+import { createTranscriptStore } from '../src/session/store.ts'
 import { DEFAULT_STATUSLINE_ITEMS } from '../src/render/status.ts'
 
 const wait = async (): Promise<void> => new Promise(resolve => setTimeout(resolve, 180))

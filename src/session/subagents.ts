@@ -18,7 +18,7 @@
  * microtask notify chained SyncLane rerenders past React's nested update
  * limit; a bare macrotask merge repaints a whole turn's bursts at once).
  *
- * @module @deepseek-ai/dsh-code/subagents
+ * @module @deepseek-ai/dsh-code/session/subagents
  */
 
 import type { SessionEvent } from '@deepseek-ai/dsh-session'

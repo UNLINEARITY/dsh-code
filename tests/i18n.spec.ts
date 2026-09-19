@@ -12,7 +12,7 @@ import {
   setLanguage,
   t,
 } from '../src/i18n.ts'
-import { LanguagePanel } from '../src/language-panel.ts'
+import { LanguagePanel } from '../src/panels/language-panel.ts'
 
 describe('i18n catalog', () => {
   it('defaults to english and switches catalogs live', () => {

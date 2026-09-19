@@ -2,11 +2,11 @@
 
 import { createElement, type ReactElement } from 'react'
 import { Box, Text, useStdout } from 'ink'
-import type { CompletionCandidate } from './completion.ts'
-import { selectionWindow } from './render/inspector.ts'
-import { visibleColumns } from './render/markdown.ts'
-import { displayText, padColumns, singleLineText, truncateColumns } from './render/text.ts'
-import { dim, getPalette, inkColor } from './theme.ts'
+import type { CompletionCandidate } from '../completion.ts'
+import { selectionWindow } from '../render/inspector.ts'
+import { visibleColumns } from '../render/markdown.ts'
+import { displayText, padColumns, singleLineText, truncateColumns } from '../render/text.ts'
+import { dim, getPalette, inkColor } from '../theme.ts'
 
 /** Shared geometry used by both the menu view and the App dynamic-row budget. */
 function completionMenuMetrics(terminalRows: number): { limit: number; showFooter: boolean; verticalPadding: number } {

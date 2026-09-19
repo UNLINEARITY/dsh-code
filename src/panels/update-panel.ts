@@ -11,12 +11,12 @@
 
 import { createElement, useEffect, useState, type ReactElement } from 'react'
 import { Box, Text, useInput, useStdout } from 'ink'
-import type { LauncherUpdatePlan, LauncherUpdateStatus } from './update.ts'
-import { clampScroll, panelViewport } from './render/inspector.ts'
-import { singleLineText, truncateColumns } from './render/text.ts'
-import { panelAccent } from './panel-accent.ts'
-import { getPalette, inkColor } from './theme.ts'
-import { t } from './i18n.ts'
+import type { LauncherUpdatePlan, LauncherUpdateStatus } from '../update.ts'
+import { clampScroll, panelViewport } from '../render/inspector.ts'
+import { singleLineText, truncateColumns } from '../render/text.ts'
+import { panelAccent } from '../ui/panel-accent.ts'
+import { getPalette, inkColor } from '../theme.ts'
+import { t } from '../i18n.ts'
 
 /** Retained apply-progress lines (ring tail; npm output is ephemeral). */
 export const UPDATE_OUTPUT_CAP = 800

@@ -6,10 +6,10 @@
 
 import { createElement, useState, type ReactElement } from 'react'
 import { Box, Text, useInput, useStdout } from 'ink'
-import { panelViewport } from './render/inspector.ts'
-import { truncateColumns } from './render/text.ts'
-import { LANGUAGES, t, type LanguageName } from './i18n.ts'
-import { getPalette, inkColor } from './theme.ts'
+import { panelViewport } from '../render/inspector.ts'
+import { truncateColumns } from '../render/text.ts'
+import { LANGUAGES, t, type LanguageName } from '../i18n.ts'
+import { getPalette, inkColor } from '../theme.ts'
 
 export function LanguagePanel({ current, select, close }: {
   current: LanguageName

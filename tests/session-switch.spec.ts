@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { SessionSwitchQueue, type IdleActivity } from '../src/session-switch.ts'
+import { SessionSwitchQueue, type IdleActivity } from '../src/session/session-switch.ts'
 
 function deferred(): { promise: Promise<void>; resolve(): void } {
   let resolve!: () => void
