@@ -253,8 +253,10 @@ describe('/model provider credentials', () => {
     ...overrides,
   })
 
-  it('starts an upstream provider login from /model and returns to the model list', async () => {
+  it('signs a subscription channel in from the setup page and materializes its models', async () => {
     let begins = 0
+    let enables = 0
+    const savedModels: (readonly unknown[])[] = []
     const authorization = {
       key: credentialKey('llm-pi-ai', 'deepseek-official'),
       provider: 'deepseek-official',
@@ -270,7 +272,12 @@ describe('/model provider credentials', () => {
       }),
       loadModelProviders: async () => ({ rows: [provider()], writable: true, failures: [] }),
       saveModelProviderCredential: async () => {},
-      saveModelProviderConfiguration: async () => {},
+      saveModelProviderConfiguration: async (_target, configuration) => {
+        savedModels.push(configuration.models)
+      },
+      enableModelProviderSubscription: async () => {
+        enables += 1
+      },
       loadProviderAuthorizations: async () => ({ rows: [authorization], failures: [] }),
       subscribeProviderAuthorizations: () => () => {},
       beginProviderAuthorization: async (_row, method) => {
@@ -291,15 +298,21 @@ describe('/model provider credentials', () => {
       await wait()
       app.stdin.push('\t')
       await wait()
-      expect(app.output()).toContain('not logged in')
-      app.stdin.push('l')
-      await wait()
-      expect(app.output()).toContain('login DeepSeek')
+      // Enter opens the setup page; the subscription channel heads it.
       app.stdin.push('\r')
       await wait()
+      expect(app.output()).toContain('not signed in')
+      expect(app.output()).toContain('no key set')
+      // Tab serves the selected subscription channel: the single OAuth
+      // method starts with no picker, lands, enables the route, and the
+      // catalog model list is materialized into the profile.
+      app.stdin.push('\t')
+      await wait()
+      await wait()
       expect(begins).toBe(1)
+      expect(enables).toBe(1)
+      expect(savedModels).toEqual([[{ id: 'flash', name: 'Flash' }]])
       expect(app.output()).toContain('logged in to DeepSeek; select a model')
-      expect(app.output()).toContain('DeepSeek')
     } finally {
       app.unmount()
     }

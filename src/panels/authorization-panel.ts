@@ -25,6 +25,11 @@ interface PromptReply {
 
 export interface ProviderAuthorizationPanelProps {
   readonly row: ProviderAuthorizationRow
+  /**
+   * Start this method immediately instead of showing the picker: a
+   * single-method provider signs in with no extra step.
+   */
+  readonly autoStartMethod?: string
   begin(
     row: ProviderAuthorizationRow,
     method: string,
@@ -78,6 +83,20 @@ export function ProviderAuthorizationPanel(props: ProviderAuthorizationPanelProp
   const propsRef = useRef(props)
   propsRef.current = props
   const rowKey = props.row.key
+  // One-shot auto start (single-method providers): guarded by a ref so a
+  // remount of the same row cannot start a second attempt.
+  const autoStarted = useRef(false)
+  useEffect(() => {
+    const method = props.autoStartMethod
+    if (method === undefined || autoStarted.current) return
+    autoStarted.current = true
+    if (phase !== 'methods') return
+    if (props.row.methods.some(entry => entry.id === method)) start(method)
+    // One mount-time decision: the auto method, the method list, and the
+    // phase are fixed for this mount, so re-running on their identity would
+    // risk starting a second attempt.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.autoStartMethod])
   useEffect(() => () => {
     controllerRef.current?.abort()
     propsRef.current.cancel(rowKey)

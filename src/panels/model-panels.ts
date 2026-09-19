@@ -223,7 +223,7 @@ function providerStateLabel(row: ProviderTargetView): string {
 }
 
 /** The provider-management stage reached from /model with `a`. */
-export function ProviderPanel({ directory, error, authorizations, authorizationError, onConfigure, onUnset, onRemove, onLogin, onLogout, onRetry, onBack, onExit }: {
+export function ProviderPanel({ directory, error, authorizations, authorizationError, onConfigure, onUnset, onRemove, onRetry, onBack, onExit }: {
   directory: ProviderSettingsDirectory | undefined
   error: string | undefined
   authorizations: ProviderAuthorizationDirectory | undefined
@@ -231,8 +231,6 @@ export function ProviderPanel({ directory, error, authorizations, authorizationE
   onConfigure: (target: ProviderTargetView) => void
   onUnset: (target: ProviderTargetView) => void
   onRemove: (target: ProviderTargetView) => void
-  onLogin: (target: ProviderTargetView, authorization: ProviderAuthorizationRow) => void
-  onLogout: (target: ProviderTargetView, authorization: ProviderAuthorizationRow) => void
   onRetry: () => void
   onBack: () => void
   /** Leave the whole /model flow (Ctrl+C), not just this stage. */
@@ -314,20 +312,8 @@ export function ProviderPanel({ directory, error, authorizations, authorizationE
       }
       return
     }
-    const authorization = authorizationForProvider(authorizations, target.provider)
-    if (input === 'l' || input === 'L') {
-      if (authorization === undefined) setActionError(t('panel.provider.noLoginFlow'))
-      else if (authorization.inFlight) setActionError(t('panel.provider.loginRunning'))
-      else onLogin(target, authorization)
-      return
-    }
-    if (input === 'o' || input === 'O') {
-      if (authorization === undefined || !authorization.record.configured) setActionError(t('panel.provider.noLoginRecord'))
-      else if (!authorization.record.writable) setActionError(t('panel.provider.readOnlyLogin'))
-      else onLogout(target, authorization)
-      return
-    }
-    // Enter opens the unified setup page (key, endpoint, models, discovery):
+    // Enter opens the unified setup page (key, endpoint, models, discovery,
+    // and the subscription channel when the provider offers one):
     // the old split — Enter for the key alone, Tab for the deep menu — hid
     // the configuration surface behind an undiscoverable chord.
     if (key.return) {
@@ -432,8 +418,15 @@ export interface EffortDonor {
   readonly efforts: Record<string, string | null>
 }
 
-export function ProviderSetupPanel({ target, save, saveCredential, discover, effortDonors, done, back, onExit }: {
+export function ProviderSetupPanel({ target, authorization, onSubscribe, save, saveCredential, discover, effortDonors, done, back, onExit }: {
   target: ProviderTargetView
+  /**
+   * The provider's sign-in flow, when it offers a web (OAuth) channel: its
+   * presence adds the subscription/key mode layer at the top of the page.
+   */
+  authorization: ProviderAuthorizationRow | undefined
+  /** Open the subscription channel: sign in when logged out, confirm sign-out when logged in. */
+  onSubscribe: (() => void) | undefined
   /** Models with declared efforts (settings first, catalog-advertised after) a model row can copy from. */
   effortDonors: readonly EffortDonor[]
   save: (target: ProviderTargetView, configuration: ProviderConfiguration) => Promise<void>
@@ -448,11 +441,15 @@ export function ProviderSetupPanel({ target, save, saveCredential, discover, eff
   const stdout = useStdout().stdout
   const viewport = panelViewport(stdout?.columns ?? 80, stdout?.rows ?? 30)
   const [page, setPage] = useState<'setup' | 'discover' | 'donor'>('setup')
+  /** Whether the provider offers a web (OAuth) sign-in channel. */
+  const hasSubscription = authorization !== undefined
+    && authorization.methods.some(method => method.id === 'oauth')
+    && onSubscribe !== undefined
   const [keyDraft, setKeyDraft] = useState('')
   const [baseURL, setBaseURL] = useState(target.configuration.baseURL ?? '')
   const [models, setModels] = useState<readonly ProviderModelSettings[]>(target.configuration.models)
   const [cursor, setCursor] = useState(0)
-  const [zone, setZone] = useState<'key' | 'url' | 'models'>('key')
+  const [zone, setZone] = useState<'mode' | 'key' | 'url' | 'models'>(hasSubscription ? 'mode' : 'key')
   const [field, setField] = useState<'none' | 'ctx' | 'out'>('none')
   const [addDraft, setAddDraft] = useState('')
   /** Micro-editor for the selected model's reasoningEfforts declaration. */
@@ -462,6 +459,12 @@ export function ProviderSetupPanel({ target, save, saveCredential, discover, eff
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | undefined>(undefined)
   const credential = target.credential
+  /** The mode layer's selection: 0 = subscription channel, 1 = key channel. */
+  const [modeSel, setModeSel] = useState(
+    authorization?.record.configured === true ? 0
+      : credential?.kind === 'facts' && credential.configured ? 1
+      : 0,
+  )
   const keyStatus = saveCredential === undefined
     ? 'key storage unavailable'
     : credential?.kind === 'error'
@@ -587,13 +590,24 @@ export function ProviderSetupPanel({ target, save, saveCredential, discover, eff
       return
     }
     if (key.escape || input === 'q') { back(); return }
-    if (key.tab) { setPage('discover'); return }
-    if (key.return) { submit(); return }
+    // Tab serves the selected channel: the subscription channel signs in
+    // through the browser, the key channel interrogates the endpoint.
+    if (key.tab) {
+      if (hasSubscription && modeSel === 0) { onSubscribe(); return }
+      setPage('discover'); return
+    }
+    if (key.return && !(zone === 'mode' && modeSel === 0 && hasSubscription)) { submit(); return }
+    if (zone === 'mode' && hasSubscription) {
+      if (key.upArrow || key.downArrow) { setModeSel(current => (current + 1) % 2); return }
+      if (key.return) { onSubscribe(); return }
+      return
+    }
     if (zone === 'key') {
       // Typing stays available even when the key cannot be written here (a
       // read-only env supply, or a describe failure): the draft is local, and
       // Enter refuses the save with one actionable line instead of silently
       // dropping what the user typed.
+      if (key.upArrow && hasSubscription) { setZone('mode'); return }
       if (key.downArrow) { setZone('url'); return }
       if (key.backspace || key.delete) { setError(undefined); setKeyDraft(current => [...current].slice(0, -1).join('')); return }
       if (key.ctrl && input === 'u') { setError(undefined); setKeyDraft(''); return }
@@ -765,6 +779,16 @@ export function ProviderSetupPanel({ target, save, saveCredential, discover, eff
       truncateColumns('! ' + displayText(singleLineText(target.diagnostic)), viewport.contentColumns),
     )]),
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
+    ...(hasSubscription
+      ? [
+        createElement(Text, { key: 'mode-sub', color: zone === 'mode' && modeSel === 0 ? inkColor(getPalette().brandBright) : inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns('  ' + (zone === 'mode' && modeSel === 0 ? '>' : ' ') + ' ' + t('panel.setup.mode.subscribe') + '   ' + (authorization.inFlight ? t('panel.setup.mode.login.running') : authorization.record.configured ? t('panel.setup.mode.login.plan') : t('panel.setup.mode.login.none')), viewport.contentColumns)),
+        createElement(Text, { key: 'mode-key', color: zone === 'mode' && modeSel === 1 ? inkColor(getPalette().brandBright) : inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns('  ' + (zone === 'mode' && modeSel === 1 ? '>' : ' ') + ' ' + t('panel.setup.mode.key') + '      ' + keyStatus, viewport.contentColumns)),
+        ...(authorization.record.configured && credential?.kind === 'facts' && credential.configured
+          ? [createElement(Text, { key: 'mode-override', color: inkColor(getPalette().warn), wrap: 'truncate-end' }, truncateColumns('  ' + t('panel.setup.mode.overridden'), viewport.contentColumns))]
+          : []),
+        createElement(Text, { key: 'mode-divider', color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns('  ' + '─'.repeat(Math.max(0, viewport.contentColumns - 2)), viewport.contentColumns)),
+      ]
+      : []),
     keyRow,
     urlRow,
     ...stateRows,

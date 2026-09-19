@@ -14,6 +14,7 @@ import {
   loadProviderSettings,
   removeProviderSettings,
   saveProviderConfiguration,
+  enableProviderSubscription,
   saveProviderCredential,
   subscribeProviderSettings,
   unsetProviderCredential,
@@ -431,6 +432,41 @@ describe('discoverProviderModels', () => {
     const failing = vi.fn(async () => { throw new Error('gateway answered 401;\ncheck the API key') })
     await expect(discoverProviderModels(fakeCtx({ llm: { discoverModels: failing } }), targetOf(), {}))
       .rejects.toThrow('gateway answered 401; check the API key')
+  })
+})
+
+describe('enableProviderSubscription', () => {
+  const target: ProviderTargetView = {
+    provider: 'pi-ai', displayName: 'PI AI', active: true,
+    settingsNs: 'llm-pi-ai', settingsPath: ['providers', 'pi-ai'], settingsRevision: 7,
+    configured: true, removable: false, suggestedRef: 'PI_AI_API_KEY', credential: undefined,
+    configuration: { models: [] },
+  }
+
+  it('drops the key reference, endpoint, and model list so the sign-in record serves', async () => {
+    const settings = { writable: true, mutate: vi.fn(async () => undefined) }
+    await enableProviderSubscription(fakeCtx({ settings }), target)
+    expect(settings.mutate).toHaveBeenCalledWith('llm-pi-ai', [
+      { op: 'unset', path: ['providers', 'pi-ai', 'apiKeyEnv'] },
+      { op: 'unset', path: ['providers', 'pi-ai', 'baseURL'] },
+      { op: 'unset', path: ['providers', 'pi-ai', 'models'] },
+    ], 7)
+  })
+
+  it('creates an empty profile for a dormant route so the catalog registers it', async () => {
+    const settings = { writable: true, mutate: vi.fn(async () => undefined) }
+    await enableProviderSubscription(fakeCtx({ settings }), { ...target, configured: false })
+    expect(settings.mutate).toHaveBeenCalledWith('llm-pi-ai', [
+      { op: 'set', path: ['providers', 'pi-ai'], value: {} },
+    ], 7)
+  })
+
+  it('refuses unmanaged routes and read-only settings', async () => {
+    const settings = { writable: true, mutate: vi.fn(async () => undefined) }
+    await expect(enableProviderSubscription(fakeCtx({ settings }), { ...target, settingsNs: '' }))
+      .rejects.toThrow('no managed settings namespace')
+    await expect(enableProviderSubscription(fakeCtx({ settings: { writable: false, mutate: settings.mutate } }), target))
+      .rejects.toThrow('read-only')
   })
 })
 

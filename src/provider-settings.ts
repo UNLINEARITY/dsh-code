@@ -667,6 +667,44 @@ export async function saveProviderConfiguration(
 }
 
 /**
+ * Switch one provider route to its subscription (plan sign-in) channel: the
+ * profile keeps neither a key reference nor an explicit model list, so the
+ * official catalog endpoint serves requests and the stored OAuth record — not
+ * a settings-named key override — authenticates them. Enabling a route that
+ * has no profile yet creates the empty profile that registers it.
+ * @param ctx - context carrying the `settings` service.
+ * @param target - provider row whose settings namespace owns the profile.
+ * @throws when the route is unmanaged or settings are read-only.
+ */
+export async function enableProviderSubscription(ctx: Context, target: ProviderTargetView): Promise<void> {
+  if (target.settingsNs.length === 0) {
+    throw new ProviderSettingsError(`provider "${target.provider}" has no managed settings namespace; configure it in settings.yaml`)
+  }
+  const settings = ctx.get('settings') as SettingsFace | undefined
+  if (settings === undefined || settings.writable !== true) {
+    throw new ProviderSettingsError('settings are read-only; provider configuration cannot be changed here')
+  }
+  const root = target.settingsPath
+  const ops: SettingsPathOpFace[] = target.configured
+    ? [
+      // The key reference would resolve as a request-level override BEFORE
+      // the stored sign-in record, so the subscription channel must drop it;
+      // the endpoint and the explicit model list belong to the key channel.
+      { op: 'unset', path: [...root, 'apiKeyEnv'] },
+      { op: 'unset', path: [...root, 'baseURL'] },
+      { op: 'unset', path: [...root, 'models'] },
+    ]
+    // A route with no profile stays dormant: an empty profile registers it
+    // with the catalog endpoint and every catalog model.
+    : [{ op: 'set', path: [...root], value: {} }]
+  try {
+    await settings.mutate(target.settingsNs, ops, target.settingsRevision)
+  } catch (error) {
+    throw new ProviderSettingsError(singleLine(messageOf(error)))
+  }
+}
+
+/**
  * Interrogate a provider endpoint for the models it really serves, through
  * the model-discovery capability the provider's settings namespace
  * registered — the same pipe the official Web Models page uses. The request

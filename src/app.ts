@@ -85,6 +85,7 @@ import { recallEntries, recordLocalEntry } from './session/history.ts'
 import type { SessionDirectoryOptions, SessionRow } from './session/session-directory.ts'
 import type { GitDiffView, ReviewBranch, ReviewCommit, ReviewSelection } from './git-workflow.ts'
 import type { ProviderAuthorizationDirectory, ProviderAuthorizationRow } from './authorization.ts'
+import { authorizationForProvider } from './authorization.ts'
 import { ProviderAuthorizationLogoutPanel, ProviderAuthorizationPanel } from './panels/authorization-panel.ts'
 import type { FilePathInspection, ImagePathInspection } from './attachments.ts'
 import { LOCAL_COMMAND_NAMES, LOCAL_COMMANDS } from './completion.ts'
@@ -268,6 +269,8 @@ export interface AppProps {
   subscribeModelProviders?: (listener: () => void) => () => void
   /** Store or rotate one provider credential through the Harness credential service. */
   saveModelProviderCredential?: (target: ProviderTargetView, key: string) => Promise<void>
+  /** Switch a provider route to its subscription channel (drops the key reference). */
+  enableModelProviderSubscription?: (target: ProviderTargetView) => Promise<void>
   /** Remove one writable provider credential without removing its settings profile. */
   unsetModelProviderCredential?: (target: ProviderTargetView) => Promise<void>
   /** Remove one user-owned provider profile and its page-managed credential. */
@@ -1632,6 +1635,7 @@ export function App(props: AppProps): ReactElement {
   const [providerAction, setProviderAction] = useState<
     | { kind: 'configure' | 'unset' | 'remove'; target: ProviderTargetView }
     | { kind: 'login' | 'logout'; target: ProviderTargetView; authorization: ProviderAuthorizationRow }
+    | { kind: 'subscribe-login' | 'subscribe-logout'; target: ProviderTargetView; authorization: ProviderAuthorizationRow }
     | undefined
   >(undefined)
   /** The model row whose effort levels the /model stage lists; undefined shows the model list. */
@@ -2269,7 +2273,87 @@ export function App(props: AppProps): ReactElement {
   }, [providerDirectory, directory])
   let modelSurface: ReactElement | undefined
   if (modelOpen && !approvalPending && !questionPending) {
-    if (providerAction?.kind === 'login'
+    if (providerAction?.kind === 'subscribe-login'
+      && props.beginProviderAuthorization !== undefined
+      && props.cancelProviderAuthorization !== undefined
+      && props.openAuthorizationUrl !== undefined
+      && props.copyTextValue !== undefined) {
+      const target = providerAction.target
+      modelSurface = createElement(ProviderAuthorizationPanel, {
+        row: providerAction.authorization,
+        // A single-method provider signs in with no picker step; a provider
+        // with several methods still chooses first.
+        autoStartMethod: providerAction.authorization.methods.length === 1
+          ? providerAction.authorization.methods[0].id
+          : undefined,
+        begin: props.beginProviderAuthorization,
+        cancel: () => props.cancelProviderAuthorization!(providerAction.authorization),
+        openUrl: props.openAuthorizationUrl,
+        copy: props.copyTextValue,
+        done: () => {
+          const authorization = providerAction.authorization
+          setProviderAction(undefined)
+          // The subscription channel owns the route: drop the key reference
+          // (it would resolve as a request-level override before the stored
+          // sign-in record), then let the catalog serve every model.
+          const enable = props.enableModelProviderSubscription
+          if (enable === undefined) {
+            notify(t('notice.loginUnavailable'), 'warning')
+            reloadModelSurfaces()
+            return
+          }
+          void enable(target).then(() => {
+            // Materialize the catalog's model list into the profile so the
+            // page's model layer shows what the subscription unlocked; the
+            // route registers on the settings write, so one fresh read sees it.
+            const save = props.saveModelProviderConfiguration
+            const load = props.loadModels
+            if (save === undefined || load === undefined) {
+              reloadModelSurfaces()
+              notify(t('notice.loggedIn', { provider: authorization.label }))
+              return
+            }
+            Promise.resolve().then(() => load()).then(directory => {
+              const rows = directory.rows.filter(row => row.provider === target.provider)
+              if (rows.length === 0) {
+                reloadModelSurfaces()
+                notify(t('notice.loggedIn', { provider: authorization.label }))
+                return
+              }
+              const configuration = {
+                models: rows.map(row => ({ id: row.model, ...(row.modelName === undefined ? {} : { name: row.modelName }) })),
+              }
+              void save(target, configuration).then(() => {
+                reloadModelSurfaces()
+                notify(t('notice.loggedIn', { provider: authorization.label }))
+              }, (reason: unknown) => {
+                reloadModelSurfaces()
+                notify(t('notice.loggedIn', { provider: authorization.label }))
+                notify(reason instanceof Error ? reason.message : String(reason), 'warning')
+              })
+            }, () => {
+              reloadModelSurfaces()
+              notify(t('notice.loggedIn', { provider: authorization.label }))
+            })
+          }, (reason: unknown) => {
+            reloadModelSurfaces()
+            notify(reason instanceof Error ? reason.message : String(reason), 'error')
+          })
+        },
+        back: () => { setProviderAction({ kind: 'configure', target: providerAction.target }) },
+      })
+    } else if (providerAction?.kind === 'subscribe-logout' && props.logoutProviderAuthorization !== undefined) {
+      modelSurface = createElement(ProviderAuthorizationLogoutPanel, {
+        row: providerAction.authorization,
+        confirm: props.logoutProviderAuthorization,
+        done: () => {
+          setProviderAction(undefined)
+          reloadModelSurfaces()
+          notify(t('notice.loggedOut', { provider: providerAction.authorization.label }))
+        },
+        back: () => { setProviderAction({ kind: 'configure', target: providerAction.target }) },
+      })
+    } else if (providerAction?.kind === 'login'
       && props.beginProviderAuthorization !== undefined
       && props.cancelProviderAuthorization !== undefined
       && props.openAuthorizationUrl !== undefined
@@ -2306,8 +2390,38 @@ export function App(props: AppProps): ReactElement {
         back: () => setProviderAction(undefined),
       })
     } else if (providerAction?.kind === 'configure' && props.saveModelProviderConfiguration !== undefined) {
+      const setupTarget = providerAction.target
+      const setupAuthorization = authorizationForProvider(authorizationDirectory, setupTarget.provider)
       modelSurface = createElement(ProviderSetupPanel, {
-        target: providerAction.target,
+        target: setupTarget,
+        authorization: setupAuthorization,
+        onSubscribe: (() => {
+          const authorization = setupAuthorization
+          if (authorization === undefined) return undefined
+          if (busy) {
+            notify(t('notice.loginIdleOnly'), 'warning')
+            return undefined
+          }
+          if (authorization.inFlight) {
+            notify(t('panel.provider.loginRunning'), 'warning')
+            return undefined
+          }
+          if (authorization.record.configured) {
+            if (props.logoutProviderAuthorization === undefined) {
+              notify(t('notice.logoutUnavailable'), 'warning')
+              return undefined
+            }
+            return () => { setProviderAction({ kind: 'subscribe-logout', target: setupTarget, authorization }) }
+          }
+          if (props.beginProviderAuthorization === undefined
+            || props.cancelProviderAuthorization === undefined
+            || props.openAuthorizationUrl === undefined
+            || props.copyTextValue === undefined) {
+            notify(t('notice.loginUnavailable'), 'warning')
+            return undefined
+          }
+          return () => { setProviderAction({ kind: 'subscribe-login', target: setupTarget, authorization }) }
+        })(),
         effortDonors,
         save: props.saveModelProviderConfiguration,
         saveCredential: props.saveModelProviderCredential,
@@ -2377,27 +2491,6 @@ export function App(props: AppProps): ReactElement {
             return
           }
           setProviderAction({ kind: 'remove', target })
-        },
-        onLogin: (target: ProviderTargetView, authorization: ProviderAuthorizationRow) => {
-          if (busy) {
-            notify(t('notice.loginIdleOnly'), 'warning')
-            return
-          }
-          if (props.beginProviderAuthorization === undefined
-            || props.cancelProviderAuthorization === undefined
-            || props.openAuthorizationUrl === undefined
-            || props.copyTextValue === undefined) {
-            notify(t('notice.loginUnavailable'), 'warning')
-            return
-          }
-          setProviderAction({ kind: 'login', target, authorization })
-        },
-        onLogout: (target: ProviderTargetView, authorization: ProviderAuthorizationRow) => {
-          if (props.logoutProviderAuthorization === undefined) {
-            notify(t('notice.logoutUnavailable'), 'warning')
-            return
-          }
-          setProviderAction({ kind: 'logout', target, authorization })
         },
         onRetry: reloadModelSurfaces,
         onBack: () => setProviderOpen(false),

@@ -64,6 +64,7 @@ import {
   removeProviderSettings,
   saveProviderCredential,
   saveProviderConfiguration,
+  enableProviderSubscription,
   subscribeProviderSettings,
   unsetProviderCredential,
 } from './provider-settings.ts'
@@ -1661,6 +1662,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       loadModelProviders: () => loadProviderSettings(ctx),
       subscribeModelProviders: listener => subscribeProviderSettings(ctx, listener),
       saveModelProviderCredential: (target, key) => saveProviderCredential(ctx, target, key),
+      enableModelProviderSubscription: target => enableProviderSubscription(ctx, target),
       saveModelProviderConfiguration: (target, configuration) => saveProviderConfiguration(ctx, target, configuration),
       discoverModelProvider: (target, request, signal) => discoverProviderModels(ctx, target, request, signal),
       unsetModelProviderCredential: target => unsetProviderCredential(ctx, target),
