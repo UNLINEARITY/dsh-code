@@ -41,7 +41,7 @@ describe('global launcher aliases', () => {
   })
 
   it('pins setup to this release so pnpm can install it on publication day', () => {
-    expect(setupBundle([])).toBe('dsh-code@1.3.0')
+    expect(setupBundle([])).toBe('dsh-code@1.4.0')
   })
 
   it('starts dsh with inherited stdio and preserves its exit code', () => {
@@ -356,7 +356,7 @@ describe('update orchestration', () => {
   describe('buildUpdateStatus', () => {
     const registry = (): Record<string, PackagePeers | undefined> => ({
       // view(subject) returns the FIELD value, so the peers map is bare.
-      'dsh-code@1.3.1': { '@deepseek-ai/dsh-session': '0.1.5-rc.2' },
+      'dsh-code@1.4.1': { '@deepseek-ai/dsh-session': '0.1.5-rc.2' },
     })
     // Profile readers stay injectable: the real machine state must not leak
     // into these contract tests (a link-mounted dev profile would flip every
@@ -365,14 +365,14 @@ describe('update orchestration', () => {
 
     it('reports an aligned upgrade with the plugin carry and no blockers', () => {
       const status = buildUpdateStatus({
-        view: subjectParts => subjectParts[0] === 'dsh-code' ? '1.3.1' : registry()[subjectParts[0]],
+        view: subjectParts => subjectParts[0] === 'dsh-code' ? '1.4.1' : registry()[subjectParts[0]],
         installedDsh: () => '0.1.5-rc.1',
         ...readers,
       })
-      expect(status.code).toEqual({ running: packageVersion, latest: '1.3.1' })
+      expect(status.code).toEqual({ running: packageVersion, latest: '1.4.1' })
       expect(status.host).toEqual({ installed: '0.1.5-rc.1', targetLine: '0.1.5-rc.2' })
       expect(status.plan.dshSpec).toBe('@deepseek-ai/dsh@0.1.5-rc.2')
-      expect(status.plan.codeSpec).toBe('dsh-code@1.3.1')
+      expect(status.plan.codeSpec).toBe('dsh-code@1.4.1')
       expect(status.blockers).toEqual({ registry: null, downgrade: false, localCheckout: null })
       expect(status.upToDate).toBe(false)
     })

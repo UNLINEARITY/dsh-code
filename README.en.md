@@ -31,8 +31,8 @@ Install from npm (recommended). `/update` and `deepseek update --apply` both wor
 
 ```sh
 npm install -g @deepseek-ai/dsh@0.1.5-rc.2 pnpm
-npm install -g dsh-code@1.3.0
-dsh plugin --profile cli add dsh-code@1.3.0
+npm install -g dsh-code@1.4.0
+dsh plugin --profile cli add dsh-code@1.4.0
 ```
 
 When npm is unreachable (restricted network, a mirror outage), install the GitHub Release tarball instead. CI builds it on every tag and attaches it to the release; lib is prebuilt, so the installing machine needs no toolchain:

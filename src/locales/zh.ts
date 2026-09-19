@@ -105,8 +105,8 @@ export const zh: MessageCatalog = {
 
   // Transcript document panel (/resume details)
   'document.loading': '转录加载中…',
-  'attach.bar': '观察模式 · {label} · r 重载 · esc/ctrl+d 返回',
-  'attach.loading': '载入 {label} 的子会话…',
+  'attach.bar': '观察模式 · {label} · r 重新载入 · esc/ctrl+d 返回',
+  'attach.loading': '正在载入 {label} 的子会话…',
   'attach.status': '子代理 {label} · {id} · {turns} 回合',
   'notice.attachUnavailable': '当前配置无法附加子代理会话',
   'document.compact': '转录 · esc 关闭',
@@ -513,8 +513,6 @@ export const zh: MessageCatalog = {
   'panel.setup.mode.login.none': '未登录',
   'panel.setup.mode.login.running': '登录中…',
   'panel.setup.mode.overridden': '⚠ 设置中的 Key 覆盖订阅登录',
-  'panel.setup.mode.subscribeTab': 'tab 网页登录',
-  'panel.setup.mode.subscribeEnter': '回车 登录/登出',
   'panel.setup.title': '/model — 配置 {provider}',
   'panel.setup.footer': '↑↓ 移动 · ←→ 输入/输出 · 空格移除 · e 推理档位 · c 复制推理档位 · tab 按当前方式（订阅=网页登录 / Key=发现） · 回车保存 · esc 返回',
   'panel.discovery.compact': '模型发现 · 终端过窄 · esc 返回',

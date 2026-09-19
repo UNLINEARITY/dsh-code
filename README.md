@@ -33,8 +33,8 @@ DeepSeek Harness 将模型、工具、存储、策略和界面作为插件，通
 
 ```sh
 npm install -g @deepseek-ai/dsh@0.1.5-rc.2 pnpm
-npm install -g dsh-code@1.3.0
-dsh plugin --profile cli add dsh-code@1.3.0
+npm install -g dsh-code@1.4.0
+dsh plugin --profile cli add dsh-code@1.4.0
 ```
 
 npm 不可达时（网络受限、镜像临时故障），改用 GitHub Release tarball。每次打 tag 由 CI 构建并挂到 Release，lib 已预构建，安装机不需要工具链：

@@ -511,8 +511,6 @@ export const en = {
   'panel.setup.mode.login.none': 'not signed in',
   'panel.setup.mode.login.running': 'signing in…',
   'panel.setup.mode.overridden': '⚠ the settings key overrides the plan sign-in',
-  'panel.setup.mode.subscribeTab': 'tab web sign-in',
-  'panel.setup.mode.subscribeEnter': 'enter sign in / out',
   'panel.setup.title': '/model — configure {provider}',
   'panel.setup.footer': '↑↓ move · ←→ in/out · space remove · e efforts · c copy efforts · tab per channel (subscription = web sign-in, key = discover) · enter save · esc back',
   'panel.discovery.compact': 'model discovery · terminal too small · esc back',
