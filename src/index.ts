@@ -128,6 +128,7 @@ import { createUserSettingsPersistence } from './settings-file.ts'
 import { preferencePath, readPreference, savePreference } from './runner/preferences.ts'
 import { createInputHistory } from './runner/input-history.ts'
 import { createSessionIo } from './runner/session-io.ts'
+import { EXPECTED_HARNESS_VERSION, probeRunningHarness, requireHarnessVersion } from './runner/harness-gate.ts'
 import { turnUsages, type UsageView } from './render/usage.ts'
 // Type-only import: merges the projection registry into the Context type so
 // `ctx.get('sessionProjections')` is typed (the service itself is mounted by
@@ -1803,6 +1804,10 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
  * @param config - validated startup config resolved from the tuiStartup provider.
  */
 export function apply(ctx: Context, config: Config): void {
+  // The host resolves every bare @deepseek-ai/* import against its own
+  // installed copies with no version check anywhere on that path, so refuse
+  // to run against an identified-but-different Harness before anything loads.
+  requireHarnessVersion(EXPECTED_HARNESS_VERSION, probeRunningHarness(process.argv[1]))
   // The CLI validated --theme at parse time; the loose config schema falls
   // back to dark for anything unexpected.
   const theme = config.startup.theme === undefined ? undefined : parseThemeName(config.startup.theme)
