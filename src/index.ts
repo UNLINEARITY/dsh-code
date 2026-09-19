@@ -129,6 +129,7 @@ import { preferencePath, readPreference, savePreference } from './runner/prefere
 import { createInputHistory } from './runner/input-history.ts'
 import { createSessionIo } from './runner/session-io.ts'
 import { EXPECTED_HARNESS_VERSION, probeRunningHarness, requireHarnessVersion } from './runner/harness-gate.ts'
+import { resolveStartupConfig } from './runner/startup-config.ts'
 import { turnUsages, type UsageView } from './render/usage.ts'
 // Type-only import: merges the projection registry into the Context type so
 // `ctx.get('sessionProjections')` is typed (the service itself is mounted by
@@ -1808,22 +1809,7 @@ export function apply(ctx: Context, config: Config): void {
   // installed copies with no version check anywhere on that path, so refuse
   // to run against an identified-but-different Harness before anything loads.
   requireHarnessVersion(EXPECTED_HARNESS_VERSION, probeRunningHarness(process.argv[1]))
-  // The CLI validated --theme at parse time; the loose config schema falls
-  // back to dark for anything unexpected.
-  const theme = config.startup.theme === undefined ? undefined : parseThemeName(config.startup.theme)
-  const input = {
-    ...(theme === undefined ? {} : { theme }),
-    ...(config.startup.prompt === undefined ? {} : { prompt: config.startup.prompt }),
-    ...(config.startup.images === undefined ? {} : { images: config.startup.images }),
-  }
-  const startup: TuiStartup =
-    config.startup.kind === 'resume' && config.startup.sessionId !== undefined
-      ? { kind: 'resume', sessionId: config.startup.sessionId, ...input }
-      : config.startup.kind === 'latest'
-        ? { kind: 'latest', ...input }
-        : config.startup.kind === 'named' && config.startup.sessionId !== undefined
-          ? { kind: 'named', sessionId: config.startup.sessionId, ...config.startup.mode === undefined ? {} : { mode: config.startup.mode }, ...input }
-          : { kind: 'fresh', ...config.startup.mode === undefined ? {} : { mode: config.startup.mode }, ...input }
+  const startup = resolveStartupConfig(config)
   // Read through the global service store, not the property proxy: appExit is
   // an optional host value, never an injected dependency.
   const exit = ctx.get('appExit')
