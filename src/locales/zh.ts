@@ -458,7 +458,6 @@ export const zh: MessageCatalog = {
   'panel.provider.notConfiguredDivider': '── 未配置 ──',
   'panel.provider.title': '/model — 供应商',
   'panel.provider.titleCount': '/model — 供应商 · {index}/{total}',
-  'panel.provider.state': '{route} · {value}',
   'panel.provider.key': '密钥 {value}',
   'panel.provider.authConfigured': '供应商认证',
   'panel.provider.noKey': '缺少密钥',

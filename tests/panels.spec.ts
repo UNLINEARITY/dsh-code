@@ -2894,8 +2894,8 @@ describe('/model typing filter — late directory and compact copy', () => {
       // Wait for the cursor row itself, not just the header: the filtered
       // list and its cursor commit in the same render, so anchoring on the
       // row keeps Enter from racing a half-applied directory.
-      for (let i = 0; i < 20 && !output.includes('❯ OpenAI · GPT-5.1'); i += 1) await wait()
-      expect(output).toContain('❯ OpenAI · GPT-5.1')
+      for (let i = 0; i < 20 && !output.includes('❯ OpenAI  GPT-5.1'); i += 1) await wait()
+      expect(output).toContain('❯ OpenAI  GPT-5.1')
       stdin.write('\r')
       await wait()
       expect(picked.map(row => row.model)).toEqual(['gpt-5.1'])

@@ -456,7 +456,6 @@ export const en = {
   'panel.provider.notConfiguredDivider': '── not configured ──',
   'panel.provider.title': '/model — providers',
   'panel.provider.titleCount': '/model — providers · {index}/{total}',
-  'panel.provider.state': '{route} · {value}',
   'panel.provider.key': 'key {value}',
   'panel.provider.authConfigured': 'provider auth',
   'panel.provider.noKey': 'key missing',

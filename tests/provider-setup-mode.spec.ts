@@ -10,10 +10,11 @@ import { describe, expect, it, vi } from 'vitest'
 import { credentialKey, type CredentialKey } from '@deepseek-ai/dsh-credentials'
 import type { AuthorizationInteraction, AuthorizationStatus } from '@deepseek-ai/dsh-authorization'
 import { ProviderAuthorizationPanel } from '../src/panels/authorization-panel.ts'
-import { ProviderPanel, ProviderSetupPanel } from '../src/panels/model-panels.ts'
+import { ModelPanel, ProviderPanel, ProviderSetupPanel } from '../src/panels/model-panels.ts'
 import type { ProviderAuthorizationDirectory, ProviderAuthorizationRow } from '../src/authorization.ts'
 import type { DiscoveredModelView } from '../src/provider-settings.ts'
 import type { ProviderCredentialView, ProviderSettingsDirectory, ProviderTargetView } from '../src/provider-settings.ts'
+import type { ModelRow } from '../src/models.ts'
 
 const wait = async (ms = 100): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
 
@@ -197,6 +198,137 @@ describe('provider setup mode layer', () => {
       expect(harness.onSubscribe).toHaveBeenCalledTimes(1)
     } finally {
       harness.close()
+    }
+  })
+})
+
+describe('model list table alignment', () => {
+  it('aligns the model column behind the padded provider column', async () => {
+    const streams = fakeStreams(100, 24)
+    const row = (provider: string, model: string, modelName: string, image = false): ModelRow =>
+      ({ provider, providerName: provider, model, modelName, ...(image ? { inputModalities: ['text', 'image'] as const } : {}) })
+    const instance = render(createElement(ModelPanel, {
+      directory: { rows: [
+        row('openai', 'gpt-5.6-luna', 'GPT-5.6 Luna', true),
+        row('openai-codex', 'spark', 'GPT-5.3 Codex Spark'),
+        row('xai', 'grok-4.5', 'grok-4.5', true),
+      ], failures: [] },
+      error: undefined,
+      current: '',
+      onSelect: vi.fn(),
+      onProviders: vi.fn(),
+      onRetry: vi.fn(),
+      onClose: vi.fn(),
+    }), { stdin: streams.stdin, stdout: streams.stdout, stderr: streams.stdout, exitOnCtrlC: false, patchConsole: false })
+    try {
+      await wait()
+      const clean = streams.read().replace(/\u001b\[[0-9;?]*[a-zA-Z]/g, '')
+      const lines = clean.split(/\r\n|\r|\n/).filter(line => /GPT-5|grok/.test(line))
+      expect(lines.length).toBeGreaterThanOrEqual(3)
+      // The model names all start at the same offset behind the padded
+      // provider column, whatever the provider's own width.
+      const starts = lines.map(line => line.search(/GPT-5|grok/)).filter(offset => offset >= 0)
+      expect(new Set(starts)).toHaveLength(1)
+    } finally {
+      instance.unmount()
+      streams.stdin.destroy()
+      streams.stdout.destroy()
+    }
+  })
+})
+
+describe('setup page model table alignment', () => {
+  it('aligns the in/out/eff columns across differing id and value widths', async () => {
+    const streams = fakeStreams(110, 30)
+    const instance = render(createElement(ProviderSetupPanel, {
+      target: target('openai', {
+        configured: true,
+        credential: { kind: 'facts', configured: true, writable: true, source: 'file' },
+        configuration: {
+          models: [
+            { id: 'gpt-5.6-luna', contextWindow: 1000000, maxTokens: 128000 },
+            { id: 'gpt-6-astra' },
+          ],
+        },
+      }),
+      authorization: undefined,
+      onSubscribe: undefined,
+      save: vi.fn(async () => {}),
+      saveCredential: vi.fn(async () => {}),
+      discover: neverDiscover,
+      effortDonors: [],
+      done: vi.fn(),
+      back: vi.fn(),
+      onExit: vi.fn(),
+    }), { stdin: streams.stdin, stdout: streams.stdout, stderr: streams.stdout, exitOnCtrlC: false, patchConsole: false })
+    try {
+      await wait()
+      const clean = streams.read().replace(/\u001b\[[0-9;?]*[a-zA-Z]/g, '')
+      const lines = clean.split(/\r\n|\r|\n/).filter(line => line.includes('gpt-'))
+      expect(lines.length).toBeGreaterThanOrEqual(2)
+      // '-' pads to the width of 1000000, so every column starts together.
+      const at = (marker: string): number[] => lines.map(line => line.indexOf(marker)).filter(offset => offset >= 0)
+      expect(new Set(at('in:'))).toHaveLength(1)
+      expect(new Set(at('out:'))).toHaveLength(1)
+      expect(new Set(at('eff:'))).toHaveLength(1)
+    } finally {
+      instance.unmount()
+      streams.stdin.destroy()
+      streams.stdout.destroy()
+    }
+  })
+})
+
+describe('provider list table alignment', () => {
+  it('aligns every column across configured and dormant rows', async () => {
+    const streams = fakeStreams()
+    const directory: ProviderSettingsDirectory = {
+      rows: [
+        target('deepseek-official', { displayName: 'DeepSeek', configured: true, credential: { kind: 'facts', configured: true, writable: true, source: 'file' } }),
+        target('openai', { configured: true, removable: true, credential: { kind: 'facts', configured: true, writable: true, source: 'file' } }),
+        target('openai-codex', { configured: true, removable: true }),
+        target('anthropic', { active: false }),
+      ],
+      writable: true,
+      failures: [],
+    }
+    const authorizations: ProviderAuthorizationDirectory = {
+      rows: [
+        loginRow('openai-codex', { record: { configured: true, kind: 'grant', writable: true } }),
+        loginRow('anthropic'),
+      ],
+      failures: [],
+    }
+    const instance = render(createElement(ProviderPanel, {
+      directory,
+      error: undefined,
+      authorizations,
+      authorizationError: undefined,
+      onConfigure: vi.fn(),
+      onUnset: vi.fn(),
+      onRemove: vi.fn(),
+      onRetry: vi.fn(),
+      onBack: vi.fn(),
+      onExit: vi.fn(),
+    }), { stdin: streams.stdin, stdout: streams.stdout, stderr: streams.stdout, exitOnCtrlC: false, patchConsole: false })
+    try {
+      await wait()
+      const clean = streams.read().replace(/\u001b\[[0-9;?]*[a-zA-Z]/g, '')
+      const lines = clean.split(/\r\n|\r|\n/).filter(line => /deepseek-official|openai-codex|anthropic/.test(line))
+      expect(lines.length).toBeGreaterThanOrEqual(3)
+      // The route-state column starts at the same offset on every row.
+      const offsets = lines.map(line => line.indexOf('active')).filter(offset => offset >= 0)
+      expect(new Set(offsets).size).toBe(1)
+      // The credential column aligns too (key facts vs auth-configured).
+      const keyAt = lines.map(line => line.indexOf('key file')).filter(offset => offset >= 0)
+      expect(new Set(keyAt).size).toBe(1)
+      // And the login column (OAuth vs not logged in) after it.
+      const loginAt = lines.map(line => line.search(/OAuth|not logged in/)).filter(offset => offset >= 0)
+      expect(new Set(loginAt).size).toBe(1)
+    } finally {
+      instance.unmount()
+      streams.stdin.destroy()
+      streams.stdout.destroy()
     }
   })
 })

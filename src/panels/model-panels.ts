@@ -26,7 +26,7 @@ import { PanelGap } from '../ui/panel-gap.ts'
 import { panelAccent } from '../ui/panel-accent.ts'
 import { deleteLastGrapheme } from '../render/editor.ts'
 import { panelViewport, selectionWindow } from '../render/inspector.ts'
-import { displayText, singleLineText, truncateColumns } from '../render/text.ts'
+import { displayText, padColumns, singleLineText, stringWidth, truncateColumns } from '../render/text.ts'
 import { dim, getPalette, inkColor } from '../theme.ts'
 import { t } from '../i18n.ts'
 import { useStableInput } from '../ui/use-stable-input.ts'
@@ -179,6 +179,9 @@ export function ModelPanel({ directory, error, current, onSelect, onProviders, o
   const rowBudget = Math.max(0, viewport.bodyRows - visibleStateRows.length)
   const first = selectionWindow(cursor, filtered.length, rowBudget)
   const visible = rowBudget === 0 ? [] : filtered.slice(first, first + rowBudget)
+  // Column width spans the filtered list, so the alignment holds while the
+  // cursor scrolls within one filter result.
+  const providerWidth = Math.max(0, ...filtered.map(row => stringWidth(displayText(row.providerName))))
   const accent = panelAccent('model', getPalette().brand)
   return createElement(
     Box,
@@ -191,7 +194,9 @@ export function ModelPanel({ directory, error, current, onSelect, onProviders, o
     ...visible.map((row) => {
       const index = filtered.indexOf(row)
       const capability = row.inputModalities?.includes('image') === true ? ' · image' : ''
-      const label = displayText(`${row.providerName} · ${row.modelName}${capability}`)
+      // Table layout: the provider column pads to the filtered list's widest
+      // name so every model lines up behind it.
+      const label = padColumns(displayText(row.providerName), providerWidth) + '  ' + displayText(row.modelName) + capability
       return createElement(
         Text,
         {
@@ -209,17 +214,40 @@ export function ModelPanel({ directory, error, current, onSelect, onProviders, o
   )
 }
 
-/** Compact provider-state copy; only value-free credential facts cross this boundary. */
-function providerStateLabel(row: ProviderTargetView): string {
+/**
+ * The provider-state label split into its table columns: the route state
+ * (active/dormant) and the credential state (key facts, auth-configured, or
+ * missing). The words are the same ones the previous joined label carried;
+ * the table layout pads them into aligned columns instead.
+ */
+function providerStateParts(row: ProviderTargetView): { route: string; credential: string } {
   const route = row.active ? t('panel.provider.active') : t('panel.provider.dormant')
   const credential = row.credential
-  if (credential?.kind === 'error') return t('panel.provider.state', { route, value: t('panel.provider.keyStatusUnavailable') })
+  if (credential?.kind === 'error') return { route, credential: t('panel.provider.keyStatusUnavailable') }
   if (credential?.kind === 'facts') {
-    if (!credential.configured) return t('panel.provider.state', { route, value: t('panel.provider.noKey') })
+    if (!credential.configured) return { route, credential: t('panel.provider.noKey') }
     const source = credential.source === undefined ? t('panel.provider.configured') : singleLineText(credential.source)
-    return t('panel.provider.state', { route, value: `${t('panel.provider.key', { value: source })}${credential.writable ? '' : ` · ${t('panel.provider.readOnly')}`}` })
+    return { route, credential: `${t('panel.provider.key', { value: source })}${credential.writable ? '' : ` · ${t('panel.provider.readOnly')}`}` }
   }
-  return t('panel.provider.state', { route, value: row.configured ? t('panel.provider.authConfigured') : t('panel.provider.noLogin') })
+  return { route, credential: row.configured ? t('panel.provider.authConfigured') : t('panel.provider.noLogin') }
+}
+
+/** One provider row as table cells: identity, route, credential, login, marker. */
+function providerRowCells(
+  row: ProviderTargetView,
+  authorization: ProviderAuthorizationRow | undefined,
+): readonly [string, string, string, string, string] {
+  const identity = row.displayName === row.provider ? row.provider : row.displayName + ' (' + row.provider + ')'
+  const parts = providerStateParts(row)
+  const manualKeyConfigured = row.credential?.kind === 'facts' && row.credential.configured
+  const showAuthorization = !manualKeyConfigured || authorization?.record.configured === true || authorization?.inFlight === true
+  return [
+    identity,
+    parts.route,
+    parts.credential,
+    showAuthorization ? providerAuthorizationStatus(authorization) : '',
+    row.removable ? 'custom' : '',
+  ]
 }
 
 /** The provider-management stage reached from /model with `a`. */
@@ -358,6 +386,14 @@ export function ProviderPanel({ directory, error, authorizations, authorizationE
   const displayLength = sorted.length + (hasSeparator ? 1 : 0)
   const displayCursor = cursor + (hasSeparator && cursor >= configuredCount ? 1 : 0)
   const first = selectionWindow(displayCursor, displayLength, rowBudget)
+  // Column widths span the whole list, so alignment holds while scrolling.
+  const widths = [0, 0, 0, 0] as [number, number, number, number]
+  for (const row of sorted) {
+    const cells = providerRowCells(row, authorizationForProvider(authorizations, row.provider))
+    for (let column = 0; column < 4; column += 1) {
+      widths[column] = Math.max(widths[column], stringWidth(cells[column]))
+    }
+  }
   const itemRows: ReactElement[] = []
   for (let display = first; display < first + rowBudget && display < displayLength; display += 1) {
     if (hasSeparator && display === configuredCount) {
@@ -367,15 +403,18 @@ export function ProviderPanel({ directory, error, authorizations, authorizationE
     const index = hasSeparator && display > configuredCount ? display - 1 : display
     const row = sorted[index]
     if (row === undefined) continue
-    const identity = row.displayName === row.provider ? row.provider : row.displayName + ' (' + row.provider + ')'
+    // Table layout: every cell aligns in its own column so a long name or
+    // key source cannot push the next field out of line. Widths come from
+    // the whole list (stable while scrolling); the marker column is last and
+    // unpadded, and the diagnostic rides after it unclipped.
     const authorization = authorizationForProvider(authorizations, row.provider)
-    const manualKeyConfigured = row.credential?.kind === 'facts' && row.credential.configured
-    const showAuthorization = !manualKeyConfigured || authorization?.record.configured === true || authorization?.inFlight === true
-    const authLabel = showAuthorization ? ' · ' + providerAuthorizationStatus(authorization) : ''
-    // The adapter's configuration diagnostic rides the row (the provider
-    // stays listed and repairable — this is why it did not vanish).
-    const diagnostic = row.diagnostic === undefined ? '' : ' · ! ' + singleLineText(row.diagnostic)
-    const label = identity + ' · ' + providerStateLabel(row) + authLabel + (row.removable ? ' · custom' : '') + diagnostic
+    const cells = providerRowCells(row, authorization)
+    const label = padColumns(cells[0], widths[0]) + '  '
+      + padColumns(cells[1], widths[1]) + '  '
+      + padColumns(cells[2], widths[2]) + '  '
+      + padColumns(cells[3], widths[3]) + '  '
+      + cells[4]
+      + (row.diagnostic === undefined ? '' : '  ! ' + singleLineText(row.diagnostic))
     // Configured rows render in the intermediate brand blue so the in-use
     // group reads at a glance; the dormant tail keeps the dim caption gray.
     const idleColor = row.configured ? inkColor(getPalette().brandMid) : inkColor(getPalette().dim)
@@ -751,6 +790,13 @@ export function ProviderSetupPanel({ target, authorization, onSubscribe, save, s
   const rowBudget = Math.max(0, viewport.bodyRows - stateRows.length - (target.diagnostic === undefined ? 0 : 1) - 3)
   const first = selectionWindow(cursor, models.length + 1, rowBudget)
   const modelRows: ReactElement[] = []
+  // Table columns: the id, the context window, and the output window each
+  // pad to the list's widest value so every row's fields line up. The active
+  // field's editing brackets occupy the padding, so marking never shifts the
+  // columns beside it.
+  const idWidth = Math.max(0, ...models.map(model => stringWidth(model.id)))
+  const contextWidth = Math.max(0, ...models.map(model => stringWidth(model.contextWindow === undefined ? '-' : String(model.contextWindow))))
+  const outputWidth = Math.max(0, ...models.map(model => stringWidth(model.maxTokens === undefined ? '-' : String(model.maxTokens))))
   for (let index = first; index < first + Math.max(0, Math.min(models.length + 1 - first, rowBudget)); index += 1) {
     if (index >= models.length) {
       modelRows.push(createElement(Text, { key: 'add', color: cursor === index ? inkColor(getPalette().brandBright) : inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns('  ' + (cursor === index ? '>' : ' ') + ' + add by id' + (addDraft === '' ? '' : ' ' + addDraft + '▏'), viewport.contentColumns)))
@@ -760,11 +806,16 @@ export function ProviderSetupPanel({ target, authorization, onSubscribe, save, s
     const active = index === cursor
     const context = model.contextWindow === undefined ? '-' : String(model.contextWindow)
     const output = model.maxTokens === undefined ? '-' : String(model.maxTokens)
-    const editing = active && effEditing
-    const tail = editing
-      ? '  eff:' + effDraft + '▏'
-      : '  in:' + (active && field === 'ctx' ? '[' + context + ']' : context) + ' out:' + (active && field === 'out' ? '[' + output + ']' : output) + ' eff:' + effortsSummary(model)
-    modelRows.push(createElement(Text, { key: model.id, color: active ? inkColor(getPalette().brandBright) : inkColor(getPalette().success), wrap: 'truncate-end' }, truncateColumns('  ' + (active ? '>' : ' ') + ' [x] ' + displayText(model.id) + tail, viewport.contentColumns)))
+    const contextCell = active && field === 'ctx'
+      ? padColumns('[' + context + ']', contextWidth + 2)
+      : padColumns(context, contextWidth + 2)
+    const outputCell = active && field === 'out'
+      ? padColumns('[' + output + ']', outputWidth + 2)
+      : padColumns(output, outputWidth + 2)
+    const efforts = active && effEditing
+      ? 'eff:' + effDraft + '▏'
+      : 'eff:' + effortsSummary(model)
+    modelRows.push(createElement(Text, { key: model.id, color: active ? inkColor(getPalette().brandBright) : inkColor(getPalette().success), wrap: 'truncate-end' }, truncateColumns('  ' + (active ? '>' : ' ') + ' [x] ' + padColumns(displayText(model.id), idWidth) + '  in:' + contextCell + ' out:' + outputCell + '  ' + efforts, viewport.contentColumns)))
   }
   const accent = panelAccent('model-configure', getPalette().brand)
   return createElement(

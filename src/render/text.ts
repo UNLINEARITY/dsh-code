@@ -14,6 +14,8 @@
 
 import { graphemeWidth, splitGraphemes, stringWidth } from './width.ts'
 
+export { stringWidth }
+
 /**
  * Compact token count: exact below 1K, then one-decimal-ish K/M.
  * @param n - token count.
