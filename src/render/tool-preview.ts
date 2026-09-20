@@ -11,7 +11,7 @@
  */
 
 /** Keys searched in declaration order when building a preview. */
-const PREVIEW_KEYS = ['command', 'cmd', 'description', 'path', 'pattern', 'query'] as const
+const PREVIEW_KEYS = ['command', 'cmd', 'file_path', 'description', 'path', 'pattern', 'query', 'name'] as const
 
 /**
  * Raw arguments longer than this are skipped without parsing and fall back
@@ -25,6 +25,33 @@ function boundedRawPreview(args: string): string {
   return args.length > 80 ? `${args.slice(0, 77)}...` : args
 }
 
+/** Escape a fixed preview key before embedding it in a bounded regex. */
+function regexKey(key: string): string {
+  return key.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
+}
+
+/**
+ * Recover one complete JSON string property from the bounded head/tail of a
+ * large argument object. Write/edit payloads commonly put a multi-kilobyte
+ * `content` first and `file_path` last; parsing the whole payload is forbidden
+ * on the render path, but the short trailing path is still safe to decode.
+ */
+function boundedStringProperty(args: string, key: string): string | undefined {
+  const slices = [args.slice(0, MAX_PARSE_CHARS), args.slice(-MAX_PARSE_CHARS)]
+  const pattern = new RegExp(`"${regexKey(key)}"\\s*:\\s*("(?:\\\\.|[^"\\\\])*")`, 'u')
+  for (const slice of slices) {
+    const literal = pattern.exec(slice)?.[1]
+    if (literal === undefined) continue
+    try {
+      const value: unknown = JSON.parse(literal)
+      if (typeof value === 'string' && value !== '') return value
+    } catch {
+      // A property crossing the bounded slice edge is ignored.
+    }
+  }
+  return undefined
+}
+
 /**
  * Resolve one bounded preview for raw tool arguments.
  * @param args - raw JSON arguments string as the model produced it.
@@ -33,7 +60,13 @@ function boundedRawPreview(args: string): string {
  */
 export function toolArgumentsPreview(args: string, toolName: string): string {
   if (args === '') return toolName
-  if (args.length > MAX_PARSE_CHARS) return boundedRawPreview(args)
+  if (args.length > MAX_PARSE_CHARS) {
+    for (const key of PREVIEW_KEYS) {
+      const value = boundedStringProperty(args, key)
+      if (value !== undefined) return value
+    }
+    return boundedRawPreview(args)
+  }
   try {
     const parsed: unknown = JSON.parse(args)
     if (parsed !== null && typeof parsed === 'object') {

@@ -243,7 +243,7 @@ export function reasoningLines(text: string, columns: number): readonly StyledLi
  * diff/read/web/raw rows align under them instead of floating two columns
  * shallower.
  */
-function toolDetailLines(detail: ToolDetail, columns: number): readonly StyledLine[] {
+function toolDetailLines(detail: ToolDetail, columns: number, rawStyle: LineStyle): readonly StyledLine[] {
   switch (detail.kind) {
     case 'diff':
       return detail.diffs.flatMap(diff => [
@@ -280,8 +280,8 @@ function toolDetailLines(detail: ToolDetail, columns: number): readonly StyledLi
       return prefixedTextLines(`${detail.url} · HTTP ${detail.statusCode}`, columns, '    ', 'dim')
     case 'raw':
       return [
-        ...prefixedTextLines(detail.text, columns, '    ', 'dim'),
-        ...prefixedTextLines(detail.truncated ? '… (output truncated)' : '(end of output)', columns, '    ', 'dim'),
+        ...prefixedTextLines(detail.text, columns, '    ', rawStyle),
+        ...prefixedTextLines(detail.truncated ? '… (output truncated)' : '(end of output)', columns, '    ', rawStyle),
       ]
     default: {
       const exhaustive: never = detail
@@ -410,12 +410,14 @@ function subDispatchLines(entry: ToolEntry, columns: number): readonly StyledLin
   const width = Math.max(1, Math.floor(columns))
   const rows = entry.subs.flatMap(sub => {
     const mark = sub.state === 'running' ? '●' : sub.state === 'error' ? '⨯' : '⏺'
-    const style: LineStyle = sub.state === 'running' ? 'brand' : sub.state === 'error' ? 'error' : 'dim'
-    const label = sub.preview === '' ? sub.name : `${sub.name} ${sub.preview}`
-    if (sub.state === 'error' && sub.summary !== '') {
-      return textLines(`  ┆ ${mark} ${label} · ${sub.summary}${subDispatchSeconds(sub.durationMs)}`, width, style)
-    }
-    return textLines(`  ┆ ${mark} ${label}${subDispatchSeconds(sub.durationMs)}`, width, style)
+    const markStyle: LineStyle = sub.state === 'running' ? 'brand' : sub.state === 'error' ? 'error' : 'success'
+    return hangingStyledLines([
+      lineSegment(`${mark} `, markStyle),
+      lineSegment(sub.name, 'brand'),
+      lineSegment(sub.preview === '' ? '' : ` ${sub.preview}`, 'dim'),
+      lineSegment(sub.state === 'error' && sub.summary !== '' ? ` · ${sub.summary}` : '', sub.state === 'error' ? 'error' : 'dim'),
+      lineSegment(subDispatchSeconds(sub.durationMs), 'dim'),
+    ], width, '  ┆ ', 'dim', '  ┆ ', 'dim')
   })
   if (entry.subsDropped === 0) return rows
   return [...rows, ...textLines(`  ┆ … ${entry.subsDropped} earlier dispatch${entry.subsDropped === 1 ? '' : 'es'}`, width, 'dim')]
@@ -491,7 +493,7 @@ export function transcriptEntryLines(
       const mark = entry.state === 'running' ? '●' : entry.state === 'error' ? '⨯' : '⏺'
       const markStyle: LineStyle = entry.state === 'running' ? 'brand' : entry.state === 'error' ? 'error' : 'success'
       const summaryStyle: LineStyle = entry.state === 'error' ? 'error' : 'dim'
-      const lines = [
+      const invocation = [
         // The invocation row hangs wrapped previews under the call badge.
         ...hangingStyledLines([
           // Global call ordinal — the same number an error line references.
@@ -505,13 +507,35 @@ export function transcriptEntryLines(
         // Nested PTC sub-dispatches (run_code): one bounded row per child
         // call, live while the parent card itself is still running.
         ...subDispatchLines(entry, width),
-        ...(entry.summary === '' ? [] : hangingTextLines(
-          entry.state === 'error' ? `call ${entry.ordinal}: ${entry.summary}` : entry.summary,
-          width, '  ⎿ ', summaryStyle, '    ', summaryStyle,
-        )),
-        ...(entry.detail === undefined ? [] : toolDetailLines(entry.detail, width)),
       ]
-      return showToolDetails ? lines : compactToolLines(lines, width)
+      const summary = entry.summary === '' ? [] : hangingTextLines(
+        entry.state === 'error' ? `call ${entry.ordinal}: ${entry.summary}` : entry.summary,
+        width, '  ⎿ ', summaryStyle, '    ', summaryStyle,
+      )
+      // Compact cards carry the bounded result summary only. Keep one fold
+      // hint when richer detail exists, but not when a complete one-line raw
+      // result is byte-for-byte the summary (that false hint was one symptom
+      // of rendering summary and detail together).
+      if (!showToolDetails) {
+        const rawFullySummarized = entry.detail?.kind === 'raw'
+          && !entry.detail.truncated
+          && entry.detail.text.trim() === entry.summary.trim()
+        const hiddenDetail = entry.detail !== undefined && !rawFullySummarized
+          ? textLines('    … output hidden · Ctrl/Alt+R', width, 'dim').slice(0, 1)
+          : []
+        return compactToolLines([...invocation, ...summary, ...hiddenDetail], width)
+      }
+
+      const detail = entry.detail === undefined
+        ? []
+        : toolDetailLines(entry.detail, width, entry.state === 'error' ? 'error' : 'dim')
+      // Raw output and structured read/diff views already contain the result
+      // represented by `summary`; web details are supplemental metadata, so
+      // those keep both the answer summary and their source/status rows.
+      const detailSupersedesSummary = entry.detail?.kind === 'raw'
+        || entry.detail?.kind === 'read'
+        || entry.detail?.kind === 'diff'
+      return [...invocation, ...(detailSupersedesSummary ? [] : summary), ...detail]
     }
     case 'command': {
       const mark = entry.state === 'running' ? '●' : entry.state === 'error' ? '⨯' : '⏺'
@@ -537,9 +561,12 @@ export function transcriptEntryLines(
         // subagent feed's live rows for the same agent.
         ...entry.members.flatMap(member => {
           const state = member.outcome === 'running' ? '●' : member.outcome === 'failed' ? '⨯' : member.outcome === 'cancelled' ? '⏹' : '⏺'
-          const style: LineStyle = member.outcome === 'running' ? 'brand' : member.outcome === 'failed' ? 'error' : 'dim'
+          const stateStyle: LineStyle = member.outcome === 'running' ? 'brand' : member.outcome === 'failed' ? 'error' : member.outcome === 'cancelled' ? 'dim' : 'success'
           const phase = member.phase === '' ? '' : ` [${member.phase}]`
-          return textLines(`  ┆ ${state} ${member.label}${phase}`, width, style)
+          return hangingStyledLines([
+            lineSegment(`${state} `, stateStyle),
+            lineSegment(`${member.label}${phase}`, 'dim'),
+          ], width, '  ┆ ', 'dim', '  ┆ ', 'dim')
         }),
         ...(entry.membersDropped === 0 ? [] : textLines(`  ┆ … ${entry.membersDropped} earlier member${entry.membersDropped === 1 ? '' : 's'}`, width, 'dim')),
       ]

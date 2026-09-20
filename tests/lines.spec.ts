@@ -193,6 +193,16 @@ describe('styled terminal lines', () => {
     }
   })
 
+  it('keeps ordinary reasoning and its Markdown markers uniformly dim', () => {
+    const lines = reasoningLines('**Current state:** run `pnpm test`\n- complete', 80)
+    expect(textOf(lines)).toBe('✻ **Current state:** run `pnpm test`\n  - complete')
+    expect(lines.flatMap(line => line.segments).every(segment => segment.style === 'dimItalic')).toBe(true)
+  })
+
+  it('keeps explicit blank reasoning rows instead of joining separate thoughts', () => {
+    expect(textOf(reasoningLines('first\n\nsecond', 80))).toBe('✻ first\n  \n  second')
+  })
+
   it('keeps the tool gutter on every wrapped detail row, aligned with the summary hanging indent', () => {
     const raw = '甲'.repeat(300)
     const entry: TranscriptEntry = {
@@ -392,6 +402,11 @@ describe('styled terminal lines', () => {
     expect(text).toContain('┆ ⏺ bash ls · 1.2s')
     expect(text).toContain('┆ ⨯ edit b.ts · boom')
     expect(text).toContain('┆ … 2 earlier dispatches')
+    const rows = transcriptEntryLines(entry, 80, true)
+    const bashRow = rows.find(line => line.segments.some(segment => segment.text === 'bash'))
+    expect(bashRow?.segments).toContainEqual({ text: '⏺ ', style: 'success' })
+    expect(bashRow?.segments).toContainEqual({ text: 'bash', style: 'brand' })
+    expect(bashRow?.segments).toContainEqual({ text: ' ls · 1.2s', style: 'dim' })
     // Collapsed (Ctrl+R fold closed) keeps the bounded three-row window.
     const collapsed = transcriptEntryLines(entry, 80, false)
     expect(collapsed).toHaveLength(3)

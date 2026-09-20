@@ -499,7 +499,7 @@ describe('Ctrl+R reasoning fold', () => {
         type: 'user/message', seq: 4, time: 4,
         data: createUserMessage({ content: [{ type: 'text', text: 'go' }], source: { kind: 'user' } }),
       } as SessionEvent)
-      applyStreamDeltas(store, 1, 1, [{ kind: 'reasoning', text: 'the streaming thought', time: 5 }])
+      applyStreamDeltas(store, 1, 1, [{ kind: 'reasoning', text: '**the streaming thought** with `pnpm test`', time: 5 }])
       await wait()
       const plain = harness.output.text.replace(/\x1b\[[0-9;?]*[A-Za-z]/gu, '')
       expect(plain).toContain('✻ Thinking… (Ctrl/Alt+R to expand)')
@@ -520,7 +520,7 @@ describe('Ctrl+R reasoning fold', () => {
       harness.stdin.write('\x12')
       await wait()
       const expanded = harness.output.text.replace(/\x1b\[[0-9;?]*[A-Za-z]/gu, '')
-      expect(expanded).toContain('the streaming thought')
+      expect(expanded).toContain('**the streaming thought** with `pnpm test`')
       expect(expanded).not.toContain('Thinking… (Ctrl/Alt+R to expand)')
     } finally {
       instance.unmount()

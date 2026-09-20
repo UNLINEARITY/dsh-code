@@ -234,6 +234,10 @@ describe('tool detail card rows (verbose transcript rendering)', () => {
     expect(flat).toContain('10 | first')
     expect(flat).toContain('11 | second')
     expect(flat).toContain('(window truncated)')
+    const segments = rowsOf(entry).flatMap(line => line.segments)
+    const ordinary = segments.filter(segment => segment.text.includes('b.ts') || segment.text.includes('first'))
+    expect(ordinary.length).toBeGreaterThan(0)
+    expect(ordinary.every(segment => segment.style === 'dim')).toBe(true)
   })
 
   it('renders web-search sources with titles, urls, snippets and the count', () => {
@@ -252,15 +256,52 @@ describe('tool detail card rows (verbose transcript rendering)', () => {
     expect(styles).toContain('brand')
   })
 
-  it('renders web-fetch and raw cards with their summaries and end markers', () => {
+  it('renders web-fetch and raw detail with status and end markers', () => {
     const fetch = { kind: 'tool', name: 'fetch', state: 'done', ordinal: 4, preview: '', prompt: '', summary: '', subs: [], detail: { kind: 'web-fetch', url: 'https://x', statusCode: 404 } } as unknown as TranscriptEntry
     const flatFetch = render(rowsOf(fetch))
     expect(flatFetch).toContain('https://x · HTTP 404')
 
     const raw = { kind: 'tool', name: 'bash', state: 'done', ordinal: 5, preview: '', prompt: '', summary: '', subs: [], detail: { kind: 'raw', text: 'done', truncated: true } } as unknown as TranscriptEntry
-    const flatRaw = render(rowsOf(raw))
+    const rawRows = rowsOf(raw)
+    const flatRaw = render(rawRows)
     expect(flatRaw).toContain('done')
     expect(flatRaw).toContain('… (output truncated)')
+    expect(rawRows.flatMap(line => line.segments)).toContainEqual({ text: '⏺ ', style: 'success' })
+    expect(rawRows.flatMap(line => line.segments)).toContainEqual({ text: 'bash', style: 'brand' })
+    expect(rawRows.flatMap(line => line.segments)).toContainEqual({ text: 'done', style: 'dim' })
+    expect(rawRows.flatMap(line => line.segments)).toContainEqual({ text: '… (output truncated)', style: 'dim' })
+  })
+
+  it('does not repeat summaries already represented by raw, read, or diff detail', () => {
+    const raw = { kind: 'tool', name: 'bash', state: 'done', ordinal: 6, preview: 'curl', prompt: '', summary: 'HTTP 200', subs: [], detail: { kind: 'raw', text: 'HTTP 200', truncated: false } } as unknown as TranscriptEntry
+    const rawFlat = render(rowsOf(raw))
+    expect(rawFlat.match(/HTTP 200/gu)).toHaveLength(1)
+
+    const read = { kind: 'tool', name: 'read', state: 'done', ordinal: 7, preview: 'a.ts', prompt: '', summary: 'duplicate read summary', subs: [], detail: { kind: 'read', path: 'a.ts', offset: 1, totalLines: 1, truncated: false, lines: [{ number: 1, text: 'content' }] } } as unknown as TranscriptEntry
+    const readFlat = render(rowsOf(read))
+    expect(readFlat).not.toContain('duplicate read summary')
+    expect(readFlat).toContain('1 | content')
+    expect(rowsOf(read).flatMap(line => line.segments)).toContainEqual({ text: ' a.ts', style: 'dim' })
+
+    const diff = { kind: 'tool', name: 'edit', state: 'done', ordinal: 8, preview: 'a.ts', prompt: '', summary: 'Updated file', subs: [], detail: { kind: 'diff', diffs: [{ path: 'a.ts', truncated: false, lines: [{ mark: '+', text: 'new' }] }] } } as unknown as TranscriptEntry
+    const diffFlat = render(rowsOf(diff))
+    expect(diffFlat).not.toContain('Updated file')
+    expect(diffFlat).toContain('+new')
+  })
+
+  it('keeps summaries when web detail is supplemental metadata', () => {
+    const fetch = { kind: 'tool', name: 'web_fetch', state: 'done', ordinal: 9, preview: 'https://x', prompt: '', summary: 'page body', subs: [], detail: { kind: 'web-fetch', url: 'https://x', statusCode: 200 } } as unknown as TranscriptEntry
+    const flat = render(rowsOf(fetch))
+    expect(flat).toContain('page body')
+    expect(flat).toContain('https://x · HTTP 200')
+  })
+
+  it('keeps compact cards summary-only without false hidden-output hints', () => {
+    const entry = { kind: 'tool', name: 'bash', state: 'done', ordinal: 10, preview: 'curl', prompt: '', summary: 'HTTP 200', subs: [], detail: { kind: 'raw', text: 'HTTP 200', truncated: false } } as unknown as TranscriptEntry
+    const flat = render(transcriptEntryLines(entry, columns, true, true, false))
+    expect(flat.match(/HTTP 200/gu)).toHaveLength(1)
+    expect(flat).not.toContain('(end of output)')
+    expect(flat).not.toContain('output hidden')
   })
 
   it('keeps verbose detail rows within the terminal column budget', () => {

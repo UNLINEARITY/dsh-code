@@ -132,7 +132,7 @@ describe('keyboard protocol and transcript alignment', () => {
     }
   })
 
-  it('folds tool output by default and expands wrapped summaries with Ctrl+R', async () => {
+  it('folds tool output by default and expands full detail with Ctrl+R', async () => {
     const harness = createTty(40, 30)
     const { stdin, output } = harness
     const callId = 'wide-tool' as ToolCallId
@@ -162,16 +162,14 @@ describe('keyboard protocol and transcript alignment', () => {
       output.text = ''
       stdin.write('\x12')
       await wait()
-      // The expanded settled card's ⎿ row wraps; every continuation line
-      // starts with the four-space hanging indent, never at column zero.
-      const lines = output.text.split('\n')
-      const arrow = lines.findIndex(line => line.includes('\u23bf'))
-      expect(arrow).toBeGreaterThanOrEqual(0)
-      const continuations = lines.slice(arrow + 1).filter(line => line.trim() !== '' && line.includes('summary'))
-      expect(continuations.length).toBeGreaterThan(0)
-      for (const line of continuations) {
-        expect(line.startsWith('    ')).toBe(true)
-      }
+      // Expanded raw detail supersedes the bounded ⎿ summary instead of
+      // printing the same output twice. Every wrapped detail row keeps the
+      // tool card's four-space gutter.
+      expect(output.text).not.toContain('\u23bf')
+      expect(output.text).toContain('(end of output)')
+      const detailLines = output.text.split('\n').filter(line => line.includes('summary'))
+      expect(detailLines.length).toBeGreaterThan(0)
+      for (const line of detailLines) expect(line.startsWith('    ')).toBe(true)
     } finally {
       instance.unmount()
       stdin.destroy()
