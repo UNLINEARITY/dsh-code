@@ -164,6 +164,7 @@ import {
   clampScroll,
   followInspectorCursor,
   inspectorViewport,
+  inspectableTranscriptEntries,
   layoutGutterRows,
   liveRegionBudget,
   moveScroll,
@@ -1412,7 +1413,8 @@ interface SettledRowsCache {
   /** The flat row list (header + optional hint + per-entry before/box/after). */
   flat: ReactElement[]
   /** Settled entries dropped from the window's head (rendering only — the
-   * event log keeps everything; Ctrl+O and /export read it directly). */
+   * event log keeps everything; /export reads all of it and Ctrl+O reads its
+   * inspectable entries). */
   droppedEntries: number
   /** Physical rows the window's entries contribute (excludes header/hint). */
   totalRows: number
@@ -1474,8 +1476,9 @@ function settledTrimHint(droppedEntries: number, columns: number): ReactElement 
  *
  * RENDERED-HISTORY CAP: the window holds at most `rowCap` physical rows of
  * settled transcript (header and hint reserved on top). The cap exists only
- * here — the event log, the store projection, /export, Ctrl+O, and /resume
- * keep the full history. Ink 5's <Static> is a consumption counter
+ * here — the event log, the store projection, /export, and /resume keep the
+ * full history; Ctrl+O keeps its inspectable subset. Ink 5's <Static> is a
+ * consumption counter
  * (items.slice(index) keyed on length): deleting head items mid-stream while
  * appending tail items can permanently swallow new rows, so the append branch
  * NEVER drops the head — it only accounts rows and flags `needsTrim` once the
@@ -1935,6 +1938,12 @@ export function App(props: AppProps): ReactElement {
   // The Ctrl+O inspector is the one surface the composer already yields to
   // through verboseOpen; it rides the same gate without a panel row.
   const inspectorVisible = verboseOpen && !approvalPending && !questionPending
+  // Filtering is inspector-only: the durable log and ordinary transcript keep
+  // every reasoning settlement. Avoid scanning long histories while closed.
+  const verboseEntries = useMemo(
+    () => verboseOpen ? inspectableTranscriptEntries(view.entries) : [],
+    [verboseOpen, view.entries],
+  )
   const modalVisible = openPanel !== undefined || inspectorVisible || approvalPending || questionPending
   // While a deletion waits for y/n, the composer takes the keys (the resume
   // panel yields): the confirm is typed IN the input box, not as an invisible
@@ -2802,7 +2811,7 @@ export function App(props: AppProps): ReactElement {
       : undefined,
     verboseOpen && !approvalPending && !questionPending
       ? createElement(MemoVerbosePanel, {
-        entries: view.entries,
+        entries: verboseEntries,
         onClose: closeInspector,
         columns: terminalColumns,
         rows: terminalRows,

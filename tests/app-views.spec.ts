@@ -61,6 +61,59 @@ describe('Ctrl+O history details', () => {
     }
   })
 
+  it('skips reasoning-only assistant settlements in navigation', async () => {
+    const harness = createTty(120, 18)
+    const store = createTranscriptStore([
+      {
+        type: 'user/message',
+        seq: 1,
+        time: 1,
+        data: createUserMessage({
+          content: [{ type: 'text', text: 'Commit the completed changes.' }],
+          source: { kind: 'user' },
+        }),
+      } as SessionEvent,
+      {
+        type: 'assistant/message',
+        seq: 2,
+        time: 2,
+        data: {
+          turn: 1,
+          step: 1,
+          message: createAssistantMessage({
+            content: [{ type: 'text', text: 'Committed the verified changes successfully.' }],
+            source: { provider: 'p', model: 'm' },
+          }),
+        },
+      } as SessionEvent,
+      {
+        type: 'assistant/message',
+        seq: 3,
+        time: 3,
+        data: {
+          turn: 1,
+          step: 2,
+          message: createAssistantMessage({
+            content: [{ type: 'reasoning', text: '**Committing changes to repository**' }],
+            source: { provider: 'p', model: 'm' },
+          }),
+        },
+      } as SessionEvent,
+    ])
+    const instance = renderApp(harness, appProps({ store }))
+    try {
+      await wait()
+      harness.output.text = ''
+      harness.stdin.write('\x0f')
+      await wait()
+      expect(harness.output.text).toContain('history details · entry 2/2 · reply')
+      expect(harness.output.text).toContain('Committed the verified changes successfully.')
+      expect(harness.output.text).not.toContain('Committing changes to repository')
+    } finally {
+      instance.unmount()
+    }
+  })
+
   it('reflows the inspector border when the terminal narrows', async () => {
     const harness = createTty(100, 24)
     const store = createTranscriptStore()

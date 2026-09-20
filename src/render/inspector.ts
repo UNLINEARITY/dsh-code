@@ -1,5 +1,17 @@
 /** Pure viewport, selection, and scrolling rules for exclusive TUI panels. */
 
+import type { TranscriptEntry } from './projection.ts'
+
+/**
+ * Remove assistant settlements that contain reasoning but no final response.
+ * They remain in the durable transcript and in the Ctrl/Alt+R fold; excluding
+ * them only from Ctrl+O navigation prevents short progress thoughts from
+ * appearing as a long run of misleading `reply` entries.
+ */
+export function inspectableTranscriptEntries(entries: readonly TranscriptEntry[]): readonly TranscriptEntry[] {
+  return entries.filter(entry => !(entry.kind === 'assistant' && entry.text.trim() === '' && entry.reasoning.trim() !== ''))
+}
+
 /** Terminal-space allocation for the inspector's one dynamic screen. */
 export interface InspectorViewport {
   /** Maximum dynamic rows, kept strictly below the terminal height. */

@@ -117,7 +117,7 @@ Levels above `high` include `xhigh`, `x-high`, `very-high`, `max`, `maximum`, an
 - Attach images through the initial prompt, repeated `--image` arguments, or by dragging one or more images into the terminal
 - Inspect changes by file with `/diff`, and start a read-only code review with `/review` (a range picker; diffs use full-row green/red)
 - `run_code` lists nested tool calls as they run; workflow runs list their member agents until they finish
-- Copy the latest complete response with `/copy`, and inspect full history and tool details with Ctrl+O
+- Copy the latest complete response with `/copy`, and inspect history and full tool details with Ctrl+O; intermediate replies that contain reasoning but no final text do not occupy their own inspector entry
 - Handle tool approvals, structured questions, plan reviews, multiple selections, and custom answers
 - Control what the Agent may do with permission Presets and sandboxes; add instructions or interrupt while a task is running
 
@@ -220,7 +220,7 @@ The following built-in commands are available inside the TUI. Additional Harness
 | `Up` / `Down` | Recall the previous or next input-history entry |
 | `Tab` | Complete commands, skills, or `@` references; on an empty composer, switch the next message between queue and steer |
 | `@` | Reference workspace files or existing sessions; image files are sent as attachments |
-| `Ctrl+O` | Inspect full history and tool details, with a kind label on each entry (user prompt / reply / tool call, and so on) |
+| `Ctrl+O` | Inspect history and full tool details; intermediate replies with reasoning but no final text do not occupy their own entry |
 | `Ctrl/Alt+R` | Fold or expand model reasoning; run /vscode-keys first in VS Code-family terminals to pass Ctrl+R through |
 | `Shift+Tab` | Cycle permission Presets, and the plan station when `/plan` is available |
 | `Delete` | Cancel the newest queued message when the composer is empty (steering is not in the queue; press `Esc` to end the turn instead) |

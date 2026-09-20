@@ -1,16 +1,39 @@
 /** Exclusive Ctrl+O inspector viewport and live-history cursor behavior. */
 
 import { describe, expect, it } from 'vitest'
+import type { TranscriptEntry } from '../src/render/projection.ts'
 import {
   clampScroll,
   followInspectorCursor,
   inspectorViewport,
+  inspectableTranscriptEntries,
   moveScroll,
   revealRow,
   selectionWindow,
   layoutGutterRows,
   liveRegionBudget,
 } from '../src/render/inspector.ts'
+
+describe('inspectableTranscriptEntries', () => {
+  const assistant = (text: string, reasoning: string): TranscriptEntry => ({ kind: 'assistant', text, reasoning })
+
+  it('filters reasoning-only assistant settlements without touching the source list', () => {
+    const entries: readonly TranscriptEntry[] = [
+      { kind: 'user', text: 'commit the changes', files: [], images: [], notice: false },
+      assistant('Committed successfully.', ''),
+      assistant('', '**Committing changes to repository**'),
+    ]
+    const visible = inspectableTranscriptEntries(entries)
+    expect(visible).toEqual(entries.slice(0, 2))
+    expect(entries).toHaveLength(3)
+  })
+
+  it('keeps final replies that also carry reasoning and empty non-reasoning replies', () => {
+    const withAnswer = assistant('Final answer', 'private reasoning')
+    const empty = assistant('', '')
+    expect(inspectableTranscriptEntries([withAnswer, empty])).toEqual([withAnswer, empty])
+  })
+})
 
 describe('inspectorViewport', () => {
   it('keeps the dynamic screen strictly shorter than ordinary terminals', () => {
