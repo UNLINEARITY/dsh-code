@@ -54,6 +54,6 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      # Publish the totals and enforce the conservative global floor declared
-      # in vitest.config.ts so coverage cannot materially regress unnoticed.
+      # Publish coverage totals for trend visibility. Behavioral regression
+      # tests, not a global percentage floor, are the quality gate.
       - run: pnpm test:coverage

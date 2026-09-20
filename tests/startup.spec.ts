@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { resolveTuiStartup } from '../src/startup.ts'
+import { apply as applyStartup, resolveTuiStartup } from '../src/startup.ts'
 import type { ThemeName } from '../src/theme.ts'
 
 describe('TUI startup modes', () => {
@@ -37,5 +37,29 @@ describe('TUI startup modes', () => {
     expect(resolveTuiStartup({ resume: 'abc', prompt: 'continue', images: ['a.png'] })).toEqual({
       kind: 'resume', sessionId: 'abc', prompt: 'continue', images: ['a.png'],
     })
+  })
+})
+
+describe('startup provider wiring', () => {
+  /** A context double carrying the inner command line parseCmdline reads. */
+  const startupCtx = (args: readonly string[], provided: Array<[string, unknown]>): never => ({
+    provide: (name: string, value: unknown): void => { provided.push([name, value]) },
+    get: (name: string): unknown => name === 'cmdlineArgs' ? { get: () => args } : name === 'appExit' ? () => {} : undefined,
+  }) as never
+
+  it('apply parses the invocation and publishes the startup service', () => {
+    const provided: Array<[string, unknown]> = []
+    applyStartup(startupCtx(['--resume', 'abc123', '--theme', 'light', 'fix', 'the', 'build'], provided))
+    expect(provided).toHaveLength(1)
+    const [name, value] = provided[0]
+    expect(name).toBe('tuiStartup')
+    expect(value).toEqual({ startup: { kind: 'resume', sessionId: 'abc123', theme: 'light', prompt: 'fix the build' } })
+  })
+
+  it('apply publishes only the prompt-less startup for a bare invocation', () => {
+    const provided: Array<[string, unknown]> = []
+    applyStartup(startupCtx([], provided))
+    expect(provided).toHaveLength(1)
+    expect(provided[0][1]).toEqual({ startup: { kind: 'fresh' } })
   })
 })

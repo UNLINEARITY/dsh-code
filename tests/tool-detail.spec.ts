@@ -3,6 +3,9 @@
 import { describe, expect, it } from 'vitest'
 import { visibleColumns } from '../src/render/markdown.ts'
 import { diffRows, toolResultDetail } from '../src/render/tool-detail.ts'
+import { transcriptEntryLines } from '../src/render/lines.ts'
+import type { StyledLine } from '../src/render/lines.ts'
+import type { TranscriptEntry } from '../src/render/projection.ts'
 
 describe('diffRows', () => {
   it('clips long CJK lines by terminal columns and keeps the ellipsis in budget', () => {
@@ -193,5 +196,80 @@ describe('toolResultDetail hard caps', () => {
       expect(detail.truncated).toBe(true)
       expect(detail.sources).toHaveLength(10)
     }
+  })
+})
+
+/** One searchable string from rendered rows. */
+const render = (lines: readonly StyledLine[]): string => lines.flatMap(line => line.segments).map(segment => segment.text).join('')
+
+describe('tool detail card rows (verbose transcript rendering)', () => {
+  const columns = 80
+  const rowsOf = (entry: TranscriptEntry): readonly StyledLine[] =>
+    transcriptEntryLines(entry, columns, true, true, true)
+
+  it('renders diff cards with per-file headers and tinted marks', () => {
+    const entry = { kind: 'tool', name: 'edit', state: 'done', ordinal: 1, preview: '', prompt: '', summary: '', subs: [], detail: { kind: 'diff', diffs: [
+      { path: 'src/a.ts', truncated: false, lines: [
+        { mark: '-', text: 'old' }, { mark: '+', text: 'new' }, { mark: ' ', text: 'ctx' },
+      ] },
+    ] } } as unknown as TranscriptEntry
+    const rows = rowsOf(entry)
+    const flat = render(rows)
+    expect(flat).toContain('src/a.ts')
+    expect(flat).toContain('-old')
+    expect(flat).toContain('+new')
+    expect(flat).toContain(' ctx')
+    expect(flat).not.toContain('(diff truncated)')
+    const styles = rows.flatMap(line => line.segments).map(seg => seg.style)
+    expect(styles).toContain('diffAdd')
+    expect(styles).toContain('diffDel')
+  })
+
+  it('renders a read window with the line range and numbered rows', () => {
+    const entry = { kind: 'tool', name: 'read', state: 'done', ordinal: 2, preview: '', prompt: '', summary: '', subs: [], detail: { kind: 'read', path: 'b.ts', offset: 10, totalLines: 100, truncated: true, lines: [
+      { number: 10, text: 'first' }, { number: 11, text: 'second' },
+    ] } } as unknown as TranscriptEntry
+    const flat = render(rowsOf(entry))
+    expect(flat).toContain('b.ts · lines 10-11 of 100')
+    expect(flat).toContain('10 | first')
+    expect(flat).toContain('11 | second')
+    expect(flat).toContain('(window truncated)')
+  })
+
+  it('renders web-search sources with titles, urls, snippets and the count', () => {
+    const entry = { kind: 'tool', name: 'web_search', state: 'done', ordinal: 3, preview: '', prompt: '', summary: '', subs: [], detail: { kind: 'web-search', truncated: false, sources: [
+      { title: 'Docs', url: 'https://docs.example', snippet: 'the answer' },
+      { title: undefined, url: 'https://bare', snippet: '' },
+    ] } } as unknown as TranscriptEntry
+    const flat = render(rowsOf(entry))
+    expect(flat).toContain('Docs')
+    expect(flat).toContain('https://docs.example')
+    expect(flat).toContain('the answer')
+    expect(flat).toContain('https://bare')
+    expect(flat).toContain('2 sources')
+    // A title row carries the brand style.
+    const styles = rowsOf(entry).flatMap(line => line.segments).map(seg => seg.style)
+    expect(styles).toContain('brand')
+  })
+
+  it('renders web-fetch and raw cards with their summaries and end markers', () => {
+    const fetch = { kind: 'tool', name: 'fetch', state: 'done', ordinal: 4, preview: '', prompt: '', summary: '', subs: [], detail: { kind: 'web-fetch', url: 'https://x', statusCode: 404 } } as unknown as TranscriptEntry
+    const flatFetch = render(rowsOf(fetch))
+    expect(flatFetch).toContain('https://x · HTTP 404')
+
+    const raw = { kind: 'tool', name: 'bash', state: 'done', ordinal: 5, preview: '', prompt: '', summary: '', subs: [], detail: { kind: 'raw', text: 'done', truncated: true } } as unknown as TranscriptEntry
+    const flatRaw = render(rowsOf(raw))
+    expect(flatRaw).toContain('done')
+    expect(flatRaw).toContain('… (output truncated)')
+  })
+
+  it('keeps verbose detail rows within the terminal column budget', () => {
+    const width = 18
+    const entry = { kind: 'tool', name: 'read', state: 'done', ordinal: 6, preview: '', prompt: '', summary: '', subs: [], detail: { kind: 'read', path: '很长的文件名.ts', offset: 5, totalLines: 100, truncated: true, lines: [
+      { number: 5, text: '一段很长的内容 used to verify wrapping' },
+    ] } } as unknown as TranscriptEntry
+    const rows = transcriptEntryLines(entry, width, true, true, true)
+    expect(rows).not.toHaveLength(0)
+    for (const row of rows) expect(visibleColumns(render([row]))).toBeLessThanOrEqual(width)
   })
 })

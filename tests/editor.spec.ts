@@ -8,8 +8,8 @@ describe('latestAssistantText', () => {
       ...createTranscriptView(),
       entries: [
         { kind: 'assistant', text: 'first', reasoning: '' },
-        { kind: 'assistant', text: '', reasoning: 'thinking' },
         { kind: 'assistant', text: 'latest', reasoning: '' },
+        { kind: 'assistant', text: '', reasoning: 'thinking' },
       ],
     } as ReturnType<typeof createTranscriptView>
     expect(latestAssistantText(view)).toBe('latest')

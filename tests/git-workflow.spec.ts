@@ -13,6 +13,10 @@ import {
   parseGitDiffFiles,
   parseGitDiffSpec,
   parseReviewArgument,
+  loadCommitDiff,
+  gitBranch,
+  parseReviewConclusion,
+  reviewSummaryLine,
 } from '../src/git-workflow.ts'
 
 /** Run git in one directory, rejecting with git's own message on failure. */
@@ -28,7 +32,7 @@ function runGit(cwd: string, ...args: string[]): Promise<void> {
 /** One throwaway git repository per test. */
 async function tempRepo(): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), 'dsh-gitwork-'))
-  await runGit(dir, 'init')
+  await runGit(dir, 'init', '--initial-branch=main')
   return dir
 }
 
@@ -197,4 +201,107 @@ describe('Git workflow', () => {
       await rm(dir, { recursive: true, force: true }).catch(() => {})
     }
   }, 120_000)
+})
+
+describe('git workflow adapters', () => {
+  it('loadCommitDiff shows the parent diff and falls back to the full root patch', async () => {
+    const dir = await tempRepo()
+    const head = (): Promise<string> => new Promise((resolve, reject) => {
+      execFile('git', ['rev-parse', 'HEAD'], { cwd: dir }, (error, stdout) => {
+        if (error !== null) reject(new Error(error.message)); else resolve(stdout.trim())
+      })
+    })
+    try {
+      await writeFile(join(dir, 'a.txt'), 'one\n')
+      await runGit(dir, 'add', 'a.txt')
+      await runGit(dir, ...IDENTITY, 'commit', '-m', 'root')
+      const rootSha = await head()
+      // Root commit: no parent, so the show fallback carries the whole patch.
+      const root = await loadCommitDiff(dir, rootSha)
+      expect(root.title).toContain('commit')
+      expect(root.files.map(file => file.path)).toContain('a.txt')
+
+      const controller = new AbortController()
+      controller.abort()
+      await expect(loadCommitDiff(dir, rootSha, controller.signal)).rejects.toThrow()
+
+      await writeFile(join(dir, 'b.txt'), 'two\n')
+      await runGit(dir, 'add', 'b.txt')
+      await runGit(dir, ...IDENTITY, 'commit', '-m', 'second')
+      const secondSha = await head()
+      const second = await loadCommitDiff(dir, secondSha)
+      expect(second.files.map(file => file.path)).toEqual(['b.txt'])
+    } finally {
+      await rm(dir, { recursive: true, force: true }).catch(() => {})
+    }
+  }, 30_000)
+
+  it('gitBranch reads the checked-out branch and degrades outside a repository', async () => {
+    const dir = await tempRepo()
+    try {
+      expect(gitBranch(dir)).toBe('main')
+      const missing = gitBranch(join(dir, 'not-a-repository'))
+      expect(missing).toBe('')
+    } finally {
+      await rm(dir, { recursive: true, force: true }).catch(() => {})
+    }
+  })
+
+  it('loadGitDiff surfaces a bad explicit ref instead of narrowing', async () => {
+    const dir = await tempRepo()
+    try {
+      await writeFile(join(dir, 'a.txt'), 'x\n')
+      await runGit(dir, 'add', 'a.txt')
+      await runGit(dir, ...IDENTITY, 'commit', '-m', 'root')
+      await expect(loadGitDiff(dir, 'no-such-ref')).rejects.toThrow()
+    } finally {
+      await rm(dir, { recursive: true, force: true }).catch(() => {})
+    }
+  }, 30_000)
+})
+
+describe('review conclusion parsing', () => {
+  it('parses whole-text JSON findings, strips [Pn] tags, and keeps the verdict', () => {
+    const text = JSON.stringify({
+      findings: [
+        { title: ' [P1] off-by-one in loop', priority: 1, path: 'src/a.ts', range: 'L10-L12' },
+        { title: 'no priority given' },
+        { title: '   ', priority: 0 },
+        { title: 'priority out of range', priority: 9 },
+        'not an object',
+      ],
+      overall: 'incorrect',
+    })
+    const conclusion = parseReviewConclusion(text)
+    expect(conclusion).toBeDefined()
+    expect(conclusion!.findings.map(finding => finding.title)).toEqual(['off-by-one in loop', 'no priority given', 'priority out of range'])
+    expect(conclusion!.findings[0]).toMatchObject({ priority: 1, path: 'src/a.ts', range: 'L10-L12' })
+    expect(conclusion!.findings[1].priority).toBeUndefined()
+    expect(conclusion!.overall).toBe('incorrect')
+  })
+
+  it('falls back to the first balanced JSON object inside prose and accepts correct', () => {
+    const conclusion = parseReviewConclusion(`I reviewed it.\nhere you go: {"findings":[{"title":"x","priority":3}],"overall":"correct"} trailing words {"discarded":true}`)
+    expect(conclusion).toBeDefined()
+    expect(conclusion!.findings).toEqual([{ priority: 3, title: 'x' }])
+    expect(conclusion!.overall).toBe('correct')
+  })
+
+  it('returns undefined for non-JSON and malformed replies', () => {
+    expect(parseReviewConclusion('looks good to me')).toBeUndefined()
+    expect(parseReviewConclusion('[1, 2, 3]')).toBeUndefined()
+    expect(parseReviewConclusion('{"findings": 5}')).toBeDefined()
+    expect(parseReviewConclusion('{not json {"a":1}')).toBeUndefined()
+  })
+
+  it('summary line counts per priority and phrases the verdicts', () => {
+    const at = (findings: readonly { priority?: number; title: string }[], overall?: 'correct' | 'incorrect'): string =>
+      reviewSummaryLine({ findings, ...(overall === undefined ? {} : { overall }) })
+    expect(at([{ title: 'a', priority: 0 }, { title: 'b', priority: 0 }, { title: 'c', priority: 3 }, { title: 'd' }], 'incorrect'))
+      .toMatch(/P0×2 P3×1/u)
+    expect(at([{ title: 'only' }])).toMatch(/1/u)
+    expect(at([], 'correct')).toMatch(/no issues found/u)
+    expect(at([{ title: 'a', priority: 2 }], 'correct')).toMatch(/correct/u)
+    expect(at([])).toBeTypeOf('string')
+  })
 })

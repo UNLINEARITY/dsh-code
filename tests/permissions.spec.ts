@@ -5,6 +5,8 @@ import {
   applyPendingPermission,
   cyclePermission,
   effectivePermission,
+  listPermissionRows,
+  permissionPresetsFrom,
   selectPermission,
   type PermissionPresetsService,
 } from '../src/permissions.ts'
@@ -66,5 +68,36 @@ describe('permission preset policy', () => {
     const session = { events: [] } as unknown as Session
     expect(() => selectPermission(presets, session, 'missing')).toThrow('unknown preset missing')
     expect(set).not.toHaveBeenCalled()
+  })
+})
+
+describe('permission panel rows and registry probing', () => {
+  it('lists every preset in table order, degrading an unknown description to a bare row', () => {
+    const { presets } = service()
+    // The stock double answers optionOf with the spec's own description.
+    ;(presets as unknown as { optionOf: unknown }).optionOf = (id: string) => ({ description: `${id} preset` })
+    const rows = listPermissionRows(presets)
+    expect(rows.map(row => row.id)).toEqual(['read-only', 'workspace-write', 'danger-full-access'])
+    expect(rows[0]?.description).toBe('read-only preset')
+    // optionOf throwing for one row must not fail the panel load.
+    ;(presets as unknown as { optionOf: unknown }).optionOf = (id: string) => {
+      if (id === 'workspace-write') throw new Error('option retired')
+      return { description: `${id} preset` }
+    }
+    const degraded = listPermissionRows(presets)
+    expect(degraded.map(row => row.id)).toEqual(['read-only', 'workspace-write', 'danger-full-access'])
+    expect(degraded[0]?.description).toBe('read-only preset')
+    expect(degraded[1]?.description).toBeUndefined()
+  })
+
+  it('cyclePermission returns empty when the table has no names', () => {
+    const empty = { names: [], defaultPreset: 'x' } as unknown as PermissionPresetsService
+    expect(cyclePermission(empty, undefined, undefined)).toBe('')
+  })
+
+  it('permissionPresetsFrom reads the optional registry service', () => {
+    const marker = { names: ['a'] } as unknown as PermissionPresetsService
+    expect(permissionPresetsFrom({ get: () => marker } as never)).toBe(marker)
+    expect(permissionPresetsFrom({ get: () => undefined } as never)).toBeUndefined()
   })
 })

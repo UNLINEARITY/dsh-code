@@ -178,3 +178,51 @@ describe('mountQuestionProvider', () => {
     await expect(asked).rejects.toMatchObject({ code: 'ASK_ABORTED' })
   })
 })
+
+describe('question store subscription', () => {
+  it('notifies subscribers on pending changes and stops on unsubscribe', async () => {
+    const { ctx, ask } = harness()
+    const store = mountQuestionProvider(ctx, () => true)
+    let notifications = 0
+    const unsubscribe = store.subscribe(() => { notifications += 1 })
+    expect(store.getSnapshot().pending).toBeUndefined()
+
+    const asked = ask(request([{ id: 'q1', question: 'which?', options: [{ label: 'A' }] }]))
+    await settle()
+    expect(notifications).toBeGreaterThan(0)
+    expect(store.getSnapshot().pending?.request.questions[0]?.question).toBe('which?')
+
+    const beforeClear = notifications
+    store.submit(store.getSnapshot().pending!, { answers: [{ id: 'q1', selected: ['A'] }] })
+    await settle()
+    expect(notifications).toBeGreaterThan(beforeClear)
+    expect(store.getSnapshot().pending).toBeUndefined()
+
+    unsubscribe()
+    void asked
+  })
+
+  it('submit and cancel ignore a stale pending object after the queue advances', async () => {
+    const { ctx, ask } = harness()
+    const store = mountQuestionProvider(ctx, () => true)
+    const first = ask(request([{ id: 'a', question: 'first', options: [{ label: '1' }] }]))
+    const second = ask(request([{ id: 'b', question: 'second', options: [{ label: '2' }] }]))
+    const secondFailure = second.catch((error: unknown) => error)
+    await settle()
+    const stale = store.getSnapshot().pending!
+    store.submit(stale, { answers: [{ id: 'a', selected: ['1'] }] })
+    await settle()
+    const active = store.getSnapshot().pending!
+    expect(active.request.questions[0]?.id).toBe('b')
+
+    // Neither operation may settle the newer request.
+    store.submit(stale, { answers: [{ id: 'a', selected: ['1'] }] })
+    store.cancel(stale)
+    await settle()
+    expect(store.getSnapshot().pending).toBe(active)
+
+    store.cancel(active)
+    await expect(first).resolves.toEqual({ answers: [{ id: 'a', selected: ['1'] }] })
+    await expect(secondFailure).resolves.toMatchObject({ code: 'ASK_ABORTED' })
+  })
+})

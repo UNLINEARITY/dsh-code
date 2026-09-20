@@ -9,7 +9,7 @@ import { render } from 'ink'
 import { describe, expect, it, vi } from 'vitest'
 import { credentialKey, type CredentialKey } from '@deepseek-ai/dsh-credentials'
 import type { AuthorizationInteraction, AuthorizationStatus } from '@deepseek-ai/dsh-authorization'
-import { ProviderAuthorizationPanel } from '../src/panels/authorization-panel.ts'
+import { ProviderAuthorizationLogoutPanel, ProviderAuthorizationPanel } from '../src/panels/authorization-panel.ts'
 import { ModelPanel, ProviderPanel, ProviderSetupPanel } from '../src/panels/model-panels.ts'
 import type { ProviderAuthorizationDirectory, ProviderAuthorizationRow } from '../src/authorization.ts'
 import type { DiscoveredModelView } from '../src/provider-settings.ts'
@@ -397,6 +397,56 @@ describe('provider list without l/o', () => {
       expect(streams.read()).not.toContain('l login')
     } finally {
       instance.unmount()
+      streams.stdin.destroy()
+      streams.stdout.destroy()
+    }
+  })
+})
+
+describe('provider authorization logout panel', () => {
+  it('confirms on y, reports a failure in place, and backs out on n/esc', async () => {
+    const streams = fakeStreams()
+    const confirm = vi.fn(async (row: ProviderAuthorizationRow) => {
+      if (row.provider === 'failing') throw new Error('record locked')
+    })
+    const done = vi.fn()
+    const back = vi.fn()
+    const mount = (provider: string) => render(createElement(ProviderAuthorizationLogoutPanel, {
+      row: loginRow(provider),
+      confirm,
+      done,
+      back,
+    }), { stdin: streams.stdin, stdout: streams.stdout, stderr: streams.stdout, exitOnCtrlC: false, patchConsole: false })
+    try {
+      let instance = mount('openai-codex')
+      await wait()
+      streams.stdin.write('y')
+      await wait()
+      expect(confirm).toHaveBeenCalledTimes(1)
+      expect(done).toHaveBeenCalledTimes(1)
+      instance.unmount()
+
+      // A failing confirm surfaces the error and stays open for retry.
+      instance = mount('failing')
+      await wait()
+      streams.stdin.write('y')
+      await wait()
+      expect(streams.read()).toContain('record locked')
+      // n backs out without confirming again.
+      streams.stdin.write('n')
+      await wait()
+      expect(back).toHaveBeenCalledTimes(1)
+      expect(confirm).toHaveBeenCalledTimes(2)
+      instance.unmount()
+
+      instance = mount('openai-codex')
+      await wait()
+      streams.stdin.write('\x1b')
+      await wait()
+      expect(back).toHaveBeenCalledTimes(2)
+      expect(confirm).toHaveBeenCalledTimes(2)
+      instance.unmount()
+    } finally {
       streams.stdin.destroy()
       streams.stdout.destroy()
     }

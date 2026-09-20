@@ -1,7 +1,7 @@
 /** The rainbow roll: determinism, adjacency, and AA over the bright pool. */
 
 import { describe, expect, it } from 'vitest'
-import { RAINBOW_POOL, parseRainbowArgument, parseRainbowSeed, rainbowRoll, rerollRainbow, rollRainbow } from '../src/rainbow.ts'
+import { RAINBOW_POOL, parseRainbowArgument, parseRainbowSeed, rainbowRoll, rainbowSeedLabel, rerollRainbow, rollRainbow } from '../src/rainbow.ts'
 import type { StatusTone } from '../src/render/status.ts'
 import type { RgbTriple } from '../src/theme.ts'
 
@@ -131,5 +131,14 @@ describe('rainbow roll', () => {
     const other = rerollRainbow(7)
     expect(other.palette).not.toEqual(pinned.palette)
     expect(rainbowRoll()).toBe(other)
+  })
+})
+
+describe('rainbowSeedLabel', () => {
+  it('renders the pinned current roll seed and updates after a reroll', () => {
+    rerollRainbow(4242)
+    expect(rainbowSeedLabel()).toBe('4242')
+    rerollRainbow(7)
+    expect(rainbowSeedLabel()).toBe('7')
   })
 })

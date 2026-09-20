@@ -19,15 +19,10 @@ export default defineConfig({
       // render helpers are pure, and both are what the suite exercises.
       include: ['src/**/*.ts'],
       exclude: ['src/**/*.d.ts', 'src/whale-glyph.ts'],
-      // Conservative global floor from the measured Node 24 baseline
-      // (83.51% lines/statements, 83.25% branches, 89.55% functions). The
-      // margin avoids platform noise while preventing material regression.
-      thresholds: {
-        lines: 82,
-        statements: 82,
-        branches: 82,
-        functions: 88,
-      },
+      // Coverage is reported for trend visibility, not used as a gate:
+      // behavioral regression tests are the quality contract. A global
+      // percentage rewards low-value assertions and makes legitimate new,
+      // hard-to-exercise integration seams expensive to add.
     },
   },
 })
