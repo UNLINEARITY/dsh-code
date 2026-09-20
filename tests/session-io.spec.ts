@@ -19,7 +19,11 @@ import {
   type SessionQueryService,
   type SessionRecord,
 } from '../src/session/session-directory.ts'
-import { createSessionIo } from '../src/runner/session-io.ts'
+import {
+  SESSION_ARTIFACT_READ_CONCURRENCY,
+  createSessionIo,
+  mapConcurrent,
+} from '../src/runner/session-io.ts'
 
 let root = ''
 
@@ -69,6 +73,30 @@ function queryWith(overrides: Partial<SessionQueryService> & { records?: Session
 
 const OPEN_OPTIONS = { sessions: 'roots', cwd: 'all', sort: 'newest', currentCwd: CWD, query: '' } as const
 
+describe('bounded session artifact reads', () => {
+  it('preserves result order without exceeding the worker limit', async () => {
+    let active = 0
+    let maximum = 0
+    const result = await mapConcurrent(
+      Array.from({ length: SESSION_ARTIFACT_READ_CONCURRENCY * 3 }, (_, index) => index),
+      SESSION_ARTIFACT_READ_CONCURRENCY,
+      async value => {
+        active += 1
+        maximum = Math.max(maximum, active)
+        await new Promise(resolve => setTimeout(resolve, 2))
+        active -= 1
+        return value * 2
+      },
+    )
+    expect(maximum).toBe(SESSION_ARTIFACT_READ_CONCURRENCY)
+    expect(result).toEqual(Array.from({ length: SESSION_ARTIFACT_READ_CONCURRENCY * 3 }, (_, index) => index * 2))
+  })
+
+  it('rejects invalid worker limits instead of silently running unbounded', async () => {
+    await expect(mapConcurrent([1], 0, async value => value)).rejects.toThrow(RangeError)
+  })
+})
+
 describe('createSessionIo loadSessions', () => {
   it('refuses when the profile mounts no session query engine', async () => {
     const io = createSessionIo({ sessionQuery: undefined, persistence: undefined, activeSessionId: () => undefined })
@@ -106,6 +134,18 @@ describe('createSessionIo loadSessions', () => {
     })
     const rows = await io.loadSessions(OPEN_OPTIONS)
     expect(rows[0]?.updatedAt).toBe(4242)
+  })
+
+  it('does not swallow cancellation as a missing artifact', async () => {
+    const controller = new AbortController()
+    const reason = new Error('picker closed')
+    controller.abort(reason)
+    const io = createSessionIo({
+      sessionQuery: queryWith({ records: [record('missing-id', 4242)] }),
+      persistence: persistenceWith(async () => ({ close: async () => {} })),
+      activeSessionId: () => undefined,
+    })
+    await expect(io.loadSessions(OPEN_OPTIONS, controller.signal)).rejects.toBe(reason)
   })
 
   it('merges titles and filters by the picker query', async () => {

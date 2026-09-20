@@ -61,6 +61,37 @@ export interface SessionIo {
   readonly loadSessionTranscript: (id: string, signal?: AbortSignal) => Promise<string>
 }
 
+/** Maximum session artifact directories inspected at once by the picker. */
+export const SESSION_ARTIFACT_READ_CONCURRENCY = 16
+
+/**
+ * Map a collection with a fixed worker count while preserving input order.
+ * The picker may own thousands of persisted sessions; an unbounded
+ * `Promise.all` turns those into one filesystem burst and can exhaust handles
+ * on Windows or remote filesystems.
+ *
+ * @internal Exported for the deterministic concurrency regression.
+ */
+export async function mapConcurrent<T, R>(
+  items: readonly T[],
+  concurrency: number,
+  mapper: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  if (!Number.isSafeInteger(concurrency) || concurrency < 1) throw new RangeError('concurrency must be a positive safe integer')
+  const results = new Array<R>(items.length)
+  let next = 0
+  const worker = async (): Promise<void> => {
+    for (;;) {
+      const index = next
+      if (index >= items.length) return
+      next += 1
+      results[index] = await mapper(items[index], index)
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker))
+  return results
+}
+
 /**
  * Bind the session IO to one runner's services.
  * @param services - the query engine, persistence, and the live-session probe.
@@ -80,7 +111,8 @@ export function createSessionIo(services: SessionIoServices): SessionIo {
     const root = jsonlSessionRoot(persistence)
     const updated = new Map<string, number>()
     if (root !== undefined) {
-      await Promise.all(records.map(async record => {
+      const mtimes = await mapConcurrent(records, SESSION_ARTIFACT_READ_CONCURRENCY, async record => {
+        signal?.throwIfAborted()
         try {
           const dir = sessionDirectoryFor(root, record.header.cwd, record.header.id)
           const entries = await readdir(dir, { withFileTypes: true })
@@ -88,12 +120,19 @@ export function createSessionIo(services: SessionIoServices): SessionIo {
             entries.filter(entry => entry.isFile() && isSessionArtifactName(entry.name))
               .map(entry => stat(join(dir, entry.name))),
           )
+          signal?.throwIfAborted()
           const newest = Math.max(...stats.map(info => info.mtimeMs))
-          if (Number.isFinite(newest)) updated.set(record.header.id, newest)
+          return Number.isFinite(newest) ? [record.header.id, newest] as const : undefined
         } catch {
-          // Artifact gone or unreadable: the projection falls back to createdAt.
+          // Cancellation must stop the picker; only a missing/unreadable
+          // artifact degrades to createdAt.
+          signal?.throwIfAborted()
+          return undefined
         }
-      }))
+      })
+      for (const pair of mtimes) {
+        if (pair !== undefined) updated.set(...pair)
+      }
     }
     const projected = projectSessionRows(records, { ...options, query: '' }, updated)
     // Titles are the expensive fold. Fetch the first picker page when idle;
