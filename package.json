@@ -65,7 +65,8 @@
     "typecheck:tests": "tsc -p tsconfig.test.json --noEmit",
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix --max-warnings 0",
-    "verify": "pnpm lint && pnpm typecheck && pnpm typecheck:tests && pnpm test",
+    "perf:check": "tsx scripts/check-performance.ts",
+    "verify": "pnpm lint && pnpm typecheck && pnpm typecheck:tests && pnpm test && pnpm perf:check",
     "gen:whale": "tsx scripts/gen-whale-glyph.ts",
     "prepare": "pnpm build",
     "prepublishOnly": "pnpm audit:prod && pnpm exec tsx scripts/check-release.ts --package-version && pnpm verify && pnpm build"
