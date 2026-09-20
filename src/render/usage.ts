@@ -15,8 +15,7 @@ import type { TokenUsageProjection, TurnTokenUsage } from '@deepseek-ai/dsh-toke
 import { t } from '../i18n.ts'
 import { lineSegment, type LineStyle, type StyledLine, type StyledSegment } from './lines.ts'
 import { visibleColumns } from './markdown.ts'
-import { formatTokens } from './status.ts'
-import { truncateColumns } from './text.ts'
+import { formatTokens, truncateColumns } from './text.ts'
 
 /** One completed turn's exact provider-reported accounting. */
 export interface UsageTurn {
