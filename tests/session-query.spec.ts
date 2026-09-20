@@ -4,7 +4,12 @@ import { describe, expect, it, vi } from 'vitest'
 import { SessionQueryError } from '@deepseek-ai/dsh-session-query'
 import { SessionId, SessionLogOffset, type SessionHeader } from '@deepseek-ai/dsh-session'
 import { SessionPersistenceRevision } from '@deepseek-ai/dsh-session-persistence'
-import { observeStableWithSkip, type EngineSurface } from '../src/session-query.ts'
+import SqliteSessionQueryEngine from '@deepseek-ai/dsh-session-query-sqlite'
+import {
+  assertSessionQueryOverrideContract,
+  observeStableWithSkip,
+  type EngineSurface,
+} from '../src/session-query.ts'
 
 const header = (id: string): SessionHeader => ({ version: 3, id: SessionId(id), createdAt: 1, isSeeded: false })
 
@@ -39,6 +44,22 @@ function makeEngine(sessions: readonly { id: string }[] = [], persistence: Persi
 }
 
 const goodRead = async (_persistence: unknown, id: SessionId) => ({ header: header(id), inheritedEventCount: SessionLogOffset(0), events: [] })
+
+describe('session-query private override contract', () => {
+  it('matches the pinned sqlite engine seam', () => {
+    expect(() => assertSessionQueryOverrideContract(SqliteSessionQueryEngine)).not.toThrow()
+  })
+
+  it('rejects a renamed or signature-changed seam before the bundle mounts', () => {
+    class Renamed {}
+    class Changed {
+      _observeStable(_indexed: unknown): void {}
+    }
+    expect(() => assertSessionQueryOverrideContract(Renamed)).toThrow(/expected _observeStable/u)
+    expect(() => assertSessionQueryOverrideContract(Changed)).toThrow(/expected _observeStable/u)
+    expect(() => assertSessionQueryOverrideContract({})).toThrow(TypeError)
+  })
+})
 
 describe('observeStableWithSkip', () => {
   it('skips an unreadable source with a warning and indexes the rest', async () => {

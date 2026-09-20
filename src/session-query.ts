@@ -224,6 +224,28 @@ export async function observeStableWithSkip(
   throw new SessionQueryError('session-search persistence observation did not stabilize after one retry', 'SESSION_QUERY_PERSISTENCE_FAILED')
 }
 
+/**
+ * Assert the private override seam this compatibility engine relies on.
+ * Harness keeps `_observeStable` private, so TypeScript cannot protect this
+ * subclass when upstream renames the method or changes its call signature.
+ * The exact-version launcher gate prevents unsupported hosts; this import-time
+ * check additionally prevents a newly built bundle from silently mounting an
+ * override the installed base will never call.
+ *
+ * @internal Exported for the compatibility regression.
+ */
+export function assertSessionQueryOverrideContract(candidate: unknown): void {
+  if (typeof candidate !== 'function') throw new TypeError('session-query sqlite engine must be a constructor')
+  const prototype = (candidate as { prototype?: object }).prototype
+  const descriptor = prototype === undefined ? undefined : Object.getOwnPropertyDescriptor(prototype, '_observeStable')
+  const method: unknown = descriptor?.value
+  if (typeof method !== 'function' || method.length !== 2) {
+    throw new Error('incompatible @deepseek-ai/dsh-session-query-sqlite: expected _observeStable(indexed, signal)')
+  }
+}
+
+assertSessionQueryOverrideContract(SqliteSessionQueryEngine)
+
 // The opaque-base cast keeps the private `_observeStable` override legal in
 // TypeScript while inheriting every runtime static (inject, Config, Service
 // metadata) from the real engine class.
