@@ -12,6 +12,7 @@ import type { FileAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type { TodoItem } from '@deepseek-ai/dsh-tool-todo'
 import { graphemeWidth, splitGraphemes } from './width.ts'
+import { sessionEventDisposition } from './projection-events.ts'
 // Type-only imports merge the plugin-owned SessionEventMap variants
 // (agent/inbox/spliced, command/*, compaction/*, goal/change, llm/retry*,
 // plan/mode, permission/preset, sandbox/mode, session/title) into the union
@@ -796,6 +797,10 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
       stats: { ...view.stats, contextSegments: { ...view.stats.contextSegments, system: estimateTokens(shadow.prompt) } },
     }
   }
+  // Known non-transcript events are deliberate no-ops. Unknown plugin events
+  // remain tolerated at runtime, while the known-event coverage test makes a
+  // new first-party kernel event fail CI until its disposition is reviewed.
+  if (sessionEventDisposition(event.type) !== 'transcript') return view
   switch (event.type) {
     case 'user/message': {
       // A queued row retires when its durable user message lands (the agent
@@ -1477,7 +1482,10 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
           : { ...entry, state: data.stopReason })
         return { ...view, entries }
       }
-      return view
+      // The policy classified this event as transcript-visible, so reaching
+      // the end means its reducer branch was omitted. Fail loudly instead of
+      // shipping a silently stale terminal projection.
+      throw new Error(`missing transcript projection for session event "${type}"`)
     }
   }
 }
@@ -1694,6 +1702,7 @@ export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent):
     acc.systemPrompt = shadow.prompt
     acc.stats = { ...acc.stats, contextSegments: { ...acc.stats.contextSegments, system: estimateTokens(shadow.prompt) } }
   }
+  if (sessionEventDisposition(event.type) !== 'transcript') return shadow.changed
   switch (event.type) {
     case 'user/message': {
       const message = event.data
@@ -2211,7 +2220,7 @@ export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent):
           ({ ...entry, state: data.stopReason }))
         return true
       }
-      return false
+      throw new Error(`missing transcript replay projection for session event "${type}"`)
     }
   }
 }
