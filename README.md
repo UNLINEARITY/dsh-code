@@ -119,6 +119,8 @@ DSH-Code 的重点是让 DSH 的 Agent、模型、工具和持久会话可以直
 | Aurora | 两条蓝色光带交错漂移，约 1.5 秒 | 三条不同色调的光带交错漂移，约 1.8 秒 |
 | Pulse | 一个圆环从输入框中心向外扩散，约 1.1 秒 | 两个圆环先后向外扩散，约 1.45 秒 |
 
+`/animation off` 只关闭 Wave/Pulse、主题颜色流动和彩虹 burst 等纯装饰效果；输入光标、streaming caret、busy chase、Thinking/Deep Diving shimmer 与 `Deep diving...` 耗时仍会更新，避免运行中的界面看起来卡死。
+
 ### 4. 编码工作流
 
 - 使用 `@` 引用工作区文件或已有会话；选择 PNG、JPEG、WebP、GIF 时会自动作为真实图片附件
@@ -215,7 +217,7 @@ dsh --profile cli --session my-id    # 使用指定 id 新建会话
 | `/theme` | 切换配色：`dark` / `light` / `prismatic` / `rainbow` / `auto` |
 | `/rainbow [seed]` | 重掷或指定 rainbow 主题的配色种子；无参数换一颗并切到 rainbow |
 | `/language [en\|zh]` | 切换界面语言，默认英文；模型提示词和状态栏事实数据仍为英文 |
-| `/animation` | 开关计时动画（shimmer/追逐/闪烁/切换波浪），`/animation [on\|off]` |
+| `/animation` | 开关装饰动画；输入光标和活动指示始终保留，`/animation [on\|off]` |
 | `/help` | 查看快捷键、内置命令、Harness 命令和用户技能 |
 | `/quit` | 退出 DSH-Code |
 

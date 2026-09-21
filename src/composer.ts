@@ -121,11 +121,11 @@ function deepseekWaveHues(tier: DeepseekWaveTier): readonly [RgbTriple, RgbTripl
     : [palette.brandBright, palette.code, palette.brandMid]
 }
 
-/** Original web StateDot chase used by the busy composer marker. */
+/** Functional busy chase; decorative color flow still follows the preference. */
 function BusyChase({ animated = true }: { animated?: boolean }): ReactElement {
-  const tick = useFrames(BUSY_CHASE_TICK_MS, animated)
-  // Flowing themes (prismatic, rainbow) ride their anchor walk while busy;
-  // every other theme (and the frozen state) keeps the palette's live accent.
+  const tick = useFrames(BUSY_CHASE_TICK_MS, true)
+  // Flowing themes (prismatic, rainbow) ride their anchor walk only when
+  // decorative animation is enabled; the activity glyph always advances.
   const flow = themeFlow()
   const marker = flow !== undefined && animated
     ? flowColor(tick * BUSY_CHASE_TICK_MS + flow.phaseMs, flow.anchors)
@@ -592,7 +592,7 @@ export function Composer({ active, frozen, frozenHint, busy, descriptors, skills
   historyFill: { text: string; index: number } | undefined
   /** Marks the accepted entry consumed (called after the fill is applied). */
   historyConsumed: () => void
-  /** Whether timed animations run (shimmer, chase, blink, wave). */
+  /** Whether decorative animations run; caret and busy activity stay live. */
   animations: boolean
   /** Apply and report one /animation toggle (App persists through the runner). */
   applyAnimations: (enabled: boolean) => void
@@ -647,7 +647,7 @@ export function Composer({ active, frozen, frozenHint, busy, descriptors, skills
   const [preparingImages, setPreparingImages] = useState(false)
   const prepareAbortRef = useRef<AbortController | undefined>(undefined)
   const prepareEpochRef = useRef(0)
-  const { visible: cursorVisible, reset: resetCursorBlink } = useCursorBlink(active && !frozen && !preparingImages && animations)
+  const { visible: cursorVisible, reset: resetCursorBlink } = useCursorBlink(active && !frozen && !preparingImages)
   useEffect(() => () => {
     prepareEpochRef.current += 1
     prepareAbortRef.current?.abort()

@@ -511,7 +511,7 @@ describe('DeepSeek model-switch easter egg', () => {
     }
   }, 20_000)
 
-  it('freezes the wave and the busy shimmer entirely when animations are off', async () => {
+  it('disables decorative effects while keeping functional busy activity live', async () => {
     const originalChalkLevel = chalk.level
     chalk.level = 3
     const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0)
@@ -577,14 +577,21 @@ describe('DeepSeek model-switch easter egg', () => {
       // …and the sweep never paints a single wave background.
       expect(waveBgCount(output)).toBe(0)
 
-      // Busy without streaming: the Deep diving line paints once, then never
-      // re-renders — its 33ms shimmer timer stays dormant with animations off.
-      store.apply({ type: 'turn/start', seq: 1, time: 1, data: { turn: 1 } } as SessionEvent)
-      await sleep(500)
+      // Busy without streaming: shimmer and the braille chase remain live,
+      // while the elapsed clock owns a 1Hz tick, so disabling decorative
+      // effects never looks like a frozen process.
+      const startedAt = Date.now() - 14_500
+      output = ''
+      store.apply({ type: 'turn/start', seq: 1, time: startedAt, data: { turn: 1 } } as SessionEvent)
+      await sleep(1500)
       expect(output).toContain('Deep diving')
-      const painted = output.length
-      await sleep(700)
-      expect(output.slice(painted)).not.toContain('Deep diving')
+      const plainOutput = output.replace(/\x1b\[[0-9;?]*[A-Za-z]/gu, '')
+      expect(plainOutput).toMatch(/Deep diving\.\.\. 1[56]s/u)
+      const shimmerColors = new Set(output.match(/\x1b\[38;2;\d+;\d+;\d+m/gu) ?? [])
+      expect(shimmerColors.size).toBeGreaterThan(10)
+      const busyFrames = new Set(output.match(/[⣾⣽⣻⢿⡿⣟⣯⣷]/gu) ?? [])
+      expect(busyFrames.size).toBeGreaterThan(1)
+      expect(waveBgCount(output)).toBe(0)
     } finally {
       instance.unmount()
       stdin.destroy()

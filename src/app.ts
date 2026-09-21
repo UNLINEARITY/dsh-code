@@ -365,8 +365,8 @@ export interface AppProps {
   saveLanguage: (name: LanguageName) => void
   /** Apply and persist one /theme selection; the runner owns the theme.json file. */
   saveTheme?: (name: ThemeName) => void
-  /** Whether timed animations run at startup (animations.json; on by default
-   * — like parseAnimationsPref, only an explicit false disables them). */
+  /** Whether decorative animations run at startup (animations.json; on by
+   * default). Functional activity indicators remain live when disabled. */
   animations?: boolean
   /** Apply and persist one /animation toggle; the runner owns the file. */
   saveAnimations?: (enabled: boolean) => void
@@ -380,24 +380,23 @@ export interface AppProps {
   applyEditorKeys: () => Promise<string>
 }
 
-/**
- * The original web StateDot chase used by the busy composer marker. With
- * animations off it freezes on the first frame (still visibly busy).
- */
-function Caret({ animated = true }: { animated?: boolean }): ReactElement {
-  const tick = useFrames(CARET_BLINK_TICK_MS, animated)
+/** Functional streaming caret: activity remains visible in reduced motion. */
+function Caret(): ReactElement {
+  const tick = useFrames(CARET_BLINK_TICK_MS, true)
   return createElement(Text, null, caretVisible(tick) ? '▍' : ' ')
 }
 
 /** One resettable input-caret phase shared by the entire composer. */
-function ShimmerLine({ text, animated = true }: { text: string; animated?: boolean }): ReactElement {
-  const tick = useFrames(DEEP_DIVING_SHIMMER_TICK_MS, animated)
+function ShimmerLine({ text, themeFlowAnimated = true }: { text: string; themeFlowAnimated?: boolean }): ReactElement {
+  // Shimmer is functional activity feedback and always advances. The setting
+  // only gates decorative movement through a flowing theme's anchor colors.
+  const tick = useFrames(DEEP_DIVING_SHIMMER_TICK_MS, true)
   const palette = getPalette()
   // Flowing themes walk their anchors for the shimmer highlight so
   // streaming text glows along the spectrum; other themes keep the bright
   // accent.
   const flow = themeFlow()
-  const highlight = flow !== undefined && animated
+  const highlight = flow !== undefined && themeFlowAnimated
     ? flowColor(tick * DEEP_DIVING_SHIMMER_TICK_MS + flow.phaseMs, flow.anchors)
     : palette.brandBright
   const graphemes = splitGraphemes(text)
@@ -410,11 +409,9 @@ function ShimmerLine({ text, animated = true }: { text: string; animated?: boole
         Text,
         {
           key: `${grapheme.start}-${grapheme.end}`,
-          color: inkColor(!animated
-            ? (sparkle ? palette.brandBright : palette.brandDeep)
-            : sparkle
-              ? deepDivingSparkColor(tick, palette.brandDeep, highlight)
-              : deepDivingGradientColor(index, tick, graphemes.length, palette.brandDeep, highlight)),
+          color: inkColor(sparkle
+            ? deepDivingSparkColor(tick, palette.brandDeep, highlight)
+            : deepDivingGradientColor(index, tick, graphemes.length, palette.brandDeep, highlight)),
           bold: sparkle || undefined,
         },
         grapheme.text,
@@ -429,10 +426,14 @@ function ShimmerLine({ text, animated = true }: { text: string; animated?: boole
  * only once the turn has clearly been running (15s) — anchored to `turn/start`
  * so a resumed mid-turn keeps the real time.
  */
-function DeepDivingLine({ since, animated = true }: { since: number; animated?: boolean }): ReactElement {
+function DeepDivingLine({ since, themeFlowAnimated = true }: { since: number; themeFlowAnimated?: boolean }): ReactElement {
+  // Elapsed time is functional progress, not decoration. Own a low-rate tick
+  // so the clock advances independently of transcript/store updates.
+  const elapsedTick = useFrames(1_000, true)
+  void elapsedTick
   const elapsed = since === 0 ? 0 : Date.now() - since
   const text = elapsed >= 15_000 ? `✻ Deep diving... ${runClock(elapsed)}` : '✻ Deep diving...'
-  return createElement(ShimmerLine, { text, animated })
+  return createElement(ShimmerLine, { text, themeFlowAnimated })
 }
 
 /**
@@ -2813,10 +2814,10 @@ export function App(props: AppProps): ReactElement {
             maxRows: attachAudit.allocation.answer,
             prefix: '  ',
             columns: Math.max(1, terminalColumns - 2),
-          }, attachBusy ? createElement(Caret, { animated: animations }) : undefined)
+          }, attachBusy ? createElement(Caret) : undefined)
           : undefined,
         attachBusy && attachedView.streaming === '' && attachedView.streamingReasoning === ''
-          ? createElement(DeepDivingLine, { since: attachedView.busySince, animated: animations })
+          ? createElement(DeepDivingLine, { since: attachedView.busySince, themeFlowAnimated: animations })
           : undefined,
       ),
       createElement(
@@ -2880,7 +2881,7 @@ export function App(props: AppProps): ReactElement {
             // marker falls back to the static dim row — same as Deep diving
             // always yields the live region to streaming content.
             : view.streaming === ''
-              ? createElement(ShimmerLine, { text: '✻ Thinking… (Ctrl/Alt+R to expand)', animated: animations })
+              ? createElement(ShimmerLine, { text: '✻ Thinking… (Ctrl/Alt+R to expand)', themeFlowAnimated: animations })
               : createElement(StreamTail, {
                 text: 'Thinking… (Ctrl/Alt+R to expand)',
                 prefix: '✻ ',
@@ -2896,10 +2897,10 @@ export function App(props: AppProps): ReactElement {
             // The same two-column gutter as settled replies: streamed text
             // lands exactly where the assembled message will render.
             { text: view.streaming, dim: false, maxRows: auditedAnswerRows, prefix: '  ', columns: Math.max(1, terminalColumns - 2) },
-            busy ? createElement(Caret, { animated: animations }) : undefined,
+            busy ? createElement(Caret) : undefined,
           )
           : undefined,
-        deepDivingVisible ? createElement(DeepDivingLine, { since: view.busySince, animated: animations }) : undefined,
+        deepDivingVisible ? createElement(DeepDivingLine, { since: view.busySince, themeFlowAnimated: animations }) : undefined,
       )
       : undefined,
     transcriptVisible ? createElement(TodoPanel, { todos: view.todos }) : undefined,

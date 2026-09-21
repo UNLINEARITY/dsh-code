@@ -705,6 +705,26 @@ describe('multiline composer', () => {
     }
   })
 
+  it('keeps the functional input caret alive when decorative animations are off', async () => {
+    const originalChalkLevel = chalk.level
+    chalk.level = 1
+    const harness = createTty(80, 24)
+    const instance = renderApp(harness, appProps({ animations: false }))
+    try {
+      await wait()
+      harness.stdin.write('x')
+      await wait()
+      harness.output.text = ''
+      await new Promise(resolve => setTimeout(resolve, 600))
+      expect(harness.output.text.length).toBeGreaterThan(0)
+    } finally {
+      instance.unmount()
+      harness.stdin.destroy()
+      harness.stdout.destroy()
+      chalk.level = originalChalkLevel
+    }
+  })
+
   it('crosses history from a recalled multiline entry; Left still edits inside', async () => {
     const harness = createTty(80, 24)
     let dispatched = ''

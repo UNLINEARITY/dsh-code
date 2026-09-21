@@ -111,6 +111,8 @@ Levels above `high` include `xhigh`, `x-high`, `very-high`, `max`, `maximum`, an
 | Aurora | Two blue light bands drift across one another, about 1.5 seconds | Three differently hued light bands drift across one another, about 1.8 seconds |
 | Pulse | One ring expands outward from the center of the composer, about 1.1 seconds | Two rings expand outward in sequence, about 1.45 seconds |
 
+`/animation off` disables purely decorative effects such as Wave/Pulse, animated theme flow, and rainbow bursts. The input cursor, streaming caret, busy chase, Thinking/Deep Diving shimmer, and `Deep diving...` clock remain live so an active turn never looks frozen.
+
 ### 4. Coding workflow
 
 - Use `@` to reference workspace files or existing sessions; selecting PNG, JPEG, WebP, or GIF files attaches the real image automatically
@@ -207,7 +209,7 @@ The following built-in commands are available inside the TUI. Additional Harness
 | `/theme` | Switch colors: `dark` / `light` / `prismatic` / `rainbow` / `auto` |
 | `/rainbow [seed]` | Reroll or pin the rainbow theme seed; a bare `/rainbow` rolls a new seed and switches to rainbow |
 | `/language [en\|zh]` | Switch the interface language, default English; model prompts and factual status values stay in English |
-| `/animation` | Toggle timed animations (shimmer/chase/blink/switch wave), `/animation [on\|off]` |
+| `/animation` | Toggle decorative animations; input cursors and activity indicators stay live, `/animation [on\|off]` |
 | `/help` | View key bindings, built-in commands, Harness commands, and user skills |
 | `/quit` | Exit DSH-Code |
 
