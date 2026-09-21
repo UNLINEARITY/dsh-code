@@ -1,6 +1,7 @@
 /** Settled transcript rendering, caches, and row budgets. */
 
 import { describe, expect, it, vi } from 'vitest'
+import { visibleColumns } from '../src/render/markdown.ts'
 import {
   type TranscriptEntry,
   type ToolCallId,
@@ -572,8 +573,13 @@ describe('incremental settled transcript cache', () => {
     const instance = renderApp(harness, appProps({ store }))
     try {
       await wait()
-      // Every settled row flushed through <Static> exactly once.
-      expect(output.text.match(/msg-\d+/g)).toHaveLength(120)
+      // Every historical row appears; only the bounded physical-row tail may
+      // repaint while editor/status row reports settle after mount.
+      const initialMessages = output.text.match(/msg-\d+/g) ?? []
+      expect(new Set(initialMessages)).toHaveLength(120)
+      expect(output.text.match(/msg-0/g)).toHaveLength(1)
+      const visibleOutput = output.text.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/gu, '')
+      expect(visibleOutput).not.toMatch(/(?:\n[ \t]*){10}/u)
 
       // A resize triggers one source-backed replay: one clear, then the FULL
       // history re-flushes once (no ghosts, no duplicates, no lost rows).
@@ -591,6 +597,69 @@ describe('incremental settled transcript cache', () => {
     }
   })
 })
+describe('physical-row transcript viewport', () => {
+  it('fills stream contraction with real settled rows and no blank frame', async () => {
+    const harness = createTty(100, 24)
+    const history = Array.from({ length: 30 }, (_, index) => ({
+      type: 'assistant/message',
+      seq: index + 1,
+      time: index + 1,
+      data: {
+        turn: index + 1,
+        step: 1,
+        message: createAssistantMessage({
+          content: [{ type: 'text', text: `tail-${index}` }],
+          source: { provider: 'p', model: 'm' },
+        }),
+      },
+    } as SessionEvent))
+    const store = createTranscriptStore(history)
+    const instance = renderApp(harness, appProps({ store }))
+    try {
+      await wait()
+      harness.output.text = ''
+      store.apply({ type: 'turn/start', seq: 31, time: 31, data: { turn: 31 } } as SessionEvent)
+      applyStreamDeltas(store, 31, 1, [{ kind: 'text', text: 'live answer' }])
+      await wait()
+      expect(harness.output.text).toContain('tail-29')
+      expect(harness.output.text).toContain('live answer')
+      expect(harness.output.text).not.toContain('\x1b[2J')
+      // VS Code auto-wraps a row painted at exactly stdout.columns. Every
+      // first-token row—including the stretched status bar—must leave one
+      // physical column unused or the unreported wrap lifts the bottom band.
+      const firstTokenFrame = harness.output.text
+        .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/gu, '')
+        .replace(/\x1b\][^\x07]*\x07/gu, '')
+      expect(Math.max(...firstTokenFrame.split('\n').map(visibleColumns))).toBeLessThan(harness.stdout.columns)
+
+      harness.output.text = ''
+      store.apply({
+        type: 'assistant/message',
+        seq: 32,
+        time: 32,
+        data: {
+          turn: 31,
+          step: 1,
+          message: createAssistantMessage({
+            content: [{ type: 'text', text: 'settled answer' }],
+            source: { provider: 'p', model: 'm' },
+          }),
+        },
+      } as SessionEvent)
+      store.apply({ type: 'turn/end', seq: 33, time: 33, data: { turn: 31, reason: { kind: 'completed' } } } as SessionEvent)
+      await wait()
+      const visible = harness.output.text.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/gu, '')
+      expect(visible).toContain('settled answer')
+      expect(visible).toContain('tail-29')
+      expect(visible).not.toMatch(/(?:\n[ \t]*){6}/u)
+    } finally {
+      instance.unmount()
+      harness.stdin.destroy()
+      harness.stdout.destroy()
+    }
+  })
+})
+
 describe('stream wrap budget', () => {
   it('wraps streamed body text at the same column settled markdown uses', () => {
     const terminal = 80

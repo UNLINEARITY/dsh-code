@@ -384,6 +384,45 @@ describe('Ctrl+O history details', () => {
     }
   })
 })
+
+describe('bottom-anchored modal viewport', () => {
+  it('fills the rows above /help with frozen real history instead of blanks', async () => {
+    const harness = createTty(100, 24)
+    const store = createTranscriptStore(Array.from({ length: 30 }, (_, index) => ({
+      type: 'assistant/message',
+      seq: index + 1,
+      time: index + 1,
+      data: {
+        turn: index + 1,
+        step: 1,
+        message: createAssistantMessage({
+          content: [{ type: 'text', text: `modal-tail-${index}` }],
+          source: { provider: 'p', model: 'm' },
+        }),
+      },
+    } as SessionEvent)))
+    const instance = renderApp(harness, appProps({ store }))
+    try {
+      await wait()
+      harness.output.text = ''
+      harness.stdin.write('/help')
+      await wait()
+      harness.output.text = ''
+      harness.stdin.write('\r')
+      await wait()
+      const visible = harness.output.text.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/gu, '')
+      expect(visible).toContain('/help')
+      expect(visible).toContain('modal-tail-29')
+      expect(visible).not.toMatch(/(?:\n[ \t]*){6}/u)
+      expect(harness.output.text).not.toContain('\x1b[2J')
+    } finally {
+      instance.unmount()
+      harness.stdin.destroy()
+      harness.stdout.destroy()
+    }
+  })
+})
+
 describe('Ctrl+R reasoning fold', () => {
   it('handles Ctrl+R only while the VS Code terminal reports focus', async () => {
     vi.stubEnv('TERM_PROGRAM', 'vscode')

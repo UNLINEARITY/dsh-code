@@ -160,6 +160,7 @@ import {
   type StatusTone,
 } from './render/status.ts'
 import { displayTail, displayText, padColumns, singleLineText, truncateColumns } from './render/text.ts'
+import { advanceTranscriptViewport, visibleTranscriptRows } from './render/transcript-viewport.ts'
 import {
   clampScroll,
   followInspectorCursor,
@@ -180,6 +181,7 @@ import {
   styledLines,
   textLines,
   transcriptEntryLines,
+  type StyledLine,
 } from './render/lines.ts'
 import {
   composerMaxRows,
@@ -452,6 +454,32 @@ export function streamTailBodyColumns(rowColumns: number, prefix: string, contin
   return Math.max(1, width - prefixColumns)
 }
 
+interface StreamTailLayout {
+  readonly text: string
+  readonly truncated: boolean
+  readonly rows: number
+}
+
+/** Shared physical layout for streaming render and viewport row accounting. */
+function streamTailLayout(text: string, columns: number, maxRows: number, prefix: string, continuationPrefix: string): StreamTailLayout {
+  const safeRows = Math.max(1, maxRows)
+  const contentColumns = streamTailBodyColumns(columns, prefix, continuationPrefix)
+  const initial = displayTail(text, contentColumns, safeRows)
+  const tail = initial.truncated && safeRows > 1
+    ? displayTail(text, contentColumns, safeRows - 1)
+    : initial
+  return {
+    text: tail.text,
+    truncated: tail.truncated,
+    rows: tail.text.split('\n').length + (tail.truncated && safeRows > 1 ? 1 : 0),
+  }
+}
+
+function streamTailPhysicalRows(text: string, columns: number, maxRows: number, prefix = '', continuationPrefix = prefix): number {
+  if (text === '' || maxRows <= 0) return 0
+  return streamTailLayout(text, columns, maxRows, prefix, continuationPrefix).rows
+}
+
 function StreamTail({ text, dim, maxRows, prefix = '', continuationPrefix = prefix, children, columns }: {
   text: string
   dim: boolean
@@ -464,14 +492,8 @@ function StreamTail({ text, dim, maxRows, prefix = '', continuationPrefix = pref
 }): ReactElement {
   const safeRows = Math.max(1, maxRows)
   // Both prefixes participate because every physical row repeats its hanging
-  // indent. The wrap matches settled markdown (row width minus prefix), so
-  // the flush at turn end does not reflow the last paragraph.
-  const contentColumns = streamTailBodyColumns(columns, prefix, continuationPrefix)
-  const initial = displayTail(text, contentColumns, safeRows)
-  // Reserve one row for the omission marker only when a marker is needed.
-  const tail = initial.truncated && safeRows > 1
-    ? displayTail(text, contentColumns, safeRows - 1)
-    : initial
+  // indent. Rendering and viewport accounting consume the exact same layout.
+  const tail = streamTailLayout(text, columns, safeRows, prefix, continuationPrefix)
   const rows = tail.text.split('\n')
   return createElement(
     Box,
@@ -1067,7 +1089,9 @@ function StatusLine({ facts, stats, busy, columns, items, onRows, animated }: {
   const row2Present = layout.row2.left.length > 0
   return createElement(
     Box,
-    { flexDirection: 'column' },
+    // Do not stretch back to the parent width: VS Code autowraps a painted
+    // row at exactly stdout.columns, creating one unreported physical row.
+    { flexDirection: 'column', width: columns },
     renderRow(layout.row1, 's1'),
     row2Present ? renderRow(layout.row2, 's2', STATUS_ROW2_INDENT) : undefined,
   )
@@ -1380,16 +1404,18 @@ function StaticTranscript({ items }: { items: ReactElement[] }): ReactElement {
 
 const MemoStaticTranscript = memo(StaticTranscript)
 
+interface SettledPhysicalRow {
+  /** Stable one-row Static element. */
+  readonly element: ReactElement
+  /** The same row model reused by the mutable viewport tail. */
+  readonly line: StyledLine
+}
+
 interface SettledRowRecord {
-  /** The row Box element (keyed by the entry's settled index). */
-  box: ReactElement
-  /** The roomy-prompt spacer BEFORE the row, or undefined. */
-  before: ReactElement | undefined
-  /** The roomy-prompt spacer AFTER the row, or undefined. */
-  after: ReactElement | undefined
-  /** Physical rows this record contributes (row body plus spacers) — the
-   * unit of the rendered-history cap. */
-  rows: number
+  /** Physical rows for one settled entry, including roomy-prompt spacers. */
+  readonly physical: readonly SettledPhysicalRow[]
+  /** Physical rows this record contributes — the rendered-history-cap unit. */
+  readonly rows: number
 }
 
 /** The incremental settled-history cache (see `computeSettledRows`). */
@@ -1410,8 +1436,10 @@ interface SettledRowsCache {
   epoch: number
   /** The terminal width the rows were wrapped for; a change forces a rebuild. */
   columns: number
-  /** The flat row list (header + optional hint + per-entry before/box/after). */
+  /** Header/hint followed by one element per physical transcript row. */
   flat: ReactElement[]
+  /** Physical transcript rows only (header/hint excluded). */
+  physical: SettledPhysicalRow[]
   /** Settled entries dropped from the window's head (rendering only — the
    * event log keeps everything; /export reads all of it and Ctrl+O reads its
    * inspectable entries). */
@@ -1431,25 +1459,29 @@ interface SettledRowsResult {
   built: number
 }
 
-/** Build one settled row (row Box plus its roomy-prompt spacers and row count). */
+/** Build one settled entry as stable physical rows shared by Static and viewport. */
 function buildSettledRow(entry: TranscriptEntry, index: number, showReasoning: boolean, columns: number): SettledRowRecord {
-  // The SAME physical-row pipeline as the live tail (settledEntryLines).
   // Every row carries its own two-column prefix (user ❯, reply body, tool
-  // cards), which is the whole gutter: no extra container padding, so reply
-  // text starts at the same column as the composer's input text and wrapped
-  // continuations keep their hanging indent instead of resetting to column 0.
-  const roomyPrompt = entry.kind === 'user' && !entry.notice
+  // cards), which is the whole gutter. Physical row identity—not entry
+  // identity—is the viewport currency, so an oversized entry can split cleanly
+  // between native scrollback and the bottom-anchored live tail.
   const lines = settledEntryLines(entry, Math.max(10, columns - 2), showReasoning)
-  return {
-    box: createElement(Box, { key: index }, createElement(StyledRows, { lines })),
-    before: roomyPrompt
-      ? createElement(Box, { key: `prompt-before-${index}`, paddingX: 1 }, createElement(Text, null, ' '))
-      : undefined,
-    after: roomyPrompt
-      ? createElement(Box, { key: `prompt-after-${index}`, paddingX: 1 }, createElement(Text, null, ' '))
-      : undefined,
-    rows: lines.length + (roomyPrompt ? 2 : 0),
+  const physical: SettledPhysicalRow[] = lines.map((line, row) => ({
+    line,
+    element: createElement(Box, { key: `entry-${index}-row-${row}` }, createElement(StyledRows, { lines: [line] })),
+  }))
+  if (entry.kind === 'user' && !entry.notice) {
+    const blank: StyledLine = { segments: [] }
+    physical.unshift({
+      line: blank,
+      element: createElement(Box, { key: `prompt-before-${index}`, paddingX: 1 }, createElement(Text, null, ' ')),
+    })
+    physical.push({
+      line: blank,
+      element: createElement(Box, { key: `prompt-after-${index}`, paddingX: 1 }, createElement(Text, null, ' ')),
+    })
   }
+  return { physical, rows: physical.length }
 }
 
 /** The dim hint row placed under the header once the window has dropped entries. */
@@ -1512,7 +1544,7 @@ export function computeSettledRows(
     // Full rebuild at the CURRENT fold state, newest-first so the cap keeps
     // whole entries and never even parses dropped ones.
     const records = new Map<TranscriptEntry, SettledRowRecord>()
-    const window: ReactElement[] = []
+    const physical: SettledPhysicalRow[] = []
     let windowRows = 0
     let droppedEntries = 0
     let index = settled - 1
@@ -1527,14 +1559,13 @@ export function computeSettledRows(
       }
       records.set(entry, record)
       windowRows += record.rows
-      if (record.after !== undefined) window.unshift(record.after)
-      window.unshift(record.box)
-      if (record.before !== undefined) window.unshift(record.before)
+      physical.unshift(...record.physical)
     }
     const header = createElement(Header, { key: 'header', resumed })
+    const rowElements = physical.map(row => row.element)
     const flat = droppedEntries > 0
-      ? [header, settledTrimHint(droppedEntries, columns), ...window]
-      : [header, ...window]
+      ? [header, settledTrimHint(droppedEntries, columns), ...rowElements]
+      : [header, ...rowElements]
     return {
       cache: {
         entries: entries.slice(droppedEntries, settled),
@@ -1545,6 +1576,7 @@ export function computeSettledRows(
         epoch,
         columns,
         flat,
+        physical,
         droppedEntries,
         totalRows: windowRows,
         needsTrim: false,
@@ -1568,7 +1600,7 @@ export function computeSettledRows(
   // overflow only flags the cache for one trimming replay.
   const records = previous.records
   const suffix: TranscriptEntry[] = []
-  const added: ReactElement[] = []
+  const added: SettledPhysicalRow[] = []
   let deltaRows = 0
   for (let index = previous.entries.length + previous.droppedEntries; index < settled; index++) {
     const entry = entries[index]
@@ -1576,9 +1608,7 @@ export function computeSettledRows(
     records.set(entry, record)
     suffix.push(entry)
     deltaRows += record.rows
-    if (record.before !== undefined) added.push(record.before)
-    added.push(record.box)
-    if (record.after !== undefined) added.push(record.after)
+    added.push(...record.physical)
   }
   const totalRows = previous.totalRows + deltaRows
   const needsTrim = rowCap > 0 && totalRows > rowCap + Math.floor(rowCap / 4)
@@ -1591,7 +1621,8 @@ export function computeSettledRows(
       showReasoning,
       epoch: previous.epoch,
       columns: previous.columns,
-      flat: previous.flat.concat(added),
+      flat: previous.flat.concat(added.map(row => row.element)),
+      physical: previous.physical.concat(added),
       droppedEntries: previous.droppedEntries,
       totalRows,
       needsTrim,
@@ -1964,21 +1995,17 @@ export function App(props: AppProps): ReactElement {
     setVerboseOpen(false)
   }, [approvalPending, questionPending])
 
-  // Append-only transcript: everything up to the first still-mutable entry
-  // (a running tool/retry/command) flushes through Ink's `<Static>` into native
-  // scrollback and is normally never rewritten — the Claude-Code stability
-  // contract that lets arbitrarily long conversations scroll instead of
-  // freezing when the live tree exceeds the terminal height. The dynamic
-  // region below stays small: the streaming tail, modals, composer, and its
-  // status footer. Live stream frames preserve `entries` identity.
+  // Append-only transcript with a physical-row viewport: old FINAL rows flush
+  // through Ink's `<Static>` into native scrollback, while one terminal-sized
+  // suffix remains mutable beside running/streaming rows. The suffix contains
+  // real transcript content—not padding—so once content naturally fills the
+  // screen the composer stays at the bottom through live-to-settled changes.
   //
-  // `computeSettledRows` extends the cached row set incrementally: the
-  // settled prefix is permanently final, so a grown boundary builds ONLY the
-  // newly settled suffix and reuses every cached element — long histories
-  // stop re-creating rows (and re-parsing MarkdownBody) on every durable
-  // event. A source-backed replay (`refreshEpoch` bump: resize / Ctrl+L)
-  // rebuilds the CURRENT row set from index 0,
-  // so the replay stays complete and never ghosts a pending/running tail.
+  // `computeSettledRows` builds stable one-row records incrementally. The
+  // viewport owns a monotonic row-level flush cursor over those records, so an
+  // oversized entry may split cleanly between Static and the live tail. A
+  // source-backed replay (`refreshEpoch` bump: resize / Ctrl+L) rebuilds and
+  // flushes the complete current row set exactly once.
   // Hook order is unconditional. Its dimensions drive every live-region
   // budget before any dynamic rows are constructed.
   const appStdout = useStdout().stdout
@@ -1988,7 +2015,8 @@ export function App(props: AppProps): ReactElement {
   }))
   const terminalSizeRef = useRef(terminalSize)
   const settledRowsCache = useRef<SettledRowsCache | undefined>(undefined)
-  const settledRows = useMemo(() => {
+  const viewportFlushRef = useRef({ sessionKey: props.sessionKey, epoch: refreshEpoch, rows: 0 })
+  const settledRowsResult = useMemo(() => {
     const result = computeSettledRows(
       settledRowsCache.current,
       view.entries,
@@ -1999,7 +2027,7 @@ export function App(props: AppProps): ReactElement {
       terminalSize.columns,
     )
     settledRowsCache.current = result.cache
-    return result.cache.flat
+    return result
   }, [view.entries, settled, showReasoning, props.resumed, refreshEpoch, terminalSize.columns])
 
   // One pending synchronized frame covers a debounced resize or explicit
@@ -2093,41 +2121,93 @@ export function App(props: AppProps): ReactElement {
   // session title; cleared on unmount so the host shell regains its default.
   const tabTitle = view.title === '' ? DEFAULT_TERMINAL_TITLE : view.title
   useTerminalTitle(tabTitle)
-  const allLiveLines = useMemo(
+  // A single physical-row ledger owns the Static/live split. Keep at most one
+  // maximum transcript viewport mutable; as durable rows append, only overflow
+  // crosses the monotonic flush cursor into native scrollback. Temporary chrome
+  // merely slices the retained rows and can reveal them again when it closes.
+  const maximumTranscriptRows = liveRegionBudget({
+    terminalRows,
+    composerRows: 1,
+    statusBarRows: 1,
+    menuRows: 0,
+    gutterRows: composerGutterRows,
+    notice: false,
+    todo: false,
+    agents: false,
+  })
+  const settledPhysical = settledRowsResult.cache.physical
+  const viewportStep = advanceTranscriptViewport(
+    {
+      sessionKey: viewportFlushRef.current.sessionKey,
+      epoch: viewportFlushRef.current.epoch,
+      flushedRows: viewportFlushRef.current.rows,
+    },
+    {
+      sessionKey: props.sessionKey,
+      epoch: refreshEpoch,
+      totalRows: settledPhysical.length,
+      retainedRows: maximumTranscriptRows,
+    },
+  )
+  const flushedRows = viewportStep.staticRows
+  viewportFlushRef.current = {
+    sessionKey: viewportStep.cursor.sessionKey,
+    epoch: viewportStep.cursor.epoch,
+    rows: viewportStep.cursor.flushedRows,
+  }
+  const staticPrefixRows = settledRowsResult.cache.flat.length - settledPhysical.length
+  const settledRows = settledRowsResult.cache.flat.slice(0, staticPrefixRows + flushedRows)
+  const retainedSettledLines = settledPhysical.slice(flushedRows).map(row => row.line)
+  const mutableLiveLines = useMemo(
     () => view.entries.slice(settled).flatMap(
       // Width shrinks with the real terminal (no 10-column floor: on a
-      // narrower terminal the floor silently overflowed every row).
+      // narrower terminal the floor silently overflowed every mutable row).
       entry => transcriptEntryLines(entry, Math.max(1, terminalColumns - 2), showReasoning),
     ),
     [view.entries, settled, terminalColumns, showReasoning],
   )
-  // Reserve the same stream slice from the moment a turn becomes busy. This
-  // keeps the first thinking frame from changing the dynamic-tree geometry
-  // underneath Ink's cursor ledger and avoids a start-of-thinking flash.
-  const liveBudget = busy || streamingActive
+  const allLiveLines = retainedSettledLines.concat(mutableLiveLines)
+
+  // Give streams a bounded provisional maximum, then reclaim every row they
+  // do not ACTUALLY paint for real retained history. Once transcript content
+  // has naturally filled the viewport, this keeps composer geometry constant
+  // through stream growth, settlement, and running-tool replacement—without
+  // synthetic blank rows.
+  const provisionalLiveBudget = busy || streamingActive
     ? Math.max(1, Math.floor(dynamicRows / 3))
     : Math.max(0, dynamicRows - (deepDivingVisible ? 1 : 0))
-  const visibleLiveLines = liveBudget === 0 ? [] : allLiveLines.slice(-liveBudget)
+  const provisionalLiveRows = Math.min(allLiveLines.length, provisionalLiveBudget)
+  const provisionalStreamRows = Math.max(1, dynamicRows - provisionalLiveRows)
+  const provisionalReasoningRows = view.streamingReasoning === ''
+    ? 0
+    : view.streaming === ''
+      ? provisionalStreamRows
+      : provisionalStreamRows <= 1
+        ? 0
+        : showReasoning
+          ? Math.max(1, Math.floor(provisionalStreamRows / 3))
+          : 1
+  const provisionalAnswerRows = view.streaming === ''
+    ? 0
+    : Math.max(1, provisionalStreamRows - provisionalReasoningRows)
+  const streamColumns = Math.max(1, terminalColumns - 2)
+  const reasoningRows = view.streamingReasoning === '' || provisionalReasoningRows === 0
+    ? 0
+    : showReasoning
+      ? streamTailPhysicalRows(view.streamingReasoning, streamColumns, provisionalReasoningRows, '✻ ', '  ')
+      : 1
+  const answerRows = view.streaming === '' || provisionalAnswerRows === 0
+    ? 0
+    : streamTailPhysicalRows(view.streaming, streamColumns, provisionalAnswerRows, '  ')
+  const nonHistoryRows = reasoningRows + answerRows + (deepDivingVisible ? 1 : 0)
+  const visibleHistoryRows = visibleTranscriptRows(allLiveLines.length, nonHistoryRows, dynamicRows)
+  const visibleLiveLines = visibleHistoryRows === 0 ? [] : allLiveLines.slice(-visibleHistoryRows)
 
   // The screen refresh used by /clear and Ctrl+L: a raw ANSI clear (wipe
   // screen AND scrollback, home the cursor) then a Static remount via the
   // key change, which re-flushes the current items from index 0. NEVER
   // console.clear() — it desyncs Ink's internal line ledger against the
   // flushed static rows and garbles every frame after.
-  const streamRows = Math.max(1, dynamicRows - visibleLiveLines.length)
-  const reasoningRows = view.streamingReasoning === ''
-    ? 0
-    : view.streaming === ''
-      ? streamRows
-      : streamRows <= 1
-        ? 0
-        : showReasoning
-          ? Math.max(1, Math.floor(streamRows / 3))
-          : 1
-  const answerRows = view.streaming === '' ? 0 : Math.max(1, streamRows - reasoningRows)
-  // Dynamic-height tripwire: the allocation must fit dynamicRows by
-  // construction; a future edit that breaks the derivation clamps here
-  // (answer, then reasoning, then settled live rows) and warns once.
   const liveAudit = clampLiveAllocation(
     { live: visibleLiveLines.length, reasoning: reasoningRows, answer: answerRows },
     dynamicRows,
@@ -2145,6 +2225,15 @@ export function App(props: AppProps): ReactElement {
     : visibleLiveLines.slice(-liveAudit.allocation.live)
   const auditedReasoningRows = liveAudit.allocation.reasoning
   const auditedAnswerRows = liveAudit.allocation.answer
+  const transcriptViewportFilled = allLiveLines.length + nonHistoryRows >= dynamicRows
+  const modalViewportFilled = allLiveLines.length >= dynamicRows
+  const anchoredSurfaceRows = dynamicRows
+    + (transcriptVisible && view.todos.length > 0 ? 1 : 0)
+    + (transcriptVisible && agentRows.length > 0 ? 1 : 0)
+  const surfaceAnchored = transcriptVisible ? transcriptViewportFilled : modalViewportFilled
+  const frozenModalLines = surfaceAnchored && !transcriptVisible
+    ? allLiveLines.slice(-dynamicRows)
+    : []
   // The surface that currently owns the keyboard, named in the frozen band:
   // an empty composer under a panel must not advertise typing it cannot
   // accept — every key actually feeds the panel (which may or may not
@@ -2215,7 +2304,8 @@ export function App(props: AppProps): ReactElement {
   const attachedView = useSyncExternalStore(subscribeAttached, readAttached)
   const attachedSettled = useMemo(() => settledEntryCount(attachedView.entries), [attachedView.entries])
   const attachedRowsCache = useRef<SettledRowsCache | undefined>(undefined)
-  const attachedSettledRows = useMemo(() => {
+  const attachedViewportFlushRef = useRef({ sessionKey: 'none', epoch: refreshEpoch, rows: 0 })
+  const attachedSettledRowsResult = useMemo(() => {
     const result = computeSettledRows(
       attachedRowsCache.current,
       attachedView.entries,
@@ -2226,8 +2316,34 @@ export function App(props: AppProps): ReactElement {
       terminalSize.columns,
     )
     attachedRowsCache.current = result.cache
-    return result.cache.flat
+    return result
   }, [attachedView.entries, attachedSettled, showReasoning, refreshEpoch, terminalSize.columns])
+  const attachDynamicRows = Math.max(1, terminalRows - 3 - 1 - 1 - 2)
+  const attachedPhysical = attachedSettledRowsResult.cache.physical
+  const attachedViewportStep = advanceTranscriptViewport(
+    {
+      sessionKey: attachedViewportFlushRef.current.sessionKey,
+      epoch: attachedViewportFlushRef.current.epoch,
+      flushedRows: attachedViewportFlushRef.current.rows,
+    },
+    {
+      sessionKey: attachment?.id ?? 'none',
+      epoch: refreshEpoch,
+      totalRows: attachedPhysical.length,
+      retainedRows: attachDynamicRows,
+    },
+  )
+  attachedViewportFlushRef.current = {
+    sessionKey: attachedViewportStep.cursor.sessionKey,
+    epoch: attachedViewportStep.cursor.epoch,
+    rows: attachedViewportStep.cursor.flushedRows,
+  }
+  const attachedStaticPrefixRows = attachedSettledRowsResult.cache.flat.length - attachedPhysical.length
+  const attachedSettledRows = attachedSettledRowsResult.cache.flat.slice(
+    0,
+    attachedStaticPrefixRows + attachedViewportStep.staticRows,
+  )
+  const attachedRetainedLines = attachedPhysical.slice(attachedViewportStep.staticRows).map(row => row.line)
   /** Detach and hand the keyboard back to the /agents list. */
   const detach = useCallback((): void => {
     setAttachment(current => {
@@ -2620,18 +2736,18 @@ export function App(props: AppProps): ReactElement {
     // ride <Static> above (items switch), and the live region mirrors the
     // main conversation's tail with a simplified chrome budget (readonly
     // bar band + one status row + one gutter + Ink's two spare rows).
-    const attachDynamicRows = Math.max(1, terminalRows - 3 - 1 - 1 - 2)
     const attachBusy = attachedView.busySince !== undefined
     const attachStreaming = attachedView.streaming !== '' || attachedView.streamingReasoning !== ''
-    const attachAllLiveLines = attachedView.entries.slice(attachedSettled).flatMap(
+    const attachMutableLines = attachedView.entries.slice(attachedSettled).flatMap(
       entry => transcriptEntryLines(entry, Math.max(1, terminalColumns - 2), showReasoning),
     )
-    const attachLiveBudget = attachBusy || attachStreaming
-      ? Math.max(1, Math.floor(attachDynamicRows / 3))
-      : Math.max(0, attachDynamicRows - 1)
-    const attachVisibleLive = attachLiveBudget === 0 ? [] : attachAllLiveLines.slice(-attachLiveBudget)
-    const attachStreamRows = Math.max(1, attachDynamicRows - attachVisibleLive.length)
-    const attachReasoningRows = attachedView.streamingReasoning === ''
+    const attachAllLiveLines = attachedRetainedLines.concat(attachMutableLines)
+    const attachProvisionalLiveRows = Math.min(
+      attachAllLiveLines.length,
+      attachBusy || attachStreaming ? Math.max(1, Math.floor(attachDynamicRows / 3)) : attachDynamicRows,
+    )
+    const attachStreamRows = Math.max(1, attachDynamicRows - attachProvisionalLiveRows)
+    const attachReasoningLimit = attachedView.streamingReasoning === ''
       ? 0
       : attachedView.streaming === ''
         ? attachStreamRows
@@ -2640,11 +2756,30 @@ export function App(props: AppProps): ReactElement {
           : showReasoning
             ? Math.max(1, Math.floor(attachStreamRows / 3))
             : 1
-    const attachAnswerRows = attachedView.streaming === '' ? 0 : Math.max(1, attachStreamRows - attachReasoningRows)
+    const attachAnswerLimit = attachedView.streaming === '' ? 0 : Math.max(1, attachStreamRows - attachReasoningLimit)
+    const attachReasoningRows = attachedView.streamingReasoning === '' || attachReasoningLimit === 0
+      ? 0
+      : showReasoning
+        ? streamTailPhysicalRows(attachedView.streamingReasoning, Math.max(1, terminalColumns - 2), attachReasoningLimit, '✻ ', '  ')
+        : 1
+    const attachAnswerRows = attachedView.streaming === '' || attachAnswerLimit === 0
+      ? 0
+      : streamTailPhysicalRows(attachedView.streaming, Math.max(1, terminalColumns - 2), attachAnswerLimit, '  ')
+    const attachNonHistoryRows = attachReasoningRows + attachAnswerRows
+      + (attachBusy && !attachStreaming ? 1 : 0)
+    const attachVisibleHistoryRows = visibleTranscriptRows(
+      attachAllLiveLines.length,
+      attachNonHistoryRows,
+      attachDynamicRows,
+    )
+    const attachVisibleLive = attachVisibleHistoryRows === 0
+      ? []
+      : attachAllLiveLines.slice(-attachVisibleHistoryRows)
     const attachAudit = clampLiveAllocation(
       { live: attachVisibleLive.length, reasoning: attachReasoningRows, answer: attachAnswerRows },
       attachDynamicRows,
     )
+    const attachViewportFilled = attachAllLiveLines.length + attachNonHistoryRows >= attachDynamicRows
     const attachTurns = attachedView.entries.filter(entry => entry.kind === 'turn-marker').length
     return createElement(
       Box,
@@ -2655,7 +2790,9 @@ export function App(props: AppProps): ReactElement {
       }),
       createElement(
         Box,
-        { flexDirection: 'column' },
+        attachViewportFilled
+          ? { flexDirection: 'column', height: attachDynamicRows }
+          : { flexDirection: 'column' },
         attachAudit.allocation.live === attachVisibleLive.length && attachVisibleLive.length > 0
           ? createElement(StyledRows, { lines: attachVisibleLive })
           : undefined,
@@ -2705,7 +2842,19 @@ export function App(props: AppProps): ReactElement {
       key: refreshEpoch,
       items: attachment === undefined ? settledRows : attachedSettledRows,
     }),
-    transcriptVisible
+    createElement(
+      Box,
+      surfaceAnchored
+        ? { flexDirection: 'column', height: anchoredSurfaceRows }
+        : { flexDirection: 'column' },
+      frozenModalLines.length === 0
+        ? undefined
+        : createElement(
+          Box,
+          { flexDirection: 'column', height: 0, flexGrow: 1, flexShrink: 1, overflow: 'hidden', justifyContent: 'flex-end' },
+          createElement(StyledRows, { lines: frozenModalLines }),
+        ),
+      transcriptVisible
       ? createElement(
         Box,
         // No container padding: every live row carries its own two-column
@@ -2996,6 +3145,7 @@ export function App(props: AppProps): ReactElement {
         close: () => setSubagentOpen(false),
       })
       : undefined,
+    ),
     notice === undefined
       ? undefined
       : createElement(NoticeLine, {
@@ -3199,7 +3349,10 @@ export function App(props: AppProps): ReactElement {
         stats: view.stats,
         busy,
         animated: animations,
-        columns: terminalColumns,
+        // Leave one physical terminal column unused. VS Code autowraps a row
+        // painted at EXACTLY stdout.columns; the first-token status update can
+        // otherwise create an unreported row and lift composer + status.
+        columns: Math.max(1, terminalColumns - 1),
         items: statuslineItems,
         onRows: handleStatusRows,
       }),
