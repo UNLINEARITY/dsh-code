@@ -21,7 +21,7 @@ import type { Agent, AgentHandle, ModelSelection, ModelSelectionRef } from '@dee
 import type {} from '@deepseek-ai/dsh-agent-default-model'
 import type {} from '@deepseek-ai/dsh-attachment'
 import { createUserMessage, type ContentBlock } from '@deepseek-ai/dsh-llm'
-import type { JobSnapshot } from '@deepseek-ai/dsh-jobs'
+import type { JobView } from '@deepseek-ai/dsh-jobs'
 import { SessionId, SessionLogOffset, type Session, type SessionEvent, type UserMessage } from '@deepseek-ai/dsh-session'
 import { deriveTurnTokenUsage } from '@deepseek-ai/dsh-token-meter/client'
 // Type-only: carries the ctx.sessionTitle service merge for /title.
@@ -186,7 +186,7 @@ function listJobs(ctx: Context, caller: Agent | undefined): readonly JobRow[] {
   const jobs = ctx.get('jobs')
   if (jobs === undefined) return []
   try {
-    return jobs.list(caller).map((job: JobSnapshot) => ({
+    return jobs.list(caller === undefined ? undefined : caller.session.id).map((job: JobView) => ({
       id: job.id,
       kind: job.kind,
       label: job.label,

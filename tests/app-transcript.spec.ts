@@ -5,7 +5,6 @@ import { visibleColumns } from '../src/render/markdown.ts'
 import {
   type TranscriptEntry,
   type ToolCallId,
-  type SessionEvent,
   App,
   DEFAULT_TERMINAL_TITLE,
   PassThrough,
@@ -26,6 +25,7 @@ import {
   streamTailBodyColumns,
   wait,
 } from './helpers/app-mount.ts'
+import { fixtureEvent } from './helpers/events.ts'
 
 describe('keyboard protocol and transcript alignment', () => {
   it('routes enhanced Ctrl+C through the busy interrupt contract', async () => {
@@ -33,8 +33,8 @@ describe('keyboard protocol and transcript alignment', () => {
     const interrupt = vi.fn(() => true)
     const quit = vi.fn()
     const store = createTranscriptStore([
-      { type: 'turn/start', seq: 1, time: 1, data: { turn: 1 } } as SessionEvent,
-      { type: 'step/start', seq: 2, time: 2, data: { turn: 1, step: 1 } } as SessionEvent,
+      fixtureEvent({ type: 'turn/start', seq: 1, time: 1, data: { turn: 1 } }),
+      fixtureEvent({ type: 'step/start', seq: 2, time: 2, data: { turn: 1, step: 1 } }),
     ])
     const instance = renderApp(harness, appProps({ store, interrupt, quit }))
     try {
@@ -81,24 +81,24 @@ describe('keyboard protocol and transcript alignment', () => {
     const { stdin, output } = harness
     const interrupt = vi.fn(() => true)
     const store = createTranscriptStore([
-      {
+      fixtureEvent({
         type: 'user/message',
         seq: 1,
         time: 1,
         data: createUserMessage({ content: [{ type: 'text', text: 'go' }], source: { kind: 'user' } }),
-      } as SessionEvent,
-      {
+      }),
+      fixtureEvent({
         type: 'turn/start',
         seq: 2,
         time: 2,
         data: { turn: 1 },
-      } as SessionEvent,
-      {
+      }),
+      fixtureEvent({
         type: 'step/start',
         seq: 3,
         time: 3,
         data: { turn: 1, step: 1 },
-      } as SessionEvent,
+      }),
     ])
     applyStreamDeltas(store, 1, 1, [{ kind: 'reasoning', text: 'the hidden reasoning trace', time: 4 }])
     const instance = renderApp(harness, appProps({ store, interrupt }))
@@ -138,9 +138,9 @@ describe('keyboard protocol and transcript alignment', () => {
     const { stdin, output } = harness
     const callId = 'wide-tool' as ToolCallId
     const store = createTranscriptStore([
-      { type: 'turn/start', seq: 1, time: 1, data: { turn: 1 } } as SessionEvent,
-      { type: 'tool/call', seq: 2, time: 2, data: { turn: 1, step: 1, callId, name: 'run_code', arguments: '{}' } } as SessionEvent,
-      {
+      fixtureEvent({ type: 'turn/start', seq: 1, time: 1, data: { turn: 1 } }),
+      fixtureEvent({ type: 'tool/call', seq: 2, time: 2, data: { turn: 1, step: 1, callId, name: 'run_code', arguments: '{}' } }),
+      fixtureEvent({
         type: 'tool/result',
         seq: 3,
         time: 3,
@@ -153,8 +153,8 @@ describe('keyboard protocol and transcript alignment', () => {
             isError: false,
           }),
         },
-      } as SessionEvent,
-      { type: 'turn/end', seq: 4, time: 4, data: { turn: 1, reason: { kind: 'completed' } } } as SessionEvent,
+      }),
+      fixtureEvent({ type: 'turn/end', seq: 4, time: 4, data: { turn: 1, reason: { kind: 'completed' } } }),
     ])
     const instance = renderApp(harness, appProps({ store }))
     try {
@@ -259,18 +259,18 @@ describe('context stepless bar', () => {
     })
     const store = createTranscriptStore()
     const callId = 'parse-tool' as ToolCallId
-    store.apply({ type: 'request/context', seq: 1, time: 1, data: { provider: 'p', model: 'm', contextWindow: 128_000 } } as SessionEvent)
-    store.apply({
+    store.apply(fixtureEvent({ type: 'request/context', seq: 1, time: 1, data: { provider: 'p', model: 'm', contextWindow: 128_000 } }))
+    store.apply(fixtureEvent({
       type: 'request/header', seq: 2, time: 2,
       data: { header: { config: { provider: 'p', model: 'm' }, system: 'you are a helpful assistant' }, reason: 'initial' },
-    } as unknown as SessionEvent)
-    store.apply({ type: 'turn/start', seq: 3, time: 3, data: { turn: 1 } } as SessionEvent)
-    store.apply({ type: 'step/start', seq: 4, time: 4, data: { turn: 1, step: 1 } } as SessionEvent)
-    store.apply({
+    }))
+    store.apply(fixtureEvent({ type: 'turn/start', seq: 3, time: 3, data: { turn: 1 } }))
+    store.apply(fixtureEvent({ type: 'step/start', seq: 4, time: 4, data: { turn: 1, step: 1 } }))
+    store.apply(fixtureEvent({
       type: 'user/message', seq: 5, time: 5,
       data: createUserMessage({ content: [{ type: 'text', text: 'please fix the failing test in the parser module' }], source: { kind: 'user' } }),
-    } as SessionEvent)
-    store.apply({
+    }))
+    store.apply(fixtureEvent({
       type: 'assistant/message', seq: 6, time: 1_006,
       data: {
         turn: 1,
@@ -284,15 +284,15 @@ describe('context stepless bar', () => {
         }),
         usage: { inputTokens: 100_000, outputTokens: 100, cacheReadTokens: 0, cacheWriteTokens: 0 },
       },
-    } as unknown as SessionEvent)
-    store.apply({
+    }))
+    store.apply(fixtureEvent({
       type: 'tool/call', seq: 7, time: 2_000,
       data: { turn: 1, step: 1, callId, name: 'edit', arguments: '{"path":"src/parser.ts"}' },
-    } as unknown as SessionEvent)
-    store.apply({
+    }))
+    store.apply(fixtureEvent({
       type: 'tool/result', seq: 8, time: 2_500,
       data: { turn: 1, step: 1, message: createToolResultMessage({ callId, content: [{ type: 'text', text: 'patched the file' }], isError: false }) },
-    } as unknown as SessionEvent)
+    }))
     const instance = render(createElement(App, appProps({
       store,
     })), {
@@ -401,19 +401,19 @@ describe('settled tool/command name sanitization', () => {
     const csiCommand = 'wipe\x1b[2Jfetch'
     const toolCallId = 'evil-tool' as ToolCallId
     const store = createTranscriptStore([
-      {
+      fixtureEvent({
         type: 'user/message',
         seq: 1,
         time: 1,
         data: createUserMessage({ content: [{ type: 'text', text: 'go' }], source: { kind: 'user' } }),
-      } as SessionEvent,
-      {
+      }),
+      fixtureEvent({
         type: 'tool/call',
         seq: 2,
         time: 2,
         data: { turn: 1, step: 1, callId: toolCallId, name: oscTool, arguments: '{}' },
-      } as SessionEvent,
-      {
+      }),
+      fixtureEvent({
         type: 'tool/result',
         seq: 3,
         time: 3,
@@ -422,19 +422,19 @@ describe('settled tool/command name sanitization', () => {
           step: 1,
           message: createToolResultMessage({ callId: toolCallId, content: [{ type: 'text', text: 'ok' }], isError: false }),
         },
-      } as SessionEvent,
-      {
+      }),
+      fixtureEvent({
         type: 'command/run',
         seq: 4,
         time: 4,
         data: { commandId: 'evil-command', name: csiCommand, args: '--x' },
-      } as SessionEvent,
-      {
+      }),
+      fixtureEvent({
         type: 'command/done',
         seq: 5,
         time: 5,
         data: { commandId: 'evil-command', kind: 'success', text: 'done' },
-      } as SessionEvent,
+      }),
     ])
     const instance = renderApp(harness, appProps({ store }))
     try {
@@ -475,18 +475,18 @@ describe('incremental settled transcript cache', () => {
     const harness = createTty()
     const { stdin, stdout, output } = harness
     const store = createTranscriptStore([
-      {
+      fixtureEvent({
         type: 'user/message',
         seq: 1,
         time: 1,
         data: createUserMessage({ content: [{ type: 'text', text: 'go' }], source: { kind: 'user' } }),
-      } as SessionEvent,
-      {
+      }),
+      fixtureEvent({
         type: 'command/run',
         seq: 2,
         time: 2,
         data: { commandId: 'lint', name: 'lint', args: 'src' },
-      } as SessionEvent,
+      }),
     ])
     const instance = renderApp(harness, appProps({ store }))
     try {
@@ -498,12 +498,12 @@ describe('incremental settled transcript cache', () => {
       // command/done resolves the entry: it now settles, and the summary
       // appears IMMEDIATELY (the cache append path flushes the resolved
       // row) — no resize needed — exactly once.
-      store.apply({
+      store.apply(fixtureEvent({
         type: 'command/done',
         seq: 3,
         time: 3,
         data: { commandId: 'lint', kind: 'success', text: 'lint passed' },
-      } as SessionEvent)
+      }))
       await wait()
       expect(output.text.match(/lint passed/g)).toHaveLength(1)
 
@@ -522,13 +522,13 @@ describe('incremental settled transcript cache', () => {
       // Later appends settle after the existing prefix; the append path adds
       // only the new rows and never re-emits the resolved command.
       const lintBefore = output.text.match(/lint passed/g)!.length
-      store.apply({
+      store.apply(fixtureEvent({
         type: 'user/message',
         seq: 4,
         time: 4,
         data: createUserMessage({ content: [{ type: 'text', text: 'again' }], source: { kind: 'user' } }),
-      } as SessionEvent)
-      store.apply({
+      }))
+      store.apply(fixtureEvent({
         type: 'assistant/message',
         seq: 5,
         time: 5,
@@ -537,7 +537,7 @@ describe('incremental settled transcript cache', () => {
           step: 2,
           message: createAssistantMessage({ content: [{ type: 'text', text: 'done again' }], source: { provider: 'p', model: 'm' } }),
         },
-      } as SessionEvent)
+      }))
       await wait()
       expect(output.text).toContain('done again')
       expect(output.text.match(/done again/g)).toHaveLength(1)
@@ -553,13 +553,13 @@ describe('incremental settled transcript cache', () => {
     const harness = createTty()
     const { stdin, stdout, output } = harness
     const store = createTranscriptStore([
-      {
+      fixtureEvent({
         type: 'user/message',
         seq: 1,
         time: 1,
         data: createUserMessage({ content: [{ type: 'text', text: 'start' }], source: { kind: 'user' } }),
-      } as SessionEvent,
-      ...Array.from({ length: 120 }, (_, index) => ({
+      }),
+      ...Array.from({ length: 120 }, (_, index) => (fixtureEvent({
         type: 'assistant/message',
         seq: index + 2,
         time: index + 2,
@@ -568,7 +568,7 @@ describe('incremental settled transcript cache', () => {
           step: index + 1,
           message: createAssistantMessage({ content: [{ type: 'text', text: `msg-${index}` }], source: { provider: 'p', model: 'm' } }),
         },
-      }) as SessionEvent),
+      }))),
     ])
     const instance = renderApp(harness, appProps({ store }))
     try {
@@ -600,7 +600,7 @@ describe('incremental settled transcript cache', () => {
 describe('physical-row transcript viewport', () => {
   it('fills stream contraction with real settled rows and no blank frame', async () => {
     const harness = createTty(100, 24)
-    const history = Array.from({ length: 30 }, (_, index) => ({
+    const history = Array.from({ length: 30 }, (_, index) => (fixtureEvent({
       type: 'assistant/message',
       seq: index + 1,
       time: index + 1,
@@ -612,13 +612,13 @@ describe('physical-row transcript viewport', () => {
           source: { provider: 'p', model: 'm' },
         }),
       },
-    } as SessionEvent))
+    })))
     const store = createTranscriptStore(history)
     const instance = renderApp(harness, appProps({ store }))
     try {
       await wait()
       harness.output.text = ''
-      store.apply({ type: 'turn/start', seq: 31, time: 31, data: { turn: 31 } } as SessionEvent)
+      store.apply(fixtureEvent({ type: 'turn/start', seq: 31, time: 31, data: { turn: 31 } }))
       applyStreamDeltas(store, 31, 1, [{ kind: 'text', text: 'live answer' }])
       await wait()
       expect(harness.output.text).toContain('tail-29')
@@ -633,7 +633,7 @@ describe('physical-row transcript viewport', () => {
       expect(Math.max(...firstTokenFrame.split('\n').map(visibleColumns))).toBeLessThan(harness.stdout.columns)
 
       harness.output.text = ''
-      store.apply({
+      store.apply(fixtureEvent({
         type: 'assistant/message',
         seq: 32,
         time: 32,
@@ -645,8 +645,8 @@ describe('physical-row transcript viewport', () => {
             source: { provider: 'p', model: 'm' },
           }),
         },
-      } as SessionEvent)
-      store.apply({ type: 'turn/end', seq: 33, time: 33, data: { turn: 31, reason: { kind: 'completed' } } } as SessionEvent)
+      }))
+      store.apply(fixtureEvent({ type: 'turn/end', seq: 33, time: 33, data: { turn: 31, reason: { kind: 'completed' } } }))
       await wait()
       const visible = harness.output.text.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/gu, '')
       expect(visible).toContain('settled answer')

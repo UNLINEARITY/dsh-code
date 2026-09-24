@@ -3,7 +3,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   type ToolCallId,
-  type SessionEvent,
   App,
   DSH_CODE_VERSION,
   EMPTY_AGENTS,
@@ -32,6 +31,7 @@ import {
   wait,
   writeFileSync,
 } from './helpers/app-mount.ts'
+import { fixtureEvent } from './helpers/events.ts'
 
 describe('Ctrl+O history details', () => {
   it('labels each inspected entry with its kind in the title', async () => {
@@ -64,7 +64,7 @@ describe('Ctrl+O history details', () => {
   it('skips reasoning-only assistant settlements in navigation', async () => {
     const harness = createTty(120, 18)
     const store = createTranscriptStore([
-      {
+      fixtureEvent({
         type: 'user/message',
         seq: 1,
         time: 1,
@@ -72,8 +72,8 @@ describe('Ctrl+O history details', () => {
           content: [{ type: 'text', text: 'Commit the completed changes.' }],
           source: { kind: 'user' },
         }),
-      } as SessionEvent,
-      {
+      }),
+      fixtureEvent({
         type: 'assistant/message',
         seq: 2,
         time: 2,
@@ -85,8 +85,8 @@ describe('Ctrl+O history details', () => {
             source: { provider: 'p', model: 'm' },
           }),
         },
-      } as SessionEvent,
-      {
+      }),
+      fixtureEvent({
         type: 'assistant/message',
         seq: 3,
         time: 3,
@@ -98,7 +98,7 @@ describe('Ctrl+O history details', () => {
             source: { provider: 'p', model: 'm' },
           }),
         },
-      } as SessionEvent,
+      }),
     ])
     const instance = renderApp(harness, appProps({ store }))
     try {
@@ -288,7 +288,7 @@ describe('Ctrl+O history details', () => {
       await wait()
       expect(dispatched).toBe('draft')
 
-      store.apply({ type: 'turn/start', seq: 1, time: 1, data: { turn: 1 } } as SessionEvent)
+      store.apply(fixtureEvent({ type: 'turn/start', seq: 1, time: 1, data: { turn: 1 } }))
       output = ''
       applyStreamDeltas(store, 1, 1, [{ kind: 'reasoning', text: 'thinking\n'.repeat(1_000), time: 2 }])
       await wait()
@@ -296,13 +296,13 @@ describe('Ctrl+O history details', () => {
       expect(output.split('\n').length).toBeLessThan(stdout.rows)
 
       const callId = 'long-tool' as ToolCallId
-      store.apply({
+      store.apply(fixtureEvent({
         type: 'tool/call',
         seq: 3,
         time: 3,
         data: { turn: 1, step: 1, callId, name: 'shell_command', arguments: '{}' },
-      } as SessionEvent)
-      store.apply({
+      }))
+      store.apply(fixtureEvent({
         type: 'tool/result',
         seq: 4,
         time: 4,
@@ -315,13 +315,13 @@ describe('Ctrl+O history details', () => {
             isError: false,
           }),
         },
-      } as SessionEvent)
-      store.apply({
+      }))
+      store.apply(fixtureEvent({
         type: 'turn/end',
         seq: 5,
         time: 5,
         data: { turn: 1, reason: { kind: 'completed' } },
-      } as SessionEvent)
+      }))
       await wait()
       output = ''
       stdin.write('\x0f')
@@ -388,7 +388,7 @@ describe('Ctrl+O history details', () => {
 describe('bottom-anchored modal viewport', () => {
   it('fills the rows above /help with frozen real history instead of blanks', async () => {
     const harness = createTty(100, 24)
-    const store = createTranscriptStore(Array.from({ length: 30 }, (_, index) => ({
+    const store = createTranscriptStore(Array.from({ length: 30 }, (_, index) => (fixtureEvent({
       type: 'assistant/message',
       seq: index + 1,
       time: index + 1,
@@ -400,7 +400,7 @@ describe('bottom-anchored modal viewport', () => {
           source: { provider: 'p', model: 'm' },
         }),
       },
-    } as SessionEvent)))
+    }))))
     const instance = renderApp(harness, appProps({ store }))
     try {
       await wait()
@@ -429,13 +429,13 @@ describe('Ctrl+R reasoning fold', () => {
     vi.stubEnv('VSCODE_INJECTION', '1')
     const harness = createTty(100, 24)
     const store = createTranscriptStore([
-      {
+      fixtureEvent({
         type: 'user/message',
         seq: 1,
         time: 1,
         data: createUserMessage({ content: [{ type: 'text', text: 'go' }], source: { kind: 'user' } }),
-      } as SessionEvent,
-      {
+      }),
+      fixtureEvent({
         type: 'assistant/message',
         seq: 2,
         time: 2,
@@ -450,7 +450,7 @@ describe('Ctrl+R reasoning fold', () => {
             source: { provider: 'p', model: 'm' },
           }),
         },
-      } as SessionEvent,
+      }),
     ])
     const instance = renderApp(harness, appProps({ store }))
     try {
@@ -479,13 +479,13 @@ describe('Ctrl+R reasoning fold', () => {
     vi.stubEnv('VSCODE_INJECTION', '1')
     const harness = createTty(100, 24)
     const store = createTranscriptStore([
-      {
+      fixtureEvent({
         type: 'user/message',
         seq: 1,
         time: 1,
         data: createUserMessage({ content: [{ type: 'text', text: 'go' }], source: { kind: 'user' } }),
-      } as SessionEvent,
-      {
+      }),
+      fixtureEvent({
         type: 'assistant/message',
         seq: 2,
         time: 2,
@@ -500,7 +500,7 @@ describe('Ctrl+R reasoning fold', () => {
             source: { provider: 'p', model: 'm' },
           }),
         },
-      } as SessionEvent,
+      }),
     ])
     const instance = renderApp(harness, appProps({ store }))
     try {
@@ -531,13 +531,13 @@ describe('Ctrl+R reasoning fold', () => {
     const store = createTranscriptStore()
     const instance = renderApp(harness, appProps({ store }))
     try {
-      store.apply({ type: 'request/context', seq: 1, time: 1, data: { provider: 'zai', model: 'glm-5.2', contextWindow: 128_000 } } as SessionEvent)
-      store.apply({ type: 'turn/start', seq: 2, time: 2, data: { turn: 1 } } as SessionEvent)
-      store.apply({ type: 'step/start', seq: 3, time: 3, data: { turn: 1, step: 1 } } as SessionEvent)
-      store.apply({
+      store.apply(fixtureEvent({ type: 'request/context', seq: 1, time: 1, data: { provider: 'zai', model: 'glm-5.2', contextWindow: 128_000 } }))
+      store.apply(fixtureEvent({ type: 'turn/start', seq: 2, time: 2, data: { turn: 1 } }))
+      store.apply(fixtureEvent({ type: 'step/start', seq: 3, time: 3, data: { turn: 1, step: 1 } }))
+      store.apply(fixtureEvent({
         type: 'user/message', seq: 4, time: 4,
         data: createUserMessage({ content: [{ type: 'text', text: 'go' }], source: { kind: 'user' } }),
-      } as SessionEvent)
+      }))
       applyStreamDeltas(store, 1, 1, [{ kind: 'reasoning', text: '**the streaming thought** with `pnpm test`', time: 5 }])
       await wait()
       const plain = harness.output.text.replace(/\x1b\[[0-9;?]*[A-Za-z]/gu, '')
@@ -571,13 +571,13 @@ describe('Ctrl+R reasoning fold', () => {
   it('replays the fold globally and immediately on a busy-turn toggle', async () => {
     const harness = createTty(100, 30)
     const store = createTranscriptStore([
-      {
+      fixtureEvent({
         type: 'user/message',
         seq: 1,
         time: 1,
         data: createUserMessage({ content: [{ type: 'text', text: 'first' }], source: { kind: 'user' } }),
-      } as SessionEvent,
-      {
+      }),
+      fixtureEvent({
         type: 'assistant/message',
         seq: 2,
         time: 2,
@@ -592,8 +592,8 @@ describe('Ctrl+R reasoning fold', () => {
             source: { provider: 'p', model: 'm' },
           }),
         },
-      } as SessionEvent,
-      { type: 'turn/end', seq: 3, time: 3, data: { turn: 1, reason: { kind: 'completed' } } } as SessionEvent,
+      }),
+      fixtureEvent({ type: 'turn/end', seq: 3, time: 3, data: { turn: 1, reason: { kind: 'completed' } } }),
     ])
     const instance = renderApp(harness, appProps({ store }))
     try {
@@ -603,8 +603,8 @@ describe('Ctrl+R reasoning fold', () => {
       // A second turn runs; the fold toggles while that turn is busy. The
       // live region flips without a source-backed clear…
       harness.output.text = ''
-      store.apply({ type: 'turn/start', seq: 4, time: 4, data: { turn: 2 } } as SessionEvent)
-      store.apply({ type: 'step/start', seq: 5, time: 5, data: { turn: 2, step: 1 } } as SessionEvent)
+      store.apply(fixtureEvent({ type: 'turn/start', seq: 4, time: 4, data: { turn: 2 } }))
+      store.apply(fixtureEvent({ type: 'step/start', seq: 5, time: 5, data: { turn: 2, step: 1 } }))
       applyStreamDeltas(store, 2, 1, [{ kind: 'text', text: 'live answer', time: 6 }])
       await wait()
       harness.stdin.write('\x12')
@@ -616,7 +616,7 @@ describe('Ctrl+R reasoning fold', () => {
       expect(harness.output.text.replace(/\x1b\[[0-9;?]*[A-Za-z]/gu, '')).toContain('old settled reasoning')
 
       // Turn settlement adds no extra replay; the unified state persists.
-      store.apply({ type: 'turn/end', seq: 7, time: 7, data: { turn: 2, reason: { kind: 'completed' } } } as SessionEvent)
+      store.apply(fixtureEvent({ type: 'turn/end', seq: 7, time: 7, data: { turn: 2, reason: { kind: 'completed' } } }))
       await wait()
       expect((harness.output.text.match(/\x1b\[2J/gu) ?? []).length).toBe(1)
     } finally {
@@ -647,13 +647,13 @@ describe('Ctrl+R reasoning fold', () => {
       output += chunk.toString()
     })
     const store = createTranscriptStore([
-      {
+      fixtureEvent({
         type: 'user/message',
         seq: 1,
         time: 1,
         data: createUserMessage({ content: [{ type: 'text', text: 'go' }], source: { kind: 'user' } }),
-      } as SessionEvent,
-      {
+      }),
+      fixtureEvent({
         type: 'assistant/message',
         seq: 2,
         time: 2,
@@ -668,7 +668,7 @@ describe('Ctrl+R reasoning fold', () => {
             source: { provider: 'p', model: 'm' },
           }),
         },
-      } as SessionEvent,
+      }),
     ])
     const instance = render(createElement(App, appProps({
       store,
@@ -714,25 +714,25 @@ describe('Ctrl+R reasoning fold', () => {
   it('folds a live-region assistant entry trapped behind a running tool', async () => {
     const { stdin, stdout, output } = createTty(100, 24)
     const store = createTranscriptStore([
-      {
+      fixtureEvent({
         type: 'user/message',
         seq: 1,
         time: 1,
         data: createUserMessage({ content: [{ type: 'text', text: 'go' }], source: { kind: 'user' } }),
-      } as SessionEvent,
-      {
+      }),
+      fixtureEvent({
         type: 'turn/start',
         seq: 2,
         time: 2,
         data: { turn: 1 },
-      } as SessionEvent,
-      {
+      }),
+      fixtureEvent({
         type: 'tool/call',
         seq: 3,
         time: 3,
         data: { turn: 1, step: 1, callId: 'call-trap', name: 'run_code', arguments: '{}' },
-      } as SessionEvent,
-      {
+      }),
+      fixtureEvent({
         type: 'assistant/message',
         seq: 4,
         time: 4,
@@ -747,7 +747,7 @@ describe('Ctrl+R reasoning fold', () => {
             source: { provider: 'p', model: 'm' },
           }),
         },
-      } as SessionEvent,
+      }),
     ])
     const instance = render(createElement(App, appProps({
       store,
@@ -793,13 +793,13 @@ describe('Ctrl+R reasoning fold', () => {
   it('replays the mid-stream fold toggle globally and settles without extra clears', async () => {
     const { stdin, stdout, output } = createTty(100, 24)
     const store = createTranscriptStore([
-      {
+      fixtureEvent({
         type: 'user/message',
         seq: 1,
         time: 1,
         data: createUserMessage({ content: [{ type: 'text', text: 'go' }], source: { kind: 'user' } }),
-      } as SessionEvent,
-      {
+      }),
+      fixtureEvent({
         type: 'assistant/message',
         seq: 2,
         time: 2,
@@ -814,7 +814,7 @@ describe('Ctrl+R reasoning fold', () => {
             source: { provider: 'p', model: 'm' },
           }),
         },
-      } as SessionEvent,
+      }),
     ])
     const instance = render(createElement(App, appProps({
       store,
@@ -829,8 +829,8 @@ describe('Ctrl+R reasoning fold', () => {
     try {
       await wait()
       // Start a fresh reasoning stream over the settled history.
-      store.apply({ type: 'turn/start', seq: 3, time: 3, data: { turn: 2 } } as SessionEvent)
-      store.apply({ type: 'step/start', seq: 4, time: 4, data: { turn: 2, step: 1 } } as SessionEvent)
+      store.apply(fixtureEvent({ type: 'turn/start', seq: 3, time: 3, data: { turn: 2 } }))
+      store.apply(fixtureEvent({ type: 'step/start', seq: 4, time: 4, data: { turn: 2, step: 1 } }))
       applyStreamDeltas(store, 2, 1, Array.from({ length: 10 }, (_, index) => ({
         kind: 'reasoning' as const, text: `stream-${index} `, time: 5 + index,
       })))
@@ -850,7 +850,7 @@ describe('Ctrl+R reasoning fold', () => {
 
       // The assembled message ends the stream WITHOUT a second clear; the
       // new settled entry still paints the assembled trace and answer.
-      store.apply({
+      store.apply(fixtureEvent({
         type: 'assistant/message',
         seq: 200,
         time: 30,
@@ -865,7 +865,7 @@ describe('Ctrl+R reasoning fold', () => {
             source: { provider: 'p', model: 'm' },
           }),
         },
-      } as SessionEvent)
+      }))
       await wait()
       expect((output.text.match(/\x1b\[2J/gu) ?? []).length).toBe(1)
       expect(output.text).toContain('the assembled trace')
@@ -897,8 +897,8 @@ describe('Ctrl+R reasoning fold', () => {
       await wait()
       output.text = ''
       // A fresh reasoning stream.
-      store.apply({ type: 'turn/start', seq: 1, time: 1, data: { turn: 1 } } as SessionEvent)
-      store.apply({ type: 'step/start', seq: 2, time: 2, data: { turn: 1, step: 1 } } as SessionEvent)
+      store.apply(fixtureEvent({ type: 'turn/start', seq: 1, time: 1, data: { turn: 1 } }))
+      store.apply(fixtureEvent({ type: 'step/start', seq: 2, time: 2, data: { turn: 1, step: 1 } }))
       applyStreamDeltas(store, 1, 1, Array.from({ length: 10 }, (_, index) => ({
         kind: 'reasoning' as const, text: `stream-${index} `, time: 3 + index,
       })))

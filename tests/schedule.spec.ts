@@ -17,21 +17,25 @@ import {
   type ScheduleRow,
 } from '../src/render/projection.ts'
 import { SchedulePanel, scheduleDisplayRows, scheduleFrequency, scheduleRelative } from '../src/panels/kernel-panels.ts'
+import { fixtureEvent } from './helpers/events.ts'
+import type { MessageSource } from '@deepseek-ai/dsh-llm'
 
 function scheduleEvent(data: unknown, seq: number): SessionEvent {
   return { type: 'schedule/change', seq, time: 0, data } as SessionEvent
 }
 
-function pluginMessageEvent(plugin: string, form: 'snapshot' | undefined, text: string, seq: number): SessionEvent {
-  const source = form === undefined
-    ? { kind: 'plugin', plugin } as const
-    : { kind: 'plugin', plugin, form, sections: [{ name: `${plugin}-context`, text }] } as const
-  return {
+function pluginMessageEvent(producer: string, form: 'snapshot' | undefined, text: string, seq: number): SessionEvent {
+  // v4: the producer owns its source kind directly (the shared `plugin`
+  // wrapper is gone); the formed snapshot variant keeps its sections.
+  const source = (form === undefined
+    ? { kind: producer }
+    : { kind: producer, form, sections: [{ name: `${producer}-context`, text }] }) as unknown as MessageSource
+  return fixtureEvent({
     type: 'user/message',
     seq,
     time: 0,
     data: createUserMessage({ content: [{ type: 'text', text }], source }),
-  } as SessionEvent
+  })
 }
 
 const EVERY_CREATE = { operation: 'create', schedule: { id: 'schedule-1', kind: 'every', prompt: 'build check', everySeconds: 3600, scheduledAt: '2026-09-11T08:00:00Z' } }

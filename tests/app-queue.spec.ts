@@ -5,7 +5,6 @@ import {
   type UserMessage,
   type TranscriptEntry,
   type ToolCallId,
-  type SessionEvent,
   App,
   PassThrough,
   appProps,
@@ -21,6 +20,7 @@ import {
   rowBackground,
   wait,
 } from './helpers/app-mount.ts'
+import { fixtureEvent } from './helpers/events.ts'
 
 describe('queuedInboxRows', () => {
   it('uses next-turn inbox order and excludes next-step rows', () => {
@@ -274,21 +274,21 @@ describe('deferred session remount', () => {
         content: [{ type: 'text', text: 'build me a whale' }],
         source: { kind: 'user' },
       })
-      store.apply({
+      store.apply(fixtureEvent({
         type: 'agent/inbox/spliced',
         seq: 1,
         time: 0,
         data: { target: 'next-turn', start: 0, inserted: [first] },
-      } as SessionEvent)
+      }))
       await wait()
-      store.apply({
+      store.apply(fixtureEvent({
         type: 'agent/inbox/spliced',
         seq: 2,
         time: 0,
         data: { target: 'next-turn', start: 0, removedCount: 1, inserted: [] as UserMessage[] },
-      } as SessionEvent)
+      }))
       await wait()
-      store.apply({ type: 'user/message', seq: 3, time: 0, data: first } as SessionEvent)
+      store.apply(fixtureEvent({ type: 'user/message', seq: 3, time: 0, data: first }))
       await wait()
 
       // Ink's full-screen branch (dynamic frame >= terminal rows) rewrites
@@ -323,41 +323,41 @@ describe('queued inbox rows in a mixed mutable tail', () => {
       // index lookup is over the matching durable ids.
       const ids: readonly string[] = [first.id, second.id, third.id]
       const index = ids.indexOf(id)
-      store.apply({
+      store.apply(fixtureEvent({
         type: 'agent/inbox/spliced',
         seq: 100,
         time: 100,
         data: { target: 'next-turn', start: index, removedCount: 1, inserted: [] as UserMessage[] },
-      } as SessionEvent)
+      }))
     }
     const callId = 'live-tool' as ToolCallId
     // Pending rows are NOT a contiguous tail: a running tool row sits between
     // the first pending row and the rest, so a naive "scan from the end until
     // the first non-pending" would lose `one`.
-    store.apply({
+    store.apply(fixtureEvent({
       type: 'agent/inbox/spliced',
       seq: 1,
       time: 1,
       data: { target: 'next-turn', start: 0, inserted: [first] },
-    } as SessionEvent)
-    store.apply({
+    }))
+    store.apply(fixtureEvent({
       type: 'tool/call',
       seq: 2,
       time: 2,
       data: { turn: 1, step: 1, callId, name: 'live', arguments: '{}' },
-    } as SessionEvent)
-    store.apply({
+    }))
+    store.apply(fixtureEvent({
       type: 'agent/inbox/spliced',
       seq: 3,
       time: 3,
       data: { target: 'next-turn', start: 1, inserted: [second] },
-    } as SessionEvent)
-    store.apply({
+    }))
+    store.apply(fixtureEvent({
       type: 'agent/inbox/spliced',
       seq: 4,
       time: 4,
       data: { target: 'next-turn', start: 2, inserted: [third] },
-    } as SessionEvent)
+    }))
     const instance = renderApp(harness, appProps({
       store,
       updateQueued: (id, action) => {
@@ -394,14 +394,14 @@ describe('queued inbox rows in a mixed mutable tail', () => {
     const plain = createUserMessage({ content: [{ type: 'text', text: 'typed idle' }], source: { kind: 'user' } })
     const queued = createUserMessage({ content: [{ type: 'text', text: 'after the turn' }], source: { kind: 'user' } })
     const steered = createUserMessage({ content: [{ type: 'text', text: 'mid turn' }], source: { kind: 'user' } })
-    store.apply({ type: 'user/message', seq: 1, time: 1, data: plain } as SessionEvent)
+    store.apply(fixtureEvent({ type: 'user/message', seq: 1, time: 1, data: plain }))
     // A submission only counts as queued/steered when a turn is already
     // running; `followup` on an idle driver is the ordinary path.
-    store.apply({ type: 'turn/start', seq: 2, time: 2, data: { turn: 1 } } as SessionEvent)
-    store.apply({ type: 'agent/inbox/spliced', seq: 3, time: 3, data: { target: 'next-turn', start: 0, inserted: [queued] } } as SessionEvent)
-    store.apply({ type: 'user/message', seq: 4, time: 4, data: queued } as SessionEvent)
-    store.apply({ type: 'agent/inbox/spliced', seq: 5, time: 5, data: { target: 'next-step', start: 0, inserted: [steered] } } as SessionEvent)
-    store.apply({ type: 'user/message', seq: 6, time: 6, data: steered } as SessionEvent)
+    store.apply(fixtureEvent({ type: 'turn/start', seq: 2, time: 2, data: { turn: 1 } }))
+    store.apply(fixtureEvent({ type: 'agent/inbox/spliced', seq: 3, time: 3, data: { target: 'next-turn', start: 0, inserted: [queued] } }))
+    store.apply(fixtureEvent({ type: 'user/message', seq: 4, time: 4, data: queued }))
+    store.apply(fixtureEvent({ type: 'agent/inbox/spliced', seq: 5, time: 5, data: { target: 'next-step', start: 0, inserted: [steered] } }))
+    store.apply(fixtureEvent({ type: 'user/message', seq: 6, time: 6, data: steered }))
     const instance = renderApp(harness, appProps({ store }))
     try {
       await wait()
@@ -474,7 +474,7 @@ describe('queued inbox rows in a mixed mutable tail', () => {
     const dispatched: string[] = []
     const store = createTranscriptStore()
     // A running turn makes the composer's submission path the interesting one.
-    store.apply({ type: 'turn/start', seq: 1, time: 1, data: { turn: 1 } } as SessionEvent)
+    store.apply(fixtureEvent({ type: 'turn/start', seq: 1, time: 1, data: { turn: 1 } }))
     const instance = renderApp(harness, appProps({
       store,
       dispatch: text => { dispatched.push(text) },

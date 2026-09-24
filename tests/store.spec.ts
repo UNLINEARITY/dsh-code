@@ -10,6 +10,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { createTranscriptStore } from '../src/session/store.ts'
+import { fixtureEvent } from './helpers/events.ts'
 
 /** Outwait the frame-throttled notification (immediate or ~16ms-deferred). */
 const settle = async (): Promise<void> => {
@@ -17,12 +18,12 @@ const settle = async (): Promise<void> => {
 }
 
 function userEvent(text: string, seq: number): SessionEvent {
-  return {
+  return fixtureEvent({
     type: 'user/message',
     seq,
     time: 0,
     data: createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } }),
-  } as SessionEvent
+  })
 }
 
 describe('transcript store', () => {
@@ -58,7 +59,7 @@ describe('transcript store', () => {
     store.subscribe(listener)
     await settle()
     listener.mockClear()
-    store.apply({ type: 'unknown/kind', seq: 9, time: 0, data: {} } as unknown as SessionEvent)
+    store.apply(fixtureEvent({ type: 'unknown/kind', seq: 9, time: 0, data: {} }))
     expect(store.getView()).toBe(before)
     await settle()
     expect(listener).not.toHaveBeenCalled()
@@ -113,7 +114,7 @@ describe('transcript store', () => {
     const store = createTranscriptStore()
     const listener = vi.fn()
     store.subscribe(listener)
-    store.apply({ type: 'step/end', seq: 1, time: 0, data: { turn: 1, step: 1 } } as unknown as SessionEvent)
+    store.apply(fixtureEvent({ type: 'step/end', seq: 1, time: 0, data: { turn: 1, step: 1 } }))
     await settle()
     expect(listener).not.toHaveBeenCalled()
   })
@@ -122,7 +123,7 @@ describe('transcript store', () => {
     const store = createTranscriptStore()
     const before = store.getView()
     expect(store.getView()).toBe(before)
-    store.apply({ type: 'plan/mode', seq: 1, time: 0, data: { active: true } } as unknown as SessionEvent)
+    store.apply(fixtureEvent({ type: 'plan/mode', seq: 1, time: 0, data: { active: true } }))
     expect(store.getView()).not.toBe(before)
     const after = store.getView()
     expect(store.getView()).toBe(after)

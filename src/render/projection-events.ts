@@ -74,12 +74,20 @@ export const IGNORED_SESSION_EVENT_TYPES = [
   'approval/decided',
   'approval/policy',
   'compaction/start',
+  // v4 surface bookkeeping: developer tool additions/removals bind to an
+  // earlier request/header through headerSeq — the TUI sees their effect
+  // through the request tools and the tool cards, not as transcript rows.
+  'developer/message',
   'deliverables/presented',
   'feedback/message-delete',
   'feedback/message-put',
   'feedback/record',
   'hook/invoked',
   'hook/result',
+  // Durable image-offload decisions: the affected images stay priced at
+  // their original user message (full offload parity in token accounting is
+  // a deliberate follow-up, not a Stage-1 regression).
+  'image/offload',
   'session-log-deepseek/delivery-accepted',
   'session/end-seed',
   'session/title-llm-request',
@@ -91,6 +99,9 @@ export const IGNORED_SESSION_EVENT_TYPES = [
   'team/message/queued',
   'team/task',
   'web/deepseek-search-llm-request',
+  // Turn file-change git snapshots (web-client-owned typing): the TUI
+  // already tracks turn deliverables through diff-bearing tool results.
+  'workspace/changes',
 ] as const
 
 const EVENT_DISPOSITIONS = new Map<string, Exclude<SessionEventDisposition, 'unknown'>>([

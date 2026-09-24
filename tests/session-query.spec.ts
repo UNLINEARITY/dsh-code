@@ -11,7 +11,7 @@ import {
   type EngineSurface,
 } from '../src/session-query.ts'
 
-const header = (id: string): SessionHeader => ({ version: 3, id: SessionId(id), createdAt: 1, isSeeded: false })
+const header = (id: string): SessionHeader => ({ version: 4, id: SessionId(id), createdAt: 1, isSeeded: false })
 
 type PersistenceService = NonNullable<EngineSurface['_persistenceBinding']['service']>
 

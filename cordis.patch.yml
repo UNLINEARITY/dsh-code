@@ -9,16 +9,18 @@
 
 # 0.1.5 split the deployment persona into a prefix and a suffix template
 # around the first-party guidance sections; this terminal keeps its identity
-# line as the prefix ({{variable}} interpolation stays strict upstream).
+# line as the prefix ({{variable}} interpolation stays strict upstream). A
+# complete agent-preset persona (the vendored presets/ declarations) suppresses
+# this section per agent while retaining the deployment fallback here.
 - id: system-prompt
   config:
     personaPrefix: >-
       You are a coding agent powered by the {{model}} model. Your working directory is {{cwd}}.
 
-# The shared module-reload HMR row stays off; the launcher's watch-only
-# fallback still keeps the user patch layers live until the app exits.
-- id: hmr
-  disabled: true
+# 0.1.7 retargets the row to @deepseek-ai/dsh-hmr with an empty module root:
+# it no longer reloads plugin modules, it owns live profile-CONFIG reload for
+# the volatile settings forms. The terminal follows the base default (enabled
+# in profile boots) instead of keeping the old module-reload disable.
 
 - id: tools
   config:
@@ -78,7 +80,10 @@
   disabled: true
 - id: tool-subagent-fork
   disabled: true
-- id: workflow-worker-thread
+# 0.1.7 replaced the workflow worker-thread backend with workflow-ptc (the
+# orchestration now executes inside the sandboxed PTC runtime). The terminal
+# keeps its no-workflow stance: backend and model-facing tool both stay off.
+- id: workflow-ptc
   disabled: true
 - id: tool-workflow
   disabled: true
@@ -95,10 +100,6 @@
 # preset became a single-tool composition), so this patch no longer lists it.
 
 - insert:
-    # Code Mode is a core execution capability, not a Web component.
-    - id: code-runtime
-      name: '@deepseek-ai/dsh-code-runtime-worker-thread'
-
     # Cross-session @mentions: bounded read-only snapshots of other sessions
     # as sourced model context. Opt-in upstream; the TUI's completion menu
     # lists candidates and submission expands them through prepare().
@@ -112,10 +113,14 @@
     - id: file-reference-local
       name: '@deepseek-ai/dsh-file-reference-local'
 
-    # The launcher supplies the shipped preset root beside its own config and
-    # the service also discovers the user's local preset root.
+    # 0.1.7 splits preset provisioning: this registry row provides the
+    # agentPresets service, while the four preset compositions themselves
+    # (standard/ptc/minimal/cordis) ship as @deepseek-ai/dsh-agent-preset
+    # declaration rows in the vendored presets/*.patch.yml files applied
+    # after this patch (the CLI no longer supplies a shipped preset root;
+    # legacy directory-based presets are unsupported upstream).
     - id: agent-presets
-      name: '@deepseek-ai/dsh-agent-presets'
+      name: '@deepseek-ai/dsh-agent-preset-registry'
       config:
         default: standard
 
@@ -136,13 +141,10 @@
     - id: subagent-model-selection-settings
       name: '@deepseek-ai/dsh-tool-subagent/model-selection-settings'
 
-    # Interactive provider authorization. The base bundle supplies the
-    # credential store; mounting the neutral authorization seam wakes the
-    # login flows already registered by llm-pi-ai without coupling the TUI to
-    # any provider's OAuth or device-code protocol.
-    - id: authorization
-      name: '@deepseek-ai/dsh-authorization'
-
+    # Interactive provider authorization mounted by the BASE bundle at
+    # 0.1.7 (base gained its own authorization row): mounting a second row
+    # here would double-mount the plugin, so this terminal only keeps the
+    # package as a dependency for src/authorization.ts's typed imports.
     # The bundle's skip-tolerant session-query engine replacing the disabled
     # base row above: same SQLite FTS5 service, observation loop patched to
     # skip unreadable sources instead of failing every search.

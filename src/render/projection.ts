@@ -526,10 +526,24 @@ export function nextEveryTarget(previousTarget: number, acceptedAt: number, ever
   return previousTarget + missed * interval
 }
 
-/** Plugin snapshot sources folded into token stats but never rendered as rows. */
-const HIDDEN_SNAPSHOT_PLUGINS = new Set(['time-context', 'tmux-context'])
-/** Plugin prompt sources rendered as full user rows (they ARE the conversation). */
-const REMINDER_PLUGINS = new Set(['schedule'])
+/** Producer snapshot sources folded into token stats but never rendered as rows. */
+const HIDDEN_SNAPSHOT_KINDS = new Set(['time-context', 'tmux-context'])
+/** Producer prompt sources rendered as full user rows (they ARE the conversation). */
+const REMINDER_KINDS = new Set(['schedule'])
+
+/**
+ * Read a producer's one-line notice account. Since the v4 format every
+ * producer owns its source kind and the formed producers extend ContextFormed
+ * (`form: 'notice'` carries `summary`), while the base role sources (model,
+ * tool, system-prompt) carry no formed fields at all — hence the runtime
+ * shape probe instead of a union access.
+ */
+function noticeAccountOf(source: object): string | undefined {
+  if (!('form' in source)) return undefined
+  if ((source as { form?: unknown }).form !== 'notice') return undefined
+  const summary = (source as { summary?: unknown }).summary
+  return typeof summary === 'string' ? summary : undefined
+}
 
 /** The complete TUI transcript view for one session. */
 export interface TranscriptView {
@@ -850,8 +864,10 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
       }
       // Snapshot injections (time/tmux context) still spend model context but
       // render nothing; the schedule reminder is a real prompt and renders in
-      // full — the model acts on it, so the transcript must show it.
-      if (message.source.kind === 'plugin' && HIDDEN_SNAPSHOT_PLUGINS.has(message.source.plugin)) {
+      // full — the model acts on it, so the transcript must show it. Since the
+      // v4 format every producer owns its source kind (the shared `plugin`
+      // catch-all is gone), so the sets match kinds directly.
+      if (HIDDEN_SNAPSHOT_KINDS.has(message.source.kind)) {
         return {
           ...view,
           pending,
@@ -866,7 +882,7 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
           },
         }
       }
-      if (message.source.kind === 'plugin' && REMINDER_PLUGINS.has(message.source.plugin)) {
+      if (REMINDER_KINDS.has(message.source.kind)) {
         return {
           ...view,
           pending,
@@ -881,11 +897,11 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
           },
         }
       }
-      const notice = message.source.kind === 'plugin' && message.source.form === 'notice'
-        ? message.source.summary
-        : message.source.kind === 'plugin'
-          ? message.source.plugin
-          : message.source.kind
+      // Formed producers publish a one-line notice account; everything else
+      // (foreign producers included, as `plugin:<name>` kinds) degrades to the
+      // kind string as the row label.
+      const account = noticeAccountOf(message.source)
+      const notice = account !== undefined ? account : message.source.kind
       const summary = boundContextSummary(notice)
       return {
         ...view,
@@ -1113,17 +1129,20 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
       }
     }
     case 'tool/result': {
-      const block = event.data.message.content[0]
-      const started = view.anchors.toolStart.get(block.toolCallId)
-      view.anchors.toolStart.delete(block.toolCallId)
+      // v4 flattened the tool result: the message itself carries the call id,
+      // direct content, and the optional error flag (the `tool-result`
+      // content wrapper is retired).
+      const result = event.data.message
+      const started = view.anchors.toolStart.get(result.toolCallId)
+      view.anchors.toolStart.delete(result.toolCallId)
       // Deregister the call from its turn's registry so `turn/end` does not
       // sweep a start that already paired with a result.
       const turnTools = view.anchors.turnTools.get(event.data.turn)
       if (turnTools !== undefined) {
-        turnTools.delete(block.toolCallId)
+        turnTools.delete(result.toolCallId)
         if (turnTools.size === 0) view.anchors.turnTools.delete(event.data.turn)
       }
-      const rawText = textOf(block.content)
+      const rawText = textOf(result.content)
       const summary = boundContextSummary(rawText)
       // The verbose expansion self-serves from the persisted presentation
       // metadata (diffs, read windows, web sources) with the bounded raw text
@@ -1136,8 +1155,8 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
         view.anchors.turnFiles.set(event.data.turn, set)
       }
       const entries = view.entries.map((entry) => {
-        if (entry.kind !== 'tool' || entry.callId !== block.toolCallId) return entry
-        return { ...entry, state: block.isError === true ? 'error' as const : 'done' as const, summary, detail }
+        if (entry.kind !== 'tool' || entry.callId !== result.toolCallId) return entry
+        return { ...entry, state: result.isError === true ? 'error' as const : 'done' as const, summary, detail }
       })
       return {
         ...view,
@@ -1204,7 +1223,9 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
               ? 'turn ended blocked'
               : reason.kind === 'interrupted'
                 ? 'turn was interrupted by a restart'
-                : undefined
+                : reason.kind === 'forked'
+                  ? 'turn closed at the fork point'
+                  : undefined
         if (marker !== undefined) appended.push({ kind: 'turn-marker', text: marker })
       }
       // Deliverables ride the turn tail (the web's turnTail chips): the
@@ -1730,7 +1751,7 @@ export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent):
       const origin = acc.claimOrigin.get(message.id)
       const delivery = origin === undefined ? {} : { delivery: origin === 'next-turn' ? 'queued' as const : 'steered' as const }
       acc.claimOrigin.delete(message.id)
-      if (message.source.kind === 'user' || (message.source.kind === 'plugin' && REMINDER_PLUGINS.has(message.source.plugin))) {
+      if (message.source.kind === 'user' || REMINDER_KINDS.has(message.source.kind)) {
         appendReplayEntry(acc, { kind: 'user', text, notice: false, ...delivery, ...(images.length === 0 ? {} : { images }), ...(files.length === 0 ? {} : { files }) })
         acc.stats = {
           ...acc.stats,
@@ -1741,7 +1762,7 @@ export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent):
         }
         return true
       }
-      if (message.source.kind === 'plugin' && HIDDEN_SNAPSHOT_PLUGINS.has(message.source.plugin)) {
+      if (HIDDEN_SNAPSHOT_KINDS.has(message.source.kind)) {
         acc.stats = {
           ...acc.stats,
           contextSegments: {
@@ -1751,11 +1772,8 @@ export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent):
         }
         return true
       }
-      const notice = message.source.kind === 'plugin' && message.source.form === 'notice'
-        ? message.source.summary
-        : message.source.kind === 'plugin'
-          ? message.source.plugin
-          : message.source.kind
+      const account = noticeAccountOf(message.source)
+      const notice = account !== undefined ? account : message.source.kind
       const summary = boundContextSummary(notice)
       appendReplayEntry(acc, { kind: 'user', text: summary, notice: true })
       acc.stats = {
@@ -1931,15 +1949,16 @@ export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent):
       return true
     }
     case 'tool/result': {
-      const block = event.data.message.content[0]
-      const started = acc.toolStart.get(block.toolCallId)
-      acc.toolStart.delete(block.toolCallId)
+      // v4 flattened shape — see the reducer's `tool/result` case.
+      const result = event.data.message
+      const started = acc.toolStart.get(result.toolCallId)
+      acc.toolStart.delete(result.toolCallId)
       const turnTools = acc.turnTools.get(event.data.turn)
       if (turnTools !== undefined) {
-        turnTools.delete(block.toolCallId)
+        turnTools.delete(result.toolCallId)
         if (turnTools.size === 0) acc.turnTools.delete(event.data.turn)
       }
-      const rawText = textOf(block.content)
+      const rawText = textOf(result.content)
       const summary = boundContextSummary(rawText)
       const detail = toolResultDetail(event.data.meta, rawText)
       if (detail?.kind === 'diff') {
@@ -1949,13 +1968,13 @@ export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent):
       }
       const update = (entry: ToolEntry): ToolEntry => ({
         ...entry,
-        state: block.isError === true ? 'error' as const : 'done' as const,
+        state: result.isError === true ? 'error' as const : 'done' as const,
         summary,
         detail,
       })
       // Every matching row updates (duplicate callIds included); an id with no
       // registered index is a provable no-op — no full-array fallback scan.
-      updateReplayById<ToolEntry>(acc, acc.toolIndex, block.toolCallId, entry => entry.callId === block.toolCallId, update)
+      updateReplayById<ToolEntry>(acc, acc.toolIndex, result.toolCallId, entry => entry.callId === result.toolCallId, update)
       acc.stats = {
         ...acc.stats,
         toolMs: acc.stats.toolMs + (started === undefined ? 0 : Math.max(0, event.time - started)),
@@ -2010,7 +2029,9 @@ export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent):
               ? 'turn ended blocked'
               : reason.kind === 'interrupted'
                 ? 'turn was interrupted by a restart'
-                : undefined
+                : reason.kind === 'forked'
+                  ? 'turn closed at the fork point'
+                  : undefined
         if (marker !== undefined) appended.push({ kind: 'turn-marker', text: marker })
       }
       const files = acc.turnFiles.get(event.data.turn)

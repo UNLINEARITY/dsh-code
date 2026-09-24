@@ -9,6 +9,8 @@ import {
 } from '@deepseek-ai/dsh-llm'
 import { AttachmentId, type FileAttachmentRef, type ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import { SessionSeq, type SessionEvent } from '@deepseek-ai/dsh-session'
+import { fixtureEvent } from './helpers/events.ts'
+import type { MessageSource } from '@deepseek-ai/dsh-llm'
 import type { ToolEntry, WorkflowEntry } from '../src/render/projection.ts'
 import {
   applyAssistantStreamChunk,
@@ -111,7 +113,7 @@ describe('replay equivalence (property)', () => {
     })
     const systemEvent = (text: string, seq: number): SessionEvent => ({
       type: 'system/message', seq, time: 0, surfaceOp: 'append',
-      data: { turn: 1, step: 1, message: { role: 'system', id: 's' + seq, content: text === '' ? [] : [{ type: 'text', text }], source: { kind: 'plugin', plugin: 'system-prompt' } } },
+      data: { turn: 1, step: 1, message: { role: 'system', id: 's' + seq, content: text === '' ? [] : [{ type: 'text', text }], source: { kind: 'system-prompt' } } },
     } as unknown as SessionEvent)
     const builders = [userEvent, attemptEvent, assistantEvent, systemEvent]
     for (let trial = 0; trial < 150; trial += 1) {
@@ -186,15 +188,15 @@ describe('transcript projection', () => {
   })
 
   it('collapses injected plugin context to a bounded notice row', () => {
-    const event = {
+    const event = fixtureEvent({
       type: 'user/message',
       seq: 1,
       time: 0,
       data: createUserMessage({
         content: [{ type: 'text', text: 'x'.repeat(400) }],
-        source: { kind: 'plugin', plugin: 'watcher', form: 'notice', summary: 'files changed' },
+        source: { kind: 'plugin:watcher', form: 'notice', summary: 'files changed' } as unknown as MessageSource,
       }),
-    } as SessionEvent
+    })
     const view = projectEvent(createTranscriptView(), event)
     expect(view.entries).toEqual([{ kind: 'user', text: 'files changed', notice: true }])
   })
@@ -1246,15 +1248,15 @@ describe('context segment estimates', () => {
   })
 
   it('counts injected plugin context into the system segment', () => {
-    const event = {
+    const event = fixtureEvent({
       type: 'user/message',
       seq: 1,
       time: 0,
       data: createUserMessage({
         content: [{ type: 'text', text: 'x'.repeat(400) }],
-        source: { kind: 'plugin', plugin: 'watcher', form: 'notice', summary: 'files changed' },
+        source: { kind: 'plugin:watcher', form: 'notice', summary: 'files changed' } as unknown as MessageSource,
       }),
-    } as SessionEvent
+    })
     const view = projectEvent(createTranscriptView(), event)
     expect(view.stats.contextSegments.system).toBe(4)
   })
@@ -1275,7 +1277,7 @@ describe('context segment estimates', () => {
           role: 'system',
           id: 'sys-' + seq,
           content: text === undefined ? [] : [{ type: 'text', text }],
-          source: { kind: 'plugin', plugin: 'system-prompt' },
+          source: { kind: 'system-prompt' },
         },
       },
     }) as unknown as SessionEvent
@@ -1299,13 +1301,15 @@ describe('context segment estimates', () => {
     // fold must drop them from the assembled prompt and the estimate.
     const systemMessage = (text: string, seq: number, surfaceOp: 'append' | { op: 'replace'; startSeq: number; endSeq: number }) => ({
       type: 'system/message', seq, time: 0, surfaceOp,
-      data: { turn: 1, step: 1, message: { role: 'system', id: 'sys-' + seq, content: text === '' ? [] : [{ type: 'text', text }], source: { kind: 'plugin', plugin: 'system-prompt' } } },
+      data: { turn: 1, step: 1, message: { role: 'system', id: 'sys-' + seq, content: text === '' ? [] : [{ type: 'text', text }], source: { kind: 'system-prompt' } } },
     } as unknown as SessionEvent)
     const compactionSummary = (seq: number, startSeq: number, endSeq: number) => ({
       type: 'user/message', seq, time: 0, surfaceOp: { op: 'replace' as const, startSeq, endSeq },
       data: createUserMessage({
         content: [{ type: 'text', text: 'compacted context summary' }],
-        source: { kind: 'plugin', plugin: 'compaction', form: 'notice', summary: 'compacted' },
+        // v4: the compact producer's checkpoint source is un-formed; the row
+        // degrades to the kind label like any non-notice producer.
+        source: { kind: 'compact-checkpoint', compactionId: 'cx' } as unknown as MessageSource,
       }),
     } as unknown as SessionEvent)
     let view = projectEvents([
@@ -1315,12 +1319,12 @@ describe('context segment estimates', () => {
     expect(view.systemPrompt).toBe('head persona\n\npinned addendum')
     // The compaction replace covers seq 2 (and its own summary node); only
     // the protected head survives. The segment estimate prices the surviving
-    // head (12 ASCII chars → 3) plus the compaction notice row itself (9
-    // chars → 3; plugin context joins the system segment).
+    // head (12 ASCII chars → 3) plus the degraded checkpoint label row
+    // (18 chars → 5; producer context joins the system segment).
     view = projectEvent(view, compactionSummary(3, 2, 2))
     expect(view.systemPrompt).toBe('head persona')
-    expect(view.stats.contextSegments.system).toBe(6)
-    expect(view.entries.some(entry => entry.kind === 'user' && entry.text.includes('compacted'))).toBe(true)
+    expect(view.stats.contextSegments.system).toBe(8)
+    expect(view.entries.some(entry => entry.kind === 'user' && entry.text.includes('compact-checkpoint'))).toBe(true)
   })
 
   it('keeps the surviving head when a replacement only clears a later system node', () => {
@@ -1339,7 +1343,7 @@ describe('context segment estimates', () => {
           role: 'system',
           id: 'sys-' + seq,
           content: text === undefined ? [] : [{ type: 'text', text }],
-          source: { kind: 'plugin', plugin: 'system-prompt' },
+          source: { kind: 'system-prompt' },
         },
       },
     }) as unknown as SessionEvent
@@ -1363,7 +1367,7 @@ describe('context segment estimates', () => {
     } as unknown as SessionEvent
     const queued = projectEvent(createTranscriptView(), spliced)
     expect(queued.stats.contextSegments.prompt).toBe(0)
-    const landed = projectEvent(queued, { type: 'user/message', seq: 2, time: 0, data: message } as SessionEvent)
+    const landed = projectEvent(queued, fixtureEvent({ type: 'user/message', seq: 2, time: 0, data: message }))
     expect(landed.stats.contextSegments.prompt).toBe(2)
   })
 

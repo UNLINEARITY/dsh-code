@@ -7,7 +7,7 @@ English | [中文](README.md)
 <p align="center"><img alt="Typing SVG" src="https://readme-typing-svg.herokuapp.com?font=JetBrains+Mono&amp;weight=500&amp;size=22&amp;duration=4000&amp;pause=700&amp;color=4176E6&amp;center=true&amp;vCenter=true&amp;width=680&amp;lines=DeepSeek+Harness+Code;Terminal+Coding+Interface+for+the+DSH+Core"></p>
 <p align="center">
   <a href="https://github.com/deepseek-ai/deepseek-harness"><img alt="DeepSeek Harness" src="https://img.shields.io/badge/DeepSeek-Harness-4176E6?style=for-the-badge&amp;logo=deepseek&amp;logoColor=white&amp;labelColor=1c1917"></a>
-  <a href="https://www.npmjs.com/package/@deepseek-ai/dsh"><img alt="dsh version" src="https://img.shields.io/badge/dsh-0.1.5--rc.2-4176E6?style=for-the-badge&amp;logo=deepseek&amp;logoColor=white&amp;labelColor=1c1917"></a>
+  <a href="https://www.npmjs.com/package/@deepseek-ai/dsh"><img alt="dsh version" src="https://img.shields.io/badge/dsh-0.1.7--rc.1-4176E6?style=for-the-badge&amp;logo=deepseek&amp;logoColor=white&amp;labelColor=1c1917"></a>
   <a href="https://github.com/UNLINEARITY/dsh-code/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/UNLINEARITY/dsh-code?label=Stars&amp;style=for-the-badge&amp;logo=github&amp;logoColor=white&amp;color=4176E6&amp;labelColor=1c1917"></a>
   <a href="https://www.npmjs.com/package/dsh-code"><img alt="npm version" src="https://img.shields.io/npm/v/dsh-code?label=npm&amp;style=for-the-badge&amp;logo=npm&amp;color=cb3837&amp;labelColor=1c1917"></a>
   <a href="https://github.com/UNLINEARITY/dsh-code/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/github/license/UNLINEARITY/dsh-code?label=License&amp;style=for-the-badge&amp;logo=opensourceinitiative&amp;color=4176E6&amp;labelColor=1c1917"></a>
@@ -23,14 +23,14 @@ DeepSeek Harness registers models, tools, storage, policies, and interfaces as p
 
 ## 2. Quick start
 
-Requires Node `^22.19 || >=24` and the preview `dsh` CLI (current release line: `@deepseek-ai/dsh@0.1.5-rc.2`). You can still enter the TUI, browse sessions, and use non-model features without configuring a model; press `Tab` in `/model` to manage API keys, OAuth, device-code sign-in, endpoints, and models.
+Requires Node `^22.19 || >=24` and the preview `dsh` CLI (current release line: `@deepseek-ai/dsh@0.1.7-rc.1`). You can still enter the TUI, browse sessions, and use non-model features without configuring a model; press `Tab` in `/model` to manage API keys, OAuth, device-code sign-in, endpoints, and models.
 
 ### 1. Install and update
 
 Install from npm (recommended). `/update` and `deepseek update --apply` both work afterwards: they check npm for a newer version and walk you through the upgrade.
 
 ```sh
-npm install -g @deepseek-ai/dsh@0.1.5-rc.2 pnpm
+npm install -g @deepseek-ai/dsh@0.1.7-rc.1 pnpm
 npm install -g dsh-code@1.5.0
 dsh plugin --profile cli add dsh-code@1.5.0
 ```
@@ -38,14 +38,14 @@ dsh plugin --profile cli add dsh-code@1.5.0
 When npm is unreachable (restricted network, a mirror outage), install the GitHub Release tarball instead. CI builds it on every tag and attaches it to the release; lib is prebuilt, so the installing machine needs no toolchain:
 
 ```sh
-npm install -g @deepseek-ai/dsh@0.1.5-rc.2 pnpm
+npm install -g @deepseek-ai/dsh@0.1.7-rc.1 pnpm
 npm install -g https://github.com/unlinearity/dsh-code/releases/download/1.5.0/dsh-code-1.5.0.tgz
 dsh plugin --profile cli add https://github.com/unlinearity/dsh-code/releases/download/1.5.0/dsh-code-1.5.0.tgz
 ```
 
 > npm script prompts: npm 11.6+ may print `npm warn install-scripts` during a global install (unapproved build scripts for node-pty, koffi, and friends). The host ships prebuilt artifacts, so common platforms can ignore the warning; if a native-module error appears after installing, follow npm's own hint and rerun with `npm install -g --allow-scripts=<package list>`.
 >
-> Version alignment: dsh-code targets dsh `0.1.5-rc.2`, with every Harness dependency pinned exactly to `0.1.5-rc.2`. A local `link:` mount should be rebuilt with `git pull && pnpm install && pnpm build`; do not run the updater against a checkout.
+> Version alignment: dsh-code targets dsh `0.1.7-rc.1`, with every Harness dependency pinned exactly to `0.1.7-rc.1`. A local `link:` mount should be rebuilt with `git pull && pnpm install && pnpm build`; do not run the updater against a checkout.
 >
 > A GitHub tarball install can lead npm by one release (until the registry carries the same version). The updater only reads npm, so it reports that this install is newer and refuses to downgrade, instead of claiming everything is up to date; use `/update` once npm catches up.
 

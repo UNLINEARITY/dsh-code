@@ -3,7 +3,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   type TodoItem,
-  type SessionEvent,
   type QuestionSnapshot,
   type PendingQuestion,
   appProps,
@@ -15,6 +14,7 @@ import {
   unsubscribe,
   wait,
 } from './helpers/app-mount.ts'
+import { fixtureEvent } from './helpers/events.ts'
 
 describe('short-terminal surfaces', () => {
   it('keeps the approval ask visible and answerable on an 8-row terminal', async () => {
@@ -238,13 +238,13 @@ describe('/todos subpage', () => {
       status: index < 10 ? 'completed' : index < 20 ? 'in_progress' : 'pending',
     }))
     const store = createTranscriptStore([
-      {
+      fixtureEvent({
         type: 'user/message',
         seq: 1,
         time: 1,
         data: createUserMessage({ content: [{ type: 'text', text: 'track work' }], source: { kind: 'user' } }),
-      } as SessionEvent,
-      { type: 'todo/write', seq: 2, time: 2, data: { todos } } as SessionEvent,
+      }),
+      fixtureEvent({ type: 'todo/write', seq: 2, time: 2, data: { todos } }),
     ])
     const harness = createTty(100, 24)
     const instance = renderApp(harness, appProps({ store }))

@@ -8,7 +8,7 @@ import { createElement } from 'react'
 import { render } from 'ink'
 import { describe, expect, it, vi } from 'vitest'
 import { EffortPanel, ModePanel } from '../src/panels/kernel-panels.ts'
-import type { AgentPreset } from '@deepseek-ai/dsh-agent-presets'
+import type { AgentPreset } from '@deepseek-ai/dsh-agent-preset-registry'
 import type { ModelRow } from '../src/models.ts'
 
 const wait = async (ms = 120): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))

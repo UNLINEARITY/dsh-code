@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 
 type PackageManifest = {
   dependencies: Record<string, string>
+  dsh?: { bundle?: { patch?: string | string[] } }
 }
 
 /** The manifest this bundle ships. */
@@ -38,19 +39,38 @@ const patchSchema = DEFAULT_SCHEMA.extend(
   new Type('tag:yaml.org,2002:js', { kind: 'scalar', resolve: () => true, construct: () => ({ js: true }) }),
 )
 
+/** The ordered patch files the bundle applies (0.1.7 accepts a list). */
+const patchFiles = [manifest.dsh?.bundle?.patch ?? './cordis.patch.yml'].flat()
+  .map((entry) => entry.replace(/^\.\//, ''))
+
 /** The package part of a module reference ('@scope/name/sub' → '@scope/name'). */
 function packageOf(module: string): string {
   const parts = module.split('/')
   return module.startsWith('@') ? parts.slice(0, 2).join('/') : String(parts[0])
 }
 
-type PatchRow = { id?: string; name?: string; disabled?: unknown }
+type PatchRow = { id?: string; name?: string; disabled?: unknown; config?: unknown }
 type PatchEntry = { insert?: PatchRow[] }
 
-const patch = load(
-  readFileSync(new URL('../cordis.patch.yml', import.meta.url), 'utf8'),
-  { schema: patchSchema },
-) as PatchEntry[]
+/**
+ * Every plugin row a patch file declares, including rows nested inside
+ * `cordis:group` entries (their config is an array of rows). Group names
+ * themselves are not packages.
+ */
+function* rowsOf(entry: PatchEntry | PatchRow): Generator<PatchRow> {
+  for (const row of (entry as PatchEntry).insert ?? []) yield* rowsOf(row)
+  const nested = (entry as PatchRow).config
+  if (Array.isArray(nested)) for (const row of nested as PatchRow[]) yield* rowsOf(row)
+}
+
+const patchRows: PatchRow[] = []
+for (const file of patchFiles) {
+  const patch = load(
+    readFileSync(new URL(`../${file}`, import.meta.url), 'utf8'),
+    { schema: patchSchema },
+  ) as PatchEntry[]
+  for (const entry of patch) for (const row of rowsOf(entry)) patchRows.push(row)
+}
 
 describe('bundle patch rows', () => {
   // The 1.0.7 release mounted an enabled row over @deepseek-ai/dsh-tool-
@@ -60,18 +80,20 @@ describe('bundle patch rows', () => {
   // the boot died on ERR_MODULE_NOT_FOUND before drawing a frame. A row that
   // ships enabled is imported at boot, so its module must come from the
   // bundle itself, from a real dependency (installed into the profile with
-  // the bundle), or from the host install; anything else cannot boot.
+  // the bundle), or from the host install; anything else cannot boot. Since
+  // the 0.1.7 alignment the check walks every patch file (the vendored
+  // presets/*.patch.yml declarations mount the same way when a session
+  // selects their preset) and recurses into cordis:group rows.
   it('mounts every load-bearing row from the bundle, its dependencies, or the host install', () => {
     const shippable = new Set([...Object.keys(manifest.dependencies ?? {}), ...hostBundled])
     const violations: string[] = []
-    for (const entry of patch) {
-      for (const row of entry.insert ?? []) {
-        if (row.name === undefined) continue
-        if (row.disabled === true) continue // ships disabled: never imported at boot
-        const isSelf = row.name === 'dsh-code' || row.name.startsWith('dsh-code/')
-        if (isSelf || shippable.has(packageOf(row.name))) continue
-        violations.push(`${row.id ?? '(unnamed row)'} → ${row.name}`)
-      }
+    for (const row of patchRows) {
+      if (row.name === undefined) continue
+      if (row.disabled === true) continue // ships disabled: never imported at boot
+      if (row.name.includes(':')) continue // cordis:group and friends are not packages
+      const isSelf = row.name === 'dsh-code' || row.name.startsWith('dsh-code/')
+      if (isSelf || shippable.has(packageOf(row.name))) continue
+      violations.push(`${row.id ?? '(unnamed row)'} → ${row.name}`)
     }
     expect(violations).toEqual([])
   })

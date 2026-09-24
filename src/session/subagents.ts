@@ -116,14 +116,17 @@ export function foldSubagentRow(previous: SubagentRow | undefined, sessionId: st
       // recovered from a stream error, so the child stays running.
       return { ...base, state: 'running', activity: 'thinking…', updatedAt: event.time }
     case 'subagent/catalog': {
-      // Parent-owned durable discovery fact (0.1.5): the catalog names the
-      // child's mode (one-shot vs continuable) and its authored label — the
-      // most semantic label the row can carry. It is a discovery fact, not a
-      // lifecycle signal: a fresh row starts idle, but a late delivery never
-      // regresses a row that already ran or finished. An unchanged fact keeps
-      // the row's identity (the no-op discipline of the default branch), so
-      // repeated deliveries never churn the snapshot array.
-      const mode = event.data.mode === 'continuable' ? 'continuable' : 'one-shot'
+      // Parent-owned durable discovery fact (0.1.5; v1 since 0.1.7): the
+      // catalog names the child's mode (one-shot vs continuable; v1 keeps
+      // unknown-mode children whose descriptor evidence was unsupported) and
+      // its authored label — the most semantic label the row can carry. It
+      // is a discovery fact, not a lifecycle signal: a fresh row starts
+      // idle, but a late delivery never regresses a row that already ran or
+      // finished. An unchanged fact keeps the row's identity (the no-op
+      // discipline of the default branch), so repeated deliveries never
+      // churn the snapshot array.
+      const rawMode = event.data.mode
+      const mode = rawMode === 'continuable' || rawMode === 'one-shot' ? rawMode : 'unknown'
       const label = event.data.label !== undefined && event.data.label.trim() !== '' ? bound(event.data.label) : undefined
       const nextLabel = label === undefined ? base.label : label
       const activity = label === undefined ? `catalog · ${mode}` : `catalog · ${mode} · ${label}`
