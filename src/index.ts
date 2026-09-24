@@ -34,6 +34,7 @@ import { App } from './app.ts'
 import type { NoticeTone, QueueMutation } from './ui/ui-contract.ts'
 import { planCycleDecision } from './runner/mode-cycle.ts'
 export { planCycleDecision, type ModeCycleDecision } from './runner/mode-cycle.ts'
+import { readLegacySettingsGap, reimportLegacySettings, type LegacySettingsProfile, type LegacySettingsWriteFace } from './runner/legacy-settings.ts'
 import { runQuitSequence, type QuitCleanupStep } from './runner/quit.ts'
 export { runQuitSequence, type QuitCleanupStep } from './runner/quit.ts'
 import { exportSessionIdSuffix, resolveTarget, type Target } from './runner/session-target.ts'
@@ -599,6 +600,13 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     ctx.on('llm/adapters-updated', scheduleCapabilitySync),
   ]
   scheduleCapabilitySync()
+
+  // An incomplete legacy-settings migration must not pass silently: the
+  // 0.1.7 host renames the retired global document before importing it, with
+  // no retry, so a degraded first boot strands provider/model config in the
+  // renamed file. The check is advisory — restoring the file and rebooting
+  // re-runs the host's own import, which stays the single writer.
+  const legacySettingsGap = readLegacySettingsGap(ctx.get('profileContext') as LegacySettingsProfile | undefined)
 
   // /statusline persistence: one user-level JSON file under the DSH home.
   // Missing file means defaults; a corrupt file degrades to defaults with a
@@ -1788,6 +1796,36 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     setTimeout(() => {
       bridge.notify(t('notice.statuslineConfigUnreadable', { message: statuslineWarning }), 'warning')
     }, 50)
+  }
+  // Same one-shot surface for stranded legacy settings: the recovery itself
+  // runs in-process (the live settings service re-runs the host's import),
+  // so the notice reports the outcome; stderr keeps the full detail (sections,
+  // absolute paths, per-section failures) for copy-paste fallback.
+  if (legacySettingsGap !== undefined) {
+    internals.stderr.write(`dsh: legacy settings not migrated (${legacySettingsGap.sections.join(', ')});`
+      + ` recovery source: ${legacySettingsGap.importedPath}\n`)
+    void reimportLegacySettings(ctx.get('settings') as LegacySettingsWriteFace | undefined, legacySettingsGap)
+      .then(outcome => {
+        for (const failure of outcome.failed) {
+          internals.stderr.write(`dsh: re-import of ${failure.ns} failed: ${failure.message}\n`)
+        }
+        // One notice line reports the outcome; a partial failure outranks
+        // the success note, and no service at all falls back to manual steps.
+        setTimeout(() => {
+          if (outcome.failed.length > 0) {
+            bridge.notify(t('notice.legacySettingsRecoverFailed'), 'warning')
+          } else if (outcome.recovered.length > 0) {
+            bridge.notify(t('notice.legacySettingsRecovered', { sections: outcome.recovered.join(', ') }))
+          } else {
+            bridge.notify(t('notice.legacySettingsUnmigrated'), 'warning')
+          }
+        }, 50)
+      }, (error: unknown) => {
+        internals.stderr.write(`dsh: legacy settings re-import failed: ${error instanceof Error ? error.message : String(error)}\n`)
+        setTimeout(() => {
+          bridge.notify(t('notice.legacySettingsRecoverFailed'), 'warning')
+        }, 50)
+      })
   }
   // Same one-shot surface for a corrupt theme file (dark fallback stays live).
   if (languageWarning !== undefined) {

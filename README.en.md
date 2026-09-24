@@ -47,6 +47,8 @@ dsh plugin --profile cli add https://github.com/unlinearity/dsh-code/releases/do
 >
 > Version alignment: dsh-code targets dsh `0.1.7-rc.1`, with every Harness dependency pinned exactly to `0.1.7-rc.1`. A local `link:` mount should be rebuilt with `git pull && pnpm install && pnpm build`; do not run the updater against a checkout.
 >
+> Settings migration: on the first boot of a dsh 0.1.7-targeting build, the host imports the retired global `settings.yaml` into the active profile once (the file is then renamed to `settings.yaml.imported`). Upgrade dsh and dsh-code together so no degraded boot falls in between. If provider/model configuration goes missing after an upgrade, the TUI detects it at startup and re-imports the stranded sections automatically through the host's own settings pipe — no manual steps, no re-login (credentials are unaffected). Only when the settings service is unwritable do you need the manual fallback: copy `settings.yaml.imported` to `settings.yaml` under the dsh home and restart.
+>
 > A GitHub tarball install can lead npm by one release (until the registry carries the same version). The updater only reads npm, so it reports that this install is newer and refuses to downgrade, instead of claiming everything is up to date; use `/update` once npm catches up.
 
 ### 2. Launch commands

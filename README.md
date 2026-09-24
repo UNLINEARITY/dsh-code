@@ -51,6 +51,8 @@ dsh plugin --profile cli add https://github.com/unlinearity/dsh-code/releases/do
 >
 > 升级说明：旧会话与旧参数中记录的 `code` 预设会自动映射到上游已改名的 `ptc`，无需手动迁移。会话日志读取端随上游升级到格式 v3：旧格式日志在读取时由内核自动迁移，磁盘上的原始文件保持不变。
 >
+> 设置迁移：面向 dsh 0.1.7 的版本首次启动时，宿主会把旧版全局 `settings.yaml` 一次性迁入当前 profile（文件随后改名为 `settings.yaml.imported`）。请让 dsh 与 dsh-code 同步升级，避免夹在中间的降级启动。若升级后发现模型/供应商配置消失：TUI 会在启动时检测并经由宿主自己的设置管道自动重新导入，无需手动操作（凭据不受影响，无需重新登录）；仅在设置服务不可写的极端情况下，才需要把 dsh 主目录下的 `settings.yaml.imported` 复制为 `settings.yaml` 后重启。
+>
 > 从 GitHub tarball 装的版本可能领先 npm 一步（npm 上还没同步这个版本时）。更新器只认 npm，这种情况会写明「新于 npm，不降级」而不是「已是最新」；等 npm 同步后再用 `/update`。
 
 ### 2. 启动指令
