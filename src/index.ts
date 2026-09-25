@@ -35,6 +35,10 @@ import type { NoticeTone, QueueMutation } from './ui/ui-contract.ts'
 import { planCycleDecision } from './runner/mode-cycle.ts'
 export { planCycleDecision, type ModeCycleDecision } from './runner/mode-cycle.ts'
 import { readLegacySettingsGap, reimportLegacySettings, type LegacySettingsProfile, type LegacySettingsWriteFace } from './runner/legacy-settings.ts'
+import { withColdReadCeiling } from './session-query.ts'
+
+/** Ceiling for the /search title enrichment pass; slower hits degrade to snippet rows. */
+const TITLE_ENRICHMENT_CEILING_MS = 8_000
 import { runQuitSequence, type QuitCleanupStep } from './runner/quit.ts'
 export { runQuitSequence, type QuitCleanupStep } from './runner/quit.ts'
 import { exportSessionIdSuffix, resolveTarget, type Target } from './runner/session-target.ts'
@@ -1642,10 +1646,18 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     : async (query: string, signal?: AbortSignal): Promise<readonly SearchRow[]> => {
       const page = await sessionQuery.searchSessions({ query, limit: 30 }, signal === undefined ? undefined : { signal })
       const rows = page.items.map(hit => searchHitToRow(hit))
-      // Best-effort title enrichment (the same snapshots /resume merges):
-      // a failure keeps the short-id labels instead of failing the search.
+      // Best-effort title enrichment (the same snapshots /resume merges).
+      // The engine folds titles by cold-reading every result session's log,
+      // and one multi-frame zstd heavyweight among the hits costs minutes —
+      // the panel's primary value (matches + snippets) must not wait on it.
+      // A budget bounds the enrichment; on expiry (or any failure) the rows
+      // keep their short-id labels and snippets instead of failing search.
       try {
-        const observations = await sessionQuery.readTitleSnapshots(rows.map(row => row.id), signal)
+        const observations = await withColdReadCeiling(
+          innerSignal => sessionQuery.readTitleSnapshots(rows.map(row => row.id), innerSignal),
+          TITLE_ENRICHMENT_CEILING_MS,
+          signal,
+        )
         const titles = new Map<string, string>()
         for (const observation of observations) {
           if (observation.status !== 'fulfilled') continue

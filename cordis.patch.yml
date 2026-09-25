@@ -147,11 +147,16 @@
     # package as a dependency for src/authorization.ts's typed imports.
     # The bundle's skip-tolerant session-query engine replacing the disabled
     # base row above: same SQLite FTS5 service, observation loop patched to
-    # skip unreadable sources instead of failing every search.
+    # skip unreadable sources instead of failing every search. The index
+    # PERSISTS under the dsh home (created owner-only, parent dirs auto-
+    # created): an in-memory index re-decompressed and re-decoded every
+    # persisted session on the first search of EACH launch — minutes on a
+    # few hundred zstd logs — while a persisted one only reconciles the
+    # sessions whose revisions changed since the last open.
     - id: session-query-skip
       name: 'dsh-code/session-query'
       config:
-        path: ':memory:'
+        path: !!js "ctx.get('profileContext').home + '/storages/session-query/index.sqlite'"
         openAt: first-search
 
     # Model-facing session-log search/trace/read tools over the sessionQuery

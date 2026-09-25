@@ -69,6 +69,50 @@ type ColdRead = (persistence: NonNullable<EngineSurface['_persistenceBinding']['
 
 const STABLE_OBSERVATION_ATTEMPTS = 2
 
+/**
+ * Ceiling for one persisted session's cold read. A truncated multi-frame
+ * zstd log leaves the streaming frame decoder waiting for input that never
+ * comes — no error, no return — and one such log wedged every search on the
+ * whole corpus (the skip below only ever saw THROWN errors). The ceiling
+ * turns any wedged read into one skipped source; a real log of this size
+ * decodes in a fraction of the budget.
+ */
+const COLD_READ_CEILING_MS = 30_000
+
+/**
+ * Race one cold read against a ceiling, aborting the read's own signal on
+ * timeout so the underlying handle can release. Aborts propagate as-is.
+ * @param read - the cold-read promise to bound.
+ * @param ceilingMs - milliseconds before the read is declared wedged.
+ * @param signal - caller cancellation, forwarded to the race.
+ */
+export async function withColdReadCeiling<T>(read: (signal: AbortSignal | undefined) => Promise<T>, ceilingMs: number, signal: AbortSignal | undefined): Promise<T> {
+  const controller = new AbortController()
+  const forward = (): void => { controller.abort() }
+  signal?.addEventListener('abort', forward, { once: true })
+  try {
+    return await new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`cold read exceeded ${ceilingMs}ms (wedged decoder or unreadable source)`)), ceilingMs)
+      const settle = (outcome: PromiseSettledResult<T>): void => {
+        clearTimeout(timer)
+        if (outcome.status === 'fulfilled') resolve(outcome.value)
+        else reject(outcome.reason instanceof Error ? outcome.reason : new Error(String(outcome.reason)))
+      }
+      read(controller.signal).then(
+        (value: T) => settle({ status: 'fulfilled', value }),
+        (error: unknown) => settle({ status: 'rejected', reason: error instanceof Error ? error : new Error(String(error)) }),
+      )
+      controller.signal.addEventListener('abort', () => {
+        clearTimeout(timer)
+        reject(new Error('cold read aborted'))
+      }, { once: true })
+    })
+  } finally {
+    signal?.removeEventListener('abort', forward)
+    if (!controller.signal.aborted) controller.abort()
+  }
+}
+
 function assertNotAborted(signal: AbortSignal | undefined): void {
   if (signal?.aborted) {
     throw new SessionQueryError('session-search aborted', 'SESSION_QUERY_ABORTED')
@@ -171,7 +215,7 @@ export async function observeStableWithSkip(
           // not-yet-read entry, so the stable-snapshot comparison and the
           // live-preferred merge below are unaffected.
           try {
-            const loaded = await readCold(persistence, entry.header.id, signal)
+            const loaded = await withColdReadCeiling(innerSignal => readCold(persistence, entry.header.id, innerSignal), COLD_READ_CEILING_MS, signal)
             assertNotAborted(signal)
             assertSessionHeadersCompatible(entry.header, loaded.header)
             entry.loaded = observeSession(loaded.header, loaded.inheritedEventCount, loaded.events)
