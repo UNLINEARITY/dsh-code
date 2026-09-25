@@ -359,12 +359,46 @@ export interface RetryEntry {
 /** Turn-tail deliverables: files mutated by the turn's diff-bearing tools. */
 export interface FilesEntry {
   kind: 'files'
+  /** The turn whose tail this row rides (the changes row's join key). */
+  turn: number
   /** Unique mutated paths in call order, bounded. */
   paths: readonly string[]
 }
 
+/** Turn change summary announced by a `workspace/changes` event. */
+export interface WorkspaceChangesEntry {
+  kind: 'workspace-changes'
+  /** The summarized turn. */
+  turn: number
+  /** The announcing event's sequence; the live summary's lookup key. */
+  seq: number
+}
+
+/** Dynamic tool loading folded from `developer/message` blocks. */
+export interface DeveloperToolsEntry {
+  kind: 'developer-tools'
+  /** Tool names the developer surface added, in block order. */
+  added: readonly string[]
+  /** Tool names the developer surface removed, in block order. */
+  removed: readonly string[]
+}
+
+/** Live turn-change summary served by the host's `workspaceChanges` service. */
+export interface WorkspaceChangesView {
+  /** The summarized turn. */
+  readonly turn: number
+  /** Complete changed-file count (the visible list may be capped). */
+  readonly total: number
+  /** Added lines across every changed file. */
+  readonly added: number
+  /** Deleted lines across every changed file. */
+  readonly deleted: number
+  /** The changed files, capped like the summary service caps them. */
+  readonly files: readonly { readonly display: string; readonly added: number; readonly deleted: number }[]
+}
+
 /** Ordered transcript items the renderer draws. */
-export type TranscriptEntry = UserEntry | PendingEntry | AssistantEntry | ToolEntry | CommandEntry | ErrorEntry | TurnMarkerEntry | CompactionEntry | RetryEntry | FilesEntry | WorkflowEntry
+export type TranscriptEntry = UserEntry | PendingEntry | AssistantEntry | ToolEntry | CommandEntry | ErrorEntry | TurnMarkerEntry | CompactionEntry | RetryEntry | FilesEntry | WorkspaceChangesEntry | DeveloperToolsEntry | WorkflowEntry
 
 /** The live goal the status line badges, folded from `goal/change`. */
 export interface GoalFold {
@@ -413,6 +447,8 @@ export interface ContextSegments {
   thinking: number
   /** Tool call arguments plus result text. */
   tools: number
+  /** Image blocks, priced by intrinsic pixels (the offload fold subtracts). */
+  images: number
 }
 
 /** Window-scoped figures the status line shows; timing uses event timestamps. */
@@ -628,6 +664,8 @@ export interface TranscriptView {
     turnTools: Map<number, Set<string>>
     /** Live `system/message` surface nodes by event seq (empty string = an empty node). */
     systemNodes: Map<number, string>
+    /** Priced images per node seq (user prompts, tool results) for the offload fold. */
+    imagePrices: Map<number, number[]>
   }
 }
 
@@ -691,6 +729,7 @@ function cloneViewAnchors(anchors: TranscriptView['anchors']): TranscriptView['a
     turnSteps: new Map(anchors.turnSteps),
     turnTools: new Map([...anchors.turnTools].map(([turn, tools]) => [turn, new Set(tools)])),
     systemNodes: new Map(anchors.systemNodes),
+    imagePrices: new Map([...anchors.imagePrices].map(([seq, prices]) => [seq, [...prices]])),
   }
 }
 
@@ -759,6 +798,83 @@ function estimateTokens(text: string): number {
   return wide + Math.ceil(narrow / 4)
 }
 
+/** Fallback per-image price when intrinsic dimensions are unusable. */
+const IMAGE_TOKEN_FALLBACK = 1024
+
+/**
+ * Rough per-image token estimate for the segmented context bar: intrinsic
+ * pixels over a ~750-pixels-per-token vision patch heuristic (the tier most
+ * routes request). Like the text estimator this drives bar PROPORTIONS and
+ * never billing; the offload fold subtracts exactly what was priced.
+ * @param image - the image attachment the block carries.
+ * @returns a positive integer token estimate.
+ */
+function estimateImageTokens(image: ImageBlock['attachment']): number {
+  const pixels = image.width * image.height
+  if (!Number.isSafeInteger(pixels) || pixels <= 0) return IMAGE_TOKEN_FALLBACK
+  return Math.max(1, Math.ceil(pixels / 750))
+}
+
+/**
+ * Price one node's images for the segments bar and record the per-index
+ * prices the `image/offload` fold subtracts. Recorded entries are zeroed as
+ * they are consumed so a repeated index can never subtract twice.
+ * @param prices - the fold's seq-keyed price ledger (mutated in place).
+ * @param seq - the priced node's event sequence.
+ * @param images - the node's image attachments, in model-visible order.
+ * @returns the summed token estimate to add to the `images` segment.
+ */
+function recordImagePrices(prices: Map<number, number[]>, seq: number, images: readonly ImageBlock['attachment'][]): number {
+  if (images.length === 0) return 0
+  const priced = images.map(estimateImageTokens)
+  prices.set(seq, priced)
+  return priced.reduce((total, price) => total + price, 0)
+}
+
+/**
+ * Subtract offloaded image prices, zeroing consumed ledger entries so each
+ * index pays once. Unknown seqs (never priced here) and out-of-range indexes
+ * (already offloaded upstream) contribute nothing.
+ * @param prices - the fold's seq-keyed price ledger (mutated in place).
+ * @param targets - the offload event's node targets.
+ * @returns the summed token estimate to subtract from the `images` segment.
+ */
+function consumeImagePrices(prices: Map<number, number[]>, targets: ReadonlyArray<{ seq: number; imageIndexes: readonly number[] }>): number {
+  let removed = 0
+  for (const target of targets) {
+    const priced = prices.get(target.seq)
+    if (priced === undefined) continue
+    for (const index of target.imageIndexes) {
+      const price = priced[index]
+      if (price === undefined || price === 0) continue
+      removed += price
+      priced[index] = 0
+    }
+  }
+  return removed
+}
+
+/** Tool names carried by one developer message's add/remove blocks. */
+function developerToolNames(content: readonly ContentBlock[]): { added: readonly string[]; removed: readonly string[] } {
+  const added: string[] = []
+  const removed: string[] = []
+  for (const block of content) {
+    if (block.type === 'tool-addition' && block.toolName !== '') added.push(block.toolName)
+    else if (block.type === 'tool-removal' && block.toolName !== '') removed.push(block.toolName)
+  }
+  return { added, removed }
+}
+
+/** Payload of `image/offload` (dsh-compaction-image-offload's map merge). */
+interface ImageOffloadData {
+  targets: ReadonlyArray<{ seq: number; imageIndexes: readonly number[] }>
+}
+
+/** Payload of `workspace/changes` (dsh-workspace-changes' map merge). */
+interface WorkspaceChangesData {
+  turn: number
+}
+
 /** A fresh, empty transcript view. */
 export function createTranscriptView(): TranscriptView {
   return {
@@ -779,8 +895,8 @@ export function createTranscriptView(): TranscriptView {
     schedules: [],
     pending: { 'next-turn': [], 'next-step': [] },
     claimOrigin: new Map(),
-    stats: { turns: 0, steps: 0, llmMs: 0, toolMs: 0, usage: { uncachedInputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }, lastPromptTokens: 0, contextWindow: 0, contextSegments: { system: 0, prompt: 0, assistant: 0, thinking: 0, tools: 0 }, ttftMs: 0, ttftSteps: 0, decodeMs: 0, decodeTokens: 0, reasoningEffort: '' },
-    anchors: { stepStart: new Map(), toolStart: new Map(), subStart: new Map(), firstChunkAt: new Map(), compactionTokens: new Map(), lastPruneTokens: 0, turnFiles: new Map(), turnSteps: new Map(), turnTools: new Map(), systemNodes: new Map() },
+    stats: { turns: 0, steps: 0, llmMs: 0, toolMs: 0, usage: { uncachedInputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }, lastPromptTokens: 0, contextWindow: 0, contextSegments: { system: 0, prompt: 0, assistant: 0, thinking: 0, tools: 0, images: 0 }, ttftMs: 0, ttftSteps: 0, decodeMs: 0, decodeTokens: 0, reasoningEffort: '' },
+    anchors: { stepStart: new Map(), toolStart: new Map(), subStart: new Map(), firstChunkAt: new Map(), compactionTokens: new Map(), lastPruneTokens: 0, turnFiles: new Map(), turnSteps: new Map(), turnTools: new Map(), systemNodes: new Map(), imagePrices: new Map() },
   }
 }
 
@@ -848,6 +964,7 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
       const images = imagesOf(message.content)
       const files = filesOf(message.content)
       if (message.source.kind === 'user') {
+        const imageTotal = recordImagePrices(view.anchors.imagePrices, event.seq, images)
         return {
           ...view,
           pending,
@@ -858,6 +975,7 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
             contextSegments: {
               ...view.stats.contextSegments,
               prompt: view.stats.contextSegments.prompt + estimateTokens(text),
+              images: view.stats.contextSegments.images + imageTotal,
             },
           },
         }
@@ -883,6 +1001,7 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
         }
       }
       if (REMINDER_KINDS.has(message.source.kind)) {
+        const imageTotal = recordImagePrices(view.anchors.imagePrices, event.seq, images)
         return {
           ...view,
           pending,
@@ -893,6 +1012,7 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
             contextSegments: {
               ...view.stats.contextSegments,
               prompt: view.stats.contextSegments.prompt + estimateTokens(text),
+              images: view.stats.contextSegments.images + imageTotal,
             },
           },
         }
@@ -1158,6 +1278,7 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
         if (entry.kind !== 'tool' || entry.callId !== result.toolCallId) return entry
         return { ...entry, state: result.isError === true ? 'error' as const : 'done' as const, summary, detail }
       })
+      const imageTotal = recordImagePrices(view.anchors.imagePrices, event.seq, imagesOf(result.content))
       return {
         ...view,
         entries,
@@ -1167,9 +1288,18 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
           contextSegments: {
             ...view.stats.contextSegments,
             tools: view.stats.contextSegments.tools + estimateTokens(rawText),
+            images: view.stats.contextSegments.images + imageTotal,
           },
         },
       }
+    }
+    case 'developer/message': {
+      // Dynamic tool loading is the only developer-surface content the
+      // terminal surfaces; text blocks stay collapsed (their effect arrives
+      // through the request header and tool cards).
+      const blocks = developerToolNames(event.data?.message?.content ?? [])
+      if (blocks.added.length === 0 && blocks.removed.length === 0) return view
+      return { ...view, entries: [...view.entries, { kind: 'developer-tools', added: blocks.added, removed: blocks.removed }] }
     }
     case 'todo/write':
       return { ...view, todos: event.data.todos }
@@ -1232,7 +1362,7 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
       // turn's mutated files flush as one bounded row, then the set resets.
       const files = view.anchors.turnFiles.get(event.data.turn)
       view.anchors.turnFiles.delete(event.data.turn)
-      if (files !== undefined && files.size > 0) appended.push({ kind: 'files', paths: [...files].slice(0, 12) })
+      if (files !== undefined && files.size > 0) appended.push({ kind: 'files', turn: event.data.turn, paths: [...files].slice(0, 12) })
       // Derivable boundary sweep: the turn is over, so any step/tool anchors
       // it left behind (interruptions that never produced their message or
       // result) can never be resolved and are reclaimed now.
@@ -1433,6 +1563,35 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
       // vocabulary). Log-only upstream: deriveMessages ignores them, so the
       // sub rows are pure display state on the parent run_code card.
       const type = event.type as string
+      if (type === 'image/offload') {
+        // Offload parity for the segmented bar (the map merge lives in
+        // dsh-compaction-image-offload): consumed image prices leave the
+        // `images` segment exactly as the bytes left the model's context.
+        // A target we never priced contributes nothing, and the clamp keeps
+        // a hostile event from driving the segment negative.
+        const data = event.data as ImageOffloadData | undefined
+        const removed = consumeImagePrices(view.anchors.imagePrices, Array.isArray(data?.targets) ? data.targets : [])
+        if (removed === 0) return view
+        return {
+          ...view,
+          stats: {
+            ...view.stats,
+            contextSegments: {
+              ...view.stats.contextSegments,
+              images: Math.max(0, view.stats.contextSegments.images - removed),
+            },
+          },
+        }
+      }
+      if (type === 'workspace/changes') {
+        // The durable event (dsh-workspace-changes' map merge) carries only
+        // the turn; the file list is a live summary the host serves while the
+        // session lives, so the fold records the marker and the renderer
+        // joins the enrichment by seq.
+        const turn = (event.data as WorkspaceChangesData | undefined)?.turn
+        if (typeof turn !== 'number' || !Number.isSafeInteger(turn) || turn < 1) return view
+        return { ...view, entries: [...view.entries, { kind: 'workspace-changes', turn, seq: event.seq }] }
+      }
       if (type === 'tool/ptc-dispatch-start') {
         const data = event.data as PtcDispatchStartData
         view.anchors.subStart.set(data.subCallId, event.time)
@@ -1574,6 +1733,8 @@ export interface ReplayAccumulator {
   firstChunkAt: Map<string, number>
   compactionTokens: Map<string, number>
   lastPruneTokens: number
+  /** Priced images per node seq (user prompts, tool results) for the offload fold. */
+  imagePrices: Map<number, number[]>
   turnFiles: Map<number, Set<string>>
   turnSteps: Map<number, string>
   turnTools: Map<number, Set<string>>
@@ -1610,13 +1771,14 @@ export function createReplayAccumulator(): ReplayAccumulator {
     sandbox: '',
     goal: undefined,
     schedules: [],
-    stats: { turns: 0, steps: 0, llmMs: 0, toolMs: 0, usage: { uncachedInputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }, lastPromptTokens: 0, contextWindow: 0, contextSegments: { system: 0, prompt: 0, assistant: 0, thinking: 0, tools: 0 }, ttftMs: 0, ttftSteps: 0, decodeMs: 0, decodeTokens: 0, reasoningEffort: '' },
+    stats: { turns: 0, steps: 0, llmMs: 0, toolMs: 0, usage: { uncachedInputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }, lastPromptTokens: 0, contextWindow: 0, contextSegments: { system: 0, prompt: 0, assistant: 0, thinking: 0, tools: 0, images: 0 }, ttftMs: 0, ttftSteps: 0, decodeMs: 0, decodeTokens: 0, reasoningEffort: '' },
     stepStart: new Map(),
     toolStart: new Map(),
     subStart: new Map(),
     firstChunkAt: new Map(),
     compactionTokens: new Map(),
     lastPruneTokens: 0,
+    imagePrices: new Map(),
     turnFiles: new Map(),
     turnSteps: new Map(),
     turnTools: new Map(),
@@ -1752,12 +1914,14 @@ export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent):
       const delivery = origin === undefined ? {} : { delivery: origin === 'next-turn' ? 'queued' as const : 'steered' as const }
       acc.claimOrigin.delete(message.id)
       if (message.source.kind === 'user' || REMINDER_KINDS.has(message.source.kind)) {
+        const imageTotal = recordImagePrices(acc.imagePrices, event.seq, images)
         appendReplayEntry(acc, { kind: 'user', text, notice: false, ...delivery, ...(images.length === 0 ? {} : { images }), ...(files.length === 0 ? {} : { files }) })
         acc.stats = {
           ...acc.stats,
           contextSegments: {
             ...acc.stats.contextSegments,
             prompt: acc.stats.contextSegments.prompt + estimateTokens(text),
+            images: acc.stats.contextSegments.images + imageTotal,
           },
         }
         return true
@@ -1975,15 +2139,26 @@ export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent):
       // Every matching row updates (duplicate callIds included); an id with no
       // registered index is a provable no-op — no full-array fallback scan.
       updateReplayById<ToolEntry>(acc, acc.toolIndex, result.toolCallId, entry => entry.callId === result.toolCallId, update)
+      const imageTotal = recordImagePrices(acc.imagePrices, event.seq, imagesOf(result.content))
       acc.stats = {
         ...acc.stats,
         toolMs: acc.stats.toolMs + (started === undefined ? 0 : Math.max(0, event.time - started)),
         contextSegments: {
           ...acc.stats.contextSegments,
           tools: acc.stats.contextSegments.tools + estimateTokens(rawText),
+          images: acc.stats.contextSegments.images + imageTotal,
         },
       }
       return true
+    }
+    case 'developer/message': {
+      // Dynamic tool loading — see the reducer's `developer/message` case.
+      const blocks = developerToolNames(event.data?.message?.content ?? [])
+      if (blocks.added.length > 0 || blocks.removed.length > 0) {
+        appendReplayEntry(acc, { kind: 'developer-tools', added: blocks.added, removed: blocks.removed })
+        return true
+      }
+      return false
     }
     case 'todo/write':
       acc.todos = event.data.todos
@@ -2036,7 +2211,7 @@ export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent):
       }
       const files = acc.turnFiles.get(event.data.turn)
       acc.turnFiles.delete(event.data.turn)
-      if (files !== undefined && files.size > 0) appended.push({ kind: 'files', paths: [...files].slice(0, 12) })
+      if (files !== undefined && files.size > 0) appended.push({ kind: 'files', turn: event.data.turn, paths: [...files].slice(0, 12) })
       const stepKey = acc.turnSteps.get(event.data.turn)
       if (stepKey !== undefined) {
         acc.stepStart.delete(stepKey)
@@ -2179,6 +2354,28 @@ export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent):
       // parent run_code row is addressed through the same call-id index the
       // tool/result case uses.
       const type = event.type as string
+      if (type === 'image/offload') {
+        // Offload parity — see the reducer's default-block case.
+        const data = event.data as ImageOffloadData | undefined
+        const removed = consumeImagePrices(acc.imagePrices, Array.isArray(data?.targets) ? data.targets : [])
+        if (removed > 0) {
+          acc.stats = {
+            ...acc.stats,
+            contextSegments: {
+              ...acc.stats.contextSegments,
+              images: Math.max(0, acc.stats.contextSegments.images - removed),
+            },
+          }
+        }
+        return removed > 0
+      }
+      if (type === 'workspace/changes') {
+        // The marker the live summary joins by seq — see the reducer's case.
+        const turn = (event.data as WorkspaceChangesData | undefined)?.turn
+        if (typeof turn !== 'number' || !Number.isSafeInteger(turn) || turn < 1) return false
+        appendReplayEntry(acc, { kind: 'workspace-changes', turn, seq: event.seq })
+        return true
+      }
       if (type === 'tool/ptc-dispatch-start') {
         const data = event.data as PtcDispatchStartData
         acc.subStart.set(data.subCallId, event.time)
@@ -2309,6 +2506,7 @@ function materializeReplayView(acc: ReplayAccumulator, copy: boolean): Transcrip
       turnSteps: new Map(acc.turnSteps),
       turnTools: new Map([...acc.turnTools].map(([turn, tools]) => [turn, new Set(tools)])),
       systemNodes: new Map(acc.systemNodes),
+      imagePrices: new Map([...acc.imagePrices].map(([seq, prices]) => [seq, [...prices]])),
     },
   }
 }

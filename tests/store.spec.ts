@@ -208,3 +208,26 @@ describe('transcript store', () => {
     expect(second).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('workspace changes enrichment', () => {
+  it('records live summaries with a stable snapshot identity and notifies once per change', async () => {
+    const store = createTranscriptStore()
+    expect(store.getWorkspaceChanges().size).toBe(0)
+    let notifications = 0
+    store.subscribe(() => { notifications += 1 })
+    const before = store.getWorkspaceChanges()
+    const summary = { turn: 1, total: 2, added: 3, deleted: 1, files: [{ display: 'a.ts', added: 3, deleted: 1 }] }
+    store.setWorkspaceChanges(7, summary)
+    expect(store.getWorkspaceChanges().get(7)?.total).toBe(2)
+    expect(store.getWorkspaceChanges()).not.toBe(before)
+    // The notify path is frame-coalesced; one macrotask later it fired once.
+    await new Promise<void>(resolve => setImmediate(resolve))
+    expect(notifications).toBe(1)
+    // The same reference again keeps the identity and notifies nobody.
+    const kept = store.getWorkspaceChanges()
+    store.setWorkspaceChanges(7, summary)
+    expect(store.getWorkspaceChanges()).toBe(kept)
+    await new Promise<void>(resolve => setImmediate(resolve))
+    expect(notifications).toBe(1)
+  })
+})

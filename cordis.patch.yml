@@ -177,6 +177,14 @@
       config:
         refreshIntervalMs: 30000
 
+    # Turn change summaries: the host-bundled recorder git-snapshots each
+    # top-level turn's working tree and announces a `workspace/changes`
+    # event whose live summary the TUI joins by seq (the ⟳ turn-changes row
+    # with per-file line counts). Outside git, or without it, the summary
+    # lists file-tool edits only; subagent sessions are not recorded.
+    - id: workspace-changes
+      name: '@deepseek-ai/dsh-workspace-changes'
+
     # Persistent PTY plumbing: the owner-scoped registry and the one backend
     # package in both dialects (pwsh is the Windows/ConPTY path, bash covers
     # POSIX) mount as host SERVICES — no model-facing surface, so they break

@@ -33,7 +33,7 @@ const emptyStats: TranscriptStats = {
   usage: { uncachedInputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
   lastPromptTokens: 0,
   contextWindow: 0,
-  contextSegments: { system: 0, prompt: 0, assistant: 0, thinking: 0, tools: 0 },
+  contextSegments: { system: 0, prompt: 0, assistant: 0, thinking: 0, tools: 0, images: 0 },
   ttftMs: 0,
   ttftSteps: 0,
   decodeMs: 0,
@@ -268,7 +268,7 @@ describe('status layout', () => {
         usage: { uncachedInputTokens: 32_000, outputTokens: 800, cacheReadTokens: 0, cacheWriteTokens: 0 },
         lastPromptTokens: 32_000,
         contextWindow: 128_000,
-        contextSegments: { system: 2_000, prompt: 12_000, assistant: 6_000, thinking: 8_000, tools: 4_000 },
+        contextSegments: { system: 2_000, prompt: 12_000, assistant: 6_000, thinking: 8_000, tools: 4_000, images: 0 },
       },
       160,
     )
@@ -384,7 +384,7 @@ describe('status layout', () => {
         usage: { uncachedInputTokens: 32_000, outputTokens: 800, cacheReadTokens: 0, cacheWriteTokens: 0 },
         lastPromptTokens: 32_000,
         contextWindow: 128_000,
-        contextSegments: { system: 2_000, prompt: 12_000, assistant: 6_000, thinking: 8_000, tools: 4_000 },
+        contextSegments: { system: 2_000, prompt: 12_000, assistant: 6_000, thinking: 8_000, tools: 4_000, images: 0 },
       },
       120,
     )
@@ -535,7 +535,7 @@ const richStats: TranscriptStats = {
   usage: { uncachedInputTokens: 2_432, outputTokens: 2_400, cacheReadTokens: 9_728, cacheWriteTokens: 0 },
   lastPromptTokens: 32_000,
   contextWindow: 128_000,
-  contextSegments: { system: 2_000, prompt: 12_000, assistant: 6_000, thinking: 8_000, tools: 4_000 },
+  contextSegments: { system: 2_000, prompt: 12_000, assistant: 6_000, thinking: 8_000, tools: 4_000, images: 0 },
 }
 
 describe('status width degradation', () => {

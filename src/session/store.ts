@@ -39,6 +39,7 @@ import {
   replayProjectEvent,
   snapshotReplayView,
   type TranscriptView,
+  type WorkspaceChangesView,
 } from '../render/projection.ts'
 
 /** Render frame budget: the notification cadence's upper bound. */
@@ -54,6 +55,10 @@ export interface TranscriptStore {
   apply(event: SessionEvent): void
   /** Fold one live assistant-stream frame; frames without visible deltas stay silent. */
   applyStreamFrame(frame: AssistantStreamFrame): void
+  /** Live turn-change summaries by announcing event seq (stable identity between writes). */
+  getWorkspaceChanges(): ReadonlyMap<number, WorkspaceChangesView>
+  /** Record one live summary; the same value twice notifies nobody. */
+  setWorkspaceChanges(seq: number, summary: WorkspaceChangesView): void
   /** Drop the folded view entirely (/clear): the next event starts a fresh one. */
   reset(): void
 }
@@ -81,6 +86,10 @@ export function createTranscriptStore(replay?: readonly SessionEvent[]): Transcr
   // retires the attempt. A replacement attempt (new start frame) overwrites
   // the entry; committed settlements already cleared the tails it replaces.
   const attemptKeys = new Map<string, string>()
+  // Live enrichment: a frozen map identity per content state, so the
+  // useSyncExternalStore snapshot contract holds between writes.
+  let changes = new Map<number, WorkspaceChangesView>()
+  let changesSnapshot: ReadonlyMap<number, WorkspaceChangesView> = changes
   const notify = (): void => {
     if (scheduled) return
     scheduled = true
@@ -137,6 +146,14 @@ export function createTranscriptStore(replay?: readonly SessionEvent[]): Transcr
         dirty = true
         notify()
       }
+    },
+    getWorkspaceChanges: (): ReadonlyMap<number, WorkspaceChangesView> => changesSnapshot,
+    setWorkspaceChanges(seq: number, summary: WorkspaceChangesView): void {
+      if (changes.get(seq) === summary) return
+      changes = new Map(changes)
+      changes.set(seq, summary)
+      changesSnapshot = changes
+      notify()
     },
     reset(): void {
       // /clear wipes settled history but must not drop the live attempt map:

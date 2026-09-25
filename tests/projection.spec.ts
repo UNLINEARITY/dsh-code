@@ -858,6 +858,7 @@ describe('transcript projection', () => {
     ] as unknown as readonly SessionEvent[])
     expect(view.entries[view.entries.length - 1]).toEqual({
       kind: 'files',
+      turn: 1,
       paths: ['src/a.ts', 'src/b.ts', 'src/c.ts'],
     })
   })
@@ -958,7 +959,7 @@ describe('transcript projection', () => {
       usage: { uncachedInputTokens: 100, outputTokens: 20, cacheReadTokens: 300, cacheWriteTokens: 50 },
       lastPromptTokens: 450,
       contextWindow: 0,
-      contextSegments: { system: 0, prompt: 0, assistant: 2, thinking: 0, tools: 5 },
+      contextSegments: { system: 0, prompt: 0, assistant: 2, thinking: 0, tools: 5, images: 0 },
       ttftMs: 0,
       ttftSteps: 0,
       decodeMs: 0,
@@ -1209,7 +1210,7 @@ describe('workflow run projection', () => {
 describe('context segment estimates', () => {
   it('counts a direct human prompt into the prompt segment', () => {
     const view = projectEvent(createTranscriptView(), userEvent('hello', 1))
-    expect(view.stats.contextSegments).toEqual({ system: 0, prompt: 2, assistant: 0, thinking: 0, tools: 0 })
+    expect(view.stats.contextSegments).toEqual({ system: 0, prompt: 2, assistant: 0, thinking: 0, tools: 0, images: 0 })
   })
 
   it('counts CJK prompts at ~1 token per char instead of 4 chars per token', () => {
@@ -1236,7 +1237,7 @@ describe('context segment estimates', () => {
         }),
       },
     })
-    expect(view.stats.contextSegments).toEqual({ system: 0, prompt: 0, assistant: 5, thinking: 3, tools: 0 })
+    expect(view.stats.contextSegments).toEqual({ system: 0, prompt: 0, assistant: 5, thinking: 3, tools: 0, images: 0 })
   })
 
   it('counts tool call arguments and result text into the tools segment', () => {
@@ -2102,5 +2103,127 @@ describe('assistant/message interrupted marker (rc.8)', () => {
     expect(flat).toContain('⏹ interrupted')
     const plainRows = transcriptEntryLines({ kind: 'assistant', text: 'done', reasoning: '' }, 80)
     expect(plainRows.map(row => row.segments.map(segment => segment.text).join('')).join('\n')).not.toContain('⏹')
+  })
+})
+
+describe('workspace changes projection', () => {
+  const changesEvent = (seq: number, turn: number): SessionEvent => ({
+    type: 'workspace/changes',
+    seq: SessionSeq(seq),
+    time: 0,
+    surfaceOp: 'append',
+    data: { turn },
+  } as unknown as SessionEvent)
+
+  it('records the announcing marker for the live summary to join by seq', () => {
+    const view = projectEvents([
+      { type: 'turn/start', seq: SessionSeq(1), time: 0, surfaceOp: 'append', data: { turn: 1 } },
+      changesEvent(2, 1),
+    ] as unknown as readonly SessionEvent[])
+    expect(view.entries[view.entries.length - 1]).toEqual({ kind: 'workspace-changes', turn: 1, seq: 2 })
+  })
+
+  it('stays silent for a malformed turn and matches the replay fold', () => {
+    const events = [
+      { type: 'turn/start', seq: SessionSeq(1), time: 0, surfaceOp: 'append', data: { turn: 1 } },
+      changesEvent(2, 1),
+      changesEvent(3, 0),
+      changesEvent(4, 1),
+    ] as unknown as readonly SessionEvent[]
+    const view = projectEvents(events)
+    expect(view.entries.filter(entry => entry.kind === 'workspace-changes')).toHaveLength(2)
+    const acc = createReplayAccumulator()
+    for (const event of events) replayProjectEvent(acc, event)
+    expect(snapshotReplayView(acc).entries).toEqual(view.entries)
+  })
+})
+
+describe('developer tool loading projection', () => {
+  const developerEvent = (seq: number, blocks: readonly unknown[]): SessionEvent => ({
+    type: 'developer/message',
+    seq: SessionSeq(seq),
+    time: 0,
+    surfaceOp: 'append',
+    data: { turn: 1, step: 1, headerSeq: 1, message: { role: 'developer', content: blocks, source: { kind: 'user' } } },
+  } as unknown as SessionEvent)
+
+  it('renders one row per developer message carrying tool blocks', () => {
+    const view = projectEvents([
+      { type: 'turn/start', seq: SessionSeq(1), time: 0, surfaceOp: 'append', data: { turn: 1 } },
+      { type: 'step/start', seq: SessionSeq(2), time: 0, surfaceOp: 'append', data: { turn: 1, step: 1 } },
+      developerEvent(3, [
+        { type: 'tool-addition', toolName: 'web-search' },
+        { type: 'text', text: 'ignored' },
+        { type: 'tool-removal', toolName: 'lsp' },
+      ]),
+    ] as unknown as readonly SessionEvent[])
+    expect(view.entries[view.entries.length - 1]).toEqual({
+      kind: 'developer-tools', added: ['web-search'], removed: ['lsp'],
+    })
+  })
+
+  it('stays silent for text-only messages and matches the replay fold', () => {
+    const events = [
+      { type: 'turn/start', seq: SessionSeq(1), time: 0, surfaceOp: 'append', data: { turn: 1 } },
+      { type: 'step/start', seq: SessionSeq(2), time: 0, surfaceOp: 'append', data: { turn: 1, step: 1 } },
+      developerEvent(3, [{ type: 'text', text: 'note' }]),
+      developerEvent(4, [{ type: 'tool-addition', toolName: 'browser' }]),
+    ] as unknown as readonly SessionEvent[]
+    const view = projectEvents(events)
+    expect(view.entries.filter(entry => entry.kind === 'developer-tools')).toHaveLength(1)
+    const acc = createReplayAccumulator()
+    for (const event of events) replayProjectEvent(acc, event)
+    expect(snapshotReplayView(acc).entries).toEqual(view.entries)
+  })
+})
+
+describe('image segment and offload parity', () => {
+  const imageAttachment = (width: number, height: number): ImageAttachmentRef => ({
+    attachmentId: AttachmentId('sha-img'), mediaType: 'image/png', bytes: 512, width, height, name: 'shot.png',
+  })
+  const promptWithImages = (seq: number): SessionEvent => ({
+    type: 'user/message',
+    seq: SessionSeq(seq),
+    time: 0,
+    surfaceOp: 'append',
+    data: createUserMessage({
+      content: [
+        { type: 'text', text: 'inspect' },
+        { type: 'image', attachment: imageAttachment(750, 1500) },
+        { type: 'image', attachment: imageAttachment(30, 25) },
+      ],
+      source: { kind: 'user' },
+    }),
+  })
+  const offloadEvent = (seq: number, targets: readonly { seq: number; imageIndexes: readonly number[] }[]): SessionEvent => ({
+    type: 'image/offload', seq: SessionSeq(seq), time: 0, surfaceOp: 'append', data: { targets },
+  } as unknown as SessionEvent)
+
+  it('prices prompt images into the images segment', () => {
+    const view = projectEvent(createTranscriptView(), promptWithImages(1))
+    // 750x1500 → 1500 tokens; 30x25 → 1 token (pixels/750, clamped ≥1).
+    expect(view.stats.contextSegments.images).toBe(1500 + 1)
+  })
+
+  it('subtracts offloaded prices once per index and clamps at zero', () => {
+    const view = projectEvents([
+      promptWithImages(1),
+      offloadEvent(2, [{ seq: 1, imageIndexes: [1] }]),
+      // A repeated index and an unknown seq contribute nothing further.
+      offloadEvent(3, [{ seq: 1, imageIndexes: [1, 1] }, { seq: 99, imageIndexes: [0] }]),
+    ] as readonly SessionEvent[])
+    expect(view.stats.contextSegments.images).toBe(1500)
+  })
+
+  it('matches between the live fold and the replay fold', () => {
+    const events = [
+      promptWithImages(1),
+      offloadEvent(2, [{ seq: 1, imageIndexes: [0, 1] }]),
+    ] as unknown as readonly SessionEvent[]
+    const view = projectEvents(events)
+    expect(view.stats.contextSegments.images).toBe(0)
+    const acc = createReplayAccumulator()
+    for (const event of events) replayProjectEvent(acc, event)
+    expect(snapshotReplayView(acc).stats.contextSegments).toEqual(view.stats.contextSegments)
   })
 })

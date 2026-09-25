@@ -4,9 +4,9 @@ import { describe, expect, it } from 'vitest'
 import { setLanguage } from '../src/i18n.ts'
 import { visibleColumns } from '../src/render/markdown.ts'
 import { stringWidth } from '../src/render/width.ts'
-import { clampLiveAllocation, diffLineStyle, fillDiffLineBars, markdownLines, settledEntryLines, styledLines, lineSegment, reasoningLines, transcriptEntryLines, userPromptSegments } from '../src/render/lines.ts'
-import type { TranscriptEntry } from '../src/render/projection.ts'
+import { clampLiveAllocation, diffLineStyle, fillDiffLineBars, markdownLines, settledEntryLines, styledLines, lineSegment, reasoningLines, transcriptEntryLines, userPromptSegments, visibleTranscriptEntries } from '../src/render/lines.ts'
 import type { StyledLine } from '../src/render/lines.ts'
+import type { TranscriptEntry } from '../src/render/projection.ts'
 
 const textOf = (lines: ReturnType<typeof styledLines>): string => lines
   .map(line => line.segments.map(segment => segment.text).join(''))
@@ -467,5 +467,61 @@ describe('live allocation clamp', () => {
     const audit = clampLiveAllocation({ live: 2, reasoning: 1.5, answer: 0.5 }, 0)
     expect(audit.allocation).toEqual({ live: 0, reasoning: 0, answer: 0 })
     expect(audit.warning).toBeDefined()
+  })
+})
+
+describe('workspace changes and tool loading rows', () => {
+  const plain = (lines: readonly StyledLine[]): string =>
+    lines.map(line => line.segments.map(segment => segment.text).join('')).join('\n')
+
+  it('renders the enriched turn-changes row with per-file counts', () => {
+    const entry = { kind: 'workspace-changes', turn: 1, seq: 7 } as const
+    const changesFor = () => ({
+      turn: 1, total: 2, added: 31, deleted: 4,
+      files: [
+        { display: 'src/a.ts', added: 30, deleted: 2 },
+        { display: 'docs/b.md', added: 1, deleted: 2 },
+      ],
+    })
+    const text = plain(settledEntryLines(entry, 80, true, changesFor))
+    expect(text).toContain('⟳ 2 changed files · +31 −4')
+    expect(text).toContain('src/a.ts +30 −2')
+    expect(text).toContain('docs/b.md +1 −2')
+  })
+
+  it('stays silent for a replayed marker without its live summary', () => {
+    expect(settledEntryLines({ kind: 'workspace-changes', turn: 1, seq: 7 }, 80, true)).toHaveLength(0)
+    expect(settledEntryLines({ kind: 'workspace-changes', turn: 1, seq: 7 }, 80, true, () => undefined)).toHaveLength(0)
+  })
+
+  it('caps the listed files and names the remainder', () => {
+    const entry = { kind: 'workspace-changes', turn: 1, seq: 7 } as const
+    const files = Array.from({ length: 15 }, (_, index) => ({ display: `f${index}.txt`, added: 1, deleted: 0 }))
+    const text = plain(settledEntryLines(entry, 80, true, () => ({ turn: 1, total: 15, added: 15, deleted: 0, files })))
+    expect(text).toContain('⟳ 15 changed files')
+    expect(text).toContain('f11.txt +1 −0')
+    expect(text).not.toContain('f12.txt')
+    expect(text).toContain('… +3 more')
+  })
+
+  it('renders dynamic tool loading as one dim row', () => {
+    const text = plain(transcriptEntryLines({ kind: 'developer-tools', added: ['web-search', 'browser'], removed: ['lsp'] }, 80))
+    expect(text).toContain('⚙ +web-search · +browser · −lsp')
+    expect(transcriptEntryLines({ kind: 'developer-tools', added: [], removed: [] }, 80)).toHaveLength(0)
+  })
+
+  it('drops the files row of an enriched turn and keeps the replayed floor', () => {
+    const entries = [
+      { kind: 'files', turn: 1, paths: ['src/a.ts'] },
+      { kind: 'files', turn: 2, paths: ['src/b.ts'] },
+      { kind: 'workspace-changes', turn: 1, seq: 9 },
+    ] as const
+    const enriched = new Set([1])
+    expect(visibleTranscriptEntries(entries, enriched)).toEqual([
+      { kind: 'files', turn: 2, paths: ['src/b.ts'] },
+      { kind: 'workspace-changes', turn: 1, seq: 9 },
+    ])
+    // Without enrichment the durable files rows stay untouched.
+    expect(visibleTranscriptEntries(entries, new Set())).toEqual(entries)
   })
 })

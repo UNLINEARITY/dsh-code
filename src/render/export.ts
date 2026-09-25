@@ -88,6 +88,13 @@ export function buildExportMarkdown(view: TranscriptView, sessionId: string): st
       case 'files':
         out.push(`> files changed: ${entry.paths.join(', ')}`, '')
         break
+      case 'workspace-changes':
+        // The live summary is not durable; the turn's files row above (kept
+        // in exports) is the durable floor, so the bare marker stays silent.
+        break
+      case 'developer-tools':
+        out.push(`> tools ${[...entry.added.map(name => `+${name}`), ...entry.removed.map(name => `-${name}`)].join(' ')}`, '')
+        break
       case 'workflow':
         out.push(`### workflow \`${entry.name}\` (${entry.state})`, '')
         for (const member of entry.members) {

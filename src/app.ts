@@ -44,7 +44,7 @@ import { WHALE_GLYPH, WHALE_GLYPH_COLUMNS } from './whale-glyph.ts'
 import { dshKernelVersion, headerBrandTitle } from './version.ts'
 import type { TranscriptStore } from './session/store.ts'
 import { DEFAULT_TERMINAL_TITLE, useTerminalTitle } from './ui/terminal-title.ts'
-import { settledEntryCount, type TranscriptEntry } from './render/projection.ts'
+import { settledEntryCount, type TranscriptEntry, type WorkspaceChangesEntry, type WorkspaceChangesView } from './render/projection.ts'
 import { createSubagentAttachment, EMPTY_ATTACH_STORE, type SubagentAttachment, type SubagentAttachmentServices } from './session/attach.ts'
 import { visibleColumns } from './render/markdown.ts'
 import {
@@ -181,7 +181,9 @@ import {
   styledLines,
   textLines,
   transcriptEntryLines,
+  visibleTranscriptEntries,
   type StyledLine,
+  type WorkspaceChangesLookup,
 } from './render/lines.ts'
 import {
   composerMaxRows,
@@ -1241,6 +1243,8 @@ function entryKindLabel(entry: TranscriptEntry | undefined): string {
     case 'compaction': return 'compaction'
     case 'retry': return 'retry'
     case 'files': return 'files changed'
+    case 'workspace-changes': return 'turn changes'
+    case 'developer-tools': return 'tool loading'
     case 'workflow': return 'workflow run'
     default: return 'empty'
   }
@@ -1252,12 +1256,14 @@ function entryKindLabel(entry: TranscriptEntry | undefined): string {
  * retained entry is converted to physical rows, but only one viewport slice
  * reaches Ink, so even a huge reasoning block cannot grow the dynamic tree.
  */
-function VerbosePanel({ entries, onClose, columns, rows }: {
+function VerbosePanel({ entries, onClose, columns, rows, changesFor }: {
   entries: readonly TranscriptEntry[]
   onClose: () => void
   /** Live terminal columns from App's resize store — not useStdout, so memo cannot skip a reflow. */
   columns: number
   rows: number
+  /** The live changes lookup, so an inspected changes row shows its files. */
+  changesFor?: WorkspaceChangesLookup
 }): ReactElement {
   const viewport = inspectorViewport(columns, rows)
   const [cursor, setCursor] = useState(() => Math.max(0, entries.length - 1))
@@ -1267,8 +1273,8 @@ function VerbosePanel({ entries, onClose, columns, rows }: {
   const previousLength = useRef(entries.length)
   const entry = entries[cursor]
   const allLines = useMemo(
-    () => entry === undefined ? [] : transcriptEntryLines(entry, viewport.contentColumns),
-    [entry, viewport.contentColumns],
+    () => entry === undefined ? [] : transcriptEntryLines(entry, viewport.contentColumns, true, true, true, changesFor),
+    [entry, viewport.contentColumns, changesFor],
   )
   const visibleScroll = clampScroll(scroll, allLines.length, viewport.bodyRows)
   const visibleScrollRef = useRef(visibleScroll)
@@ -1435,6 +1441,8 @@ interface SettledRowsCache {
   showReasoning: boolean
   /** The refreshEpoch the rows was built for; a bump forces a full rebuild. */
   epoch: number
+  /** The workspace-changes enrichment revision the rows were built for. */
+  enrichment: number
   /** The terminal width the rows were wrapped for; a change forces a rebuild. */
   columns: number
   /** Header/hint followed by one element per physical transcript row. */
@@ -1461,12 +1469,12 @@ interface SettledRowsResult {
 }
 
 /** Build one settled entry as stable physical rows shared by Static and viewport. */
-function buildSettledRow(entry: TranscriptEntry, index: number, showReasoning: boolean, columns: number): SettledRowRecord {
+function buildSettledRow(entry: TranscriptEntry, index: number, showReasoning: boolean, columns: number, changesFor?: WorkspaceChangesLookup): SettledRowRecord {
   // Every row carries its own two-column prefix (user ❯, reply body, tool
   // cards), which is the whole gutter. Physical row identity—not entry
   // identity—is the viewport currency, so an oversized entry can split cleanly
   // between native scrollback and the bottom-anchored live tail.
-  const lines = settledEntryLines(entry, Math.max(10, columns - 2), showReasoning)
+  const lines = settledEntryLines(entry, Math.max(10, columns - 2), showReasoning, changesFor)
   const physical: SettledPhysicalRow[] = lines.map((line, row) => ({
     line,
     element: createElement(Box, { key: `entry-${index}-row-${row}` }, createElement(StyledRows, { lines: [line] })),
@@ -1539,8 +1547,17 @@ export function computeSettledRows(
   epoch: number,
   columns = 80,
   rowCap = SETTLED_ROW_CAP,
+  changes?: { for: WorkspaceChangesLookup; turns: ReadonlySet<number>; revision: number },
 ): SettledRowsResult {
+  // An enriched changes row supersedes its turn's durable files row (the
+  // live git summary also covers bash-created files and carries counts);
+  // without enrichment the files row stays as the replayed floor.
+  const rowFor = (entry: TranscriptEntry, index: number): SettledRowRecord =>
+    entry.kind === 'files' && changes !== undefined && changes.turns.has(entry.turn)
+      ? { physical: [], rows: 0 }
+      : buildSettledRow(entry, index, showReasoning, columns, changes?.for)
   if (previous === undefined || previous.epoch !== epoch || previous.resumed !== resumed
+    || previous.enrichment !== (changes?.revision ?? 0)
     || settled < previous.entries.length) {
     // Full rebuild at the CURRENT fold state, newest-first so the cap keeps
     // whole entries and never even parses dropped ones.
@@ -1552,7 +1569,7 @@ export function computeSettledRows(
     for (; index >= 0; index--) {
       const entry = entries[index]
       if (entry === undefined) break
-      const record = buildSettledRow(entry, index, showReasoning, columns)
+      const record = rowFor(entry, index)
       if (rowCap > 0 && windowRows + record.rows > rowCap - SETTLED_ROW_RESERVE) {
         // This whole entry (and everything older) falls out of the window.
         droppedEntries = index + 1
@@ -1575,6 +1592,7 @@ export function computeSettledRows(
         resumed,
         showReasoning,
         epoch,
+        enrichment: changes?.revision ?? 0,
         columns,
         flat,
         physical,
@@ -1605,7 +1623,7 @@ export function computeSettledRows(
   let deltaRows = 0
   for (let index = previous.entries.length + previous.droppedEntries; index < settled; index++) {
     const entry = entries[index]
-    const record = buildSettledRow(entry, index, showReasoning, previous.columns)
+    const record = rowFor(entry, index)
     records.set(entry, record)
     suffix.push(entry)
     deltaRows += record.rows
@@ -1621,6 +1639,7 @@ export function computeSettledRows(
       resumed: previous.resumed,
       showReasoning,
       epoch: previous.epoch,
+      enrichment: previous.enrichment,
       columns: previous.columns,
       flat: previous.flat.concat(added.map(row => row.element)),
       physical: previous.physical.concat(added),
@@ -2017,6 +2036,26 @@ export function App(props: AppProps): ReactElement {
   const terminalSizeRef = useRef(terminalSize)
   const settledRowsCache = useRef<SettledRowsCache | undefined>(undefined)
   const viewportFlushRef = useRef({ sessionKey: props.sessionKey, epoch: refreshEpoch, rows: 0 })
+  // Live turn-change summaries: the runner records what the host's
+  // `workspaceChanges` service serves; the joined view drives both the
+  // changes rows and the files-row suppression, and its revision forces the
+  // settled cache to rebuild when a summary lands after its marker settled.
+  const readWorkspaceChanges = useCallback(() => props.store.getWorkspaceChanges(), [props.store])
+  const workspaceChanges = useSyncExternalStore(subscribeTranscript, readWorkspaceChanges)
+  const changesContext = useMemo(() => {
+    const turns = new Set<number>()
+    const bySeq = new Map<number, WorkspaceChangesView>()
+    for (const entry of view.entries) {
+      if (entry.kind !== 'workspace-changes') continue
+      const summary = workspaceChanges.get(entry.seq)
+      if (summary !== undefined) {
+        turns.add(entry.turn)
+        bySeq.set(entry.seq, summary)
+      }
+    }
+    const lookup = ((changed: WorkspaceChangesEntry) => bySeq.get(changed.seq)) as WorkspaceChangesLookup
+    return { for: lookup, turns, revision: workspaceChanges.size }
+  }, [view.entries, workspaceChanges])
   const settledRowsResult = useMemo(() => {
     const result = computeSettledRows(
       settledRowsCache.current,
@@ -2026,10 +2065,12 @@ export function App(props: AppProps): ReactElement {
       props.resumed,
       refreshEpoch,
       terminalSize.columns,
+      undefined,
+      changesContext,
     )
     settledRowsCache.current = result.cache
     return result
-  }, [view.entries, settled, showReasoning, props.resumed, refreshEpoch, terminalSize.columns])
+  }, [view.entries, settled, showReasoning, props.resumed, refreshEpoch, terminalSize.columns, changesContext])
 
   // One pending synchronized frame covers a debounced resize or explicit
   // source-backed replay. It is closed after the corresponding React commit.
@@ -2160,12 +2201,12 @@ export function App(props: AppProps): ReactElement {
   const settledRows = settledRowsResult.cache.flat.slice(0, staticPrefixRows + flushedRows)
   const retainedSettledLines = settledPhysical.slice(flushedRows).map(row => row.line)
   const mutableLiveLines = useMemo(
-    () => view.entries.slice(settled).flatMap(
+    () => visibleTranscriptEntries(view.entries.slice(settled), changesContext.turns).flatMap(
       // Width shrinks with the real terminal (no 10-column floor: on a
       // narrower terminal the floor silently overflowed every mutable row).
-      entry => transcriptEntryLines(entry, Math.max(1, terminalColumns - 2), showReasoning),
+      entry => transcriptEntryLines(entry, Math.max(1, terminalColumns - 2), showReasoning, true, true, changesContext.for),
     ),
-    [view.entries, settled, terminalColumns, showReasoning],
+    [view.entries, settled, terminalColumns, showReasoning, changesContext],
   )
   const allLiveLines = retainedSettledLines.concat(mutableLiveLines)
 
@@ -2965,6 +3006,7 @@ export function App(props: AppProps): ReactElement {
         onClose: closeInspector,
         columns: terminalColumns,
         rows: terminalRows,
+        changesFor: changesContext.for,
       })
       : undefined,
     modeOpen && !approvalPending && !questionPending

@@ -75,6 +75,7 @@ import { mountQuestionProvider, type QuestionStore } from './questions.ts'
 // 'settings/document-updated') into this program's Cordis bus typing.
 import type {} from '@deepseek-ai/dsh-settings'
 import { createTranscriptStore, type TranscriptStore } from './session/store.ts'
+import type { WorkspaceChangesView } from './render/projection.ts'
 import { createSubagentFeed, subagentCatalogSeed, type SubagentFeedView } from './session/subagents.ts'
 export { subagentCatalogSeed } from './session/subagents.ts'
 import { parseStatuslineItems } from './render/status.ts'
@@ -234,6 +235,18 @@ function approvalCommandPreview(events: readonly { kind: string }[], callId: str
 interface AppBridge {
   /** Post one local notice line (feedback the transcript does not carry). */
   notify: (text: string, tone?: NoticeTone) => void
+}
+
+/** The subset of the host's `workspaceChanges` service the TUI reads. */
+interface WorkspaceChangesFace {
+  /** The summary one `workspace/changes` event announced, while its Session lives. */
+  summary(sessionId: string, seq: number): {
+    turn: number
+    total: number
+    added: number
+    deleted: number
+    files: readonly { display: string; added: number; deleted: number }[]
+  } | undefined
 }
 
 /**
@@ -489,6 +502,28 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     if (session === undefined) return
     if (subject.id === session.id) {
       store.apply(event)
+      // Live turn-change enrichment: the host's `workspaceChanges` service
+      // serves the announced summary synchronously while the session lives;
+      // the renderer joins it to the folded marker by seq. A resume replays
+      // the marker without the service (fresh recorder, no history), which
+      // renders the durable files row instead — the designed floor.
+      if ((event.type as string) === 'workspace/changes') {
+        const changes = ctx.get('workspaceChanges') as WorkspaceChangesFace | undefined
+        const data = (event as { data?: { turn?: unknown } }).data
+        if (changes !== undefined && typeof data?.turn === 'number') {
+          const summary = changes.summary(subject.id, event.seq)
+          if (summary !== undefined) {
+            const view: WorkspaceChangesView = {
+              turn: summary.turn,
+              total: summary.total,
+              added: summary.added,
+              deleted: summary.deleted,
+              files: summary.files.map(file => ({ display: file.display, added: file.added, deleted: file.deleted })),
+            }
+            store.setWorkspaceChanges(event.seq, view)
+          }
+        }
+      }
       // The committed plan fold caught up (or diverged via a typed /plan or
       // an approved plan review): the durable event is the live truth again,
       // so the cycle's in-flight intent retires.

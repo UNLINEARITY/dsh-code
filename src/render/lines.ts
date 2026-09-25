@@ -1,6 +1,6 @@
 /** Width-safe styled physical rows for bounded terminal panels. */
 
-import { promptDisplayText, type TranscriptEntry, type ToolEntry } from './projection.ts'
+import { promptDisplayText, type TranscriptEntry, type ToolEntry, type WorkspaceChangesEntry, type WorkspaceChangesView } from './projection.ts'
 import type { ToolDetail } from './tool-detail.ts'
 import { renderMarkdown, visibleColumns, type MdStyle } from './markdown.ts'
 import { graphemeWidth, splitGraphemes } from './width.ts'
@@ -432,6 +432,9 @@ function compactToolLines(lines: readonly StyledLine[], columns: number): readon
   ]
 }
 
+/** Lookup for one change marker's live summary; undefined renders no row. */
+export type WorkspaceChangesLookup = (entry: WorkspaceChangesEntry) => WorkspaceChangesView | undefined
+
 /**
  * Convert one durable transcript entry to its complete scrollable row model.
  * The source entry stays intact; only the caller's visible slice is rendered.
@@ -444,6 +447,7 @@ export function transcriptEntryLines(
   showReasoning = true,
   reasoningToggleHint = true,
   showToolDetails = showReasoning,
+  changesFor?: WorkspaceChangesLookup,
 ): readonly StyledLine[] {
   const width = Math.max(1, Math.floor(columns))
   switch (entry.kind) {
@@ -593,6 +597,25 @@ export function transcriptEntryLines(
           ...textLines(`  ⎄ ${entry.paths.length} changed file${entry.paths.length === 1 ? '' : 's'}`, width, 'dim'),
           ...entry.paths.flatMap(path => hangingTextLines(path, width, '    ', 'dim', '    ')),
         ]
+    case 'workspace-changes': {
+      // The marker renders only with its live summary: the host serves the
+      // file list while the session lives, so a replayed (resume) marker
+      // stays silent and the durable files row above carries the turn.
+      const summary = changesFor?.(entry)
+      if (summary === undefined) return []
+      const listed = summary.files.slice(0, 12)
+      const more = summary.total - listed.length
+      return [
+        ...textLines(`  ⟳ ${summary.total} changed file${summary.total === 1 ? '' : 's'} · +${summary.added} −${summary.deleted}`, width, 'dim'),
+        ...listed.flatMap(file =>
+          hangingTextLines(`${file.display} +${file.added} −${file.deleted}`, width, '    ', 'dim', '    ')),
+        ...(more > 0 ? textLines(`    … +${more} more`, width, 'dim') : []),
+      ]
+    }
+    case 'developer-tools': {
+      const parts = [...entry.added.map(name => `+${name}`), ...entry.removed.map(name => `−${name}`)]
+      return parts.length === 0 ? [] : textLines(`  ⚙ ${parts.join(' · ')}`, width, 'dim')
+    }
     case 'error':
       return textLines(entry.text, width, 'error')
     default: {
@@ -603,8 +626,22 @@ export function transcriptEntryLines(
 }
 
 /** Settled-history variant carrying the Ctrl+R reasoning fold. */
-export function settledEntryLines(entry: TranscriptEntry, columns: number, showReasoning: boolean): readonly StyledLine[] {
-  return transcriptEntryLines(entry, columns, showReasoning, false, showReasoning)
+export function settledEntryLines(entry: TranscriptEntry, columns: number, showReasoning: boolean, changesFor?: WorkspaceChangesLookup): readonly StyledLine[] {
+  return transcriptEntryLines(entry, columns, showReasoning, false, showReasoning, changesFor)
+}
+
+/**
+ * Drop the durable files rows whose turn carries an ENRICHED changes row:
+ * the live git summary supersedes the diff-derived list (it also covers
+ * bash-created files and carries line counts), while replayed turns keep
+ * their durable files rows as the floor.
+ * @param entries - the folded entries.
+ * @param enrichedTurns - turns with a live changes summary.
+ * @returns the entries the renderer should draw.
+ */
+export function visibleTranscriptEntries(entries: readonly TranscriptEntry[], enrichedTurns: ReadonlySet<number>): readonly TranscriptEntry[] {
+  if (enrichedTurns.size === 0) return entries
+  return entries.filter(entry => !(entry.kind === 'files' && enrichedTurns.has(entry.turn)))
 }
 
 /** The flexible rows of the live region; chrome (composer/notice/status) is never reduced. */
