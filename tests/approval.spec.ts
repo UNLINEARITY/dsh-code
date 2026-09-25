@@ -5,6 +5,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { ApprovalOutcome, ApprovalRequest } from '@deepseek-ai/dsh-user-approval'
 import { mountApprovalAnswerer } from '../src/approval.ts'
+import { approvalCommandPreview } from '../src/index.ts'
 
 type Listener = (request: ApprovalRequest, next: () => Promise<ApprovalOutcome>) => Promise<ApprovalOutcome>
 
@@ -201,5 +202,27 @@ describe('approval answerer', () => {
     await expect(second).resolves.toBe('cancelled')
     store.getSnapshot().pending?.answer('rejected')
     await expect(first).resolves.toBe('rejected')
+  })
+})
+
+describe('approval command preview', () => {
+  // The full raw arguments, never the 80-character card preview: an approval
+  // is a security decision and the wrapped body must show every argument.
+  const events: readonly { kind: string; callId?: string; arguments?: string }[] = [
+    { kind: 'tool', callId: 'c1', arguments: JSON.stringify({ action: 'install_bundle', target: '/Users/nonlinear/GitHub/dsh-code/lite-preset' }) },
+    { kind: 'tool', callId: 'c2', arguments: '' },
+  ]
+
+  it('keeps long argument payloads complete for the wrapped approval body', () => {
+    const preview = approvalCommandPreview(events, 'c1', 'plugin_manager')
+    expect(preview).toBe(events[0]?.arguments)
+    expect(preview.length).toBeGreaterThan(80)
+    expect(preview).toContain('/Users/nonlinear/GitHub/dsh-code/lite-preset')
+  })
+
+  it('falls back to the tool name for argument-less calls and misses', () => {
+    expect(approvalCommandPreview(events, 'c2', 'bash')).toBe('bash')
+    expect(approvalCommandPreview(events, undefined, 'bash')).toBe('')
+    expect(approvalCommandPreview(events, 'missing', 'bash')).toBe('')
   })
 })

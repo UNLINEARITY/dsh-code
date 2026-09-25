@@ -13,6 +13,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { ApprovalOutcome, ApprovalRequest } from '@deepseek-ai/dsh-user-approval'
 import { App, type AppProps } from '../src/app.ts'
+import { approvalCommandPreview } from '../src/index.ts'
 import { mountApprovalAnswerer } from '../src/approval.ts'
 import { createSplitStdin } from '../src/input-split.ts'
 import { createTranscriptStore } from '../src/session/store.ts'
@@ -184,6 +185,48 @@ describe('full-stack approval probe (split stdin, real mount shape)', () => {
       instance.unmount()
       proxy.dispose()
       real.stream.destroy()
+      stdout.destroy()
+    }
+  })
+})
+
+describe('approval body completeness', () => {
+  it('shows the full long argument payload in the wrapped bar body', async () => {
+    const args = JSON.stringify({ action: 'install_bundle', target: '/Users/nonlinear/GitHub/dsh-code/lite-preset' })
+    const harness = fakeContext()
+    const store = createTranscriptStore()
+    store.apply({
+      type: 'tool/call', seq: 1, time: 0,
+      data: { turn: 1, step: 1, callId: 'c9', name: 'plugin_manager', arguments: args },
+    } as never)
+    const approval = mountApprovalAnswerer(harness.ctx, () => true, req => approvalCommandPreview(store.getView().entries, req.callId, req.toolName))
+    const stdin = Object.assign(new PassThrough(), {
+      isTTY: true, isRaw: false,
+      setRawMode(value: boolean) { this.isRaw = value; return this },
+      ref() {}, unref() {},
+    }) as unknown as NodeJS.ReadStream
+    const stdout = Object.assign(new PassThrough(), { isTTY: true, columns: 140, rows: 30 }) as unknown as NodeJS.WriteStream
+    let output = ''
+    stdout.on('data', chunk => { output += chunk.toString() })
+    const instance = render(createElement(App, appProps({ approval })), {
+      stdin, stdout, stderr: stdout, exitOnCtrlC: false, patchConsole: false,
+    })
+    try {
+      const settled = harness.listener()({
+        callId: 'c9', toolName: 'plugin_manager',
+        reason: 'escalate sandbox to danger-full-access: plugin_manager',
+        answer: () => {}, signal: undefined,
+      } as unknown as ApprovalRequest, () => Promise.resolve<ApprovalOutcome>('unavailable'))
+      await wait()
+      // The whole argument payload — path included — is visible in the body,
+      // with no card-preview ellipsis cutting it at 80 characters.
+      expect(output).toContain('/Users/nonlinear/GitHub/dsh-code/lite-preset')
+      expect(output).toContain('"action":"install_bundle"')
+      expect(output).not.toContain('lite-pr...')
+      void settled
+    } finally {
+      instance.unmount()
+      stdin.destroy()
       stdout.destroy()
     }
   })

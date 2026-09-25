@@ -80,7 +80,6 @@ import { createSubagentFeed, subagentCatalogSeed, type SubagentFeedView } from '
 export { subagentCatalogSeed } from './session/subagents.ts'
 import { parseStatuslineItems } from './render/status.ts'
 import { watchSkills, type SkillsView } from './skills.ts'
-import { toolArgumentsPreview } from './render/tool-preview.ts'
 import { buildExportMarkdown } from './render/export.ts'
 import { inspectFilePaths, inspectImagePaths, saveFilePaths, saveImagePaths } from './attachments.ts'
 import { copyText, latestAssistantText } from './editor.ts'
@@ -222,13 +221,19 @@ function listJobs(ctx: Context, caller: Agent | undefined): readonly JobRow[] {
  * @param toolName - the tool the question is about.
  * @returns a bounded preview line, '' when nothing useful resolves.
  */
-function approvalCommandPreview(events: readonly { kind: string }[], callId: string | undefined, toolName: string): string {
+/** Resolve the approval body from the paired streaming tool call.
+ *
+ * The full raw arguments — never a bounded preview: an approval is a
+ * security decision, so the target path and every argument must be visible
+ * in the wrapped body (the bar's own row budget and overflow marker bound
+ * it); the tool name stands in when the call carried no arguments. */
+export function approvalCommandPreview(events: readonly { kind: string }[], callId: string | undefined, toolName: string): string {
   if (callId === undefined) return ''
   const entry = events.find(candidate =>
     candidate.kind === 'tool' && (candidate as { callId?: string }).callId === callId)
   if (entry === undefined) return ''
   const args = (entry as { arguments?: string }).arguments ?? ''
-  return toolArgumentsPreview(args, toolName)
+  return args === '' ? toolName : args
 }
 
 /** The runner's connection between the React app and the process side. */
