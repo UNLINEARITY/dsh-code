@@ -40,7 +40,7 @@ import { LanguagePanel } from './panels/language-panel.ts'
 import { getLanguage, t, type LanguageName } from './i18n.ts'
 import { UpdatePanel, subscribeUpdateApplyRunning } from './panels/update-panel.ts'
 import type { LauncherUpdateStatus } from './update.ts'
-import { WHALE_GLYPH, WHALE_GLYPH_COLUMNS } from './whale-glyph.ts'
+import { WHALE_GLYPH, WHALE_GLYPH_COLUMNS, WHALE_GLYPH_ROWS } from './whale-glyph.ts'
 import { dshKernelVersion, headerBrandTitle } from './version.ts'
 import type { TranscriptStore } from './session/store.ts'
 import { DEFAULT_TERMINAL_TITLE, useTerminalTitle } from './ui/terminal-title.ts'
@@ -160,7 +160,7 @@ import {
   type StatusTone,
 } from './render/status.ts'
 import { displayTail, displayText, padColumns, singleLineText, truncateColumns } from './render/text.ts'
-import { advanceTranscriptViewport, visibleTranscriptRows } from './render/transcript-viewport.ts'
+import { advanceTranscriptViewport, hasFilledTranscriptViewport, visibleTranscriptRows } from './render/transcript-viewport.ts'
 import {
   clampScroll,
   followInspectorCursor,
@@ -592,26 +592,47 @@ function rainbowGlyphRow(row: string, rowKey: number): ReactElement {
   return createElement(Text, { key: rowKey }, ...children)
 }
 
-function Header({ resumed }: { resumed: boolean }): ReactElement {
-  const stdout = useStdout().stdout
-  const rows = stdout?.rows ?? 40
-  const columns = stdout?.columns ?? 80
-  const kernelLine = (() => {
-    const version = dshKernelVersion()
-    return version === undefined ? undefined : `dsh-v${version}`
-  })()
+function headerLayout(resumed: boolean, rows: number, columns: number): {
+  readonly kernelLine: string | undefined
+  readonly title: string
+  readonly hint: string
+  readonly copyColumns: number
+  readonly compactText: string
+  readonly compact: boolean
+} {
+  const version = dshKernelVersion()
+  const kernelLine = version === undefined ? undefined : `dsh-v${version}`
   const title = headerBrandTitle()
   const slogan = 'Into the Unknown  探索未至之境'
   const hint = resumed ? t('header.hintResumed') : t('header.hint')
   const copyWidths = [visibleColumns(title), visibleColumns(slogan), visibleColumns(hint)]
   if (kernelLine !== undefined) copyWidths.push(visibleColumns(kernelLine))
   const copyColumns = Math.max(...copyWidths)
-  const compact = kernelLine === undefined ? `${title} · ${hint}` : `${title} · ${kernelLine} · ${hint}`
-  if (rows < 20 || columns < WHALE_GLYPH_COLUMNS + copyColumns + 10) {
+  return {
+    kernelLine,
+    title,
+    hint,
+    copyColumns,
+    compactText: kernelLine === undefined ? `${title} · ${hint}` : `${title} · ${kernelLine} · ${hint}`,
+    compact: rows < 20 || columns < WHALE_GLYPH_COLUMNS + copyColumns + 10,
+  }
+}
+
+/** Physical rows the source-backed header contributes before transcript rows. */
+export function headerPhysicalRows(resumed: boolean, rows: number, columns: number): number {
+  return headerLayout(resumed, rows, columns).compact ? 3 : WHALE_GLYPH_ROWS + 2
+}
+
+function Header({ resumed }: { resumed: boolean }): ReactElement {
+  const stdout = useStdout().stdout
+  const rows = stdout?.rows ?? 40
+  const columns = stdout?.columns ?? 80
+  const layout = headerLayout(resumed, rows, columns)
+  if (layout.compact) {
     return createElement(
       Box,
       { width: Math.max(1, columns - 1), borderStyle: 'round', borderColor: inkColor(getPalette().brand), paddingX: 1 },
-      createElement(Text, { color: inkColor(getPalette().brandBright), bold: true, wrap: 'truncate-end' }, truncateColumns(compact, Math.max(1, columns - 5))),
+      createElement(Text, { color: inkColor(getPalette().brandBright), bold: true, wrap: 'truncate-end' }, truncateColumns(layout.compactText, Math.max(1, columns - 5))),
     )
   }
   return createElement(
@@ -632,18 +653,18 @@ function Header({ resumed }: { resumed: boolean }): ReactElement {
     ),
     createElement(
       Box,
-      { flexDirection: 'column', width: copyColumns, justifyContent: 'center' },
-      ...(kernelLine === undefined
+      { flexDirection: 'column', width: layout.copyColumns, justifyContent: 'center' },
+      ...(layout.kernelLine === undefined
         ? []
-        : [createElement(Text, { color: inkColor(getPalette().dim), wrap: 'truncate-end' }, kernelLine)]),
-      createElement(Text, { color: inkColor(getPalette().brandBright), bold: true, wrap: 'truncate-end' }, title),
+        : [createElement(Text, { color: inkColor(getPalette().dim), wrap: 'truncate-end' }, layout.kernelLine)]),
+      createElement(Text, { color: inkColor(getPalette().brandBright), bold: true, wrap: 'truncate-end' }, layout.title),
       createElement(
         Text,
         { color: inkColor(getPalette().code), wrap: 'truncate-end' },
         createElement(Text, { bold: true }, 'Into the Unknown'),
         '  探索未至之境',
       ),
-      createElement(Text, { color: inkColor(getPalette().dim), wrap: 'truncate-end' }, hint),
+      createElement(Text, { color: inkColor(getPalette().dim), wrap: 'truncate-end' }, layout.hint),
     ),
   )
 }
@@ -2024,8 +2045,8 @@ export function App(props: AppProps): ReactElement {
   // `computeSettledRows` builds stable one-row records incrementally. The
   // viewport owns a monotonic row-level flush cursor over those records, so an
   // oversized entry may split cleanly between Static and the live tail. A
-  // source-backed replay (`refreshEpoch` bump: resize / Ctrl+L) rebuilds and
-  // flushes the complete current row set exactly once.
+  // source-backed replay (`refreshEpoch` bump: resize / Ctrl+L) rebuilds at
+  // the current width, then re-splits overflow from one retained real tail.
   // Hook order is unconditional. Its dimensions drive every live-region
   // budget before any dynamic rows are constructed.
   const appStdout = useStdout().stdout
@@ -2178,6 +2199,18 @@ export function App(props: AppProps): ReactElement {
     agents: false,
   })
   const settledPhysical = settledRowsResult.cache.physical
+  const historyPrefixRows = headerPhysicalRows(props.resumed, terminalRows, terminalColumns)
+    + (settledRowsResult.cache.droppedEntries > 0 ? 1 : 0)
+  // A source-backed replay must keep only the rows that fit the CURRENT
+  // surface live; any extra rows belong in Static so the rebuilt transcript
+  // is complete even when resize also changes status/chrome capacity. A
+  // sparse history behind an exclusive panel stays in Static, preserving the
+  // attach/detach contract without duplicating those rows in a live tail.
+  const replayingViewport = viewportFlushRef.current.epoch !== refreshEpoch
+  const replayRetainedRows = !transcriptVisible
+    && historyPrefixRows + settledPhysical.length < dynamicRows
+    ? 0
+    : dynamicRows
   const viewportStep = advanceTranscriptViewport(
     {
       sessionKey: viewportFlushRef.current.sessionKey,
@@ -2188,7 +2221,7 @@ export function App(props: AppProps): ReactElement {
       sessionKey: props.sessionKey,
       epoch: refreshEpoch,
       totalRows: settledPhysical.length,
-      retainedRows: maximumTranscriptRows,
+      retainedRows: replayingViewport ? replayRetainedRows : maximumTranscriptRows,
     },
   )
   const flushedRows = viewportStep.staticRows
@@ -2267,8 +2300,22 @@ export function App(props: AppProps): ReactElement {
     : visibleLiveLines.slice(-liveAudit.allocation.live)
   const auditedReasoningRows = liveAudit.allocation.reasoning
   const auditedAnswerRows = liveAudit.allocation.answer
-  const transcriptViewportFilled = allLiveLines.length + nonHistoryRows >= dynamicRows
-  const modalViewportFilled = allLiveLines.length >= dynamicRows
+  // Filled-state uses the complete source-backed row set, not only the rows
+  // still live after the Static split. The header is real painted content too
+  // (10 rows wide, 3 compact); omitting it delays anchoring after a restore.
+  const sourceHistoryRows = settledPhysical.length + mutableLiveLines.length
+  const transcriptViewportFilled = hasFilledTranscriptViewport(
+    sourceHistoryRows,
+    nonHistoryRows,
+    dynamicRows,
+    historyPrefixRows,
+  )
+  const modalViewportFilled = hasFilledTranscriptViewport(
+    sourceHistoryRows,
+    0,
+    dynamicRows,
+    historyPrefixRows,
+  )
   const anchoredSurfaceRows = dynamicRows
     + (transcriptVisible && view.todos.length > 0 ? 1 : 0)
     + (transcriptVisible && agentRows.length > 0 ? 1 : 0)

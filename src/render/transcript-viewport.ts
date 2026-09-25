@@ -27,9 +27,9 @@ export interface TranscriptViewportStep {
  * Advance the monotonic physical-row flush cursor.
  *
  * Ordinary renders never pull a row back out of native scrollback. A source-
- * backed replay (epoch change) flushes the complete durable window exactly
- * once after the caller clears/remounts Static; subsequent durable rows start
- * a fresh retained tail. Session/reset shrink starts from the new source.
+ * backed replay (epoch change) re-splits the complete reflowed source after
+ * the caller clears/remounts Static, keeping one terminal-sized real tail
+ * live. Session/reset shrink starts from the new source.
  */
 export function advanceTranscriptViewport(
   previous: TranscriptViewportCursor,
@@ -41,7 +41,7 @@ export function advanceTranscriptViewport(
   const staticRows = previous.sessionKey !== input.sessionKey
     ? desiredStatic
     : previous.epoch !== input.epoch
-      ? total
+      ? desiredStatic
       : total < previous.flushedRows
         ? desiredStatic
         : Math.max(previous.flushedRows, desiredStatic)
@@ -50,6 +50,15 @@ export function advanceTranscriptViewport(
     staticRows,
     liveRows: total - staticRows,
   }
+}
+
+/** Whether real source-backed content has naturally filled the transcript area. */
+export function hasFilledTranscriptViewport(historyRows: number, occupiedRows: number, capacity: number, prefixRows = 0): boolean {
+  const history = Math.max(0, Math.floor(historyRows))
+  const occupied = Math.max(0, Math.floor(occupiedRows))
+  const prefix = Math.max(0, Math.floor(prefixRows))
+  const available = Math.max(1, Math.floor(capacity))
+  return prefix + history + occupied >= available
 }
 
 /** Real history rows that fit beside the currently painted stream/tool rows. */

@@ -11,7 +11,7 @@ import { AttachmentId } from '@deepseek-ai/dsh-attachment'
 import { createAssistantMessage, createToolResultMessage, createUserMessage, type ImageBlock, type ToolCallId, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type { TodoItem } from '@deepseek-ai/dsh-tool-todo'
-import { App, computeSettledRows, queuedInboxRows, streamTailBodyColumns, type AppProps } from '../../src/app.ts'
+import { App, computeSettledRows, headerPhysicalRows, queuedInboxRows, streamTailBodyColumns, type AppProps } from '../../src/app.ts'
 import { stepCompletionIndex } from '../../src/completion.ts'
 import { createSplitStdin } from '../../src/input-split.ts'
 import { createTranscriptStore, type TranscriptStore } from '../../src/session/store.ts'
@@ -50,6 +50,7 @@ export {
   _resetDshKernelVersionForTests,
   chalk,
   computeSettledRows,
+  headerPhysicalRows,
   createAssistantMessage,
   createElement,
   createSplitStdin,

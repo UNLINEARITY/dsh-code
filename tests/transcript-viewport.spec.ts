@@ -1,7 +1,7 @@
 /** Physical-row transcript viewport and native scrollback split. */
 
 import { describe, expect, it } from 'vitest'
-import { advanceTranscriptViewport, visibleTranscriptRows } from '../src/render/transcript-viewport.ts'
+import { advanceTranscriptViewport, hasFilledTranscriptViewport, visibleTranscriptRows } from '../src/render/transcript-viewport.ts'
 
 describe('advanceTranscriptViewport', () => {
   const initial = { sessionKey: 'session-a', epoch: 0, flushedRows: 0 }
@@ -35,19 +35,27 @@ describe('advanceTranscriptViewport', () => {
     expect(expanded.liveRows).toBe(4)
   })
 
-  it('fully replays on an epoch change and resets on a new or cleared session', () => {
+  it('replays into Static plus a retained tail on an epoch change and resets on a new or cleared session', () => {
     const replay = advanceTranscriptViewport(
       { sessionKey: 'session-a', epoch: 0, flushedRows: 14 },
       { sessionKey: 'session-a', epoch: 1, totalRows: 30, retainedRows: 16 },
     )
-    expect(replay.staticRows).toBe(30)
-    expect(replay.liveRows).toBe(0)
+    expect(replay.staticRows).toBe(14)
+    expect(replay.liveRows).toBe(16)
     expect(advanceTranscriptViewport(replay.cursor, {
       sessionKey: 'session-b', epoch: 1, totalRows: 10, retainedRows: 16,
     }).staticRows).toBe(0)
     expect(advanceTranscriptViewport(replay.cursor, {
       sessionKey: 'session-a', epoch: 1, totalRows: 0, retainedRows: 16,
     }).staticRows).toBe(0)
+  })
+})
+
+describe('hasFilledTranscriptViewport', () => {
+  it('counts source history and its painted header instead of only the mutable tail', () => {
+    expect(hasFilledTranscriptViewport(100, 0, 31)).toBe(true)
+    expect(hasFilledTranscriptViewport(21, 0, 31, 10)).toBe(true)
+    expect(hasFilledTranscriptViewport(20, 0, 31, 10)).toBe(false)
   })
 })
 

@@ -1,6 +1,7 @@
 /** Overlay views and theme surfaces (Ctrl+O, Ctrl+R, header, light theme). */
 
 import { describe, expect, it, vi } from 'vitest'
+import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import {
   type ToolCallId,
   App,
@@ -386,6 +387,45 @@ describe('Ctrl+O history details', () => {
 })
 
 describe('bottom-anchored modal viewport', () => {
+  it('keeps a resized long-history surface filled when /help opens', async () => {
+    const harness = createTty(118, 39)
+    const store = createTranscriptStore(Array.from({ length: 60 }, (_, index) => ({
+      type: 'assistant/message',
+      seq: index + 1,
+      time: index + 1,
+      data: {
+        turn: index + 1,
+        step: 1,
+        message: createAssistantMessage({
+          content: [{ type: 'text', text: `resize-modal-tail-${index}` }],
+          source: { provider: 'p', model: 'm' },
+        }),
+      },
+    } as SessionEvent)))
+    const instance = renderApp(harness, appProps({ store, resumed: true }))
+    try {
+      await wait()
+      harness.stdout.rows = 18
+      harness.stdout.emit('resize')
+      await wait(220)
+
+      harness.stdin.write('/help')
+      await wait()
+      harness.output.text = ''
+      harness.stdin.write('\r')
+      await wait()
+      const visible = harness.output.text.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/gu, '')
+      expect(visible).toContain('/help')
+      expect(visible).toContain('resize-modal-tail-59')
+      expect(visible).not.toMatch(/(?:\n[ \t]*){6}/u)
+      expect(harness.output.text).not.toContain('\x1b[2J')
+    } finally {
+      instance.unmount()
+      harness.stdin.destroy()
+      harness.stdout.destroy()
+    }
+  })
+
   it('fills the rows above /help with frozen real history instead of blanks', async () => {
     const harness = createTty(100, 24)
     const store = createTranscriptStore(Array.from({ length: 30 }, (_, index) => (fixtureEvent({

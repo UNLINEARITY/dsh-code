@@ -2,6 +2,7 @@
 
 import { describe, expect, it, vi } from 'vitest'
 import { visibleColumns } from '../src/render/markdown.ts'
+import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import {
   type TranscriptEntry,
   type ToolCallId,
@@ -14,6 +15,7 @@ import {
   chalk,
   computeSettledRows,
   createAssistantMessage,
+  headerPhysicalRows,
   createElement,
   createToolResultMessage,
   createTranscriptStore,
@@ -519,9 +521,10 @@ describe('incremental settled transcript cache', () => {
       expect(rebuilt.match(/lint passed/g)).toHaveLength(1)
       expect(rebuilt.match(/\/lint/g)).toHaveLength(1)
 
-      // Later appends settle after the existing prefix; the append path adds
-      // only the new rows and never re-emits the resolved command.
-      const lintBefore = output.text.match(/lint passed/g)!.length
+      // Later appends settle after the existing prefix. A retained live tail
+      // may repaint the resolved command, but the new frame contains one
+      // visual copy rather than a running/settled ghost pair.
+      const appendMark = output.text.length
       store.apply(fixtureEvent({
         type: 'user/message',
         seq: 4,
@@ -539,9 +542,10 @@ describe('incremental settled transcript cache', () => {
         },
       }))
       await wait()
-      expect(output.text).toContain('done again')
-      expect(output.text.match(/done again/g)).toHaveLength(1)
-      expect(output.text.match(/lint passed/g)!.length).toBe(lintBefore)
+      const appendFrame = output.text.slice(appendMark)
+      expect(appendFrame).toContain('done again')
+      expect(appendFrame.match(/done again/g)).toHaveLength(1)
+      expect(appendFrame.match(/lint passed/g)).toHaveLength(1)
     } finally {
       instance.unmount()
       stdin.destroy()
@@ -581,15 +585,29 @@ describe('incremental settled transcript cache', () => {
       const visibleOutput = output.text.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/gu, '')
       expect(visibleOutput).not.toMatch(/(?:\n[ \t]*){10}/u)
 
-      // A resize triggers one source-backed replay: one clear, then the FULL
-      // history re-flushes once (no ghosts, no duplicates, no lost rows).
+      // A shrink triggers one source-backed replay: one clear, then the FULL
+      // history is rebuilt once across Static plus a retained real tail (no
+      // ghosts, duplicates, or lost rows).
       output.text = ''
       stdout.columns = 80
+      stdout.rows = 18
       stdout.emit('resize')
-      await wait()
-      expect(output.text.match(/\x1b\[2J/g)).toHaveLength(1)
+      await wait(220)
+      // Ink may independently clear while the reported row count shrinks;
+      // the app still emits exactly one managed source-backed replay clear.
+      expect(output.text.split(resizeClear)).toHaveLength(2)
       const rebuilt = output.text.slice(output.text.lastIndexOf(resizeClear) + resizeClear.length)
       expect(rebuilt.match(/msg-\d+/g)).toHaveLength(120)
+
+      // The next dynamic frame must still contain the newest real history.
+      // Replaying every row into Static used to leave a zero-row live tail,
+      // silently release the bottom anchor, and make resize-dependent jumps.
+      output.text = ''
+      store.apply({ type: 'turn/start', seq: 122, time: 122, data: { turn: 2 } } as SessionEvent)
+      applyStreamDeltas(store, 2, 1, [{ kind: 'text', text: 'after resize' }])
+      await wait()
+      expect(output.text).toContain('msg-119')
+      expect(output.text).toContain('after resize')
     } finally {
       instance.unmount()
       stdin.destroy()
@@ -598,6 +616,12 @@ describe('incremental settled transcript cache', () => {
   })
 })
 describe('physical-row transcript viewport', () => {
+  it('counts the real compact and wide header height toward first fill', () => {
+    expect(headerPhysicalRows(true, 39, 118)).toBe(10)
+    expect(headerPhysicalRows(false, 19, 118)).toBe(3)
+    expect(headerPhysicalRows(false, 39, 50)).toBe(3)
+  })
+
   it('fills stream contraction with real settled rows and no blank frame', async () => {
     const harness = createTty(100, 24)
     const history = Array.from({ length: 30 }, (_, index) => (fixtureEvent({
