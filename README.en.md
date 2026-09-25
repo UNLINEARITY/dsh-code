@@ -23,29 +23,31 @@ DeepSeek Harness registers models, tools, storage, policies, and interfaces as p
 
 ## 2. Quick start
 
-Requires Node `^22.19 || >=24` and the preview `dsh` CLI (current release line: `@deepseek-ai/dsh@0.1.7-rc.1`). You can still enter the TUI, browse sessions, and use non-model features without configuring a model; press `Tab` in `/model` to manage API keys, OAuth, device-code sign-in, endpoints, and models.
+Requires Node `^22.19 || >=24` and the preview `dsh` CLI (current release line: `@deepseek-ai/dsh@0.1.7-rc.2`). You can still enter the TUI, browse sessions, and use non-model features without configuring a model; press `Tab` in `/model` to manage API keys, OAuth, device-code sign-in, endpoints, and models.
 
 ### 1. Install and update
 
 Install from npm (recommended). `/update` and `deepseek update --apply` both work afterwards: they check npm for a newer version and walk you through the upgrade.
 
 ```sh
-npm install -g @deepseek-ai/dsh@0.1.7-rc.1 pnpm
-npm install -g dsh-code@1.5.0
-dsh plugin --profile cli add dsh-code@1.5.0
+npm install -g @deepseek-ai/dsh@0.1.7-rc.2 pnpm
+npm install -g dsh-code@1.6.0
+dsh plugin --profile cli add dsh-code@1.6.0
 ```
 
 When npm is unreachable (restricted network, a mirror outage), install the GitHub Release tarball instead. CI builds it on every tag and attaches it to the release; lib is prebuilt, so the installing machine needs no toolchain:
 
 ```sh
-npm install -g @deepseek-ai/dsh@0.1.7-rc.1 pnpm
-npm install -g https://github.com/unlinearity/dsh-code/releases/download/1.5.0/dsh-code-1.5.0.tgz
-dsh plugin --profile cli add https://github.com/unlinearity/dsh-code/releases/download/1.5.0/dsh-code-1.5.0.tgz
+npm install -g @deepseek-ai/dsh@0.1.7-rc.2 pnpm
+npm install -g https://github.com/unlinearity/dsh-code/releases/download/1.6.0/dsh-code-1.6.0.tgz
+dsh plugin --profile cli add https://github.com/unlinearity/dsh-code/releases/download/1.6.0/dsh-code-1.6.0.tgz
 ```
 
 > npm script prompts: npm 11.6+ may print `npm warn install-scripts` during a global install (unapproved build scripts for node-pty, koffi, and friends). The host ships prebuilt artifacts, so common platforms can ignore the warning; if a native-module error appears after installing, follow npm's own hint and rerun with `npm install -g --allow-scripts=<package list>`.
 >
-> Version alignment: dsh-code targets dsh `0.1.7-rc.1`, with every Harness dependency pinned exactly to `0.1.7-rc.1`. A local `link:` mount should be rebuilt with `git pull && pnpm install && pnpm build`; do not run the updater against a checkout.
+> Version alignment: dsh-code targets dsh `0.1.7-rc.2`, with every Harness dependency pinned exactly to `0.1.7-rc.2`. A local `link:` mount should be rebuilt with `git pull && pnpm install && pnpm build`; do not run the updater against a checkout.
+>
+> Upgrade notes: sessions and startup arguments recorded under the legacy `code` preset map automatically to the upstream-renamed `ptc` — no manual migration. The session-log reader follows upstream to format v4: older logs migrate in the kernel on read (v3 to v4), and the original files on disk stay untouched.
 >
 > Settings migration: on the first boot of a dsh 0.1.7-targeting build, the host imports the retired global `settings.yaml` into the active profile once (the file is then renamed to `settings.yaml.imported`). Upgrade dsh and dsh-code together so no degraded boot falls in between. If provider/model configuration goes missing after an upgrade, the TUI detects it at startup and re-imports the stranded sections automatically through the host's own settings pipe — no manual steps, no re-login (credentials are unaffected). Only when the settings service is unwritable do you need the manual fallback: copy `settings.yaml.imported` to `settings.yaml` under the dsh home and restart.
 >
@@ -197,7 +199,6 @@ The following built-in commands are available inside the TUI. Additional Harness
 | `/usage` | See this session's token usage: the four disjoint buckets (uncached input, cache write, cache read, output), the totals merged by model, and the per-turn breakdown |
 | `/agents` | View subagent sessions created by the current session |
 | `/jobs` | View background jobs and their runtime status |
-| `/schedule` | Inspect active reminders (created through the model's schedule tools; read-only, overdue first) |
 | `/copy` | Copy the latest complete assistant response |
 
 #### Extensions, display, and exit
@@ -254,9 +255,7 @@ DSH-Code reads the live Harness registries instead of maintaining a separate loc
 
 The following official plugins ship with DSH-Code and are enabled in the composition by default:
 
-- **Session search**: the model gets five read-only tools — `session_search`, `session_event_search`, `session_trace`, `session_event_trace`, `session_event_read` — over prior session logs (the index builds lazily on the first search; cross-session access is scoped by exact working directory; on Node 22 the first search prints a one-time `node:sqlite` experimental warning, which is expected).
-- **Reminders**: `schedule` provides durable, restart-surviving reminders (created through the `schedule_create` / `schedule_list` / `schedule_delete` tools); the `/schedule` panel shows them read-only with overdue rows first. `time-context` injects a clock reading for the model (throttled to 30s).
-- **Clock for reminders**: `time-context` injects the current time for the model (throttled to 30s), so phrasings like "remind me at 5 pm" work.
+- **Session search**: the model gets five read-only tools — `session_search`, `session_event_search`, `session_trace`, `session_event_trace`, `session_event_read` — over prior session logs (the index persists under the dsh home: the first search builds it once and later searches maintain it incrementally; cross-session access is scoped by exact working directory; on Node 22 the first search prints a one-time `node:sqlite` experimental warning, which is expected).
 
 The following official plugins are installed but opt-in (append rows in the user layer `~/.dsh/profiles/cli/cordis.patch.yml`, or install as noted):
 

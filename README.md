@@ -25,31 +25,31 @@ DeepSeek Harness 将模型、工具、存储、策略和界面作为插件，通
 
 ## 二、快速开始
 
-需要 Node `^22.19 || >=24` 和预览版 `dsh` CLI（当前版本线：`@deepseek-ai/dsh@0.1.7-rc.1`）。未配置模型时仍可进入 TUI、查看会话和使用非模型功能；在 `/model` 中按 Tab 进入供应商管理，配置 API key、OAuth 与设备码登录。
+需要 Node `^22.19 || >=24` 和预览版 `dsh` CLI（当前版本线：`@deepseek-ai/dsh@0.1.7-rc.2`）。未配置模型时仍可进入 TUI、查看会话和使用非模型功能；在 `/model` 中按 Tab 进入供应商管理，配置 API key、OAuth 与设备码登录。
 
 ### 1. 安装与更新
 
 从 npm 安装（推荐）。装好后 `/update` 和 `deepseek update --apply` 都能用：它们查询 npm 上的新版本，确认后按提示升级。
 
 ```sh
-npm install -g @deepseek-ai/dsh@0.1.7-rc.1 pnpm
-npm install -g dsh-code@1.5.0
-dsh plugin --profile cli add dsh-code@1.5.0
+npm install -g @deepseek-ai/dsh@0.1.7-rc.2 pnpm
+npm install -g dsh-code@1.6.0
+dsh plugin --profile cli add dsh-code@1.6.0
 ```
 
 npm 不可达时（网络受限、镜像临时故障），改用 GitHub Release tarball。每次打 tag 由 CI 构建并挂到 Release，lib 已预构建，安装机不需要工具链：
 
 ```sh
-npm install -g @deepseek-ai/dsh@0.1.7-rc.1 pnpm
-npm install -g https://github.com/unlinearity/dsh-code/releases/download/1.5.0/dsh-code-1.5.0.tgz
-dsh plugin --profile cli add https://github.com/unlinearity/dsh-code/releases/download/1.5.0/dsh-code-1.5.0.tgz
+npm install -g @deepseek-ai/dsh@0.1.7-rc.2 pnpm
+npm install -g https://github.com/unlinearity/dsh-code/releases/download/1.6.0/dsh-code-1.6.0.tgz
+dsh plugin --profile cli add https://github.com/unlinearity/dsh-code/releases/download/1.6.0/dsh-code-1.6.0.tgz
 ```
 
 > npm 脚本提示：npm 11.6+ 可能在全局安装时提示 `npm warn install-scripts`（node-pty、koffi 等原生依赖的构建脚本未获批准）。宿主随包自带预编译产物，常规平台可直接忽略；若安装后出现原生模块报错，按 npm 提示执行 `npm install -g --allow-scripts=<包名列表>` 后重装。
 >
-> 版本对齐：dsh-code 面向 dsh `0.1.7-rc.1` 构建，全部 Harness 依赖均精确锁定为 `0.1.7-rc.1`。本地 `link:` 挂载请先 `git pull && pnpm install && pnpm build`，不要对开发挂载跑更新器。
+> 版本对齐：dsh-code 面向 dsh `0.1.7-rc.2` 构建，全部 Harness 依赖均精确锁定为 `0.1.7-rc.2`。本地 `link:` 挂载请先 `git pull && pnpm install && pnpm build`，不要对开发挂载跑更新器。
 >
-> 升级说明：旧会话与旧参数中记录的 `code` 预设会自动映射到上游已改名的 `ptc`，无需手动迁移。会话日志读取端随上游升级到格式 v3：旧格式日志在读取时由内核自动迁移，磁盘上的原始文件保持不变。
+> 升级说明：旧会话与旧参数中记录的 `code` 预设会自动映射到上游已改名的 `ptc`，无需手动迁移。会话日志读取端随上游升级到格式 v4：旧格式日志在读取时由内核自动迁移（v3→v4），磁盘上的原始文件保持不变。
 >
 > 设置迁移：面向 dsh 0.1.7 的版本首次启动时，宿主会把旧版全局 `settings.yaml` 一次性迁入当前 profile（文件随后改名为 `settings.yaml.imported`）。请让 dsh 与 dsh-code 同步升级，避免夹在中间的降级启动。若升级后发现模型/供应商配置消失：TUI 会在启动时检测并经由宿主自己的设置管道自动重新导入，无需手动操作（凭据不受影响，无需重新登录）；仅在设置服务不可写的极端情况下，才需要把 dsh 主目录下的 `settings.yaml.imported` 复制为 `settings.yaml` 后重启。
 >
@@ -205,7 +205,6 @@ dsh --profile cli --session my-id    # 使用指定 id 新建会话
 | `/usage` | 查看本会话的 token 用量：四个互不重叠的桶（未命中输入、缓存写入、缓存读取、输出）、按模型合并的总量、以及按回合的明细 |
 | `/agents` | 查看当前会话创建的 subagent 会话 |
 | `/jobs` | 查看后台任务及其运行状态 |
-| `/schedule` | 查看活动提醒(模型经 schedule 工具创建/取消,面板只读展示,逾期优先) |
 | `/copy` | 复制最近一条完整助手回复 |
 
 #### 扩展、显示与退出
@@ -262,9 +261,7 @@ DSH-Code 读取 Harness 的实时注册表，不在本地维护另一套副本�
 
 以下官方插件已随 DSH-Code 一起安装并在组合中默认启用：
 
-- **会话检索**：模型获得 `session_search` / `session_event_search` / `session_trace` / `session_event_trace` / `session_event_read` 五个只读工具，可检索历史会话内容（首次搜索时才构建索引，按工作目录精确匹配授权；Node 22 上首次搜索会当场打印一次 `node:sqlite` 实验性警告，属正常现象）。
-- **定时提醒**：`schedule` 提供跨重启的持久提醒（`schedule_create` / `schedule_list` / `schedule_delete` 工具创建），`/schedule` 面板只读展示、逾期条目置顶标红；`time-context` 为模型注入时钟读数（30 秒节流）。
-- **提醒的时钟读数**：`time-context` 为模型注入当前时间（30 秒节流），「下午五点提醒我」这类表述因此可用。
+- **会话检索**：模型获得 `session_search` / `session_event_search` / `session_trace` / `session_event_trace` / `session_event_read` 五个只读工具，可检索历史会话内容（索引持久化于 dsh 主目录：首次搜索一次性构建、此后增量维护；跨会话访问按工作目录精确匹配授权；Node 22 上首次搜索会当场打印一次 `node:sqlite` 实验性警告，属正常现象）。
 
 以下官方插件已安装但需按需启用（在用户层 `~/.dsh/profiles/cli/cordis.patch.yml` 追加行，或按说明安装）：
 

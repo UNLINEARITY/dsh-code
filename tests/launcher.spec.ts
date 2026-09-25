@@ -43,7 +43,7 @@ describe('global launcher aliases', () => {
   })
 
   it('pins setup to this release so pnpm can install it on publication day', () => {
-    expect(setupBundle([])).toBe('dsh-code@1.5.0')
+    expect(setupBundle([])).toBe('dsh-code@1.6.0')
   })
 
   it('starts dsh with inherited stdio and preserves its exit code', () => {
@@ -385,7 +385,7 @@ describe('update orchestration', () => {
   describe('buildUpdateStatus', () => {
     const registry = (): Record<string, PackagePeers | undefined> => ({
       // view(subject) returns the FIELD value, so the peers map is bare.
-      'dsh-code@1.5.1': { '@deepseek-ai/dsh-session': '0.1.5-rc.2' },
+      'dsh-code@1.6.1': { '@deepseek-ai/dsh-session': '0.1.7-rc.2' },
     })
     // Profile readers stay injectable: the real machine state must not leak
     // into these contract tests (a link-mounted dev profile would flip every
@@ -394,14 +394,14 @@ describe('update orchestration', () => {
 
     it('reports an aligned upgrade with the plugin carry and no blockers', () => {
       const status = buildUpdateStatus({
-        view: subjectParts => subjectParts[0] === 'dsh-code' ? '1.5.1' : registry()[subjectParts[0]],
-        installedDsh: () => '0.1.5-rc.1',
+        view: subjectParts => subjectParts[0] === 'dsh-code' ? '1.6.1' : registry()[subjectParts[0]],
+        installedDsh: () => '0.1.5-rc.2',
         ...readers,
       })
-      expect(status.code).toEqual({ running: packageVersion, latest: '1.5.1' })
-      expect(status.host).toEqual({ installed: '0.1.5-rc.1', targetLine: '0.1.5-rc.2' })
-      expect(status.plan.dshSpec).toBe('@deepseek-ai/dsh@0.1.5-rc.2')
-      expect(status.plan.codeSpec).toBe('dsh-code@1.5.1')
+      expect(status.code).toEqual({ running: packageVersion, latest: '1.6.1' })
+      expect(status.host).toEqual({ installed: '0.1.5-rc.2', targetLine: '0.1.7-rc.2' })
+      expect(status.plan.dshSpec).toBe('@deepseek-ai/dsh@0.1.7-rc.2')
+      expect(status.plan.codeSpec).toBe('dsh-code@1.6.1')
       expect(status.blockers).toEqual({ registry: null, downgrade: false, localCheckout: null })
       expect(status.upToDate).toBe(false)
     })
@@ -411,9 +411,9 @@ describe('update orchestration', () => {
         view: subjectParts => subjectParts[0] === 'dsh-code'
           ? packageVersion
           : subjectParts[0] === 'dsh-code@' + packageVersion
-            ? { '@deepseek-ai/dsh-session': '0.1.5-rc.1' }
+            ? { '@deepseek-ai/dsh-session': '0.1.7-rc.2' }
             : undefined,
-        installedDsh: () => '0.1.5-rc.1',
+        installedDsh: () => '0.1.7-rc.2',
         ...readers,
       })
       expect(status.upToDate).toBe(true)
@@ -426,9 +426,9 @@ describe('update orchestration', () => {
         view: subjectParts => subjectParts[0] === 'dsh-code'
           ? packageVersion
           : subjectParts[0] === 'dsh-code@' + packageVersion
-            ? { '@deepseek-ai/dsh-session': '0.1.5-rc.1' }
+            ? { '@deepseek-ai/dsh-session': '0.1.7-rc.2' }
             : undefined,
-        installedDsh: () => '0.1.5-rc.2',
+        installedDsh: () => '0.1.7-rc.3',
         ...readers,
       })
       expect(status.blockers.downgrade).toBe(true)
