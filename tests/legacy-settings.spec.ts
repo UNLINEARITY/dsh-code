@@ -1,3 +1,4 @@
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { setLanguage, t } from '../src/i18n.ts'
 import { appProps, createTty, renderApp, wait } from './helpers/app-mount.ts'
@@ -16,8 +17,8 @@ function readerOf(files: Record<string, string>): LegacySettingsReader {
 }
 
 const HOME = '/home/user/.dsh'
-const IMPORTED = `${HOME}/${LEGACY_SETTINGS_IMPORTED}`
-const PATCH = `${HOME}/profiles/cli/cordis.patch.yml`
+const IMPORTED = join(HOME, LEGACY_SETTINGS_IMPORTED)
+const PATCH = join(HOME, 'profiles', 'cli', 'cordis.patch.yml')
 
 /** The retired global document as a 0.1.5 line would have left it. */
 const FULL_LEGACY = [
@@ -89,7 +90,7 @@ describe('detectLegacySettingsGap', () => {
         'agent-default-model': { provider: 'openai', model: 'gpt-5.6-luna' },
       },
       importedPath: IMPORTED,
-      restorePath: `${HOME}/${LEGACY_SETTINGS_ACTIVE}`,
+      restorePath: join(HOME, LEGACY_SETTINGS_ACTIVE),
     })
   })
 

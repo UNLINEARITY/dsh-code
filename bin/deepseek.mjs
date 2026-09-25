@@ -4,7 +4,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { homedir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, join, posix, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const packageRequire = createRequire(import.meta.url)
@@ -373,7 +373,9 @@ export function runSequence(steps, spawnProcess = spawn) {
  */
 export function execPathGlobalRoot(execPath = process.execPath, platform = process.platform) {
   if (platform === 'win32') return undefined
-  return join(dirname(dirname(execPath)), 'lib', 'node_modules')
+  // POSIX prefixes are defined on the path itself. Use the posix helpers so a
+  // Windows host still resolves nvm and Homebrew layouts in tests and probes.
+  return posix.join(posix.dirname(posix.dirname(execPath)), 'lib', 'node_modules')
 }
 
 /** Npm global-prefix roots that may contain DSH when this launcher is globally linked to a checkout. */

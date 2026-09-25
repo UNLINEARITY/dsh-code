@@ -583,10 +583,20 @@ describe('DeepSeek model-switch easter egg', () => {
       const startedAt = Date.now() - 14_500
       output = ''
       store.apply({ type: 'turn/start', seq: 1, time: startedAt, data: { turn: 1 } } as SessionEvent)
-      await sleep(1500)
-      expect(output).toContain('Deep diving')
-      const plainOutput = output.replace(/\x1b\[[0-9;?]*[A-Za-z]/gu, '')
-      expect(plainOutput).toMatch(/Deep diving\.\.\. 1[56]s/u)
+      // The clock appears at 15s on a 1Hz tick. A busy runner can skip 15s and
+      // 16s entirely, so wait for any elapsed reading at or past that threshold.
+      const deadline = Date.now() + 4_000
+      let plainOutput = ''
+      let elapsedSeconds = 0
+      while (Date.now() < deadline) {
+        await sleep(200)
+        plainOutput = output.replace(/\x1b\[[0-9;?]*[A-Za-z]/gu, '')
+        const clock = plainOutput.match(/Deep diving\.\.\. (\d+)s/u)
+        elapsedSeconds = clock === null ? 0 : Number(clock[1])
+        if (elapsedSeconds >= 15) break
+      }
+      expect(plainOutput).toContain('Deep diving')
+      expect(elapsedSeconds).toBeGreaterThanOrEqual(15)
       const shimmerColors = new Set(output.match(/\x1b\[38;2;\d+;\d+;\d+m/gu) ?? [])
       expect(shimmerColors.size).toBeGreaterThan(10)
       const busyFrames = new Set(output.match(/[⣾⣽⣻⢿⡿⣟⣯⣷]/gu) ?? [])
@@ -599,5 +609,5 @@ describe('DeepSeek model-switch easter egg', () => {
       chalk.level = originalChalkLevel
       randomSpy.mockRestore()
     }
-  }, 15_000)
+  }, 20_000)
 })
