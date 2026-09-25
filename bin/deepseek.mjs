@@ -364,12 +364,25 @@ export function runSequence(steps, spawnProcess = spawn) {
   })
 }
 
+/**
+ * The npm global-prefix root implied by this process's node: POSIX layouts
+ * (nvm, Homebrew, system installs) keep the prefix two levels above
+ * bin/node with packages under lib/node_modules. Windows npm keeps its
+ * prefix in APPDATA (already listed) because node.exe's location does not
+ * imply the prefix there, so no candidate is derived.
+ */
+export function execPathGlobalRoot(execPath = process.execPath, platform = process.platform) {
+  if (platform === 'win32') return undefined
+  return join(dirname(dirname(execPath)), 'lib', 'node_modules')
+}
+
 /** Npm global-prefix roots that may contain DSH when this launcher is globally linked to a checkout. */
-export function globalDshRoots() {
+export function globalDshRoots(env = process.env, execPath = process.execPath, platform = process.platform) {
   return [...new Set([
-    process.env.npm_config_prefix,
-    process.env.APPDATA === undefined ? undefined : join(process.env.APPDATA, 'npm'),
-    process.env.PREFIX,
+    env.npm_config_prefix,
+    env.APPDATA === undefined ? undefined : join(env.APPDATA, 'npm'),
+    env.PREFIX,
+    execPathGlobalRoot(execPath, platform),
   ].filter(Boolean))]
 }
 

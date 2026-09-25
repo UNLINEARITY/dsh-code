@@ -196,7 +196,18 @@ export function installedGlobalDshVersion(
 export function runSequence(steps: readonly SequenceStep[], spawnProcess?: SpawnProcess): Promise<number>
 
 /** Npm global-prefix roots that may contain DSH when this launcher is linked to a checkout. */
-export function globalDshRoots(): string[]
+/** The environment subset the global-root derivation reads. */
+export interface GlobalRootEnv {
+  npm_config_prefix?: string
+  APPDATA?: string
+  PREFIX?: string
+}
+
+/** The npm global package root this process's node implies, when it implies one. */
+export function execPathGlobalRoot(execPath?: string, platform?: NodeJS.Platform): string | undefined
+
+/** Npm global-prefix roots that may contain DSH when this launcher is globally linked to a checkout. */
+export function globalDshRoots(env?: GlobalRootEnv, execPath?: string, platform?: NodeJS.Platform): string[]
 
 /** A resolved child-process invocation: the executable and its argument vector. */
 export interface ResolvedCommand {

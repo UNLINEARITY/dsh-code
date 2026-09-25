@@ -5,6 +5,8 @@ import {
   buildUpdateStatus,
   bundleDowngradeRefusal,
   compareHarnessLines,
+  execPathGlobalRoot,
+  globalDshRoots,
   harnessLineFromPeers,
   installedGlobalDshVersion,
   localCheckoutRefusal,
@@ -331,6 +333,33 @@ describe('update orchestration', () => {
     expect(compareHarnessLines('0.1.5-rc.1', '0.1.5-alpha.9')).toBeGreaterThan(0)
     // Unparseable values never block (compare as equal).
     expect(compareHarnessLines('weird', '0.1.5-rc.1')).toBe(0)
+  })
+
+  it('derives the npm global root from the running node on POSIX layouts', () => {
+    expect(execPathGlobalRoot('/Users/x/.nvm/versions/node/v24.20.0/bin/node', 'darwin'))
+      .toBe('/Users/x/.nvm/versions/node/v24.20.0/lib/node_modules')
+    expect(execPathGlobalRoot('/opt/homebrew/bin/node', 'linux'))
+      .toBe('/opt/homebrew/lib/node_modules')
+    // Windows npm keeps its prefix in APPDATA; node.exe implies nothing there.
+    expect(execPathGlobalRoot('C:/Program Files/nodejs/node.exe', 'win32')).toBeUndefined()
+  })
+
+  it('still finds a root when no environment hint is set', () => {
+    // The regression: a link-mounted checkout runs the launcher outside any
+    // npm script context, so npm_config_prefix, PREFIX, and APPDATA are all
+    // absent — the execPath-implied root must keep host discovery working.
+    const roots = globalDshRoots({}, '/Users/x/.nvm/versions/node/v24.20.0/bin/node', 'darwin')
+    expect(roots).toEqual(['/Users/x/.nvm/versions/node/v24.20.0/lib/node_modules'])
+    // Env hints stay first; the execPath-implied root joins as its own entry.
+    const withHint = globalDshRoots(
+      { npm_config_prefix: '/Users/x/.nvm/versions/node/v24.20.0' },
+      '/Users/x/.nvm/versions/node/v24.20.0/bin/node',
+      'darwin',
+    )
+    expect(withHint).toEqual([
+      '/Users/x/.nvm/versions/node/v24.20.0',
+      '/Users/x/.nvm/versions/node/v24.20.0/lib/node_modules',
+    ])
   })
 
   it('reads the globally installed host version across npm roots', () => {
