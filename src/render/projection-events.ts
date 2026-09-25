@@ -39,7 +39,6 @@ export const TRANSCRIPT_SESSION_EVENT_TYPES = [
   'request/context',
   'request/header',
   'sandbox/mode',
-  'schedule/change',
   'session/title',
   'step/start',
   'system/message',
@@ -89,6 +88,9 @@ export const IGNORED_SESSION_EVENT_TYPES = [
   'hook/result',
   'session-log-deepseek/delivery-accepted',
   'session/end-seed',
+  // Reminders left the composition with 0.1.7-rc.2 (the delivery stack is
+  // web-only); historical logs keep their delivery prompts as user rows.
+  'schedule/change',
   'session/title-llm-request',
   'step/end',
   'subagent/descriptor',

@@ -164,19 +164,6 @@
     - id: tool-session-query
       name: '@deepseek-ai/dsh-tool-session-query'
 
-    # Durable reminders: the schedule service arms per-root timers, injects
-    # due prompts as plugin-source user messages, and writes schedule/change
-    # events the projection folds into the /schedule panel. time-context
-    # gives the model a clock reading so 'at' times are phrased against the
-    # actual time; the 30s throttle bounds durable snapshot growth.
-    - id: schedule
-      name: '@deepseek-ai/dsh-schedule'
-
-    - id: time-context
-      name: '@deepseek-ai/dsh-time-context'
-      config:
-        refreshIntervalMs: 30000
-
     # Turn change summaries: the host-bundled recorder git-snapshots each
     # top-level turn's working tree and announces a `workspace/changes`
     # event whose live summary the TUI joins by seq (the ⟳ turn-changes row

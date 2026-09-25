@@ -104,10 +104,6 @@ export const en = {
   'statusline.item.sandbox': 'sandbox',
   'statusline.item.sandbox.desc': 'divergent sandbox-mode override',
 
-  // /schedule panel
-  'schedule.title': '/schedule · {count} active reminder',
-  'schedule.titlePlural': '/schedule · {count} active reminders',
-  'schedule.empty': 'no active reminders — the model creates them with schedule_create',
 
   // Transcript document panel (/resume details)
   'document.loading': 'loading transcript…',
@@ -167,7 +163,6 @@ export const en = {
   'cmd.plugin': 'inspect the live plugin composition',
   'cmd.update': 'update dsh-code, the harness host, and profile plugins in one aligned step',
   'cmd.jobs': 'inspect background jobs',
-  'cmd.schedule': 'inspect active reminders (created through schedule tools)',
   'cmd.statusline': 'customize the status line items',
   'cmd.theme': 'switch the color theme',
   'cmd.language': 'switch the interface language (/language [en|zh])',
@@ -416,7 +411,6 @@ export const en = {
   'panel.footer.history': '↑↓ move · g/G ends · enter fill · esc close',
   'panel.footer.review': '↑↓ move · enter select · esc back · q close',
   'panel.footer.statusline': '↑↓ move · space toggle · ←→ reorder · d default · esc close',
-  'panel.footer.schedule': 'esc/q close{more} · the model schedules via schedule_create',
   'panel.mode.title': '/mode · current {current}',
   'panel.permission.title': '/permission · current {current}',
   'panel.plugin.title': '/plugin · loader inspector',
@@ -424,7 +418,6 @@ export const en = {
   'panel.resume.deleteTitle': 'permanently delete {target}? this cannot be undone · subagent threads go too',
   'panel.resume.title': '/resume{mode}{search} · {toolbar}',
   'panel.delete.title': '/delete{search} · {toolbar}',
-  'panel.noActiveReminders': 'no active reminders — the model schedules via schedule_create',
   'panel.notMounted': 'not mounted',
   'panel.broken': 'broken: {message}',
   'panel.live': 'live',
@@ -551,10 +544,6 @@ export const en = {
   'panel.subagent.override': ' · override {value}',
   'panel.subagent.inherit': 'inherit — follow the current model (/model switches apply)',
   'panel.statusline.compact': '/statusline · esc close',
-  'panel.schedule.compact': '/schedule · {summary}',
-  'panel.schedule.none': 'no active reminders',
-  'panel.schedule.more': ' · +{count} more',
-  'panel.schedule.footer': 'esc/q close{more} · the model schedules via schedule_create',
 } as const
 
 export type MessageKey = keyof typeof en

@@ -6,7 +6,6 @@ import type { ModelDirectory, ModelRow } from '../models.ts'
 import type { SubagentRow } from '../session/subagents.ts'
 import type { SearchRow } from '../runner/search-rows.ts'
 export type { SearchRow } from '../runner/search-rows.ts'
-import type { ScheduleRow } from '../render/projection.ts'
 import type { PermissionRow } from '../permissions.ts'
 import { presetDisplayText, type PresetRow } from '../presets.ts'
 import type { PluginRow } from '../plugin-inventory.ts'
@@ -1315,86 +1314,6 @@ export function SubagentPanel({ current, load, pick, inherit, close }: {
     query: '',
     footer: t('panel.footer.subagent'),
   })
-}
-
-/**
- * The /schedule panel: the read-only catalog of active reminders folded from
- * durable schedule/change events (the web ui-schedule contract: overdue
- * first, then ascending target; the model creates and cancels through its
- * schedule_* tools, the panel only shows state). A local second-hand keeps
- * the relative labels live while the panel is open.
- */
-export interface ScheduleDisplayRow {
-  readonly key: string
-  readonly text: string
-  readonly tone?: 'error'
-}
-
-/** Human frequency label: one-shot kinds read as Once, every rows carry the interval. */
-export function scheduleFrequency(row: ScheduleRow): string {
-  if (row.kind !== 'every') return 'Once'
-  const seconds = row.everySeconds ?? 0
-  if (seconds >= 3600 && seconds % 3600 === 0) return `Every ${seconds / 3600}h`
-  if (seconds >= 60 && seconds % 60 === 0) return `Every ${seconds / 60}m`
-  return `Every ${seconds}s`
-}
-
-/** Relative label for the next target: in N unit, or N unit overdue. */
-export function scheduleRelative(targetAt: number, now: number): string {
-  const delta = Math.max(0, Math.abs(targetAt - now))
-  const minutes = Math.floor(delta / 60_000)
-  const unit = minutes === 0
-    ? '<1m'
-    : minutes >= 60
-      ? `${Math.floor(minutes / 60)}h${String(minutes % 60).padStart(2, '0')}`
-      : `${minutes}m`
-  return targetAt <= now ? `${unit} overdue` : `in ${unit}`
-}
-
-/** Ordered display rows: overdue first (error tone), then ascending target. */
-export function scheduleDisplayRows(rows: readonly ScheduleRow[], now: number): readonly ScheduleDisplayRow[] {
-  return [...rows]
-    .sort((left, right) => (Number(left.targetAt > now) - Number(right.targetAt > now)) || (left.targetAt - right.targetAt))
-    .map(row => ({
-      key: row.id,
-      text: `${row.prompt} · ${scheduleFrequency(row)} · ${new Date(row.targetAt).toLocaleString()} (${scheduleRelative(row.targetAt, now)})`,
-      tone: row.targetAt <= now ? 'error' as const : undefined,
-    }))
-}
-
-export function SchedulePanel({ rows, close }: { rows: () => readonly ScheduleRow[]; close: () => void }): ReactElement {
-  const [, setTick] = useState(0)
-  useEffect(() => {
-    const id = setInterval(() => setTick(value => value + 1), 1_000)
-    return () => clearInterval(id)
-  }, [])
-  const display = scheduleDisplayRows(rows(), Date.now())
-  const stdout = useStdout().stdout
-  const viewport = panelViewport(stdout?.columns ?? 80, stdout?.rows ?? 30)
-  useInput((input, key) => {
-    if (key.escape || input === 'q') return close()
-  })
-  if (viewport.maxHeight === 0 || viewport.compact) {
-    const summary = display.length === 0 ? t('panel.schedule.none') : singleLineText(display[0].text)
-    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(`/schedule · ${summary}`, viewport.contentColumns))
-  }
-  const budget = Math.max(1, viewport.bodyRows)
-  const visible = display.slice(0, budget)
-  const hidden = display.length - visible.length
-  const accent = panelAccent('schedule', getPalette().dim, getPalette().brandBright)
-  return createElement(
-    Box,
-    { width: viewport.outerColumns, borderStyle: 'round', borderColor: inkColor(accent.border), flexDirection: 'column', paddingX: 1 },
-    createElement(Text, { color: inkColor(accent.title), wrap: 'truncate-end' }, truncateColumns(display.length === 1 ? t('schedule.title', { count: display.length }) : t('schedule.titlePlural', { count: display.length }), viewport.contentColumns)),
-    ...(display.length === 0
-      ? [createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns(`  ${t('schedule.empty')}`, viewport.contentColumns))]
-      : visible.map(row => createElement(Text, {
-        key: row.key,
-        color: row.tone === 'error' ? inkColor(getPalette().error) : undefined,
-        wrap: 'truncate-end',
-      }, truncateColumns(`  ${singleLineText(row.text)}`, viewport.contentColumns)))),
-    createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns(t('panel.schedule.footer', { more: hidden > 0 ? t('panel.schedule.more', { count: hidden }) : '' }), viewport.contentColumns)),
-  )
 }
 
 /**

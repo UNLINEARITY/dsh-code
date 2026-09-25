@@ -106,10 +106,6 @@ export const zh: MessageCatalog = {
   'statusline.item.sandbox': '沙箱',
   'statusline.item.sandbox.desc': '与预设不同的沙箱覆盖',
 
-  // /schedule panel
-  'schedule.title': '/schedule · {count} 条活动提醒',
-  'schedule.titlePlural': '/schedule · {count} 条活动提醒',
-  'schedule.empty': '暂无活动提醒——模型通过 schedule_create 创建',
 
   // Transcript document panel (/resume details)
   'document.loading': '转录加载中…',
@@ -169,7 +165,6 @@ export const zh: MessageCatalog = {
   'cmd.plugin': '查看插件组成状态',
   'cmd.update': '一键对齐升级 dsh-code、宿主与 profile 插件',
   'cmd.jobs': '查看后台任务',
-  'cmd.schedule': '查看活动提醒（经 schedule 工具创建）',
   'cmd.statusline': '自定义状态栏显示项',
   'cmd.theme': '切换配色主题',
   'cmd.language': '切换界面语言（/language [en|zh]）',
@@ -418,7 +413,6 @@ export const zh: MessageCatalog = {
   'panel.footer.history': '↑↓ 移动 · g/G 首尾 · 回车填入 · esc 关闭',
   'panel.footer.review': '↑↓ 移动 · 回车选择 · esc 返回 · q 关闭',
   'panel.footer.statusline': '↑↓ 移动 · 空格开关 · ←→ 调整顺序 · d 恢复默认 · esc 关闭',
-  'panel.footer.schedule': 'esc/q 关闭{more} · 模型通过 schedule_create 创建提醒',
   'panel.mode.title': '/mode · 当前 {current}',
   'panel.permission.title': '/permission · 当前 {current}',
   'panel.plugin.title': '/plugin · 插件加载状态',
@@ -426,7 +420,6 @@ export const zh: MessageCatalog = {
   'panel.resume.deleteTitle': '永久删除 {target}？此操作无法撤销，子代理线程也会删除',
   'panel.resume.title': '/resume{mode}{search} · {toolbar}',
   'panel.delete.title': '/delete{search} · {toolbar}',
-  'panel.noActiveReminders': '暂无活动提醒——模型通过 schedule_create 创建',
   'panel.notMounted': '未加载',
   'panel.broken': '异常：{message}',
   'panel.live': '运行中',
@@ -553,8 +546,4 @@ export const zh: MessageCatalog = {
   'panel.subagent.override': ' · 当前覆盖：{value}',
   'panel.subagent.inherit': '跟随当前模型（/model 切换会同步）',
   'panel.statusline.compact': '/statusline · esc 关闭',
-  'panel.schedule.compact': '/schedule · {summary}',
-  'panel.schedule.none': '暂无活动提醒',
-  'panel.schedule.more': ' · 另有 {count} 条',
-  'panel.schedule.footer': 'esc/q 关闭{more} · 模型通过 schedule_create 创建提醒',
 }

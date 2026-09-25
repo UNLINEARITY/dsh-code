@@ -78,7 +78,7 @@ import type { SkillsView, SkillRow } from './skills.ts'
 import type { MentionCandidate } from './mentions.ts'
 import type { SubagentFeedView, SubagentRow } from './session/subagents.ts'
 import type { UsageView } from './render/usage.ts'
-import { AgentsPanel, EffortPanel, HistoryPanel, JobsPanel, ModePanel, PermissionPanel, PluginPanel, ResumePanel, ReviewPickerPanel, SchedulePanel, SearchPanel, StatuslinePanel, runClock, SubagentPanel, UsagePanel, type JobRow, type SearchRow } from './panels/kernel-panels.ts'
+import { AgentsPanel, EffortPanel, HistoryPanel, JobsPanel, ModePanel, PermissionPanel, PluginPanel, ResumePanel, ReviewPickerPanel, SearchPanel, StatuslinePanel, runClock, SubagentPanel, UsagePanel, type JobRow, type SearchRow } from './panels/kernel-panels.ts'
 import type { PresetRow } from './presets.ts'
 import type { PermissionRow } from './permissions.ts'
 import type { PluginRow } from './plugin-inventory.ts'
@@ -1889,7 +1889,6 @@ export function App(props: AppProps): ReactElement {
   const [updateOpen, setUpdateOpen] = useState(false)
   const [updateApplying, setUpdateApplying] = useState(false)
   useEffect(() => subscribeUpdateApplyRunning(setUpdateApplying), [])
-  const [scheduleOpen, setScheduleOpen] = useState(false)
   const [jobsOpen, setJobsOpen] = useState(false)
   const [statuslineOpen, setStatuslineOpen] = useState(false)
   const [statuslineItems, setStatuslineItems] = useState<readonly StatusItemId[]>(() => parseStatuslineItems(props.statusline))
@@ -1992,7 +1991,6 @@ export function App(props: AppProps): ReactElement {
     { hint: '/search', open: searchOpen, close: () => setSearchOpen(false) },
     { hint: '/plugin', open: pluginOpen, close: () => setPluginOpen(false) },
     { hint: '/update', open: updateOpen, close: () => setUpdateOpen(false) },
-    { hint: '/schedule', open: scheduleOpen, close: () => setScheduleOpen(false) },
     { hint: '/jobs', open: jobsOpen, close: () => setJobsOpen(false) },
     { hint: '/statusline', open: statuslineOpen, close: () => setStatuslineOpen(false) },
     { hint: '/theme', open: themeOpen, close: () => setThemeOpen(false) },
@@ -3138,9 +3136,6 @@ export function App(props: AppProps): ReactElement {
         close: () => setUpdateOpen(false),
       })
       : undefined,
-    scheduleOpen && !approvalPending && !questionPending
-      ? createElement(SchedulePanel, { rows: () => view.schedules, close: () => setScheduleOpen(false) })
-      : undefined,
     jobsOpen && !approvalPending && !questionPending
       ? createElement(JobsPanel, { load: props.loadJobs, close: () => setJobsOpen(false) })
       : undefined,
@@ -3338,7 +3333,6 @@ export function App(props: AppProps): ReactElement {
         },
         openPlugin: (query = '') => { setPluginQuery(query); setPluginOpen(true) },
         openUpdate: () => setUpdateOpen(true),
-        openSchedule: () => setScheduleOpen(true),
         openJobs: () => setJobsOpen(true),
         openStatusline: () => setStatuslineOpen(true),
         openTheme: () => setThemeOpen(true),

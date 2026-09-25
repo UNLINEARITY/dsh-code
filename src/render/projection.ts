@@ -487,81 +487,6 @@ export interface TranscriptStats {
   reasoningEffort: string
 }
 
-/** One active reminder folded from durable `schedule/change` events. */
-export interface ScheduleRow {
-  readonly id: string
-  readonly kind: 'after' | 'at' | 'every'
-  readonly prompt: string
-  /** Next due time (epoch ms); the /schedule panel derives overdue/relative labels. */
-  readonly targetAt: number
-  /** Recurrence seconds for 'every' rows, undefined otherwise. */
-  readonly everySeconds?: number
-}
-
-/**
- * The durable `schedule/change` payload shape this fold consumes. Upstream
- * strict-decodes the whole transition stream before appending, so unknown
- * ids here are corrupt-input edges that degrade to a no-op.
- */
-export interface ScheduleChangeLike {
-  readonly operation: 'create' | 'delete' | 'dispatch'
-  readonly schedule?: {
-    readonly id: string
-    readonly kind: 'after' | 'at' | 'every'
-    readonly prompt: string
-    readonly afterSeconds?: number
-    readonly everySeconds?: number
-    readonly scheduledAt: string
-  }
-  readonly id?: string
-  readonly acceptedAt?: string
-}
-
-/*
- * Upstream record semantics (dsh-schedule types): `scheduledAt` is ALREADY
- * the due instant — AfterScheduleRecord carries the RFC 3339 UTC target
- * (delay included), EveryScheduleRecord carries the earliest anchor-aligned
- * occurrence not yet dispatched. No kind ever adds its own interval on top.
- */
-
-/** Fold one `schedule/change` into the active-reminder list (create/delete/dispatch). */
-export function applyScheduleChange(rows: readonly ScheduleRow[], data: ScheduleChangeLike): readonly ScheduleRow[] {
-  if (data.operation === 'create' && data.schedule !== undefined) {
-    const schedule = data.schedule
-    const row: ScheduleRow = {
-      id: schedule.id,
-      kind: schedule.kind,
-      prompt: schedule.prompt,
-      targetAt: Date.parse(schedule.scheduledAt),
-      ...(schedule.kind === 'every' ? { everySeconds: schedule.everySeconds ?? 0 } : {}),
-    }
-    return [...rows.filter(existing => existing.id !== schedule.id), row]
-  }
-  if (data.operation === 'delete' && data.id !== undefined) {
-    return rows.filter(existing => existing.id !== data.id)
-  }
-  if (data.operation === 'dispatch' && data.id !== undefined) {
-    // A dispatched one-shot reminder is finished. An 'every' reminder
-    // advances PAST every missed occurrence in one step: the next target is
-    // the first anchor-aligned instant strictly after acceptedAt, stepping
-    // from the previous aligned target (upstream advances the same way).
-    if (data.acceptedAt === undefined) return rows.filter(existing => existing.id !== data.id)
-    const accepted = Date.parse(data.acceptedAt)
-    return rows.map(existing => existing.id === data.id
-      ? { ...existing, targetAt: nextEveryTarget(existing.targetAt, accepted, existing.everySeconds ?? 0) }
-      : existing)
-  }
-  return rows
-}
-
-/** First anchor-aligned target after `acceptedAt`, stepping from the previous aligned target. */
-export function nextEveryTarget(previousTarget: number, acceptedAt: number, everySeconds: number): number {
-  const interval = Math.max(1, everySeconds) * 1000
-  if (acceptedAt <= previousTarget) return previousTarget + interval
-  const missed = Math.ceil((acceptedAt - previousTarget + 1) / interval)
-  return previousTarget + missed * interval
-}
-
 /** Producer snapshot sources folded into token stats but never rendered as rows. */
 const HIDDEN_SNAPSHOT_KINDS = new Set(['time-context', 'tmux-context'])
 /** Producer prompt sources rendered as full user rows (they ARE the conversation). */
@@ -627,8 +552,6 @@ export interface TranscriptView {
   sandbox: string
   /** Current long-running goal folded from the last `goal/change`, undefined when cleared. */
   goal: GoalFold | undefined
-  /** Active reminders folded from `schedule/change` events, oldest target first at render. */
-  schedules: readonly ScheduleRow[]
   /**
    * Ordered live message ids per inbox target, mirrored from
    * `agent/inbox/spliced` exactly like the upstream Inbox projection — the
@@ -892,7 +815,6 @@ export function createTranscriptView(): TranscriptView {
     systemPrompt: '',
     sandbox: '',
     goal: undefined,
-    schedules: [],
     pending: { 'next-turn': [], 'next-step': [] },
     claimOrigin: new Map(),
     stats: { turns: 0, steps: 0, llmMs: 0, toolMs: 0, usage: { uncachedInputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }, lastPromptTokens: 0, contextWindow: 0, contextSegments: { system: 0, prompt: 0, assistant: 0, thinking: 0, tools: 0, images: 0 }, ttftMs: 0, ttftSteps: 0, decodeMs: 0, decodeTokens: 0, reasoningEffort: '' },
@@ -1470,11 +1392,6 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
         entries: line === undefined ? view.entries : [...view.entries, { kind: 'turn-marker', text: line }],
       }
     }
-    case 'schedule/change':
-      // Non-conversational catalog state: the /schedule panel renders the
-      // active list, the transcript shows only the reminder prompts
-      // (handled at user/message above).
-      return { ...view, schedules: applyScheduleChange(view.schedules, event.data) }
     case 'session/title':
       // Latest-wins title snapshot, log-only; the status line prefers it.
       return { ...view, title: event.data.title }
@@ -1724,7 +1641,6 @@ export interface ReplayAccumulator {
   systemPrompt: string
   sandbox: string
   goal: GoalFold | undefined
-  schedules: readonly ScheduleRow[]
   stats: TranscriptStats
   stepStart: Map<string, number>
   toolStart: Map<string, number>
@@ -1770,7 +1686,6 @@ export function createReplayAccumulator(): ReplayAccumulator {
     systemPrompt: '',
     sandbox: '',
     goal: undefined,
-    schedules: [],
     stats: { turns: 0, steps: 0, llmMs: 0, toolMs: 0, usage: { uncachedInputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }, lastPromptTokens: 0, contextWindow: 0, contextSegments: { system: 0, prompt: 0, assistant: 0, thinking: 0, tools: 0, images: 0 }, ttftMs: 0, ttftSteps: 0, decodeMs: 0, decodeTokens: 0, reasoningEffort: '' },
     stepStart: new Map(),
     toolStart: new Map(),
@@ -2284,10 +2199,6 @@ export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent):
       if (line !== undefined) appendReplayEntry(acc, { kind: 'turn-marker', text: line })
       return true
     }
-    case 'schedule/change':
-      acc.schedules = applyScheduleChange(acc.schedules, event.data)
-      acc.ops += 1
-      return true
     case 'session/title':
       acc.title = event.data.title
       return true
@@ -2489,7 +2400,6 @@ function materializeReplayView(acc: ReplayAccumulator, copy: boolean): Transcrip
     systemPrompt: acc.systemPrompt,
     sandbox: acc.sandbox,
     goal: acc.goal,
-    schedules: acc.schedules,
     pending: { 'next-turn': [...acc.pendingTurn], 'next-step': [...acc.pendingStep] },
     claimOrigin: new Map(acc.claimOrigin),
     stats: acc.stats,

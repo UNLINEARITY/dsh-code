@@ -384,35 +384,6 @@ describe('composer image attachments', () => {
     }
   })
 
-  it('opens the /schedule panel from the command line and folds live schedule events', async () => {
-    const harness = createTty(120, 24)
-    const store = createTranscriptStore()
-    const instance = renderApp(harness, appProps({ store }))
-    try {
-      store.apply({
-        type: 'schedule/change',
-        seq: 1,
-        time: 1,
-        data: { operation: 'create', schedule: { id: 'schedule-1', kind: 'every', prompt: 'check the build', everySeconds: 1800, scheduledAt: new Date(Date.now() + 90_000).toISOString() } },
-      } as never)
-      await wait()
-      harness.stdin.write('/schedule')
-      await wait()
-      harness.stdin.write('\r')
-      await wait()
-      expect(harness.output.text).toContain('check the build')
-      expect(harness.output.text).toContain('Every 30m')
-      // Height budget is proven by the SchedulePanel TTY suite; here the
-      // accumulated multi-frame output would miscount.
-      harness.output.text = ''
-      harness.stdin.write('\x1b')
-      await wait()
-      expect(harness.output.text).not.toContain('Every 30m')
-    } finally {
-      instance.unmount()
-    }
-  })
-
   it('preserves a moved cursor when an async image mention resolves', async () => {
     const harness = createTty(120, 24)
     const dispatch = vi.fn()

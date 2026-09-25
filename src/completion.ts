@@ -25,7 +25,6 @@ export const LOCAL_COMMANDS: readonly LocalCommand[] = [
   { label: '/plugin', descriptionKey: 'cmd.plugin' },
   { label: '/update', descriptionKey: 'cmd.update' },
   { label: '/jobs', descriptionKey: 'cmd.jobs' },
-  { label: '/schedule', descriptionKey: 'cmd.schedule' },
   { label: '/statusline', descriptionKey: 'cmd.statusline' },
   { label: '/theme', descriptionKey: 'cmd.theme' },
   { label: '/language', descriptionKey: 'cmd.language' },
@@ -52,7 +51,7 @@ export const LOCAL_COMMAND_NAMES: ReadonlySet<string> = new Set(LOCAL_COMMANDS.m
 
 /** TUI-local commands that reject trailing input instead of forwarding it as a prompt. */
 export const BARE_LOCAL_COMMANDS: ReadonlySet<string> = new Set([
-  'quit', 'help', 'clear', 'copy', 'update', 'schedule', 'statusline', 'theme',
+  'quit', 'help', 'clear', 'copy', 'update', 'statusline', 'theme',
   'history', 'queue', 'usage', 'agents', 'todos', 'subagent',
 ])
 
