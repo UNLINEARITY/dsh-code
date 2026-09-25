@@ -8,6 +8,10 @@ import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 /** One discoverable agent composition. */
 export type PresetRow = AgentPreset
 
+/** Upstream's display fold: shipped presets resolve through dictionary keys. */
+export { presetDisplayText } from '@deepseek-ai/dsh-agent-preset-registry/display'
+export type { BuiltInPresetCopyKey } from '@deepseek-ai/dsh-agent-preset-registry/display'
+
 /** Public compatibility alias for the official upstream service type. */
 export type AgentPresetsService = AgentPresetRegistry
 

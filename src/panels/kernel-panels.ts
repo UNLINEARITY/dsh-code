@@ -8,7 +8,7 @@ import type { SearchRow } from '../runner/search-rows.ts'
 export type { SearchRow } from '../runner/search-rows.ts'
 import type { ScheduleRow } from '../render/projection.ts'
 import type { PermissionRow } from '../permissions.ts'
-import type { PresetRow } from '../presets.ts'
+import { presetDisplayText, type PresetRow } from '../presets.ts'
 import type { PluginRow } from '../plugin-inventory.ts'
 import type { SessionDirectoryOptions, SessionRow } from '../session/session-directory.ts'
 import { formatRelativeTime, matchSessionRow } from '../session/session-directory.ts'
@@ -118,7 +118,12 @@ export function ModePanel({ current, load, select, close }: {
     })
   }, [load])
   useEffect(refresh, [refresh])
-  const visible = useMemo(() => rows.filter(row => `${row.id} ${row.name ?? ''} ${row.description ?? ''}`.toLowerCase().includes(query.toLowerCase())), [rows, query])
+  const visible = useMemo(() => rows.filter(row => {
+    // The filter reads the resolved display copy, so searching "标准" or
+    // "terminal" matches shipped presets whose declaration carries no name.
+    const display = presetDisplayText(row, key => t(key))
+    return `${row.id} ${display.name} ${display.description ?? ''}`.toLowerCase().includes(query.toLowerCase())
+  }), [rows, query])
   useEffect(() => setCursor(value => Math.min(value, Math.max(0, visible.length - 1))), [visible.length])
   useInput((input, key) => {
     if (key.escape) return close()
@@ -136,7 +141,13 @@ export function ModePanel({ current, load, select, close }: {
   })
   return createElement(ListFrame, {
     title: t('panel.mode.title', { current }),
-    rows: visible.map(row => ({ key: row.id, disabled: row.broken !== undefined, text: `${row.id === current ? '●' : '○'} ${row.name ?? row.id} · ${row.description ?? ''}${row.broken === undefined ? '' : ` · broken: ${row.broken}`}` })),
+    rows: visible.map(row => {
+      // 0.1.7 moved shipped presets' copy into dictionary keys; the upstream
+      // display fold resolves them (and keeps user-authored metadata as-is).
+      const display = presetDisplayText(row, key => t(key))
+      const text = `${row.id === current ? '●' : '○'} ${display.name}${display.description === undefined ? '' : ` · ${display.description}`}${row.broken === undefined ? '' : ` · broken: ${row.broken}`}`
+      return { key: row.id, disabled: row.broken !== undefined, text }
+    }),
     cursor, loading, error, query, footer: t('panel.footer.chooseSwitch'),
   })
 }

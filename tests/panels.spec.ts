@@ -5,6 +5,7 @@ import chalk from 'chalk'
 import { createElement } from 'react'
 import { render } from 'ink'
 import { describe, expect, it, vi } from 'vitest'
+import { getLanguage, setLanguage } from '../src/i18n.ts'
 import { App, type AppProps } from '../src/app.ts'
 import { HistoryPanel, JobsPanel, ModePanel, PermissionPanel, ResumePanel, SearchPanel, type JobRow, type SearchRow } from '../src/panels/kernel-panels.ts'
 import { editQuery } from '../src/ui/query-editor.ts'
@@ -2330,6 +2331,44 @@ describe('panel row sanitization', () => {
     }
   })
 
+  it('resolves shipped preset copy through the dictionary keys, not declaration fields', async () => {
+    // 0.1.7 shipped presets publish no name/description: their copy lives in
+    // the locale dictionaries, resolved by the upstream display fold. A row
+    // without the resolution rendered "● standard · " with a dangling dot.
+    const previous = getLanguage()
+    setLanguage('zh')
+    const { stdin, stdout, read } = fakeStreams()
+    const instance = render(createElement(ModePanel, {
+      current: 'standard',
+      load: async () => [
+        { id: 'standard' },
+        { id: 'ptc' },
+        { id: 'custom-preset', name: '自定义', description: '用户自建预设' },
+      ],
+      select: () => {},
+      close: () => {},
+    }), {
+      stdin,
+      stdout,
+      stderr: stdout,
+      exitOnCtrlC: false,
+      patchConsole: false,
+    })
+    try {
+      await wait()
+      const output = read()
+      expect(output).toContain('● 标准模式 · 处理代码、文件和资料')
+      expect(output).toContain('○ PTC 模式 · 包含标准模式的所有能力')
+      // User-authored metadata stays untranslated and unseparated when absent.
+      expect(output).toContain('○ 自定义 · 用户自建预设')
+    } finally {
+      instance.unmount()
+      stdin.destroy()
+      stdout.destroy()
+      setLanguage(previous)
+    }
+  })
+
   it('lists and selects permission presets from the /permission panel', async () => {
     const { stdin, stdout, read } = fakeStreams()
     const selected: string[] = []
@@ -2742,7 +2781,7 @@ describe('panel query q-key guard', () => {
     const instance = render(createElement(ModePanel, {
       current: 'standard',
       load: async () => [
-        { id: 'standard', trust: 'user' as const, path: 'C:\\presets\\standard\\agent.yml', description: 'standard preset' },
+        { id: 'starter', trust: 'user' as const, path: 'C:\\presets\\starter\\agent.yml', description: 'standard preset' },
         { id: 'quiet', trust: 'user' as const, path: 'C:\\presets\\quiet\\agent.yml', description: 'quiet preset' },
       ],
       select: () => {},
