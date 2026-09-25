@@ -70,6 +70,6 @@ export function ThemePanel({ current, select, close }: {
         truncateColumns(`${selected ? '› ' : '  '}${active ? '● ' : '○ '}${t(`theme.${theme.id}.label`)}${active ? ` · ${t('theme.current')}` : ''} · ${t(`theme.${theme.id}.description`)}`, viewport.contentColumns),
       )
     }),
-    createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns(`↑↓ choose · enter apply · esc/q close${hiddenThemes > 0 ? ` · +${hiddenThemes} more` : ''}`, viewport.contentColumns)),
+    createElement(Text, { dimColor: true, wrap: 'truncate-end' }, truncateColumns(`${t('theme.footer')}${hiddenThemes > 0 ? t('theme.footerMore', { count: hiddenThemes }) : ''}`, viewport.contentColumns)),
   )
 }

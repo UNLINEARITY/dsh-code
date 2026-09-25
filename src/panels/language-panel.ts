@@ -29,7 +29,7 @@ export function LanguagePanel({ current, select, close }: {
     if (key.return) return select(LANGUAGES[cursor].id)
   })
   if (viewport.maxHeight === 0 || viewport.compact) {
-    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns('/language · esc/q close', viewport.contentColumns))
+    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(t('language.compact'), viewport.contentColumns))
   }
   return createElement(
     Box,

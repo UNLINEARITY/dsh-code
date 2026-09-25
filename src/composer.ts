@@ -967,7 +967,7 @@ export function Composer({ active, frozen, frozenHint, busy, descriptors, skills
           const tokenText = value.slice(mentionToken.start, cursor)
           const start = mentionToken.start
           const originalValue = value
-          notify(`checking image ${basename(row.path)}…`)
+          notify(t('notice.imageChecking', { name: basename(row.path) }))
           void inspectImages([row.path]).then((inspected) => {
             const inspection = inspected[0]
             if (inspection === undefined) return
@@ -1330,7 +1330,7 @@ export function Composer({ active, frozen, frozenHint, busy, descriptors, skills
         const imageSnapshot = draftImagesRef.current
         const fileSnapshot = draftFilesRef.current
         const total = imageSnapshot.length + fileSnapshot.length
-        notify(`processing ${total} attachment${total === 1 ? '' : 's'}…`)
+        notify(t('notice.attachmentsProcessing', { count: total, plural: total === 1 ? '' : 's' }))
         void Promise.all([
           imageSnapshot.length === 0 ? Promise.resolve([]) : prepareImages(imageSnapshot.map(image => image.path), controller.signal),
           fileSnapshot.length === 0 ? Promise.resolve([]) : prepareFiles(fileSnapshot.map(file => file.path), controller.signal),
@@ -1361,7 +1361,7 @@ export function Composer({ active, frozen, frozenHint, busy, descriptors, skills
           if (controller.signal.aborted || prepareEpochRef.current !== epoch) return
           prepareAbortRef.current = undefined
           setPreparingImages(false)
-          notify(`attachment submission failed: ${reason instanceof Error ? reason.message : String(reason)}`, 'error')
+          notify(t('notice.attachmentSubmissionFailed', { message: reason instanceof Error ? reason.message : String(reason) }), 'error')
         })
         return
       }
@@ -1459,7 +1459,7 @@ export function Composer({ active, frozen, frozenHint, busy, descriptors, skills
         return
       }
       if (text === '/resume cancel') {
-        notify(cancelSessionSwitch() ? 'pending session switch cancelled' : 'no pending session switch', 'info')
+        notify(cancelSessionSwitch() ? t('notice.sessionSwitchCancelled') : t('notice.noPendingSessionSwitch'), 'info')
         return
       }
       if (text === '/resume' || text.startsWith('/resume ')) {
@@ -1546,7 +1546,7 @@ export function Composer({ active, frozen, frozenHint, busy, descriptors, skills
       if (text === '/vscode-keys' || text.startsWith('/vscode-keys ')) {
         void applyEditorKeys().then(
           summary => notify(summary),
-          error => notify(`vscode-keys failed: ${error instanceof Error ? error.message : String(error)}`, 'error'),
+          error => notify(t('notice.vscodeKeysFailed', { message: error instanceof Error ? error.message : String(error) }), 'error'),
         )
         return
       }

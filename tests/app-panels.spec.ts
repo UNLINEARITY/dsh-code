@@ -15,6 +15,7 @@ import {
   wait,
 } from './helpers/app-mount.ts'
 import { fixtureEvent } from './helpers/events.ts'
+import { setLanguage } from '../src/i18n.ts'
 
 describe('short-terminal surfaces', () => {
   it('keeps the approval ask visible and answerable on an 8-row terminal', async () => {
@@ -130,6 +131,34 @@ describe('/agents panel', () => {
       await wait()
       expect(harness.output.text.lastIndexOf('type a message')).toBeGreaterThan(harness.output.text.lastIndexOf('/agents ·'))
     } finally {
+      instance.unmount()
+      harness.stdin.destroy()
+      harness.stdout.destroy()
+    }
+  })
+})
+describe('interface language on live chrome', () => {
+  it('translates the agents summary and the help title', async () => {
+    setLanguage('zh')
+    const agents = [
+      Object.freeze({ id: 'child-session-1', label: 'explorer', state: 'running' as const, activity: 'tool grep', updatedAt: 3 }),
+    ]
+    const harness = createTty(100, 24)
+    const instance = renderApp(harness, appProps({
+      subagents: { subscribe: () => unsubscribe, getSnapshot: () => agents, getTotalSeen: () => agents.length },
+    }))
+    try {
+      await wait()
+      expect(harness.output.text).toContain('子代理 1 个运行中')
+      expect(harness.output.text).toContain('共 1 个')
+      harness.stdin.write('/help ')
+      await wait()
+      harness.stdin.write('\r')
+      await wait()
+      expect(harness.output.text).toContain('按键与命令')
+      expect(harness.output.text).not.toContain('keys and commands')
+    } finally {
+      setLanguage('en')
       instance.unmount()
       harness.stdin.destroy()
       harness.stdout.destroy()

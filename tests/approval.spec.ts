@@ -6,6 +6,9 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { ApprovalOutcome, ApprovalRequest } from '@deepseek-ai/dsh-user-approval'
 import { mountApprovalAnswerer } from '../src/approval.ts'
 import { approvalCommandPreview } from '../src/index.ts'
+import { layoutApprovalPanel } from '../src/panels/interaction-bars.ts'
+import { panelViewport } from '../src/render/inspector.ts'
+import { stringWidth } from '../src/render/text.ts'
 
 type Listener = (request: ApprovalRequest, next: () => Promise<ApprovalOutcome>) => Promise<ApprovalOutcome>
 
@@ -218,6 +221,40 @@ describe('approval command preview', () => {
     expect(preview).toBe(events[0]?.arguments)
     expect(preview.length).toBeGreaterThan(80)
     expect(preview).toContain('/Users/nonlinear/GitHub/dsh-code/lite-preset')
+  })
+
+  it('wraps a long approval reason instead of cutting the first line', () => {
+    const marker = 'APPROVAL-TAIL-MARKER'
+    const headline = `escalate sandbox to danger-full-access: 这是审批弹层长度测试，请只看排版然后拒绝或允许都可以，允许之后不会执行任何写入。${marker}`
+    const command = JSON.stringify({ command: `echo ${'测'.repeat(80)} ${'y'.repeat(400)}` })
+    for (const rows of [24, 40]) {
+      const viewport = panelViewport(80, rows)
+      const first = layoutApprovalPanel(headline, command, viewport.contentColumns, viewport.maxHeight, 0)
+      const painted = 2 + first.headline.length + first.body.length + (first.overflow > 0 || first.above > 0 ? 1 : 0) + 4
+      const text = first.headline.flatMap(line => line.segments.map(segment => segment.text)).join('')
+      expect(painted).toBeLessThanOrEqual(viewport.maxHeight)
+      expect(first.above).toBe(0)
+      expect(text.startsWith('escalate sandbox to danger-full-access:')).toBe(true)
+      expect(text).toContain(marker)
+      expect(text).not.toContain('…')
+      expect(first.headline[0]?.segments.map(segment => segment.text).join('').endsWith(' ')).toBe(false)
+      for (const line of [...first.headline, ...first.body]) {
+        const width = stringWidth(line.segments.map(segment => segment.text).join(''))
+        expect(width).toBeLessThanOrEqual(viewport.contentColumns)
+        expect(width).toBeGreaterThan(0)
+      }
+      if (first.overflow > 0) {
+        const paged = layoutApprovalPanel(
+          headline,
+          command,
+          viewport.contentColumns,
+          viewport.maxHeight,
+          first.headline.length + first.body.length,
+        )
+        expect(paged.above).toBeGreaterThan(0)
+        expect(2 + paged.headline.length + paged.body.length + 1 + 4).toBeLessThanOrEqual(viewport.maxHeight)
+      }
+    }
   })
 
   it('falls back to the tool name for argument-less calls and misses', () => {

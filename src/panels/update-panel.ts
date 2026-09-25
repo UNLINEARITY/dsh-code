@@ -278,12 +278,12 @@ export function UpdatePanel({ probe, apply, close, notify }: {
     runUpdateApply(apply, status.plan, appendLine).then(code => {
       setExit(code)
       setPhase('done')
-      notify(code === 0 ? 'update installed — restart dsh to activate' : `update failed (exit ${code})`, code === 0 ? 'info' : 'error')
+      notify(code === 0 ? t('notice.updateInstalled') : t('notice.updateFailedExit', { code }), code === 0 ? 'info' : 'error')
     }, reason => {
       const message = reason instanceof Error ? reason.message : String(reason)
       setApplyError(message)
       setPhase('done')
-      notify(`update failed: ${message}`, 'error')
+      notify(t('notice.updateFailed', { message }), 'error')
     })
   }
   const planView = status === undefined ? undefined : updatePlanView(status)
@@ -296,8 +296,8 @@ export function UpdatePanel({ probe, apply, close, notify }: {
         : phase === 'apply'
           ? lines.map((line, index) => ({ key: `out:${index}`, text: line, tone: 'dim' as const }))
           : [
-            ...(exit === 0 ? [{ key: 'ok', text: 'update installed — restart dsh to load the new version (/quit or ctrl+c)', tone: 'ok' as const }] : []),
-            ...(exit !== undefined && exit !== 0 ? [{ key: 'fail', text: `update failed (exit ${exit})`, tone: 'error' as const }] : []),
+            ...(exit === 0 ? [{ key: 'ok', text: t('panel.update.installedDetail'), tone: 'ok' as const }] : []),
+            ...(exit !== undefined && exit !== 0 ? [{ key: 'fail', text: t('notice.updateFailedExit', { code: exit }), tone: 'error' as const }] : []),
             ...(applyError !== undefined ? [{ key: 'fail:start', text: singleLineText(applyError), tone: 'error' as const }] : []),
             ...lines.map((line, index) => ({ key: `out:${index}`, text: line, tone: 'dim' as const })),
           ]

@@ -9,7 +9,7 @@ import { PanelGap } from '../ui/panel-gap.ts'
 import { deleteLastGrapheme } from '../render/editor.ts'
 import { clampScroll, moveScroll, panelViewport, revealRow } from '../render/inspector.ts'
 import { lineSegment, markdownLines, styledLines, textLines, type LineStyle, type StyledLine } from '../render/lines.ts'
-import { truncateColumns } from '../render/text.ts'
+import { singleLineText, truncateColumns } from '../render/text.ts'
 import { StyledRows } from '../ui/styled-rows.ts'
 import { dim, getPalette, inkColor } from '../theme.ts'
 import { t } from '../i18n.ts'
@@ -29,6 +29,56 @@ const APPROVAL_OPTIONS: readonly ApprovalOption[] = [
   { key: 'reject-note', label: 'No, and tell it what to do differently', hotkey: 'n' },
   { key: 'reject', label: 'No, continue without running it', hotkey: 'd' },
 ]
+
+/** Rows the approval dialog will paint: wrapped headline, command body, overflow. */
+export interface ApprovalPanelLayout {
+  readonly headline: readonly StyledLine[]
+  readonly body: readonly StyledLine[]
+  /** Wrapped rows still below the window. */
+  readonly overflow: number
+  /** Wrapped rows scrolled off above the window. */
+  readonly above: number
+}
+
+/**
+ * Fit an approval ask into the panel's height.
+ *
+ * The headline used to be one `truncateColumns` row ending in `…`. On a CJK
+ * terminal that glyph is wider than the budget, so the first line overflowed
+ * by a blank cell and flickered. The reason now wraps across the content
+ * window (no blank gap row under it). Ctrl+O pages that window; the inspector
+ * cannot open while this dialog owns the keys.
+ */
+export function layoutApprovalPanel(
+  headline: string,
+  command: string,
+  contentColumns: number,
+  maxHeight: number,
+  scroll = 0,
+): ApprovalPanelLayout {
+  const textColumns = Math.max(1, contentColumns)
+  const headlineLines = textLines(singleLineText(headline), textColumns, 'warn')
+  const commandLines = command === '' ? [] : textLines(command, textColumns, 'dim')
+  const room = Math.max(0, maxHeight - 2 - APPROVAL_OPTIONS.length - 1)
+  const total = headlineLines.length + commandLines.length
+  const reserve = total > room ? 1 : 0
+  const window = Math.max(0, room - reserve)
+  const maxScroll = Math.max(0, total - window)
+  const start = Math.max(0, Math.min(Math.floor(scroll), maxScroll))
+  let remaining = window
+  const headlineStart = Math.min(start, headlineLines.length)
+  const visibleHeadline = headlineLines.slice(headlineStart, headlineStart + remaining)
+  remaining -= visibleHeadline.length
+  const bodyStart = Math.max(0, start - headlineLines.length)
+  const visibleBody = commandLines.slice(bodyStart, bodyStart + remaining)
+  const end = start + visibleHeadline.length + visibleBody.length
+  return {
+    headline: visibleHeadline,
+    body: visibleBody,
+    overflow: Math.max(0, total - end),
+    above: start,
+  }
+}
 
 /**
  * The approval dialog (Codex ApprovalOverlay contract): a bold question
@@ -52,14 +102,23 @@ export function ApprovalBar({ snapshot, locked, notify, interrupt, summarize }: 
   const stdout = useStdout().stdout
   const viewport = panelViewport(stdout?.columns ?? 80, stdout?.rows ?? 30)
   const [cursor, setCursor] = useState(0)
+  const [scroll, setScroll] = useState(0)
   const pending = snapshot.pending
   const active = !locked && pending !== undefined && !snapshot.answered
-  const body = useMemo<readonly StyledLine[]>(() => pending === undefined || pending.command === ''
-    ? []
-    : textLines(pending.command, viewport.contentColumns, 'dim'), [pending, viewport.contentColumns])
+  const queuedSuffix = snapshot.queued > 0 ? ` · +${snapshot.queued} queued` : ''
+  const layout = useMemo(() => pending === undefined
+    ? undefined
+    : layoutApprovalPanel(
+      `${pending.headline}${queuedSuffix}`,
+      pending.command,
+      viewport.contentColumns,
+      viewport.maxHeight,
+      scroll,
+    ), [pending, queuedSuffix, viewport.contentColumns, viewport.maxHeight, scroll])
 
   useEffect(() => {
     setCursor(0)
+    setScroll(0)
   }, [pending])
 
   const decide = (option: ApprovalOption): void => {
@@ -84,6 +143,16 @@ export function ApprovalBar({ snapshot, locked, notify, interrupt, summarize }: 
     // only reachable surface and offered no way out.
     if (key.ctrl && input === 'c') {
       interrupt()
+      return
+    }
+    // The overflow hint's ctrl+o cannot open the inspector: this dialog owns
+    // the keys and the app closes every other surface. Page the wrapped text
+    // instead, and return to the first line from the end.
+    if (key.ctrl && input === 'o') {
+      setScroll(current => {
+        if (layout === undefined || layout.overflow <= 0) return 0
+        return current + Math.max(1, layout.headline.length + layout.body.length)
+      })
       return
     }
     if (key.upArrow) {
@@ -120,31 +189,24 @@ export function ApprovalBar({ snapshot, locked, notify, interrupt, summarize }: 
     }
   }, { isActive: active })
 
-  if (pending === undefined) return undefined
-  const queuedSuffix = snapshot.queued > 0 ? ` · +${snapshot.queued} queued` : ''
+  if (pending === undefined || layout === undefined) return undefined
   if (viewport.maxHeight === 0 || viewport.compact || summarize === true) {
     return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(t('approval.compact', { queued: queuedSuffix }), viewport.contentColumns))
   }
-  // Body budget: title + options + footer consume fixed rows; the command
-  // preview shrinks with an explicit overflow marker (Codex's "[… N lines]").
-  const reservedRows = 3 + APPROVAL_OPTIONS.length
-  const bodyBudget = Math.max(1, viewport.bodyRows - reservedRows)
-  const visibleBody = body.slice(0, bodyBudget)
-  const overflow = body.length - visibleBody.length
   return createElement(
     Box,
     { flexDirection: 'column', width: viewport.outerColumns, paddingX: 1, borderStyle: 'round', borderColor: inkColor(getPalette().warn) },
-    createElement(
+    ...layout.headline.map((line, index) => createElement(
       Text,
-      { color: inkColor(getPalette().warn), bold: true, wrap: 'truncate-end' },
-      truncateColumns(`${pending.headline}${queuedSuffix}`, viewport.contentColumns),
-    ),
-    createElement(PanelGap, { visible: viewport.gapRows > 0 && body.length > 0 }),
-    ...visibleBody.map((line, index) => createElement(StyledRows, { key: `body-${index}`, lines: [line] })),
-    ...(overflow > 0
-      ? [createElement(Text, { key: 'overflow', color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns(t('approval.overflow', { count: overflow }), viewport.contentColumns))]
-      : []),
-    ...(body.length > 0 ? [createElement(PanelGap, { visible: viewport.gapRows > 0 })] : []),
+      { key: `headline-${index}`, color: inkColor(getPalette().warn), bold: true, wrap: 'truncate-end' },
+      line.segments.map(segment => segment.text).join(''),
+    )),
+    ...layout.body.map((line, index) => createElement(StyledRows, { key: `body-${index}`, lines: [line] })),
+    ...(layout.overflow > 0
+      ? [createElement(Text, { key: 'overflow', color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns(t('approval.overflow', { count: layout.overflow }), viewport.contentColumns))]
+      : layout.above > 0
+        ? [createElement(Text, { key: 'overflow', color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns(t('approval.overflowEnd'), viewport.contentColumns))]
+        : []),
     ...APPROVAL_OPTIONS.map((option, index) => {
       const selected = !snapshot.answered && index === cursor
       return createElement(

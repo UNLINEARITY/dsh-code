@@ -70,6 +70,43 @@ describe('i18n catalog', () => {
     }
   })
 
+  it('translates the panel chrome and notices that used to be hardcoded', () => {
+    try {
+      setLanguage('en')
+      expect(t('notice.updateInstalled')).toBe('update installed — restart dsh to activate')
+      expect(t('notice.updateFailedExit', { code: 2 })).toBe('update failed (exit 2)')
+      expect(t('help.title', { from: 1, to: 2, total: 3 })).toBe('/help — keys and commands · rows 1-2/3')
+      expect(t('completion.footer.complete', { count: 4 })).toBe('↑↓ choose · 4 items · tab complete')
+      expect(t('status.agents.live', { count: 1 })).toBe('agents 1 live')
+      expect(t('status.todos.progress', { done: 1, total: 3 })).toBe('todos 1/3')
+      expect(t('panel.confirm.title', { action: t('panel.confirm.removeKey') })).toBe('/model — remove API key')
+      setLanguage('zh')
+      expect(t('notice.updateInstalled')).toContain('重启')
+      expect(t('notice.permissionChangeFailed', { message: 'x' })).toContain('权限')
+      expect(t('notice.modelLookupFailed', { message: 'x' })).toContain('模型')
+      expect(t('notice.diffFailed', { message: 'x' })).toContain('diff')
+      expect(t('notice.imageChecking', { name: 'a.png' })).toContain('图片')
+      expect(t('notice.attachmentsProcessing', { count: 2, plural: 's' })).toContain('附件')
+      expect(t('notice.sessionSwitchCancelled')).toContain('会话')
+      expect(t('help.title', { from: 1, to: 2, total: 3 })).toContain('按键')
+      expect(t('completion.searchUnavailable', { message: 'offline' })).toContain('搜索')
+      expect(t('completion.footer.insert', { count: 2 })).toContain('插入')
+      expect(t('status.agents.total', { total: 4 })).toContain('共')
+      expect(t('status.todos.counts', { active: 1, pending: 2 })).toContain('待处理')
+      expect(t('language.compact')).toContain('关闭')
+      expect(t('theme.footer')).toContain('选择')
+      expect(t('theme.footerMore', { count: 2 })).toContain('2')
+      expect(t('panel.setup.officialDefault')).toContain('官方')
+      expect(t('panel.setup.addById')).toContain('ID')
+      expect(t('panel.setup.saving')).toContain('保存')
+      expect(t('panel.confirm.removeProvider')).toContain('供应商')
+      expect(t('panel.confirm.keyStays')).toContain('模型')
+      expect(t('panel.update.installedDetail')).toContain('ctrl+c')
+    } finally {
+      setLanguage('en')
+    }
+  })
+
   it('translates model/provider chrome while preserving technical values', () => {
     try {
       setLanguage('zh')

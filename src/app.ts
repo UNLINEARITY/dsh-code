@@ -692,8 +692,8 @@ function AgentsLine({ rows, total }: { rows: readonly SubagentRow[]; total: numb
     createElement(
       Text,
       { color: inkColor(getPalette().brand), bold: true, wrap: 'truncate-end' },
-      `agents ${running} live`,
-      createElement(Text, { color: inkColor(getPalette().dim) }, ` · ${total} total · /agents`),
+      t('status.agents.live', { count: running }),
+      createElement(Text, { color: inkColor(getPalette().dim) }, t('status.agents.total', { total })),
       createElement(Text, { color: inkColor(getPalette().text) }, ` · ${mark} ${newest.label} ${newest.activity}`),
     ),
   )
@@ -712,8 +712,8 @@ function TodoPanel({ todos }: { todos: readonly TodoItem[] }): ReactElement | un
     createElement(
       Text,
       { color: inkColor(getPalette().brand), bold: true, wrap: 'truncate-end' },
-      `todos ${completed}/${todos.length}`,
-      createElement(Text, { dimColor: true }, ` · ${inProgress} active · ${pending} pending`),
+      t('status.todos.progress', { done: completed, total: todos.length }),
+      createElement(Text, { dimColor: true }, t('status.todos.counts', { active: inProgress, pending })),
       current === undefined ? '' : createElement(Text, { color: inkColor(getPalette().brandBright) }, ` · ${todoMark(current.status)} ${displayText(current.content)}`),
       createElement(Text, { color: inkColor(getPalette().dim) }, ' · /todos'),
     ),
@@ -1243,7 +1243,11 @@ function HelpPanel({ descriptors, skills, commandError, skillError, onClose }: {
   return createElement(
     Box,
     { flexDirection: 'column', width: viewport.outerColumns, paddingX: 1, borderStyle: 'round', borderColor: inkColor(accent.border) },
-    createElement(Text, { color: inkColor(accent.title), bold: true, wrap: 'truncate-end' }, truncateColumns(`/help — keys and commands · rows ${content.length === 0 ? 0 : visibleScroll + 1}-${Math.min(content.length, visibleScroll + viewport.bodyRows)}/${content.length}`, viewport.contentColumns)),
+    createElement(Text, { color: inkColor(accent.title), bold: true, wrap: 'truncate-end' }, truncateColumns(t('help.title', {
+      from: content.length === 0 ? 0 : visibleScroll + 1,
+      to: Math.min(content.length, visibleScroll + viewport.bodyRows),
+      total: content.length,
+    }), viewport.contentColumns)),
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
     ...content.slice(visibleScroll, visibleScroll + viewport.bodyRows),
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
@@ -3077,7 +3081,7 @@ export function App(props: AppProps): ReactElement {
             notify(t('notice.permissionChangedSimple', { value: selected }))
             setPermissionOpen(false)
           } catch (reason: unknown) {
-            notify(`permission change failed: ${reason instanceof Error ? reason.message : String(reason)}`, 'error')
+            notify(t('notice.permissionChangeFailed', { message: reason instanceof Error ? reason.message : String(reason) }), 'error')
           }
         },
         close: () => setPermissionOpen(false),
@@ -3314,7 +3318,7 @@ export function App(props: AppProps): ReactElement {
             setEffortFor(row)
             setModelOpen(true)
           }, (error: unknown) => {
-            notify(`model lookup failed: ${error instanceof Error ? error.message : String(error)}`, 'error')
+            notify(t('notice.modelLookupFailed', { message: error instanceof Error ? error.message : String(error) }), 'error')
           })
         },
         openHelp: () => {
@@ -3354,7 +3358,7 @@ export function App(props: AppProps): ReactElement {
         },
         openDiff: (argument: string) => {
           void props.loadGitDiff(argument).then(setDiffView, (error: unknown) => {
-            notify(`diff failed: ${error instanceof Error ? error.message : String(error)}`, 'error')
+            notify(t('notice.diffFailed', { message: error instanceof Error ? error.message : String(error) }), 'error')
           })
         },
         reviewChanges: props.reviewChanges,

@@ -505,12 +505,12 @@ export function ProviderSetupPanel({ target, authorization, onSubscribe, save, s
       : 0,
   )
   const keyStatus = saveCredential === undefined
-    ? 'key storage unavailable'
+    ? t('panel.setup.keyStorageUnavailable')
     : credential?.kind === 'error'
-      ? 'key status unavailable'
+      ? t('panel.provider.keyStatusUnavailable')
       : credential?.kind === 'facts' && credential.configured
-        ? 'key saved' + (credential.source === undefined ? '' : ' · ' + credential.source)
-        : 'no key set'
+        ? t('panel.setup.keySaved') + (credential.source === undefined ? '' : ' · ' + credential.source)
+        : t('panel.setup.noKeySet')
   // A dormant route (no resolved profile yet, so no credential facts) may
   // still receive a key: the save path materializes the apiKeyEnv reference
   // itself. Only a known-unwritable or indescribable credential blocks.
@@ -783,8 +783,11 @@ export function ProviderSetupPanel({ target, authorization, onSubscribe, save, s
   }
   const stateRows = error === undefined ? [] : [createElement(Text, { key: 'error', color: inkColor(getPalette().error), wrap: 'truncate-end' }, truncateColumns('  ' + error, viewport.contentColumns))]
   const keyBullets = '•'.repeat(Math.min([...keyDraft].length, Math.max(1, viewport.contentColumns - 14)))
-  const keyRow = createElement(Text, { key: 'key', color: zone === 'key' ? inkColor(getPalette().brandBright) : inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns(('  ' + (zone === 'key' ? '>' : ' ') + ' key   ' + keyBullets + (zone === 'key' && !busy ? '▏' : '') + (keyDraft === '' ? ' (' + keyStatus + ')' : busy ? ' saving…' : '')).replace(/ +$/u, ''), viewport.contentColumns))
-  const urlRow = createElement(Text, { key: 'url', color: zone === 'url' ? inkColor(getPalette().brandBright) : inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns('  ' + (zone === 'url' ? '>' : ' ') + ' url   ' + (baseURL === '' ? '(official default)' : baseURL) + (zone === 'url' ? '▏' : ''), viewport.contentColumns))
+  const fieldLabelWidth = Math.max(stringWidth(t('panel.setup.field.key')), stringWidth(t('panel.setup.field.url')))
+  const keyLabel = padColumns(t('panel.setup.field.key'), fieldLabelWidth)
+  const urlLabel = padColumns(t('panel.setup.field.url'), fieldLabelWidth)
+  const keyRow = createElement(Text, { key: 'key', color: zone === 'key' ? inkColor(getPalette().brandBright) : inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns(('  ' + (zone === 'key' ? '>' : ' ') + ' ' + keyLabel + '   ' + keyBullets + (zone === 'key' && !busy ? '▏' : '') + (keyDraft === '' ? ' (' + keyStatus + ')' : busy ? ' ' + t('panel.setup.saving') : '')).replace(/ +$/u, ''), viewport.contentColumns))
+  const urlRow = createElement(Text, { key: 'url', color: zone === 'url' ? inkColor(getPalette().brandBright) : inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns('  ' + (zone === 'url' ? '>' : ' ') + ' ' + urlLabel + '   ' + (baseURL === '' ? t('panel.setup.officialDefault') : baseURL) + (zone === 'url' ? '▏' : ''), viewport.contentColumns))
   // The fixed diagnostic row (present only with an adapter error) joins the
   // same height budget as the state rows — it must never overflow the panel.
   const rowBudget = Math.max(0, viewport.bodyRows - stateRows.length - (target.diagnostic === undefined ? 0 : 1) - 3)
@@ -799,7 +802,7 @@ export function ProviderSetupPanel({ target, authorization, onSubscribe, save, s
   const outputWidth = Math.max(0, ...models.map(model => stringWidth(model.maxTokens === undefined ? '-' : String(model.maxTokens))))
   for (let index = first; index < first + Math.max(0, Math.min(models.length + 1 - first, rowBudget)); index += 1) {
     if (index >= models.length) {
-      modelRows.push(createElement(Text, { key: 'add', color: cursor === index ? inkColor(getPalette().brandBright) : inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns('  ' + (cursor === index ? '>' : ' ') + ' + add by id' + (addDraft === '' ? '' : ' ' + addDraft + '▏'), viewport.contentColumns)))
+      modelRows.push(createElement(Text, { key: 'add', color: cursor === index ? inkColor(getPalette().brandBright) : inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns('  ' + (cursor === index ? '>' : ' ') + ' ' + t('panel.setup.addById') + (addDraft === '' ? '' : ' ' + addDraft + '▏'), viewport.contentColumns)))
       continue
     }
     const model = models[index]
@@ -990,13 +993,13 @@ export function ProviderConfirmPanel({ target, kind, confirm, done, back }: {
     if (input === 'y') run()
   }, true)
 
-  const action = kind === 'credential' ? 'remove API key' : 'remove provider'
+  const action = kind === 'credential' ? t('panel.confirm.removeKey') : t('panel.confirm.removeProvider')
   if (viewport.maxHeight === 0 || viewport.compact) {
-    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(`${action} ${target.displayName}? · y confirm · n/esc back`, viewport.contentColumns))
+    return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(t('panel.confirm.compact', { action, name: target.displayName }), viewport.contentColumns))
   }
   const identity = target.displayName === target.provider ? target.provider : `${target.displayName} (${target.provider})`
   const identityRow = createElement(Text, { key: 'identity', wrap: 'truncate-end' }, truncateColumns(`  ${displayText(identity)}`, viewport.contentColumns))
-  const descriptionRow = createElement(Text, { key: 'description', color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns(kind === 'credential' ? '  the provider profile and selected model stay available' : '  the user settings profile and its managed key will be removed', viewport.contentColumns))
+  const descriptionRow = createElement(Text, { key: 'description', color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns('  ' + (kind === 'credential' ? t('panel.confirm.keyStays') : t('panel.confirm.providerGone')), viewport.contentColumns))
   const errorRow = error === undefined
     ? undefined
     : createElement(Text, { key: 'error', color: inkColor(getPalette().error), wrap: 'truncate-end' }, truncateColumns(`  ${error}`, viewport.contentColumns))
@@ -1006,11 +1009,11 @@ export function ProviderConfirmPanel({ target, kind, confirm, done, back }: {
   return createElement(
     Box,
     { flexDirection: 'column', width: viewport.outerColumns, paddingX: 1, borderStyle: 'round', borderColor: inkColor(getPalette().warn) },
-    createElement(Text, { color: inkColor(getPalette().warn), bold: true, wrap: 'truncate-end' }, truncateColumns(`/model — ${action}`, viewport.contentColumns)),
+    createElement(Text, { color: inkColor(getPalette().warn), bold: true, wrap: 'truncate-end' }, truncateColumns(t('panel.confirm.title', { action }), viewport.contentColumns)),
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
     ...bodyRows,
     createElement(PanelGap, { visible: viewport.gapRows > 0 }),
-    createElement(Text, { color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns(busy ? 'working…' : 'y confirm · n/esc back', viewport.contentColumns)),
+    createElement(Text, { color: inkColor(getPalette().dim), wrap: 'truncate-end' }, truncateColumns(busy ? t('panel.auth.working') : t('panel.confirm.footer'), viewport.contentColumns)),
   )
 }
 

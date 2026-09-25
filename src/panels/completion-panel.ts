@@ -6,6 +6,7 @@ import type { CompletionCandidate } from '../completion.ts'
 import { selectionWindow } from '../render/inspector.ts'
 import { visibleColumns } from '../render/markdown.ts'
 import { displayText, padColumns, singleLineText, truncateColumns } from '../render/text.ts'
+import { t } from '../i18n.ts'
 import { dim, getPalette, inkColor } from '../theme.ts'
 
 /** Shared geometry used by both the menu view and the App dynamic-row budget. */
@@ -51,11 +52,11 @@ export function CompletionMenu({ active, mention, index, rows, error }: {
     { flexDirection: 'column', marginLeft: 2, paddingY: verticalPadding },
     ...(rows.length === 0
       ? [error === undefined
-        ? createElement(Text, { key: 'loading', dimColor: true }, 'searching…')
+        ? createElement(Text, { key: 'loading', dimColor: true }, t('completion.searching'))
         : createElement(
           Text,
           { key: 'error', color: inkColor(getPalette().error), wrap: 'truncate-end' },
-          truncateColumns(`workspace search unavailable: ${singleLineText(error)} · keep typing to retry`, contentColumns),
+          truncateColumns(t('completion.searchUnavailable', { message: singleLineText(error) }), contentColumns),
         )]
       : visible.map((candidate, at) => {
         const absolute = first + at
@@ -70,10 +71,12 @@ export function CompletionMenu({ active, mention, index, rows, error }: {
         )
       })),
     hidden > 0
-      ? createElement(Text, { key: 'more', color: inkColor(getPalette().dim), wrap: 'truncate-end' }, `  … +${hidden} more`)
+      ? createElement(Text, { key: 'more', color: inkColor(getPalette().dim), wrap: 'truncate-end' }, t('completion.more', { count: hidden }))
       : undefined,
     showFooter
-      ? createElement(Text, { color: inkColor(getPalette().dim), wrap: 'truncate-end' }, dim(mention ? `↑↓ choose · ${rows.length} items · tab insert` : `↑↓ choose · ${rows.length} items · tab complete`))
+      ? createElement(Text, { color: inkColor(getPalette().dim), wrap: 'truncate-end' }, dim(mention
+        ? t('completion.footer.insert', { count: rows.length })
+        : t('completion.footer.complete', { count: rows.length })))
       : undefined,
   )
 }
