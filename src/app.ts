@@ -2057,6 +2057,11 @@ export function App(props: AppProps): ReactElement {
     rows: appStdout?.rows ?? 30,
   }))
   const terminalSizeRef = useRef(terminalSize)
+  // Columns the settled Static rows were last reflowed at. Static wrapping
+  // depends on columns only, so a rows-only resize never needs the replay —
+  // launch-time row storms would otherwise stack a re-emitted whale banner
+  // on terminals that keep scrollback across the replay clear's \x1b[3J.
+  const lastReflowColumns = useRef(terminalSize.columns)
   const settledRowsCache = useRef<SettledRowsCache | undefined>(undefined)
   const viewportFlushRef = useRef({ sessionKey: props.sessionKey, epoch: refreshEpoch, rows: 0 })
   // Live turn-change summaries: the runner records what the host's
@@ -2121,10 +2126,18 @@ export function App(props: AppProps): ReactElement {
       setTerminalSize(next)
       if (replayTimer !== undefined) clearTimeout(replayTimer)
       replayTimer = setTimeout(() => {
+        resizeBurstHeld.current = false
+        // Rows-only bursts skip the clear + source replay entirely: budgets
+        // update reactively, and no wrapped row changes shape. The held
+        // synchronized frame still closes atomically.
+        if (terminalSizeRef.current.columns === lastReflowColumns.current) {
+          appStdout.write(SYNCHRONIZED_UPDATE_END)
+          return
+        }
+        lastReflowColumns.current = terminalSizeRef.current.columns
         synchronizedReplayPending.current = true
         appStdout.write(RESIZE_REFLOW_CLEAR)
         setRefreshEpoch(epoch => epoch + 1)
-        resizeBurstHeld.current = false
       }, RESIZE_REFLOW_DELAY_MS)
     }
     appStdout.on('resize', handleResize)
@@ -2303,20 +2316,20 @@ export function App(props: AppProps): ReactElement {
   const auditedReasoningRows = liveAudit.allocation.reasoning
   const auditedAnswerRows = liveAudit.allocation.answer
   // Filled-state uses the complete source-backed row set, not only the rows
-  // still live after the Static split. The header is real painted content too
-  // (10 rows wide, 3 compact); omitting it delays anchoring after a restore.
+  // still live after the Static split. Only real transcript rows count: the
+  // whale header lives in native scrollback and scrolls off-screen before the
+  // live tail can fill the budget, so counting it anchored the surface early
+  // and Ink padded the gap below the tail as stable blank rows.
   const sourceHistoryRows = settledPhysical.length + mutableLiveLines.length
   const transcriptViewportFilled = hasFilledTranscriptViewport(
     sourceHistoryRows,
     nonHistoryRows,
     dynamicRows,
-    historyPrefixRows,
   )
   const modalViewportFilled = hasFilledTranscriptViewport(
     sourceHistoryRows,
     0,
     dynamicRows,
-    historyPrefixRows,
   )
   const anchoredSurfaceRows = dynamicRows
     + (transcriptVisible && view.todos.length > 0 ? 1 : 0)

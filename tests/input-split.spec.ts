@@ -60,4 +60,41 @@ describe('split stdin proxy', () => {
     source.write('x')
     expect(seen).toEqual([' ', '\r'])
   })
+
+  it('keeps the shared source flowing for a successor tap after a swap dispose', () => {
+    // The runner swaps Ink instances per session switch: the OLD tap's
+    // dispose must not pause the shared stdin under the NEW tap's listener,
+    // or the new session's keyboard is dead.
+    const source = new PassThrough() as unknown as NodeJS.ReadStream
+    source.isTTY = true
+    const first = createSplitStdin(source)
+    const second = createSplitStdin(source)
+    const seen: string[] = []
+    second.stdin.on('data', chunk => seen.push(String(chunk)))
+    first.dispose()
+    source.write('a')
+    expect(seen).toEqual(['a'])
+    second.dispose()
+    source.write('b')
+    expect(seen).toEqual(['a'])
+  })
+
+  it('never forwards raw-mode or ref calls from a disposed tap', () => {
+    // The old Ink tree's deferred useInput cleanup runs after the successor
+    // mount restored raw mode; a disposed tap forwarding it would flip the
+    // real stdin back to cooked mode and swallow every key.
+    const source = new PassThrough() as unknown as NodeJS.ReadStream
+    source.isTTY = true
+    const calls: boolean[] = []
+    source.setRawMode = (value: boolean): NodeJS.ReadStream => {
+      calls.push(value)
+      return source
+    }
+    const { stdin, dispose } = createSplitStdin(source)
+    stdin.setRawMode(true)
+    expect(calls).toEqual([true])
+    dispose()
+    stdin.setRawMode(false)
+    expect(calls).toEqual([true])
+  })
 })

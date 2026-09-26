@@ -51,6 +51,36 @@ describe('short-terminal surfaces', () => {
     }
   })
 
+  it('keeps the one-line ask when the wrapped approval chrome cannot fit', async () => {
+    // A 14-row terminal leaves panelViewport maxHeight 5: border, options,
+    // footer, and one content row need 7. Painting the wrapped dialog there
+    // exceeded the budget and hid the command entirely, so the ask must stay
+    // on its compact line until the chrome fits.
+    const harness = createTty(100, 14)
+    const snapshot = Object.freeze({
+      pending: {
+        headline: `escalate sandbox to danger-full-access: ${'长'.repeat(40)}`,
+        toolName: 'bash',
+        command: JSON.stringify({ command: `echo ${'y'.repeat(200)}` }),
+        answer: noop,
+      },
+      answered: false,
+      queued: 0,
+    })
+    const instance = renderApp(harness, appProps({
+      approval: { subscribe: () => unsubscribe, getSnapshot: () => snapshot },
+    }))
+    try {
+      await wait()
+      expect(harness.output.text).toContain('esc/n reject')
+      expect(harness.output.text).not.toContain('Yes, proceed')
+    } finally {
+      instance.unmount()
+      harness.stdin.destroy()
+      harness.stdout.destroy()
+    }
+  })
+
   it('disables blind question picks when the options cannot render', async () => {
     const harness = createTty(100, 8)
     const submit = vi.fn()

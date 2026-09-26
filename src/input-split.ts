@@ -160,6 +160,7 @@ export function createSplitStdin(source: NodeJS.ReadStream): { stdin: TuiStdin; 
   // exists to separate. In object mode every pushed unit reads back alone.
   const stream = new PassThrough({ objectMode: true }) as TuiStdin
   const splitter = createKeypressSplitter()
+  let disposed = false
   let stalePasteTimer: ReturnType<typeof setTimeout> | undefined
   const disarmStalePasteTimer = (): void => {
     if (stalePasteTimer === undefined) return
@@ -188,24 +189,37 @@ export function createSplitStdin(source: NodeJS.ReadStream): { stdin: TuiStdin; 
   const proxy = Object.assign(stream, {
     isTTY: source.isTTY === true,
     setRawMode(value: boolean): TuiStdin {
-      source.setRawMode?.(value)
+      // A disposed tap must never touch the shared source again: the runner
+      // swaps Ink instances per session switch, and the OLD tree's deferred
+      // useInput cleanup would otherwise flip the real stdin back to cooked
+      // mode AFTER the successor mount restored raw mode (swallowed keys,
+      // line-buffered input, unreachable Ctrl+C).
+      if (!disposed) source.setRawMode?.(value)
       return stream
     },
     ref(): void {
-      source.ref?.()
+      if (!disposed) source.ref?.()
     },
     unref(): void {
-      source.unref?.()
+      if (!disposed) source.unref?.()
     },
   })
   source.setEncoding('utf8')
   source.on('data', onChunk)
+  // Flowing mode is explicit: a predecessor tap's dispose may have paused the
+  // shared source (quit path), and a paused stdin never emits 'data' to this
+  // tap's listener no matter how long it waits.
+  source.resume()
   return {
     stdin: proxy,
     dispose(): void {
+      disposed = true
       disarmStalePasteTimer()
       source.removeListener('data', onChunk)
-      source.pause()
+      // Pause only when nobody else is listening: a session-switch remount
+      // attaches its successor tap to the SAME source, and pausing here
+      // would starve it of every byte (a dead keyboard on the new session).
+      if (source.listenerCount('data') === 0) source.pause()
     },
   }
 }

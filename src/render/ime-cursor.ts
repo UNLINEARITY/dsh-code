@@ -98,11 +98,18 @@ export function installImeCursorAnchor(stream: NodeJS.WriteStream): ImeCursorAnc
       if (rows !== 0) originalWrite(imeCursorRestore(rows))
       rows = 0
       column = -1
-      target.write = originalWrite as typeof target.write
-      delete target[ANCHOR_STATE]
+      // The runner swaps Ink instances per session switch, and the OLD tree's
+      // effect cleanup can run AFTER the successor App installed its own
+      // anchor on the same stream. Restore the write path only when THIS
+      // anchor's wrapper is still the installed one, or the delayed release
+      // would silently unwrap (and unregister) the new session's anchor.
+      if (target.write === wrappedWrite) {
+        target.write = originalWrite as typeof target.write
+        if (target[ANCHOR_STATE] === anchor) delete target[ANCHOR_STATE]
+      }
     },
   }
-  target.write = ((chunk: unknown, ...rest: unknown[]) => {
+  const wrappedWrite = ((chunk: unknown, ...rest: unknown[]) => {
     const ownedRows = rows
     const ownedColumn = column
     if (ownedRows === 0 || typeof chunk !== 'string') {
@@ -118,6 +125,7 @@ export function installImeCursorAnchor(stream: NodeJS.WriteStream): ImeCursorAnc
     column = reanchor ? ownedColumn : -1
     return originalWrite(imeCursorRestore(ownedRows) + chunk + (reanchor ? imeCursorMove(ownedRows, ownedColumn) : ''), ...rest)
   }) as typeof target.write
+  target.write = wrappedWrite
   target[ANCHOR_STATE] = anchor
   return anchor
 }

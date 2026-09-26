@@ -52,10 +52,14 @@ describe('advanceTranscriptViewport', () => {
 })
 
 describe('hasFilledTranscriptViewport', () => {
-  it('counts source history and its painted header instead of only the mutable tail', () => {
+  it('fills only from real source history and occupied rows, never scrollback chrome', () => {
     expect(hasFilledTranscriptViewport(100, 0, 31)).toBe(true)
-    expect(hasFilledTranscriptViewport(21, 0, 31, 10)).toBe(true)
-    expect(hasFilledTranscriptViewport(20, 0, 31, 10)).toBe(false)
+    expect(hasFilledTranscriptViewport(31, 0, 31)).toBe(true)
+    // A 10-row whale header above the live region must not anchor the surface
+    // early: those rows scroll off-screen and would pad stable blank rows.
+    expect(hasFilledTranscriptViewport(30, 0, 31)).toBe(false)
+    expect(hasFilledTranscriptViewport(21, 2, 31)).toBe(false)
+    expect(hasFilledTranscriptViewport(29, 2, 31)).toBe(true)
   })
 })
 

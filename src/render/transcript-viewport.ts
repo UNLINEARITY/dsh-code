@@ -52,13 +52,17 @@ export function advanceTranscriptViewport(
   }
 }
 
-/** Whether real source-backed content has naturally filled the transcript area. */
-export function hasFilledTranscriptViewport(historyRows: number, occupiedRows: number, capacity: number, prefixRows = 0): boolean {
+/** Whether real source-backed transcript content has naturally filled the viewport.
+ *
+ * Only history and occupied rows count: scrollback chrome above the live region
+ * (the whale header) scrolls off-screen before the tail fills the budget, so
+ * counting it would anchor the surface early and pad stable blank rows.
+ */
+export function hasFilledTranscriptViewport(historyRows: number, occupiedRows: number, capacity: number): boolean {
   const history = Math.max(0, Math.floor(historyRows))
   const occupied = Math.max(0, Math.floor(occupiedRows))
-  const prefix = Math.max(0, Math.floor(prefixRows))
   const available = Math.max(1, Math.floor(capacity))
-  return prefix + history + occupied >= available
+  return history + occupied >= available
 }
 
 /** Real history rows that fit beside the currently painted stream/tool rows. */

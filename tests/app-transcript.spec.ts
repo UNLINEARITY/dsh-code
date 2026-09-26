@@ -622,6 +622,127 @@ describe('physical-row transcript viewport', () => {
     expect(headerPhysicalRows(false, 39, 50)).toBe(3)
   })
 
+  it('never pads stable blank rows below a live tail shorter than the budget', async () => {
+    // Short session on a tall terminal: real history sits below the budget
+    // while the 10-row whale header would push the paper total past it. The
+    // header lives in scrollback and scrolls off-screen first, so counting it
+    // anchored the live box early and Ink padded the gap under the tail as
+    // stable blank rows between the transcript and the composer.
+    const harness = createTty(100, 44)
+    const { stdin, output } = harness
+    const events = [] as ReturnType<typeof fixtureEvent>[]
+    let seq = 1
+    let turn = 1
+    for (let index = 0; index < 4; index += 1) {
+      const callId = `call-${index}` as ToolCallId
+      events.push(fixtureEvent({ type: 'turn/start', seq: seq++, time: seq, data: { turn } }))
+      events.push(fixtureEvent({
+        type: 'user/message',
+        seq: seq++,
+        time: seq,
+        data: createUserMessage({ content: [{ type: 'text', text: `question ${index}` }], source: { kind: 'user' } }),
+      }))
+      events.push(fixtureEvent({ type: 'tool/call', seq: seq++, time: seq, data: { turn, step: 1, callId, name: 'grep', arguments: '{"pattern":"x"}' } }))
+      events.push(fixtureEvent({
+        type: 'tool/result',
+        seq: seq++,
+        time: seq,
+        data: {
+          turn,
+          step: 1,
+          message: createToolResultMessage({ callId, content: [{ type: 'text', text: `match ${index} ` + 'z'.repeat(30) }], isError: false }),
+        },
+      }))
+      events.push(fixtureEvent({
+        type: 'assistant/message',
+        seq: seq++,
+        time: seq,
+        data: {
+          turn,
+          step: 1,
+          message: createAssistantMessage({ content: [{ type: 'text', text: `answer ${index} ` + 'y'.repeat(60) }], source: { provider: 'p', model: 'm' } }),
+        },
+      }))
+      events.push(fixtureEvent({ type: 'turn/end', seq: seq++, time: seq, data: { turn, reason: { kind: 'completed' } } }))
+      turn += 1
+    }
+    events.push(fixtureEvent({ type: 'turn/start', seq: seq++, time: seq, data: { turn } }))
+    events.push(fixtureEvent({
+      type: 'user/message',
+      seq: seq++,
+      time: seq,
+      data: createUserMessage({ content: [{ type: 'text', text: 'pop a super long approval' }], source: { kind: 'user' } }),
+    }))
+    events.push(fixtureEvent({
+      type: 'assistant/message',
+      seq: seq++,
+      time: seq,
+      data: {
+        turn,
+        step: 1,
+        message: createAssistantMessage({ content: [{ type: 'text', text: '' }], source: { provider: 'p', model: 'm' } }),
+        interrupted: true,
+      },
+    }))
+    events.push(fixtureEvent({ type: 'turn/end', seq: seq++, time: seq, data: { turn, reason: { kind: 'aborted', reason: { kind: 'user' } } } }))
+    const store = createTranscriptStore(events)
+    const instance = renderApp(harness, appProps({ store }))
+    try {
+      await wait()
+      output.text = ''
+      // Ctrl+R re-renders an identical frame (no reasoning entries to fold).
+      stdin.write('\x12')
+      await wait()
+      const lines = output.text
+        .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/gu, '')
+        .split('\n')
+      const tail = lines.findIndex(line => line.includes('turn cancelled by the user'))
+      expect(tail).toBeGreaterThan(-1)
+      const composer = lines.findIndex((line, index) => index > tail && line.includes('type a message'))
+      expect(composer).toBeGreaterThan(tail)
+      const blanks = lines.slice(tail + 1, composer).filter(line => line.trim() === '').length
+      // Only the composer gutter and the band's top padding row may sit there.
+      expect(blanks).toBeLessThanOrEqual(2)
+    } finally {
+      instance.unmount()
+      stdin.destroy()
+      harness.stdout.destroy()
+    }
+  })
+
+  it('skips the source replay for rows-only resize bursts', async () => {
+    // Settled Static rows wrap at COLUMNS only, so a rows-only resize never
+    // needs the clear + replay. Launch-time row storms (pane settling) would
+    // otherwise stack one re-emitted whale banner per burst on terminals
+    // that keep scrollback across the replay clear's \x1b[3J.
+    const harness = createTty(100, 24)
+    const { stdin, stdout, output } = harness
+    const instance = renderApp(harness, appProps({ store: createTranscriptStore() }))
+    try {
+      await wait()
+      expect(output.text.match(/╭─/gu)).toHaveLength(1)
+      output.text = ''
+      for (const rows of [30, 36, 42, 48]) {
+        stdout.rows = rows
+        stdout.emit('resize')
+        await wait(200)
+      }
+      // No managed replay clear, and the banner was written exactly once.
+      expect(output.text).not.toContain(resizeClear)
+      expect(output.text.match(/╭─/gu)).toBeNull()
+      // A width change still reflows exactly once per settled burst.
+      output.text = ''
+      stdout.columns = 80
+      stdout.emit('resize')
+      await wait(200)
+      expect(output.text.split(resizeClear)).toHaveLength(2)
+    } finally {
+      instance.unmount()
+      stdin.destroy()
+      stdout.destroy()
+    }
+  })
+
   it('fills stream contraction with real settled rows and no blank frame', async () => {
     const harness = createTty(100, 24)
     const history = Array.from({ length: 30 }, (_, index) => (fixtureEvent({

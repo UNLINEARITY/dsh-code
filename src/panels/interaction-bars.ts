@@ -30,6 +30,13 @@ const APPROVAL_OPTIONS: readonly ApprovalOption[] = [
   { key: 'reject', label: 'No, continue without running it', hotkey: 'd' },
 ]
 
+/**
+ * Rows the wrapped dialog cannot shrink below: the two border rows, the
+ * options, the footer, and one content row. A shorter viewport must keep the
+ * one-line ask — the fixed chrome alone would overflow the height budget.
+ */
+const APPROVAL_MIN_PANEL_HEIGHT = 2 + APPROVAL_OPTIONS.length + 1 + 1
+
 /** Rows the approval dialog will paint: wrapped headline, command body, overflow. */
 export interface ApprovalPanelLayout {
   readonly headline: readonly StyledLine[]
@@ -190,7 +197,9 @@ export function ApprovalBar({ snapshot, locked, notify, interrupt, summarize }: 
   }, { isActive: active })
 
   if (pending === undefined || layout === undefined) return undefined
-  if (viewport.maxHeight === 0 || viewport.compact || summarize === true) {
+  // compact already covers maxHeight 0 and narrow columns; the floor covers a
+  // viewport tall enough to skip compact yet too short for the wrapped chrome.
+  if (viewport.compact || viewport.maxHeight < APPROVAL_MIN_PANEL_HEIGHT || summarize === true) {
     return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(t('approval.compact', { queued: queuedSuffix }), viewport.contentColumns))
   }
   return createElement(

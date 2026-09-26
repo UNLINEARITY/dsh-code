@@ -995,11 +995,19 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
           commands.setAgent(agent)
           skills.setAgent(agent)
           // The App mounts with a placeholder key until the first input; the
-          // key-change remount below must start from a clean screen or the ghost
-          // static header stays visible above the new one (same source-backed
-          // clear the session-switch path performs).
+          // remount below must start from a clean screen or the ghost static
+          // header stays visible above the new one. Swap the whole Ink
+          // instance (same source-backed clear the session-switch path
+          // performs): the fresh instance carries no cursor ledger, so its
+          // first flush paints the placeholder's successor from the origin.
+          // Detach the ref BEFORE the teardown: a throwing unmount (or a
+          // throwing mount below) must leave an empty handle, or the rollback
+          // would rerender into a disposed renderer instead of restoring one.
+          const retired = mountRef.current
+          mountRef.current = undefined
+          retired?.unmount()
           process.stdout.write('\x1b[r\x1b[0m\x1b[H\x1b[2J\x1b[3J\x1b[H')
-          renderCurrent()
+          mountRef.current = io.mount(appElement())
         } catch (error: unknown) {
           // The session composed but the screen handoff threw (stdout EPIPE,
           // a render-time failure). Roll the published state back exactly
@@ -1017,6 +1025,14 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
             skills.setAgent(agent)
           }
           await next.handle.dispose().catch(() => {})
+          // The instance swap may have torn the mount down before the
+          // failure: restore one so the rollback can paint the placeholder.
+          // Never during quit — the exit sequence already ran the teardown
+          // and must keep ownership of the terminal.
+          if (!quitting && mountRef.current === undefined) {
+            process.stdout.write('\x1b[r\x1b[0m\x1b[H\x1b[2J\x1b[3J\x1b[H')
+            mountRef.current = io.mount(appElement())
+          }
           if (!quitting) renderCurrent()
           bridge.notify(t('notice.activationFailed', { message: error instanceof Error ? error.message : String(error) }), 'error')
           return
@@ -1419,8 +1435,21 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
         // re-seeds the previous session's catalog the same way.
         subagents.reset()
         for (const event of next.catalogSeed) subagents.apply(event.data.childId, event)
+        // Swap the WHOLE Ink instance, not just the root element. A rerender
+        // keeps Ink's cursor ledger across the key-change remount, and on a
+        // terminal whose scrollback survives the clear (no working \x1b[3J)
+        // the interleaved relative erases during the swap permanently blank
+        // bands of the freshly written transcript in native scrollback. A
+        // fresh instance owns no previous-frame ledger: after the clear its
+        // first flush paints the complete restored session from the origin.
+        // Detach the ref BEFORE the teardown: a throwing unmount (or a
+        // throwing mount below) must leave an empty handle, or the rollback
+        // would rerender into a disposed renderer instead of restoring one.
+        const retired = mountRef.current
+        mountRef.current = undefined
+        retired?.unmount()
         process.stdout.write('\x1b[r\x1b[0m\x1b[H\x1b[2J\x1b[3J\x1b[H')
-        renderCurrent()
+        mountRef.current = io.mount(appElement())
         // Only a successful handoff may clear the transient per-session
         // surfaces: a rolled-back switch keeps the previous session's
         // subagent feed plus the user's pre-session /mode and permission
@@ -1449,6 +1478,15 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
         // collected against the switch churn retires too.
         planIntent = undefined
         await next.handle.dispose()
+        // The instance swap may have torn the mount down before the failure:
+        // restore one so the rollback below can actually paint the previous
+        // session (renderCurrent no-ops on an empty handle). Never during
+        // quit — the exit sequence already ran the teardown and must keep
+        // ownership of the terminal.
+        if (!quitting && mountRef.current === undefined) {
+          process.stdout.write('\x1b[r\x1b[0m\x1b[H\x1b[2J\x1b[3J\x1b[H')
+          mountRef.current = io.mount(appElement())
+        }
         if (!quitting) renderCurrent()
         throw error
       }
