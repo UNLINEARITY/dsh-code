@@ -140,6 +140,24 @@ export function statusCycleHint(): string {
 export const CONTEXT_BAR_WIDTH = 24
 /** Occupancy at which the usage readout flips from brand blue to amber. */
 const CONTEXT_WARN_PERCENT = 90
+
+/** Presets whose compositions mount no compaction group at all. */
+const COMPACTIONLESS_PRESETS = new Set(['minimal', 'lite'])
+
+/**
+ * Whether a session on a compaction-less preset has entered the pressure
+ * zone the missing auto-compaction would have relieved — the policy's own
+ * default trigger ratio (0.8 of the context window) is the threshold, so
+ * the notice fires where `/compact` would have, on presets that lack it.
+ * @param preset - active agent preset id.
+ * @param usedTokens - reported used context tokens (`lastPromptTokens`).
+ * @param contextWindow - route capacity, non-positive when unknown.
+ */
+export function compactionAbsentNotice(preset: string, usedTokens: number, contextWindow: number): boolean {
+  if (!COMPACTIONLESS_PRESETS.has(preset)) return false
+  if (!(contextWindow > 0) || !(usedTokens > 0)) return false
+  return usedTokens / contextWindow >= 0.8
+}
 /**
  * Narrowest bar width the drop ladder keeps before dropping the whole
  * context group: the bar shrinks to this floor first (the absolute readout

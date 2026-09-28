@@ -150,6 +150,7 @@ import {
   layoutStatusBar,
   parseStatuslineItems,
   statusCycleHint,
+  compactionAbsentNotice,
   STATUS_GROUP_SEPARATOR,
   STATUS_ITEM_SEPARATOR,
   STATUS_ROW2_INDENT,
@@ -1793,6 +1794,20 @@ export function App(props: AppProps): ReactElement {
   const notify = useCallback((text: string, tone: NoticeTone = 'info'): void => {
     setNotice({ text, tone })
   }, [])
+
+  // A compaction-less preset (minimal/lite) cannot relieve context pressure:
+  // one notice per upward crossing of the policy's own trigger ratio, re-armed
+  // once the ratio falls back below it — visible limits without nagging.
+  const compactionNoticeArmed = useRef(true)
+  useEffect(() => {
+    const inPressureZone = compactionAbsentNotice(props.mode, view.stats.lastPromptTokens, view.stats.contextWindow)
+    if (inPressureZone && compactionNoticeArmed.current) {
+      compactionNoticeArmed.current = false
+      notify(t('notice.noCompactionPreset'), 'warning')
+    } else if (!inPressureZone) {
+      compactionNoticeArmed.current = true
+    }
+  }, [props.mode, view.stats.lastPromptTokens, view.stats.contextWindow, notify])
 
   const {
     loadModels,

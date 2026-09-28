@@ -6,6 +6,7 @@ import type { TranscriptStats } from '../src/render/projection.ts'
 import { visibleColumns } from '../src/render/markdown.ts'
 import {
   cacheHitPercent,
+  compactionAbsentNotice,
   contextBar,
   contextGroupSpans,
   CONTEXT_BAR_WIDTH,
@@ -679,5 +680,21 @@ describe('status width degradation', () => {
       previousRow1 = texts1
       previousRow2 = texts2
     }
+  })
+})
+
+describe('compactionAbsentNotice', () => {
+  it('fires only on compaction-less presets at or past the 0.8 trigger ratio', () => {
+    expect(compactionAbsentNotice('lite', 8_000, 10_000)).toBe(true)
+    expect(compactionAbsentNotice('minimal', 8_000, 10_000)).toBe(true)
+    expect(compactionAbsentNotice('lite', 7_999, 10_000)).toBe(false)
+    expect(compactionAbsentNotice('standard', 9_500, 10_000)).toBe(false)
+    expect(compactionAbsentNotice('ptc', 10_000, 10_000)).toBe(false)
+  })
+
+  it('stays silent while the window or usage is unknown', () => {
+    expect(compactionAbsentNotice('lite', 8_000, 0)).toBe(false)
+    expect(compactionAbsentNotice('minimal', 0, 10_000)).toBe(false)
+    expect(compactionAbsentNotice('lite', -1, 10_000)).toBe(false)
   })
 })

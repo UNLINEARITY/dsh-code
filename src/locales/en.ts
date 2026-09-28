@@ -339,6 +339,7 @@ export const en = {
   'notice.animationsSaveFailed': 'decorative animation save failed: {message}',
   'notice.commandRegistryMissing': 'no command registry is mounted in this composition',
   'notice.kernelCommandUnavailable': '/{name} is not available in this session (the current preset does not carry it)',
+  'notice.noCompactionPreset': 'context is nearing its limit and the current preset has no compaction (/compact is unavailable here)',
   'notice.commandFallbackFailed': 'command fallback failed: {message}',
   'notice.commandFailed': 'command failed: {message}',
   'notice.invalidReference': 'invalid session reference: {message}',
