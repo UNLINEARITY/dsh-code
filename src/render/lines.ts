@@ -516,6 +516,11 @@ export function transcriptEntryLines(
         entry.state === 'error' ? `call ${entry.ordinal}: ${entry.summary}` : entry.summary,
         width, '  ⎿ ', summaryStyle, '    ', summaryStyle,
       )
+      // Spill badge: the full output went to a session-private file; the
+      // locator rides one dim row so the offload stays visible in both folds.
+      const spill = entry.spilledTo === undefined || entry.state === 'running'
+        ? []
+        : hangingTextLines(`⇱ full result spilled · ${entry.spilledTo}`, width, '  ⎿ ', 'dim', '    ')
       // Compact cards carry the bounded result summary only. Keep one fold
       // hint when richer detail exists, but not when a complete one-line raw
       // result is byte-for-byte the summary (that false hint was one symptom
@@ -527,7 +532,7 @@ export function transcriptEntryLines(
         const hiddenDetail = entry.detail !== undefined && !rawFullySummarized
           ? textLines('    … output hidden · Ctrl/Alt+R', width, 'dim').slice(0, 1)
           : []
-        return compactToolLines([...invocation, ...summary, ...hiddenDetail], width)
+        return compactToolLines([...invocation, ...summary, ...spill, ...hiddenDetail], width)
       }
 
       const detail = entry.detail === undefined
@@ -539,7 +544,7 @@ export function transcriptEntryLines(
       const detailSupersedesSummary = entry.detail?.kind === 'raw'
         || entry.detail?.kind === 'read'
         || entry.detail?.kind === 'diff'
-      return [...invocation, ...(detailSupersedesSummary ? [] : summary), ...detail]
+      return [...invocation, ...(detailSupersedesSummary ? [] : summary), ...detail, ...spill]
     }
     case 'command': {
       const mark = entry.state === 'running' ? '●' : entry.state === 'error' ? '⨯' : '⏺'
@@ -590,6 +595,21 @@ export function transcriptEntryLines(
         width,
         entry.state === 'running' ? 'warn' : 'dim',
       )
+    case 'hook':
+      return textLines(
+        `  ⚓ ${entry.point} · ${entry.handlerId} → ${entry.decision} (${Math.round(entry.durationMs)}ms)`
+          + (entry.stderr === '' ? '' : ` · ${entry.stderr}`),
+        width,
+        entry.stopped ? 'warn' : 'dim',
+      )
+    case 'deliverables':
+      return [
+        ...textLines(`  ✦ delivered ${entry.paths.length + entry.dropped} file${entry.paths.length + entry.dropped === 1 ? '' : 's'}`, width, 'dim'),
+        ...entry.paths.flatMap(path => hangingTextLines(path, width, '    ', 'dim', '    ')),
+        ...(entry.dropped > 0 ? textLines(`    … +${entry.dropped} more`, width, 'dim') : []),
+      ]
+    case 'image-offload':
+      return textLines(`  ◑ offloaded ${entry.count} image${entry.count === 1 ? '' : 's'} from context`, width, 'dim')
     case 'files':
       return entry.paths.length === 0
         ? textLines('  ⎄ no changed files', width, 'dim')

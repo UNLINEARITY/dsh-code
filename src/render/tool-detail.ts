@@ -23,6 +23,31 @@ const MAX_LINE_COLUMNS = 240
 const MAX_DIFFS = 8
 const MAX_DIFF_TEXT_CHARS = 24_000
 
+/** Separator the spill policy writes between the locator and the retrieval hint. */
+const SPILL_STORED_AT = ' Full formatted result stored at: '
+
+/**
+ * Locator of a persisted spill-policy notice trailing a tool result, when
+ * one is present. The policy appends `(Omitted N bytes.[ Omitted M images.]
+ * Full formatted result stored at: <locator>. <hint>)` to the retained
+ * preview (the kernel's exact spelling); the badge keeps the locator so the
+ * user sees where the full output went without expanding the card.
+ * @param text - the complete recorded text result.
+ * @returns the stored-result locator, or undefined when no notice trails.
+ */
+export function spillLocatorOf(text: string): string | undefined {
+  if (!text.endsWith(')')) return undefined
+  const at = text.lastIndexOf(SPILL_STORED_AT)
+  if (at < 0) return undefined
+  const rest = text.slice(at + SPILL_STORED_AT.length)
+  // `<locator>. <hint>)` — split at the first sentence separator; a path
+  // containing `. ` itself is pathological and still renders a usable badge.
+  const separator = rest.indexOf('. ')
+  const end = separator >= 0 ? separator : rest.length - ')'.length
+  const locator = rest.slice(0, Math.max(0, end)).trim()
+  return locator.length > 0 ? locator : undefined
+}
+
 /** One rendered diff row: removed, added, or shared context. */
 export interface DiffLine {
   /** '-' removed, '+' added, ' ' context. */

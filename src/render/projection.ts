@@ -31,7 +31,7 @@ import type {} from '@deepseek-ai/dsh-session-title'
 // (parent-owned facts; the fold itself lives with the live feed).
 import type {} from '@deepseek-ai/dsh-subagent'
 import { toolArgumentsPreview, toolPromptPreview } from './tool-preview.ts'
-import { toolResultDetail, type ToolDetail } from './tool-detail.ts'
+import { spillLocatorOf, toolResultDetail, type ToolDetail } from './tool-detail.ts'
 
 /** In-flight UI buffers are tails; the assembled assistant message is authoritative. */
 const MAX_STREAMING_CHARS = 65_536
@@ -123,6 +123,12 @@ export interface ToolEntry {
   state: 'running' | 'done' | 'error'
   /** Bounded first text block of the result, empty until it lands. */
   summary: string
+  /**
+   * Locator of a trailing spill-policy notice on the result text
+   * (`Full formatted result stored at: …`), undefined when none; the card
+   * renders it as a one-line badge so the offload is user-visible.
+   */
+  spilledTo: string | undefined
   /**
    * Bounded expansion payload for the verbose transcript (Ctrl+O), derived
    * from the tool's persisted presentation metadata; undefined until the
@@ -365,6 +371,39 @@ export interface FilesEntry {
   paths: readonly string[]
 }
 
+/** One completed hook execution, surfaced from `hook/result`. */
+export interface HookEntry {
+  kind: 'hook'
+  /** Hook point name as the bridge reports it (e.g. `PreToolUse`). */
+  point: string
+  /** Handler identity from the bridge's hooks declaration. */
+  handlerId: string
+  /** Recorded decision: `pass`, `stop`, or a bridge-specific verdict. */
+  decision: string
+  /** True when the decision stopped the flow (`stop` or `continue:false`). */
+  stopped: boolean
+  /** Trimmed stderr summary the bridge recorded, empty when none. */
+  stderr: string
+  /** Wall-clock handler duration in ms. */
+  durationMs: number
+}
+
+/** Files the present tool declared delivered (`deliverables/presented`). */
+export interface DeliverablesEntry {
+  kind: 'deliverables'
+  /** Declared paths in declared order, bounded; dropped ones are counted out. */
+  paths: readonly string[]
+  /** Paths evicted from the bounded window. */
+  dropped: number
+}
+
+/** One durable image offload decision (`image/offload`). */
+export interface ImageOffloadEntry {
+  kind: 'image-offload'
+  /** Image occurrences permanently removed from the model context. */
+  count: number
+}
+
 /** Turn change summary announced by a `workspace/changes` event. */
 export interface WorkspaceChangesEntry {
   kind: 'workspace-changes'
@@ -398,7 +437,7 @@ export interface WorkspaceChangesView {
 }
 
 /** Ordered transcript items the renderer draws. */
-export type TranscriptEntry = UserEntry | PendingEntry | AssistantEntry | ToolEntry | CommandEntry | ErrorEntry | TurnMarkerEntry | CompactionEntry | RetryEntry | FilesEntry | WorkspaceChangesEntry | DeveloperToolsEntry | WorkflowEntry
+export type TranscriptEntry = UserEntry | PendingEntry | AssistantEntry | ToolEntry | CommandEntry | ErrorEntry | TurnMarkerEntry | CompactionEntry | RetryEntry | FilesEntry | HookEntry | DeliverablesEntry | ImageOffloadEntry | WorkspaceChangesEntry | DeveloperToolsEntry | WorkflowEntry
 
 /** The live goal the status line badges, folded from `goal/change`. */
 export interface GoalFold {
@@ -793,6 +832,39 @@ interface ImageOffloadData {
   targets: ReadonlyArray<{ seq: number; imageIndexes: readonly number[] }>
 }
 
+/** Payload of `hook/result` (dsh-hook-protocol's map merge). */
+interface HookResultData {
+  point?: unknown
+  handlerId?: unknown
+  decision?: unknown
+  stderrSummary?: unknown
+  durationMs?: unknown
+}
+
+/** Payload of `deliverables/presented` (dsh-tool-present's map merge). */
+interface DeliverablesData {
+  files?: ReadonlyArray<{ path?: unknown }>
+}
+
+/** Bound on the delivery row's remembered paths (files rows use a cousin). */
+const MAX_DELIVERABLE_PATHS = 12
+
+/**
+ * Count image occurrences one durable offload decision removes, hostile
+ * payloads included: non-array or non-integer indexes contribute nothing.
+ */
+function countOffloadedImages(targets: ReadonlyArray<{ imageIndexes?: readonly unknown[] }>): number {
+  let count = 0
+  for (const target of targets) {
+    const indexes = target?.imageIndexes
+    if (!Array.isArray(indexes)) continue
+    for (const index of indexes) {
+      if (typeof index === 'number' && Number.isSafeInteger(index) && index >= 0) count += 1
+    }
+  }
+  return count
+}
+
 /** Payload of `workspace/changes` (dsh-workspace-changes' map merge). */
 interface WorkspaceChangesData {
   turn: number
@@ -1156,6 +1228,7 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
           prompt: toolPromptPreview(data.name, data.arguments),
           state: 'running',
           summary: '',
+          spilledTo: undefined,
           detail: undefined,
           subs: [],
           subsDropped: 0,
@@ -1198,7 +1271,7 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
       }
       const entries = view.entries.map((entry) => {
         if (entry.kind !== 'tool' || entry.callId !== result.toolCallId) return entry
-        return { ...entry, state: result.isError === true ? 'error' as const : 'done' as const, summary, detail }
+        return { ...entry, state: result.isError === true ? 'error' as const : 'done' as const, summary, spilledTo: spillLocatorOf(rawText), detail }
       })
       const imageTotal = recordImagePrices(view.anchors.imagePrices, event.seq, imagesOf(result.content))
       return {
@@ -1487,10 +1560,18 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
         // A target we never priced contributes nothing, and the clamp keeps
         // a hostile event from driving the segment negative.
         const data = event.data as ImageOffloadData | undefined
-        const removed = consumeImagePrices(view.anchors.imagePrices, Array.isArray(data?.targets) ? data.targets : [])
-        if (removed === 0) return view
+        const targets = Array.isArray(data?.targets) ? data.targets : []
+        const count = countOffloadedImages(targets)
+        const removed = consumeImagePrices(view.anchors.imagePrices, targets)
+        // The decision is also user-visible: one dim row names how many
+        // image occurrences left the context, priced or not.
+        const entries = count > 0
+          ? [...view.entries, { kind: 'image-offload' as const, count }]
+          : view.entries
+        if (removed === 0) return entries === view.entries ? view : { ...view, entries }
         return {
           ...view,
+          entries,
           stats: {
             ...view.stats,
             contextSegments: {
@@ -1499,6 +1580,47 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
             },
           },
         }
+      }
+      if (type === 'hook/invoked') {
+        // The in-flight half of the audit pair: no row until the result
+        // settles, but the event must pass both folds without tripping the
+        // replay router's unknown-event guard.
+        return view
+      }
+      if (type === 'hook/result') {
+        // The audit pair's settling half carries the full row identity
+        // (point/handler/decision/duration); the invoked half stays silent
+        // so an in-flight hook renders nothing until it settles.
+        const data = event.data as HookResultData | undefined
+        if (data === undefined || typeof data.point !== 'string' || data.point === ''
+          || typeof data.handlerId !== 'string' || data.handlerId === '') return view
+        return { ...view, entries: [...view.entries, {
+          kind: 'hook',
+          point: data.point,
+          handlerId: data.handlerId,
+          decision: typeof data.decision === 'string' && data.decision !== '' ? data.decision : 'pass',
+          stopped: data.decision === 'stop',
+          stderr: typeof data.stderrSummary === 'string' ? data.stderrSummary : '',
+          durationMs: typeof data.durationMs === 'number' && Number.isFinite(data.durationMs) ? Math.max(0, data.durationMs) : 0,
+        }] }
+      }
+      if (type === 'deliverables/presented') {
+        // The present tool's declared file set rides the transcript as a
+        // bounded delivery row; dropped paths stay counted.
+        const files = (event.data as DeliverablesData | undefined)?.files
+        if (!Array.isArray(files)) return view
+        const paths: string[] = []
+        for (const raw of files as readonly unknown[]) {
+          const path = typeof raw === 'object' && raw !== null ? (raw as { path?: unknown }).path : undefined
+          if (typeof path !== 'string' || path === '') continue
+          if (paths.length < MAX_DELIVERABLE_PATHS) paths.push(path)
+        }
+        if (paths.length === 0) return view
+        return { ...view, entries: [...view.entries, {
+          kind: 'deliverables',
+          paths,
+          dropped: Math.max(0, files.length - MAX_DELIVERABLE_PATHS),
+        }] }
       }
       if (type === 'workspace/changes') {
         // The durable event (dsh-workspace-changes' map merge) carries only
@@ -2012,6 +2134,7 @@ export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent):
         prompt: toolPromptPreview(data.name, data.arguments),
         state: 'running',
         summary: '',
+        spilledTo: undefined,
         detail: undefined,
         subs: [],
         subsDropped: 0,
@@ -2049,6 +2172,7 @@ export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent):
         ...entry,
         state: result.isError === true ? 'error' as const : 'done' as const,
         summary,
+        spilledTo: spillLocatorOf(rawText),
         detail,
       })
       // Every matching row updates (duplicate callIds included); an id with no
@@ -2268,7 +2392,10 @@ export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent):
       if (type === 'image/offload') {
         // Offload parity — see the reducer's default-block case.
         const data = event.data as ImageOffloadData | undefined
-        const removed = consumeImagePrices(acc.imagePrices, Array.isArray(data?.targets) ? data.targets : [])
+        const targets = Array.isArray(data?.targets) ? data.targets : []
+        const count = countOffloadedImages(targets)
+        const removed = consumeImagePrices(acc.imagePrices, targets)
+        if (count > 0) appendReplayEntry(acc, { kind: 'image-offload', count })
         if (removed > 0) {
           acc.stats = {
             ...acc.stats,
@@ -2278,7 +2405,47 @@ export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent):
             },
           }
         }
-        return removed > 0
+        return removed > 0 || count > 0
+      }
+      if (type === 'hook/invoked') {
+        // The in-flight half of the audit pair — no row until the result
+        // settles, but the event must pass the replay router without
+        // tripping its unknown-event guard.
+        return false
+      }
+      if (type === 'hook/result') {
+        // The settling half renders the row — see the reducer's case.
+        const data = event.data as HookResultData | undefined
+        if (data === undefined || typeof data.point !== 'string' || data.point === ''
+          || typeof data.handlerId !== 'string' || data.handlerId === '') return false
+        appendReplayEntry(acc, {
+          kind: 'hook',
+          point: data.point,
+          handlerId: data.handlerId,
+          decision: typeof data.decision === 'string' && data.decision !== '' ? data.decision : 'pass',
+          stopped: data.decision === 'stop',
+          stderr: typeof data.stderrSummary === 'string' ? data.stderrSummary : '',
+          durationMs: typeof data.durationMs === 'number' && Number.isFinite(data.durationMs) ? Math.max(0, data.durationMs) : 0,
+        })
+        return true
+      }
+      if (type === 'deliverables/presented') {
+        // Bounded delivery row — see the reducer's case.
+        const files = (event.data as DeliverablesData | undefined)?.files
+        if (!Array.isArray(files)) return false
+        const paths: string[] = []
+        for (const raw of files as readonly unknown[]) {
+          const path = typeof raw === 'object' && raw !== null ? (raw as { path?: unknown }).path : undefined
+          if (typeof path !== 'string' || path === '') continue
+          if (paths.length < MAX_DELIVERABLE_PATHS) paths.push(path)
+        }
+        if (paths.length === 0) return false
+        appendReplayEntry(acc, {
+          kind: 'deliverables',
+          paths,
+          dropped: Math.max(0, files.length - MAX_DELIVERABLE_PATHS),
+        })
+        return true
       }
       if (type === 'workspace/changes') {
         // The marker the live summary joins by seq — see the reducer's case.

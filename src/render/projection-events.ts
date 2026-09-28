@@ -27,11 +27,19 @@ export const TRANSCRIPT_SESSION_EVENT_TYPES = [
   'compaction/end',
   'compaction/prune',
   'compaction/summary',
+  // v4 deliverables visibility: the present tool's declared file set rides
+  // the transcript as a bounded delivery row.
+  'deliverables/presented',
   // v4 dynamic tool loading: tool-addition/removal blocks render one dim row.
   'developer/message',
   'goal/change',
   // v4 durable offload decisions: consumed image prices leave the segments bar.
   'image/offload',
+  // v4 hooks visibility: the bridge's audit pair renders one bounded row per
+  // completed handler (invoked alone is the in-flight half; the result
+  // carries the point/handler identity, decision, and duration).
+  'hook/invoked',
+  'hook/result',
   'llm/retry',
   'llm/retry-started',
   'permission/preset',
@@ -80,12 +88,9 @@ export const IGNORED_SESSION_EVENT_TYPES = [
   'approval/decided',
   'approval/policy',
   'compaction/start',
-  'deliverables/presented',
   'feedback/message-delete',
   'feedback/message-put',
   'feedback/record',
-  'hook/invoked',
-  'hook/result',
   'session-log-deepseek/delivery-accepted',
   'session/end-seed',
   // Reminders left the composition with 0.1.7-rc.2 (the delivery stack is

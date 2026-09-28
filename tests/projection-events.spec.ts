@@ -22,8 +22,16 @@ describe('session event projection compatibility policy', () => {
   it('distinguishes transcript, other-surface, ignored, and plugin events', () => {
     expect(sessionEventDisposition('assistant/message')).toBe('transcript')
     expect(sessionEventDisposition('model/selection')).toBe('other-surface')
-    expect(sessionEventDisposition('hook/result')).toBe('ignored')
+    expect(sessionEventDisposition('approval/asked')).toBe('ignored')
     expect(sessionEventDisposition('third-party/example')).toBe('unknown')
+  })
+
+  it('classifies the v4 visibility additions as transcript events', () => {
+    // Batches 2's deliberate moves out of IGNORED: hooks and deliverables
+    // now render bounded rows; historical sessions replay them the same way.
+    expect(sessionEventDisposition('hook/invoked')).toBe('transcript')
+    expect(sessionEventDisposition('hook/result')).toBe('transcript')
+    expect(sessionEventDisposition('deliverables/presented')).toBe('transcript')
   })
 
   it('keeps non-transcript and unknown events silent in the live store', () => {

@@ -215,6 +215,7 @@ describe('styled terminal lines', () => {
       prompt: '',
       state: 'done',
       summary: 'done',
+      spilledTo: undefined,
       detail: { kind: 'raw', text: raw, truncated: false },
       subs: [],
       subsDropped: 0,
@@ -298,6 +299,7 @@ describe('styled terminal lines', () => {
       prompt: '',
       state: 'done',
       summary: 'done',
+      spilledTo: undefined,
       detail: {
         kind: 'diff',
         diffs: [{
@@ -343,6 +345,7 @@ describe('styled terminal lines', () => {
       prompt: '',
       state: 'done',
       summary: 'done',
+      spilledTo: undefined,
       detail: { kind: 'raw', text: raw, truncated: false },
       subs: [],
       subsDropped: 0,
@@ -367,6 +370,7 @@ describe('styled terminal lines', () => {
       prompt: '',
       state: 'error',
       summary: 'command failed',
+      spilledTo: undefined,
       detail: undefined,
       subs: [],
       subsDropped: 0,
@@ -389,6 +393,7 @@ describe('styled terminal lines', () => {
       prompt: '',
       state: 'running',
       summary: '',
+      spilledTo: undefined,
       detail: undefined,
       subs: [
         { subCallId: 'run:ptc:1', name: 'read_file', preview: 'a.ts', state: 'running', summary: '', durationMs: 0 },
@@ -424,6 +429,7 @@ describe('styled terminal lines', () => {
       prompt: '',
       state: 'running',
       summary: '',
+      spilledTo: undefined,
       detail: undefined,
       subs: [],
       subsDropped: 0,

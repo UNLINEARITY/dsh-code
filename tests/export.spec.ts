@@ -35,7 +35,7 @@ describe('buildExportMarkdown', () => {
       entries: [
         { kind: 'user', text: 'fix it', notice: false },
         { kind: 'assistant', text: 'doing it', reasoning: 'hmm' },
-        { kind: 'tool', callId: 'c1', ordinal: 1, name: 'edit', arguments: '{}', preview: 'a.ts', prompt: '', state: 'done', summary: 'Updated file', detail: undefined, subs: [], subsDropped: 0 },
+        { kind: 'tool', callId: 'c1', ordinal: 1, name: 'edit', arguments: '{}', preview: 'a.ts', prompt: '', state: 'done', summary: 'Updated file', spilledTo: undefined, detail: undefined, subs: [], subsDropped: 0 },
         { kind: 'turn-marker', text: 'turn cancelled by the user' },
         { kind: 'error', text: 'X: boom' },
       ] as const,
@@ -57,7 +57,7 @@ describe('buildExportMarkdown', () => {
       entries: [
         {
           kind: 'tool', callId: 'call', ordinal: 1, name: 'run_code', arguments: '{}', preview: 'main.ts', prompt: '',
-          state: 'done', summary: 'ok', detail: undefined,
+          state: 'done', summary: 'ok', spilledTo: undefined, detail: undefined,
           subs: [
             { subCallId: 'run:ptc:1', name: 'read_file', preview: 'a.ts', state: 'done', summary: '', durationMs: 1_000 },
             { subCallId: 'run:ptc:2', name: 'bash', preview: 'ls', state: 'error', summary: 'boom', durationMs: 50 },

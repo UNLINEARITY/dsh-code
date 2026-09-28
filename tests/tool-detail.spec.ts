@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from 'vitest'
 import { visibleColumns } from '../src/render/markdown.ts'
-import { diffRows, toolResultDetail } from '../src/render/tool-detail.ts'
+import { diffRows, spillLocatorOf, toolResultDetail } from '../src/render/tool-detail.ts'
 import { transcriptEntryLines } from '../src/render/lines.ts'
 import type { StyledLine } from '../src/render/lines.ts'
 import type { TranscriptEntry } from '../src/render/projection.ts'
@@ -312,5 +312,33 @@ describe('tool detail card rows (verbose transcript rendering)', () => {
     const rows = transcriptEntryLines(entry, width, true, true, true)
     expect(rows).not.toHaveLength(0)
     for (const row of rows) expect(visibleColumns(render([row]))).toBeLessThanOrEqual(width)
+  })
+})
+
+describe('spillLocatorOf', () => {
+  it('extracts the locator from a trailing spill notice, with and without images', () => {
+    const text = 'head preview\n\n(Omitted 20480 bytes. Full formatted result stored at: /sessions/abc/spill/42.txt. Retrieve the stored result before answering.)'
+    expect(spillLocatorOf(text)).toBe('/sessions/abc/spill/42.txt')
+    expect(spillLocatorOf('x\n\n(Omitted 9 bytes. Omitted 2 images. Full formatted result stored at: /s/p. hint.)')).toBe('/s/p')
+  })
+
+  it('recognizes the unknown-count spelling and a hintless notice', () => {
+    expect(spillLocatorOf('(More bytes were omitted. Full formatted result stored at: /a/b. hint.)')).toBe('/a/b')
+    expect(spillLocatorOf('(Omitted 5 bytes. Full formatted result stored at: /c)')).toBe('/c')
+  })
+
+  it('returns undefined for ordinary results and non-trailing mentions', () => {
+    expect(spillLocatorOf('plain output')).toBeUndefined()
+    expect(spillLocatorOf('mentions Full formatted result stored at: /x without parens')).toBeUndefined()
+    expect(spillLocatorOf('(nested (parens) only)')).toBeUndefined()
+  })
+})
+
+describe('spill badge rendering', () => {
+  it('rides one dim row under a settled card whose result carries a notice', () => {
+    const entry = { kind: 'tool', name: 'bash', state: 'done', ordinal: 3, preview: 'cat big.log', prompt: '', summary: 'head lines…', spilledTo: '/sessions/s/spill/7.txt', subs: [], subsDropped: 0, detail: undefined } as unknown as TranscriptEntry
+    const flat = render(transcriptEntryLines(entry, 80, true, true, false))
+    expect(flat).toContain('spilled')
+    expect(flat).toContain('/sessions/s/spill/7.txt')
   })
 })

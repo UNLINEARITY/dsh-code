@@ -85,6 +85,15 @@ export function buildExportMarkdown(view: TranscriptView, sessionId: string): st
       case 'retry':
         out.push(`> retry ${entry.attempt}/${entry.max} (${entry.code})`, '')
         break
+      case 'hook':
+        out.push(`> hook ${entry.point} · ${entry.handlerId} → ${entry.decision} (${entry.durationMs}ms)`, '')
+        break
+      case 'deliverables':
+        out.push(`> delivered ${entry.paths.length + entry.dropped} file${entry.paths.length + entry.dropped === 1 ? '' : 's'}: ${entry.paths.join(', ')}`, '')
+        break
+      case 'image-offload':
+        out.push(`> offloaded ${entry.count} image${entry.count === 1 ? '' : 's'} from context`, '')
+        break
       case 'files':
         out.push(`> files changed: ${entry.paths.join(', ')}`, '')
         break

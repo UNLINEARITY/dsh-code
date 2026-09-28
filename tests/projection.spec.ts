@@ -2227,3 +2227,71 @@ describe('image segment and offload parity', () => {
     expect(snapshotReplayView(acc).stats.contextSegments).toEqual(view.stats.contextSegments)
   })
 })
+
+describe('v4 visibility additions (hooks, deliverables, image offload, spill)', () => {
+  const asEvent = (type: string, data: unknown, seq: number): SessionEvent =>
+    ({ type, seq: SessionSeq(seq), time: 0, surfaceOp: 'append', data }) as unknown as SessionEvent
+
+  const replayedWith = (events: readonly SessionEvent[]) => {
+    const acc = createReplayAccumulator()
+    for (const event of events) replayProjectEvent(acc, event)
+    return snapshotReplayView(acc)
+  }
+
+  it('folds one hook row per hook/result and stays silent on hostile payloads', () => {
+    const events = [
+      asEvent('hook/invoked', { turn: 1, point: 'PreToolUse', dialect: 'claude-code', handlerId: 'h1' }, 1),
+      asEvent('hook/result', { turn: 1, point: 'PreToolUse', handlerId: 'h1', decision: 'pass', durationMs: 42 }, 2),
+      asEvent('hook/result', { turn: 1, point: 'Stop', handlerId: 'h2', decision: 'stop', stderrSummary: 'boom', durationMs: 7 }, 3),
+      asEvent('hook/result', { handlerId: '' }, 4),
+      asEvent('hook/result', 'not-an-object', 5),
+    ]
+    const view = projectEvents(events)
+    const rows = view.entries.filter(entry => entry.kind === 'hook')
+    expect(rows).toHaveLength(2)
+    expect(rows[0]).toMatchObject({ point: 'PreToolUse', handlerId: 'h1', decision: 'pass', stopped: false, durationMs: 42 })
+    expect(rows[1]).toMatchObject({ point: 'Stop', handlerId: 'h2', decision: 'stop', stopped: true, stderr: 'boom' })
+    expect(replayedWith(events).entries.filter(entry => entry.kind === 'hook')).toEqual(rows)
+  })
+
+  it('folds a bounded deliverables row and counts dropped paths', () => {
+    const files = Array.from({ length: 15 }, (_, i) => ({ path: `out-${i}.md` }))
+    const events = [
+      asEvent('deliverables/presented', { turn: 1, callId: 'c1', files }, 1),
+      asEvent('deliverables/presented', { turn: 1, callId: 'c2', files: [{ path: '' }, { path: 'ok.ts' }] }, 2),
+      asEvent('deliverables/presented', { turn: 1, callId: 'c3', files: [] }, 3),
+      asEvent('deliverables/presented', { turn: 1, callId: 'c4' }, 4),
+    ]
+    const view = projectEvents(events)
+    const rows = view.entries.filter(entry => entry.kind === 'deliverables')
+    expect(rows).toHaveLength(2)
+    expect(rows[0]).toMatchObject({ paths: files.slice(0, 12).map(file => file.path), dropped: 3 })
+    expect(rows[1]).toMatchObject({ paths: ['ok.ts'], dropped: 0 })
+    expect(replayedWith(events).entries.filter(entry => entry.kind === 'deliverables')).toEqual(rows)
+  })
+
+  it('folds an image-offload row beside the segments-bar consumption', () => {
+    const events = [
+      asEvent('image/offload', { targets: [{ seq: 1, imageIndexes: [0, 1] }, { seq: 2, imageIndexes: [3] }] }, 1),
+      asEvent('image/offload', { targets: [{ seq: 9, imageIndexes: 'nope' }] }, 2),
+      asEvent('image/offload', { targets: [] }, 3),
+    ]
+    const view = projectEvents(events)
+    const rows = view.entries.filter(entry => entry.kind === 'image-offload')
+    expect(rows).toEqual([{ kind: 'image-offload', count: 3 }])
+    expect(replayedWith(events).entries.filter(entry => entry.kind === 'image-offload')).toEqual(rows)
+  })
+
+  it('flags a settled tool card with the spill locator from its trailing notice', () => {
+    const spilled = 'preview\n\n(Omitted 20480 bytes. Full formatted result stored at: /s/spill/1.txt. Retrieve it.)'
+    const events = [
+      { type: 'tool/call', seq: SessionSeq(1), time: 0, surfaceOp: 'append', data: { turn: 1, step: 1, callId: ToolCallId('c1'), name: 'bash', arguments: '{}' } } as unknown as SessionEvent,
+      toolResultEvent(ToolCallId('c1'), spilled, false, 2),
+    ]
+    const view = projectEvents(events)
+    const tool = view.entries.find(entry => entry.kind === 'tool') as ToolEntry
+    expect(tool.spilledTo).toBe('/s/spill/1.txt')
+    const replayTool = replayedWith(events).entries.find(entry => entry.kind === 'tool') as ToolEntry
+    expect(replayTool.spilledTo).toBe('/s/spill/1.txt')
+  })
+})
