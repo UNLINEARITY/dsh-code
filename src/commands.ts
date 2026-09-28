@@ -121,6 +121,28 @@ export function isSlashLine(line: string): boolean {
 }
 
 /**
+ * Kernel command names the host registry can register but a preset-scoped
+ * session may not carry (`/compact` and `/goal` ride the compaction and goal
+ * preset groups; `/feedback` and `/plan` are global registrations). When a
+ * line targets one of these and the registry still answers `undefined`, the
+ * name is reserved vocabulary — not a skill gesture — so the runner shows an
+ * availability notice instead of leaking the line to the model as a prompt.
+ */
+const KERNEL_COMMAND_NAMES: ReadonlySet<string> = new Set(['compact', 'feedback', 'goal', 'plan'])
+
+/**
+ * The kernel command one slash line targets, when its name is reserved host
+ * vocabulary the current session's registry view does not own.
+ * @param line - the complete submission candidate (already known syntactic).
+ * @returns the reserved command name, or null when the line may fall through.
+ */
+export function missingKernelCommand(line: string): string | null {
+  if (!isSlashLine(line)) return null
+  const name = line.slice(1).split(/[\t ]/u, 1)[0] ?? ''
+  return KERNEL_COMMAND_NAMES.has(name) ? name : null
+}
+
+/**
  * The submission payload for one composer line. Trim is a blank check, not a
  * rewrite: an ordinary prompt keeps its exact leading indentation, inner
  * layout, and trailing spaces (pasted code must reach the model verbatim).

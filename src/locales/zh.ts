@@ -340,6 +340,7 @@ export const zh: MessageCatalog = {
   'notice.statuslineSaveFailed': '状态栏保存失败：{message}',
   'notice.animationsSaveFailed': '装饰动画保存失败：{message}',
   'notice.commandRegistryMissing': '当前组合未加载命令注册表',
+  'notice.kernelCommandUnavailable': '/{name} 在当前会话不可用（当前预设未包含该命令）',
   'notice.commandFallbackFailed': '命令回退失败：{message}',
   'notice.commandFailed': '命令执行失败：{message}',
   'notice.invalidReference': '会话引用无效：{message}',

@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { CommandDescriptor } from '@deepseek-ai/dsh-commands'
-import { isSlashLine, submissionPayload, watchCommands } from '../src/commands.ts'
+import { isSlashLine, missingKernelCommand, submissionPayload, watchCommands } from '../src/commands.ts'
 import { loadModelDirectory } from '../src/models.ts'
 
 describe('isSlashLine', () => {
@@ -46,6 +46,30 @@ describe('submissionPayload', () => {
     // a command name — both must reach the model exactly as typed.
     expect(submissionPayload('/* block\ncomment */')).toBe('/* block\ncomment */')
     expect(submissionPayload('/path/to/file tail')).toBe('/path/to/file tail')
+  })
+})
+
+describe('missingKernelCommand', () => {
+  it('names the kernel command an unregistered line targets, with or without input', () => {
+    expect(missingKernelCommand('/compact')).toBe('compact')
+    expect(missingKernelCommand('/compact now')).toBe('compact')
+    expect(missingKernelCommand('/goal create ship it')).toBe('goal')
+    expect(missingKernelCommand('/plan off')).toBe('plan')
+    expect(missingKernelCommand('/feedback   ')).toBe('feedback')
+  })
+
+  it('returns null for unknown names so the skill-gesture fall-through survives', () => {
+    // A user-invocable skill (`/skill-name`) is not a kernel command: the
+    // verbatim fall-through must keep delivering it to the pre-step injection.
+    expect(missingKernelCommand('/my-skill')).toBeNull()
+    expect(missingKernelCommand('/review')).toBeNull()
+  })
+
+  it('returns null for anything that is not a syntactic slash line', () => {
+    expect(missingKernelCommand('hello')).toBeNull()
+    expect(missingKernelCommand('/')).toBeNull()
+    expect(missingKernelCommand('/Compact')).toBeNull()
+    expect(missingKernelCommand('')).toBeNull()
   })
 })
 

@@ -59,7 +59,7 @@ export {
   type QueueMutationOutcome,
 } from './runner/submissions.ts'
 import { mountApprovalAnswerer, type ApprovalStore } from './approval.ts'
-import { isSlashLine, submissionPayload, watchCommands, type CommandsView } from './commands.ts'
+import { isSlashLine, missingKernelCommand, submissionPayload, watchCommands, type CommandsView } from './commands.ts'
 import { internals, type TuiMount } from './internals.ts'
 import { syncModelCapabilities } from './model-capabilities.ts'
 import { buildModelSelection, applyModelSelectionToConfig, loadModelDirectory, modelSelectionLabel, pendingModelSelection, resolveEffectiveSelection, type ModelRow } from './models.ts'
@@ -848,6 +848,15 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       // reach an agent that is no longer on screen.
       if (epoch !== atEpoch || agent !== currentAgent) return
       if (execution === undefined) {
+        // Reserved kernel vocabulary the registry did not claim (e.g. a
+        // minimal or lite session without the compaction or goal groups):
+        // leaking "/compact" to the model as a prompt reads as a user
+        // request, so the runner answers with an availability notice instead.
+        const kernelName = missingKernelCommand(line)
+        if (kernelName !== null) {
+          bridge.notify(t('notice.kernelCommandUnavailable', { name: kernelName }), 'error')
+          return
+        }
         // No command owns this line: send it verbatim so a user-invocable
         // skill gesture (`/skill-name`) reaches the host's tool-skill
         // pre-step injection — the web composer's same fall-through.
