@@ -12,6 +12,7 @@ import { SessionSeq, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { fixtureEvent } from './helpers/events.ts'
 import type { MessageSource } from '@deepseek-ai/dsh-llm'
 import type { ToolEntry, WorkflowEntry } from '../src/render/projection.ts'
+import { createTranscriptStore } from './helpers/app-mount.ts'
 import {
   applyAssistantStreamChunk,
   createReplayAccumulator,
@@ -2293,5 +2294,40 @@ describe('v4 visibility additions (hooks, deliverables, image offload, spill)', 
     expect(tool.spilledTo).toBe('/s/spill/1.txt')
     const replayTool = replayedWith(events).entries.find(entry => entry.kind === 'tool') as ToolEntry
     expect(replayTool.spilledTo).toBe('/s/spill/1.txt')
+  })
+})
+
+describe('message seq→text index (the /copy lookup)', () => {
+  it('indexes user prompts, collapsed notices, and settled replies by event seq', () => {
+    const acc = createReplayAccumulator()
+    replayProjectEvent(acc, {
+      type: 'user/message', seq: SessionSeq(3), time: 1, surfaceOp: 'append',
+      data: createUserMessage({ content: [{ type: 'text', text: 'hello there' }], source: { kind: 'user' } }),
+    } as unknown as SessionEvent)
+    replayProjectEvent(acc, {
+      type: 'user/message', seq: SessionSeq(5), time: 2, surfaceOp: 'append',
+      data: createUserMessage({ content: [{ type: 'text', text: 'injected notice body' }], source: { kind: 'runtime-context', form: 'notice', summary: 'ctx' } as unknown as MessageSource }),
+    } as unknown as SessionEvent)
+    replayProjectEvent(acc, {
+      type: 'assistant/message', seq: SessionSeq(7), time: 3, surfaceOp: 'append',
+      data: {
+        turn: 1, step: 1, stream: [],
+        message: createAssistantMessage({ content: [{ type: 'text', text: 'here is the answer' }], source: { provider: 'p', model: 'm' } }),
+      },
+    } as unknown as SessionEvent)
+    const view = snapshotReplayView(acc)
+    expect(view.anchors.messageText.get(3)).toBe('hello there')
+    expect(view.anchors.messageText.has(5)).toBe(true)
+    expect(view.anchors.messageText.get(7)).toBe('here is the answer')
+    // Live-fold equivalence: the sequential store path indexes identically.
+    const events = [
+      fixtureEvent({ type: 'user/message', seq: 3, time: 1, data: createUserMessage({ content: [{ type: 'text', text: 'hello there' }], source: { kind: 'user' } }) }),
+      fixtureEvent({ type: 'user/message', seq: 5, time: 2, data: createUserMessage({ content: [{ type: 'text', text: 'injected notice body' }], source: { kind: 'runtime-context', form: 'notice', summary: 'ctx' } as unknown as MessageSource }) }),
+      { type: 'assistant/message', seq: SessionSeq(7), time: 3, surfaceOp: 'append', data: { turn: 1, step: 1, stream: [], message: createAssistantMessage({ content: [{ type: 'text', text: 'here is the answer' }], source: { provider: 'p', model: 'm' } }) } } as unknown as SessionEvent,
+    ]
+    const store = createTranscriptStore()
+    for (const event of events) store.apply(event)
+    expect(store.getView().anchors.messageText.get(3)).toBe('hello there')
+    expect(store.getView().anchors.messageText.get(7)).toBe('here is the answer')
   })
 })

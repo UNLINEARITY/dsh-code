@@ -628,6 +628,8 @@ export interface TranscriptView {
     systemNodes: Map<number, string>
     /** Priced images per node seq (user prompts, tool results) for the offload fold. */
     imagePrices: Map<number, number[]>
+    /** Copyable message text (user prompts, assistant replies) by event seq — the /copy lookup. */
+    messageText: Map<number, string>
   }
 }
 
@@ -692,6 +694,7 @@ function cloneViewAnchors(anchors: TranscriptView['anchors']): TranscriptView['a
     turnTools: new Map([...anchors.turnTools].map(([turn, tools]) => [turn, new Set(tools)])),
     systemNodes: new Map(anchors.systemNodes),
     imagePrices: new Map([...anchors.imagePrices].map(([seq, prices]) => [seq, [...prices]])),
+    messageText: new Map(anchors.messageText),
   }
 }
 
@@ -890,7 +893,7 @@ export function createTranscriptView(): TranscriptView {
     pending: { 'next-turn': [], 'next-step': [] },
     claimOrigin: new Map(),
     stats: { turns: 0, steps: 0, llmMs: 0, toolMs: 0, usage: { uncachedInputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }, lastPromptTokens: 0, contextWindow: 0, contextSegments: { system: 0, prompt: 0, assistant: 0, thinking: 0, tools: 0, images: 0 }, ttftMs: 0, ttftSteps: 0, decodeMs: 0, decodeTokens: 0, reasoningEffort: '' },
-    anchors: { stepStart: new Map(), toolStart: new Map(), subStart: new Map(), firstChunkAt: new Map(), compactionTokens: new Map(), lastPruneTokens: 0, turnFiles: new Map(), turnSteps: new Map(), turnTools: new Map(), systemNodes: new Map(), imagePrices: new Map() },
+    anchors: { stepStart: new Map(), toolStart: new Map(), subStart: new Map(), firstChunkAt: new Map(), compactionTokens: new Map(), lastPruneTokens: 0, turnFiles: new Map(), turnSteps: new Map(), turnTools: new Map(), systemNodes: new Map(), imagePrices: new Map(), messageText: new Map() },
   }
 }
 
@@ -959,6 +962,7 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
       const files = filesOf(message.content)
       if (message.source.kind === 'user') {
         const imageTotal = recordImagePrices(view.anchors.imagePrices, event.seq, images)
+        view.anchors.messageText.set(event.seq, text)
         return {
           ...view,
           pending,
@@ -996,6 +1000,7 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
       }
       if (REMINDER_KINDS.has(message.source.kind)) {
         const imageTotal = recordImagePrices(view.anchors.imagePrices, event.seq, images)
+        view.anchors.messageText.set(event.seq, text)
         return {
           ...view,
           pending,
@@ -1017,11 +1022,12 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
       const account = noticeAccountOf(message.source)
       const notice = account !== undefined ? account : message.source.kind
       const summary = boundContextSummary(notice)
+      view.anchors.messageText.set(event.seq, summary)
       return {
         ...view,
         pending,
         claimOrigin,
-        entries: [...entries, { kind: 'user', text: summary, notice: true }],
+          entries: [...entries, { kind: 'user', text: summary, notice: true }],
         stats: {
           ...view.stats,
           contextSegments: {
@@ -1176,6 +1182,7 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
       // walk and an empty block in /export. The event still updates timing
       // and usage above; only the transcript entry is skipped.
       const renderable = text !== '' || reasoning !== '' || event.data.interrupted === true
+      if (renderable) view.anchors.messageText.set(event.seq, text)
       return {
         ...view,
         streaming: '',
@@ -1773,6 +1780,8 @@ export interface ReplayAccumulator {
   lastPruneTokens: number
   /** Priced images per node seq (user prompts, tool results) for the offload fold. */
   imagePrices: Map<number, number[]>
+  /** Copyable message text by event seq — mirrors the live view's anchors. */
+  messageText: Map<number, string>
   turnFiles: Map<number, Set<string>>
   turnSteps: Map<number, string>
   turnTools: Map<number, Set<string>>
@@ -1816,6 +1825,7 @@ export function createReplayAccumulator(): ReplayAccumulator {
     compactionTokens: new Map(),
     lastPruneTokens: 0,
     imagePrices: new Map(),
+    messageText: new Map(),
     turnFiles: new Map(),
     turnSteps: new Map(),
     turnTools: new Map(),
@@ -1952,7 +1962,8 @@ export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent):
       acc.claimOrigin.delete(message.id)
       if (message.source.kind === 'user' || REMINDER_KINDS.has(message.source.kind)) {
         const imageTotal = recordImagePrices(acc.imagePrices, event.seq, images)
-        appendReplayEntry(acc, { kind: 'user', text, notice: false, ...delivery, ...(images.length === 0 ? {} : { images }), ...(files.length === 0 ? {} : { files }) })
+        acc.messageText.set(event.seq, text)
+      appendReplayEntry(acc, { kind: 'user', text, notice: false, ...delivery, ...(images.length === 0 ? {} : { images }), ...(files.length === 0 ? {} : { files }) })
         acc.stats = {
           ...acc.stats,
           contextSegments: {
@@ -1976,6 +1987,7 @@ export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent):
       const account = noticeAccountOf(message.source)
       const notice = account !== undefined ? account : message.source.kind
       const summary = boundContextSummary(notice)
+      acc.messageText.set(event.seq, summary)
       appendReplayEntry(acc, { kind: 'user', text: summary, notice: true })
       acc.stats = {
         ...acc.stats,
@@ -2094,7 +2106,8 @@ export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent):
       // Same zero-line guard as the live fold: tool-only settlements carry
       // timing/usage but no renderable transcript entry.
       if (text !== '' || reasoning !== '' || event.data.interrupted === true) {
-        appendReplayEntry(acc, { kind: 'assistant', text, reasoning, interrupted: event.data.interrupted === true ? true : undefined })
+        acc.messageText.set(event.seq, text)
+      appendReplayEntry(acc, { kind: 'assistant', text, reasoning, interrupted: event.data.interrupted === true ? true : undefined })
       }
       acc.stats = {
         ...acc.stats,
@@ -2584,6 +2597,7 @@ function materializeReplayView(acc: ReplayAccumulator, copy: boolean): Transcrip
       turnTools: new Map([...acc.turnTools].map(([turn, tools]) => [turn, new Set(tools)])),
       systemNodes: new Map(acc.systemNodes),
       imagePrices: new Map([...acc.imagePrices].map(([seq, prices]) => [seq, [...prices]])),
+      messageText: new Map(acc.messageText),
     },
   }
 }

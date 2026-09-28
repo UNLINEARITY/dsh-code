@@ -579,7 +579,7 @@ export function Composer({ active, frozen, frozenHint, busy, descriptors, skills
   cycleMode: () => string
   exportTranscript: (argument: string) => Promise<void>
   renameTitle: (argument: string) => string
-  copyLastResponse: () => Promise<string>
+  copyLastResponse: (seq?: number) => Promise<string>
   /** Newest-first recall space (persistent + in-session, deduped). */
   recallSpace: readonly string[]
   /** Record one in-session submission (deduped, local only). */
@@ -1415,8 +1415,10 @@ export function Composer({ active, frozen, frozenHint, busy, descriptors, skills
         notify(outcome, tone)
         return
       }
-      if (text === '/copy') {
-        void copyLastResponse().then(
+      if (text === '/copy' || text.startsWith('/copy ')) {
+        const argument = text.slice(5).trim()
+        const seq = /^\d+$/u.test(argument) ? Number.parseInt(argument, 10) : undefined
+        void copyLastResponse(seq).then(
           outcome => notify(outcome),
           error => notify(t('notice.copyFailed', { message: error instanceof Error ? error.message : String(error) }), 'error'),
         )

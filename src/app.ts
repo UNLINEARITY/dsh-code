@@ -319,7 +319,7 @@ export interface AppProps {
   /** Rename the session (/title <text>); returns the outcome line for the notice. */
   renameTitle: (argument: string) => string
   /** Copy the latest complete assistant response; resolves to notice text. */
-  copyLastResponse: () => Promise<string>
+  copyLastResponse: (seq?: number) => Promise<string>
   /** Load a complete read-only Git diff for the file-oriented viewport. */
   loadGitDiff: (argument: string) => Promise<GitDiffView>
   /** Local branches for the /review picker (absent: the picker hides the branch phase's list). */
@@ -357,6 +357,16 @@ export interface AppProps {
   loadJobs: () => readonly JobRow[]
   /** Configured MCP servers (dsh-mcp-client loader rows, read-only). */
   loadMcpServers?: () => readonly McpServerRow[]
+  /** Persisted new-session permission default (settings-backed, read/write). */
+  permissionDefault?: { load: () => Promise<string>; set: (preset: string) => Promise<string> }
+  /** Request one background job's cancellation (resolves with a notice). */
+  jobKill?: (id: string) => Promise<string>
+  /** Toggle one plugin row through the manager service (non-management rows). */
+  pluginToggle?: (entryId: string, rowId: string, enabled: boolean) => Promise<string>
+  /** Loader entry ids the manager may edit; empty when the service is absent. */
+  pluginEditable?: () => Promise<readonly string[]>
+  /** Read one background job's retained output as bounded plain lines. */
+  jobOutput?: (id: string) => Promise<readonly string[]>
   /** Probe the launcher's aligned update plan (read-only; never installs). */
   probeUpdate: () => Promise<LauncherUpdateStatus>
   /** Run the launcher's aligned update; streams sanitized lines; resolves with the exit code. */
@@ -3118,6 +3128,8 @@ export function App(props: AppProps): ReactElement {
       ? createElement(PermissionPanel, {
         current: props.permission,
         load: props.loadPermissions,
+        defaultPreset: props.permissionDefault === undefined ? undefined : props.permissionDefault.load,
+        setDefault: props.permissionDefault === undefined ? undefined : props.permissionDefault.set,
         select: (id: string) => {
           try {
             const selected = props.setPermission(id)
@@ -3173,7 +3185,13 @@ export function App(props: AppProps): ReactElement {
       })
       : undefined,
     pluginOpen && !approvalPending && !questionPending
-      ? createElement(PluginPanel, { load: props.loadPlugins, initialQuery: pluginQuery, close: () => setPluginOpen(false) })
+      ? createElement(PluginPanel, {
+        load: props.loadPlugins,
+        initialQuery: pluginQuery,
+        editableEntries: props.pluginEditable,
+        toggle: props.pluginToggle,
+        close: () => setPluginOpen(false),
+      })
       : undefined,
     updateOpen && !approvalPending && !questionPending
       ? createElement(UpdatePanel, {
@@ -3184,7 +3202,12 @@ export function App(props: AppProps): ReactElement {
       })
       : undefined,
     jobsOpen && !approvalPending && !questionPending
-      ? createElement(JobsPanel, { load: props.loadJobs, close: () => setJobsOpen(false) })
+      ? createElement(JobsPanel, {
+        load: props.loadJobs,
+        kill: props.jobKill,
+        readOutput: props.jobOutput,
+        close: () => setJobsOpen(false),
+      })
       : undefined,
     mcpOpen && !approvalPending && !questionPending
       ? createElement(McpPanel, { load: props.loadMcpServers ?? ((): readonly McpServerRow[] => []), close: () => setMcpOpen(false) })

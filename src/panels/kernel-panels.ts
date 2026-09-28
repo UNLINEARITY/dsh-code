@@ -152,23 +152,33 @@ export function ModePanel({ current, load, select, close }: {
   })
 }
 
-export function PermissionPanel({ current, load, select, close }: {
+export function PermissionPanel({ current, load, select, close, defaultPreset, setDefault }: {
   current: string
   load: () => Promise<readonly PermissionRow[]>
   select: (id: string) => void
   close: () => void
+  /** Loads the persisted new-session default ('' when none); ★ marks the row. */
+  defaultPreset?: () => Promise<string>
+  /** Persist one preset as the new-session default; resolves with the notice text. */
+  setDefault?: (id: string) => Promise<string>
 }): ReactElement {
   const [rows, setRows] = useState<readonly PermissionRow[]>([])
   const [query, setQuery] = useState('')
   const [cursor, setCursor] = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string>()
+  const [defaultId, setDefaultId] = useState<string>()
+  const [defaultNotice, setDefaultNotice] = useState<string>()
   const refresh = useCallback((): void => {
     setLoading(true); setError(undefined)
     Promise.resolve().then(load).then(value => { setRows(value); setLoading(false) }, reason => {
       setError(reason instanceof Error ? reason.message : String(reason)); setLoading(false)
     })
-  }, [load])
+    if (defaultPreset !== undefined) void defaultPreset().then(
+      value => { setDefaultId(value === '' ? undefined : value) },
+      () => { setDefaultId(undefined) },
+    )
+  }, [load, defaultPreset])
   useEffect(refresh, [refresh])
   const visible = useMemo(() => rows.filter(row => `${row.id} ${row.description ?? ''}`.toLowerCase().includes(query.toLowerCase())), [rows, query])
   useEffect(() => setCursor(value => Math.min(value, Math.max(0, visible.length - 1))), [visible.length])
@@ -177,6 +187,18 @@ export function PermissionPanel({ current, load, select, close }: {
     // q closes only while the query is empty; mid-filter it is query text.
     if (input === 'q' && query === '') return close()
     if (input === 'r' && query === '') return refresh()
+    // Space persists the cursor row as the new-session default (one settings
+    // mutation, mirroring the web General row) — the unified safe-action key;
+    // the footer echoes the outcome. Mid-filter, space stays query text.
+    if (input === ' ' && query === '' && setDefault !== undefined && visible[cursor] !== undefined) {
+      const row = visible[cursor]
+      setDefaultNotice(undefined)
+      void Promise.resolve(setDefault(row.id)).then(
+        notice => { setDefaultId(row.id); setDefaultNotice(notice) },
+        reason => { setDefaultNotice(reason instanceof Error ? reason.message : String(reason)) },
+      )
+      return
+    }
     if (key.upArrow) return setCursor(value => visible.length === 0 ? 0 : (value + visible.length - 1) % visible.length)
     if (key.downArrow) return setCursor(value => visible.length === 0 ? 0 : (value + 1) % visible.length)
     if (key.return && visible[cursor] !== undefined) return select(visible[cursor].id)
@@ -185,37 +207,87 @@ export function PermissionPanel({ current, load, select, close }: {
   })
   return createElement(ListFrame, {
     title: t('panel.permission.title', { current }),
-    rows: visible.map(row => ({ key: row.id, text: `${row.id === current ? '●' : '○'} ${row.id}${row.description === undefined ? '' : ` · ${row.description}`}` })),
-    cursor, loading, error, query, footer: t('panel.footer.chooseSelect'),
+    rows: visible.map(row => ({
+      key: row.id,
+      text: `${row.id === current ? '●' : '○'} ${row.id}${row.description === undefined ? '' : ` · ${row.description}`}${row.id === defaultId ? ' ★' : ''}`,
+    })),
+    cursor, loading, error, query,
+    footer: defaultNotice !== undefined
+      ? defaultNotice
+      : setDefault === undefined ? t('panel.footer.chooseSelect') : t('panel.footer.permissionDefault'),
   })
 }
 
-export function PluginPanel({ load, close, initialQuery = '' }: { load: () => readonly PluginRow[]; close: () => void; initialQuery?: string }): ReactElement {
+export function PluginPanel({ load, close, initialQuery = '', editableEntries, toggle }: {
+  load: () => readonly PluginRow[]
+  close: () => void
+  initialQuery?: string
+  /** Loader entry ids the manager may edit (the keystone lock); undefined disables editing. */
+  editableEntries?: () => Promise<readonly string[]>
+  /** Toggle one row's enablement; resolves with the outcome notice text. */
+  toggle?: (entryId: string, rowId: string, enabled: boolean) => Promise<string>
+}): ReactElement {
   const [epoch, setEpoch] = useState(0)
   const [query, setQuery] = useState(initialQuery)
   const [cursor, setCursor] = useState(0)
   const [expanded, setExpanded] = useState(false)
+  const [editable, setEditable] = useState<readonly string[] | undefined>(editableEntries === undefined ? undefined : [])
+  const [actionNotice, setActionNotice] = useState<string>()
   // eslint-disable-next-line react-hooks/exhaustive-deps -- epoch is the panel's explicit registry refresh trigger
   const rows = useMemo(() => load().filter(row => `${row.entryId} ${row.moduleName} ${row.phase ?? ''}`.toLowerCase().includes(query.toLowerCase())), [epoch, load, query])
+  // Re-read the editable set on open and refresh: the manager's own
+  // management-protection (base + bundle rows) IS the keystone lock; the
+  // service refuses those edits even if this set were stale.
+  const refreshEditable = useCallback((): void => {
+    if (editableEntries === undefined) return
+    void Promise.resolve(editableEntries()).then(setEditable, () => { setEditable([]) })
+  }, [editableEntries])
+  useEffect(refreshEditable, [refreshEditable])
   useEffect(() => setCursor(value => Math.min(value, Math.max(0, rows.length - 1))), [rows.length])
   useInput((input, key) => {
     if (key.escape) return close()
     // q closes only while the query is empty; mid-filter it is query text.
     if (input === 'q' && query === '') return close()
-    if (input === 'r' && query === '') return setEpoch(value => value + 1)
+    if (input === 'r' && query === '') {
+      setEpoch(value => value + 1)
+      refreshEditable()
+      return
+    }
     if (key.upArrow) return setCursor(value => rows.length === 0 ? 0 : (value + rows.length - 1) % rows.length)
     if (key.downArrow) return setCursor(value => rows.length === 0 ? 0 : (value + 1) % rows.length)
     if (key.return) return setExpanded(value => !value)
+    // Space toggles the cursor row — the unified safe-action key (a toggle is
+    // reversible, so no arm step): only rows the manager marks editable;
+    // keystone rows (base/bundle composition) stay read-only by design.
+    if (input === ' ' && query === '' && toggle !== undefined && editable !== undefined) {
+      const row = rows[cursor]
+      if (row !== undefined && editable.includes(row.entryId)) {
+        const next = !row.enabled
+        setActionNotice(undefined)
+        void Promise.resolve(toggle(row.entryId, row.entryId, next)).then(
+          notice => { setActionNotice(notice); setEpoch(value => value + 1) },
+          reason => { setActionNotice(reason instanceof Error ? reason.message : String(reason)) },
+        )
+        return
+      }
+    }
     const next = editQuery(query, input, key)
     if (next !== undefined) { setQuery(next); setCursor(0) }
   })
   return createElement(ListFrame, {
     title: t('panel.plugin.title'),
-    rows: rows.map((row, index) => ({
-      key: row.entryId,
-      disabled: !row.enabled,
-      text: `${row.enabled ? '●' : '○'} ${row.entryId} · ${row.phase ?? 'not mounted'}${expanded && index === cursor ? ` · ${row.moduleName}` : ''}`,
-    })), cursor, loading: false, query, footer: t('panel.footer.inspectDetails'),
+    rows: rows.map((row, index) => {
+      const locked = toggle === undefined || editable === undefined || !editable.includes(row.entryId)
+      return {
+        key: row.entryId,
+        disabled: !row.enabled,
+        text: `${row.enabled ? '●' : '○'} ${row.entryId} · ${row.phase ?? 'not mounted'}${locked ? ' 🔒' : ''}${expanded && index === cursor ? ` · ${row.moduleName}` : ''}`,
+      }
+    }),
+    cursor, loading: false, query,
+    footer: actionNotice !== undefined
+      ? actionNotice
+      : toggle === undefined ? t('panel.footer.inspectDetails') : t('panel.footer.pluginToggle'),
   })
 }
 
@@ -261,29 +333,96 @@ const JOB_MARK: Record<JobRow['status'], string> = {
  * interval dies with the panel). Cancel stays upstream-only; an absent
  * registry renders as the plain empty state (a harmless missing service).
  */
-export function JobsPanel({ load, close }: { load: () => readonly JobRow[]; close: () => void }): ReactElement {
+export function JobsPanel({ load, kill, readOutput, close }: {
+  load: () => readonly JobRow[]
+  /** Request cancellation for one job; resolves with the outcome notice text. */
+  kill?: (id: string) => Promise<string>
+  /** Read one job's retained output ring as wrapped plain lines. */
+  readOutput?: (id: string) => Promise<readonly string[]>
+  close: () => void
+}): ReactElement {
   const [, setRefresh] = useState(0)
   const [cursor, setCursor] = useState(0)
   const [, setTick] = useState(0)
+  const [armedId, setArmedId] = useState<string>()
+  const [actionNotice, setActionNotice] = useState<string>()
+  const [output, setOutput] = useState<{ id: string; lines: readonly string[]; error?: string } | undefined>()
   useEffect(() => {
     const id = setInterval(() => setTick(value => value + 1), 1_000)
     return () => clearInterval(id)
   }, [])
   const rows = load()
+  const openOutput = (id: string): void => {
+    if (readOutput === undefined) return
+    setActionNotice(undefined)
+    void Promise.resolve(readOutput(id)).then(
+      lines => { setOutput({ id, lines }) },
+      reason => { setOutput({ id, lines: [], error: reason instanceof Error ? reason.message : String(reason) }) },
+    )
+  }
   useInput((input, key) => {
+    if (output !== undefined) {
+      // The output sub-view owns the keys: r re-reads, esc returns to the
+      // roster, q leaves the panel entirely.
+      if (key.escape) return setOutput(undefined)
+      if (input === 'q') return close()
+      if (input === 'r') return openOutput(output.id)
+      return
+    }
     if (key.escape || input === 'q') return close()
     if (input === 'r') return setRefresh(value => value + 1)
     if (key.upArrow) return setCursor(value => rows.length === 0 ? 0 : (value + rows.length - 1) % rows.length)
     if (key.downArrow) return setCursor(value => rows.length === 0 ? 0 : (value + 1) % rows.length)
+    const row = rows[cursor]
+    // Enter is the unified primary action: drill into the cursor job's
+    // retained output.
+    if (key.return && readOutput !== undefined && row !== undefined) return openOutput(row.id)
+    // Backspace/Delete is the unified destructive key, two-press: the first
+    // press arms (the footer names the target), the second executes. Only
+    // running or stopping rows offer cancellation.
+    if ((key.backspace === true || key.delete === true) && kill !== undefined
+      && row !== undefined && (row.status === 'running' || row.status === 'stopping')) {
+      if (armedId === row.id) {
+        setArmedId(undefined)
+        setActionNotice(undefined)
+        void Promise.resolve(kill(row.id)).then(setActionNotice, reason => {
+          setActionNotice(reason instanceof Error ? reason.message : String(reason))
+        })
+      } else {
+        setArmedId(row.id)
+        setActionNotice(undefined)
+      }
+      return
+    }
+    setArmedId(input === undefined || input === '' ? armedId : undefined)
   })
   useEffect(() => setCursor(value => Math.min(value, Math.max(0, rows.length - 1))), [rows.length])
+  if (output !== undefined) {
+    // Bound the retained tail to the last 500 physical lines; the ring itself
+    // already caps retention, this keeps a pathological stream within budget.
+    const lines = output.lines.slice(-500)
+    return createElement(ListFrame, {
+      title: t('panel.jobs.outputTitle', { id: output.id }),
+      rows: (output.error !== undefined ? [output.error] : lines.length === 0 ? [t('panel.jobs.outputEmpty')] : lines)
+        .map((text, index) => ({ key: `line-${index}`, text })),
+      cursor: 0, loading: false, query: '', searching: false,
+      footer: t('panel.jobs.outputFooter'),
+    })
+  }
   return createElement(ListFrame, {
     title: t('panel.jobs.title', { count: rows.length }),
     rows: rows.map(row => ({
       key: row.id,
       text: `${JOB_MARK[row.status]} ${row.id} · ${singleLineText(row.label)} · ${runClock((row.finishedAt ?? Date.now()) - row.startedAt)}${row.detail === undefined ? '' : ` · ${singleLineText(row.detail)}`}`,
     })),
-    cursor, loading: false, query: '', searching: false, footer: t('panel.footer.inspectRefresh'),
+    cursor, loading: false, query: '', searching: false,
+    footer: actionNotice !== undefined
+      ? actionNotice
+      : armedId !== undefined
+        ? t('panel.jobs.killArmed', { id: armedId })
+        : kill !== undefined && readOutput !== undefined
+          ? t('panel.jobs.footerFull')
+          : t('panel.footer.inspectRefresh'),
   })
 }
 
@@ -367,15 +506,21 @@ export function GoalPanel({ goal, dispatch, close }: { goal: GoalFold | undefine
   useInput((input, key) => {
     if (key.escape || input === 'q') return close()
     if (goal === undefined) return
-    if (input === 'p' && goal.phase === 'active') {
-      dispatch('/goal pause')
-      return close()
+    // Space is the unified safe-action key: pause an active goal, resume a
+    // paused or blocked one — one reversible toggle, no letters.
+    if (input === ' ') {
+      if (goal.phase === 'active') {
+        dispatch('/goal pause')
+        return close()
+      }
+      if (goal.phase === 'paused' || goal.phase === 'blocked') {
+        dispatch('/goal resume')
+        return close()
+      }
+      return
     }
-    if (input === 'r' && (goal.phase === 'paused' || goal.phase === 'blocked')) {
-      dispatch('/goal resume')
-      return close()
-    }
-    if (input === 'x') {
+    // Backspace/Delete is the unified destructive key, two-press clear.
+    if (key.backspace === true || key.delete === true) {
       if (clearArmed) {
         dispatch('/goal clear')
         return close()

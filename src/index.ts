@@ -39,6 +39,40 @@ import { withColdReadCeiling } from './session-query.ts'
 
 /** Ceiling for the /search title enrichment pass; slower hits degrade to snippet rows. */
 const TITLE_ENRICHMENT_CEILING_MS = 8_000
+
+/** Structural slice of the settings forms service the permission default uses. */
+interface SettingsFormsFace {
+  describe(): readonly { ns: string; value: unknown; revision: number }[]
+  mutate(ns: string, ops: readonly { op: 'set'; path: readonly string[]; value: unknown }[], expectedRevision?: number): Promise<void>
+}
+
+/**
+ * The persisted new-session permission default ('' when unset or no service).
+ * Reads the `permission` settings descriptor the web General row exposes.
+ */
+async function loadDefaultPermissionPreset(settings: SettingsFormsFace | undefined): Promise<string> {
+  await Promise.resolve()
+  if (settings === undefined) return ''
+  try {
+    const descriptor = settings.describe().find(entry => entry.ns === 'permission')
+    const value = (descriptor?.value as { defaultPreset?: unknown } | undefined)?.defaultPreset
+    return typeof value === 'string' ? value : ''
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * Persist one preset as the new-session default: one `defaultPreset` path
+ * mutation carrying the descriptor revision (the web row's exact write).
+ * @returns the notice text; failures reject with the service's message.
+ */
+async function saveDefaultPermissionPreset(settings: SettingsFormsFace | undefined, preset: string): Promise<string> {
+  if (settings === undefined) return t('notice.permissionDefaultUnavailable')
+  const descriptor = settings.describe().find(entry => entry.ns === 'permission')
+  await settings.mutate('permission', [{ op: 'set', path: ['defaultPreset'], value: preset }], descriptor?.revision)
+  return t('notice.permissionDefaultSet', { value: preset })
+}
 import { runQuitSequence, type QuitCleanupStep } from './runner/quit.ts'
 export { runQuitSequence, type QuitCleanupStep } from './runner/quit.ts'
 import { exportSessionIdSuffix, resolveTarget, type Target } from './runner/session-target.ts'
@@ -212,6 +246,67 @@ function listJobs(ctx: Context, caller: Agent | undefined): readonly JobRow[] {
  * @param ctx - context carrying the (optional) cordis loader.
  * @returns server rows in loader order; never throws.
  */
+/** Structural slice of the plugin manager the /plugin toggle uses. */
+interface PluginManagerFace {
+  listPlugins(): Promise<readonly { rowId: string; moduleName: string; entryId?: string; patchId?: string; readOnlyReason?: string }[]>
+  setPluginEnabled(id: string, enabled: boolean): Promise<{ changed: boolean; application: string; target: string; error?: { message?: string } }>
+}
+
+/**
+ * Toggle one plugin row's enablement through the manager service. The
+ * service itself refuses management-bundle rows (the keystone lock lives
+ * there too), so this slice only translates outcomes into notice text.
+ */
+async function togglePluginRow(services: PluginManagerFace | undefined, entryId: string, rowId: string, enabled: boolean): Promise<string> {
+  if (services === undefined) throw new Error('plugin manager unavailable')
+  const result = await services.setPluginEnabled(entryId, enabled)
+  if (result.error?.message !== undefined) return result.error.message
+  const application = result.application
+  const state = t(enabled ? 'notice.pluginStateOn' : 'notice.pluginStateOff')
+  return t(application === 'restart-required'
+    ? 'notice.pluginToggledRestart'
+    : application === 'overridden'
+      ? 'notice.pluginToggledOverridden'
+      : application === 'applied'
+        ? 'notice.pluginToggledApplied'
+        : 'notice.pluginToggledOther', { row: rowId, state, application })
+}
+
+/** Which loader entries the manager may edit (non-management rows only). */
+async function editablePluginEntries(services: PluginManagerFace | undefined): Promise<readonly string[]> {
+  if (services === undefined) return []
+  try {
+    const rows = await services.listPlugins()
+    return rows.filter(row => row.entryId !== undefined && row.readOnlyReason === undefined).map(row => row.entryId as string)
+  } catch {
+    return []
+  }
+}
+
+/** Structural slice of the jobs registry the panel actions use. */
+interface JobsServiceFace {
+  kill(id: string, caller?: string, reason?: string): 'requested' | 'already-finished'
+  readAt(id: string, from: number, caller?: string): { chunks: readonly { text: string }[] }
+}
+
+/** Request one job's cancellation; resolves with the outcome notice text. */
+async function killJob(services: JobsServiceFace | undefined, caller: string | undefined, id: string): Promise<string> {
+  await Promise.resolve()
+  if (services === undefined) throw new Error('jobs registry unavailable')
+  const outcome = services.kill(id, caller, 'user')
+  return t(outcome === 'requested' ? 'notice.jobKillRequested' : 'notice.jobKillAlreadyFinished', { id })
+}
+
+/** One job's retained output ring, from offset 0, as bounded plain lines. */
+async function readJobOutput(services: JobsServiceFace | undefined, caller: string | undefined, id: string): Promise<readonly string[]> {
+  await Promise.resolve()
+  if (services === undefined) throw new Error('jobs registry unavailable')
+  const read = services.readAt(id, 0, caller)
+  const text = read.chunks.map(chunk => chunk.text).join('')
+  const lines = text === '' ? [] : text.split('\n')
+  return lines.slice(-500)
+}
+
 function listMcpServers(ctx: Context): readonly McpServerRow[] {
   try {
     return listPluginRows(ctx)
@@ -1863,6 +1958,14 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       applyUpdate: (onLine, plan) => applyLauncherUpdate(onLine, undefined, plan),
       loadJobs: () => listJobs(ctx, active?.agent),
       loadMcpServers: () => listMcpServers(ctx),
+      jobKill: (id: string) => killJob(ctx.get('jobs') as JobsServiceFace | undefined, active?.agent?.session.id, id),
+      pluginToggle: (entryId: string, rowId: string, enabled: boolean) => togglePluginRow(ctx.get('pluginManager') as PluginManagerFace | undefined, entryId, rowId, enabled),
+      pluginEditable: () => editablePluginEntries(ctx.get('pluginManager') as PluginManagerFace | undefined),
+      jobOutput: (id: string) => readJobOutput(ctx.get('jobs') as JobsServiceFace | undefined, active?.agent?.session.id, id),
+      permissionDefault: {
+        load: () => loadDefaultPermissionPreset(ctx.get('settings') as SettingsFormsFace | undefined),
+        set: (preset: string) => saveDefaultPermissionPreset(ctx.get('settings') as SettingsFormsFace | undefined, preset),
+      },
       statusline: statuslineItems,
       saveStatusline,
       applyEditorKeys,
@@ -1900,9 +2003,19 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     })
   }
 
-  async function copyLastResponse(): Promise<string> {
-    const text = latestAssistantText(store.getView())
-    if (text === undefined) return t('notice.copyEmpty')
+  async function copyLastResponse(seq?: number): Promise<string> {
+    // An explicit durable seq copies that message: an assistant reply or a
+    // user prompt (the two text-bearing message kinds), looked up in the
+    // settled view. Unknown seqs keep the notice honest instead of copying
+    // the wrong thing.
+    let text: string | undefined
+    if (seq !== undefined) {
+      text = store.getView().anchors.messageText.get(seq)
+      if (text === undefined) return t('notice.copySeqMissing', { seq })
+    } else {
+      text = latestAssistantText(store.getView())
+    }
+    if (text === undefined || text === '') return t('notice.copyEmpty')
     await copyText(text)
     return t('notice.copied')
   }

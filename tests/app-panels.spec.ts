@@ -580,7 +580,7 @@ describe('/mcp, /deliverables, and /goal panels', () => {
       await wait()
       expect(harness.output.text).toContain('ship the audit')
       expect(harness.output.text).toContain('active · round 2/8')
-      harness.stdin.write('p')
+      harness.stdin.write(' ')
       await wait()
       expect(dispatched).toEqual(['/goal pause'])
     } finally {
@@ -600,6 +600,107 @@ describe('/mcp, /deliverables, and /goal panels', () => {
       harness.stdin.write('\r')
       await wait()
       expect(harness.output.text).toContain('no goal set')
+    } finally {
+      instance.unmount()
+      await wait()
+    }
+  })
+})
+
+describe('batch-4 panel operations', () => {
+  it('/jobs two-press kill dispatches and echoes the outcome', async () => {
+    const harness = createTty(100, 30)
+    const kills: string[] = []
+    const clock = Date.now()
+    const instance = renderApp(harness, appProps({
+      loadJobs: () => [
+        { id: 'bash-1', kind: 'bash', label: 'npm run watch', status: 'running', startedAt: clock - 5_000 },
+        { id: 'bash-2', kind: 'bash', label: 'done job', status: 'completed', startedAt: clock - 60_000, finishedAt: clock - 30_000 },
+      ],
+      jobKill: async id => { kills.push(id); return `kill requested for ${id}` },
+      jobOutput: async () => ['line one', 'line two'],
+    }))
+    try {
+      await wait()
+      harness.stdin.write('/jobs')
+      await wait()
+      harness.output.text = ''
+      harness.stdin.write('\r')
+      await wait()
+      harness.stdin.write('\x7f')
+      await wait()
+      expect(harness.output.text).toContain('press again')
+      expect(kills).toEqual([])
+      harness.output.text = ''
+      harness.stdin.write('\x7f')
+      await wait()
+      expect(kills).toEqual(['bash-1'])
+      expect(harness.output.text).toContain('kill requested for bash-1')
+    } finally {
+      instance.unmount()
+      await wait()
+    }
+  })
+
+  it('/jobs o opens the retained output sub-view and esc returns', async () => {
+    const harness = createTty(100, 30)
+    const reads: string[] = []
+    const clock = Date.now()
+    const instance = renderApp(harness, appProps({
+      loadJobs: () => [{ id: 'bash-7', kind: 'bash', label: 'build', status: 'completed', startedAt: clock - 60_000, finishedAt: clock }],
+      jobOutput: async id => { reads.push(id); return ['hello from stdout'] },
+    }))
+    try {
+      await wait()
+      harness.stdin.write('/jobs')
+      await wait()
+      harness.output.text = ''
+      harness.stdin.write('\r')
+      await wait()
+      harness.stdin.write('\r')
+      await wait()
+      expect(reads).toEqual(['bash-7'])
+      expect(harness.output.text).toContain('hello from stdout')
+      harness.output.text = ''
+      harness.stdin.write('\x1b')
+      await wait()
+      expect(harness.output.text).toContain('bash-7 · build')
+    } finally {
+      instance.unmount()
+      await wait()
+    }
+  })
+
+  it('/permission d persists the cursor row as the new-session default', async () => {
+    const harness = createTty(100, 30)
+    const saved: string[] = []
+    const instance = renderApp(harness, appProps({
+      loadPermissions: async () => [
+        { id: 'read-only', description: 'read only' },
+        { id: 'workspace-write', description: 'write workspace' },
+      ],
+      permissionDefault: {
+        load: async () => 'read-only',
+        set: async preset => { saved.push(preset); return `new sessions will start on ${preset}` },
+      },
+    }))
+    try {
+      await wait()
+      harness.stdin.write('/permission')
+      await wait()
+      harness.output.text = ''
+      harness.stdin.write('\r')
+      await wait()
+      await wait()
+      expect(harness.output.text).toContain('read only ★')
+      harness.stdin.write('\x1b[B')
+      await wait()
+      harness.output.text = ''
+      harness.stdin.write(' ')
+      await wait()
+      await wait()
+      expect(saved).toEqual(['workspace-write'])
+      expect(harness.output.text).toContain('new sessions will start on workspace-write')
     } finally {
       instance.unmount()
       await wait()
