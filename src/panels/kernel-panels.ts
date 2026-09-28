@@ -8,7 +8,8 @@ import type { SearchRow } from '../runner/search-rows.ts'
 export type { SearchRow } from '../runner/search-rows.ts'
 import type { PermissionRow } from '../permissions.ts'
 import { presetDisplayText, type PresetRow } from '../presets.ts'
-import type { PluginRow } from '../plugin-inventory.ts'
+import type { PluginRow, PluginPhase } from '../plugin-inventory.ts'
+import type { DeliverablesEntry, GoalFold } from '../render/projection.ts'
 import type { SessionDirectoryOptions, SessionRow } from '../session/session-directory.ts'
 import { formatRelativeTime, matchSessionRow } from '../session/session-directory.ts'
 import type { ReviewBranch, ReviewCommit, ReviewSelection } from '../git-workflow.ts'
@@ -283,6 +284,118 @@ export function JobsPanel({ load, close }: { load: () => readonly JobRow[]; clos
       text: `${JOB_MARK[row.status]} ${row.id} · ${singleLineText(row.label)} · ${runClock((row.finishedAt ?? Date.now()) - row.startedAt)}${row.detail === undefined ? '' : ` · ${singleLineText(row.detail)}`}`,
     })),
     cursor, loading: false, query: '', searching: false, footer: t('panel.footer.inspectRefresh'),
+  })
+}
+
+/** One configured MCP server for the /mcp panel (a loader-derived snapshot). */
+export interface McpServerRow {
+  /** Loader entry id — the cordis row id, conventionally the server name. */
+  readonly entryId: string
+  /** Whether the loader row is enabled. */
+  readonly enabled: boolean
+  /** Loader fiber phase; null while the row never mounted. */
+  readonly phase: PluginPhase
+}
+
+/** Phase glyph for one MCP server row. */
+const MCP_MARK: Record<Exclude<PluginPhase, null>, string> = {
+  pending: '○',
+  loading: '◐',
+  active: '●',
+  failed: '✗',
+  unloading: '◑',
+}
+
+/**
+ * The read-only MCP server panel: every `dsh-mcp-client` loader row (one row
+ * IS one server — the plugin is per-instance) with its live phase. No
+ * configured servers renders the plain empty state with the profile-layer
+ * pointer, matching the README's manual configuration path.
+ */
+export function McpPanel({ load, close }: { load: () => readonly McpServerRow[]; close: () => void }): ReactElement {
+  const [epoch, setEpoch] = useState(0)
+  void epoch
+  const rows = load()
+  useInput((input, key) => {
+    if (key.escape || input === 'q') return close()
+    if (input === 'r') return setEpoch(value => value + 1)
+  })
+  return createElement(ListFrame, {
+    title: t('panel.mcp.title', { count: rows.length }),
+    rows: rows.map(row => ({
+      key: row.entryId,
+      disabled: !row.enabled,
+      text: `${row.enabled ? (row.phase === null ? '○' : MCP_MARK[row.phase]) : '○'} ${row.entryId} · ${row.phase ?? 'not mounted'}`,
+    })),
+    cursor: 0, loading: false, query: '', searching: false,
+    footer: rows.length === 0 ? t('panel.mcp.empty') : t('panel.footer.refreshClose'),
+  })
+}
+
+/**
+ * The cumulative deliverables panel: every `deliverables/presented` fold from
+ * the current session's transcript view, newest last. Pure projection data —
+ * no service reads, no refresh needed (the view re-renders on every store
+ * notification while the panel is open).
+ */
+export function DeliverablesPanel({ entries, close }: { entries: readonly DeliverablesEntry[]; close: () => void }): ReactElement {
+  useInput((input, key) => {
+    if (key.escape || input === 'q') return close()
+  })
+  const rows = entries.flatMap((entry, index) => [
+    { key: `head-${index}`, text: `✦ ${entry.paths.length + entry.dropped} file${entry.paths.length + entry.dropped === 1 ? '' : 's'}` },
+    ...entry.paths.map((path, pathIndex) => ({ key: `path-${index}-${pathIndex}`, text: `  ${path}` })),
+    ...(entry.dropped > 0 ? [{ key: `more-${index}`, text: `  … +${entry.dropped} more` }] : []),
+  ])
+  return createElement(ListFrame, {
+    title: t('panel.deliverables.title', { count: entries.length }),
+    rows,
+    cursor: 0, loading: false, query: '', searching: false,
+    footer: entries.length === 0 ? t('panel.deliverables.empty') : t('panel.footer.closeOnly'),
+  })
+}
+
+/**
+ * The goal panel: the folded goal card (objective, phase, round counter,
+ * blocked reason) with direct action keys dispatching the registry's own
+ * `/goal` command — pause (p), resume (r), and a two-press clear (x then x).
+ * Creating or editing stays in the composer (`/goal <objective>`,
+ * `/goal edit <objective>`) because the objective text outgrows panel keys.
+ */
+export function GoalPanel({ goal, dispatch, close }: { goal: GoalFold | undefined; dispatch: (line: string) => void; close: () => void }): ReactElement {
+  const [clearArmed, setClearArmed] = useState(false)
+  useInput((input, key) => {
+    if (key.escape || input === 'q') return close()
+    if (goal === undefined) return
+    if (input === 'p' && goal.phase === 'active') {
+      dispatch('/goal pause')
+      return close()
+    }
+    if (input === 'r' && (goal.phase === 'paused' || goal.phase === 'blocked')) {
+      dispatch('/goal resume')
+      return close()
+    }
+    if (input === 'x') {
+      if (clearArmed) {
+        dispatch('/goal clear')
+        return close()
+      }
+      return setClearArmed(true)
+    }
+    setClearArmed(false)
+  })
+  const rows = goal === undefined ? [] : [
+    { key: 'objective', text: goal.objective },
+    { key: 'phase', text: `${goal.phase} · round ${goal.rounds}/${goal.max}` },
+    ...(goal.blocked === '' ? [] : [{ key: 'blocked', text: goal.blocked }]),
+  ]
+  return createElement(ListFrame, {
+    title: t('panel.goal.title'),
+    rows,
+    cursor: 0, loading: false, query: '', searching: false,
+    footer: goal === undefined
+      ? t('panel.goal.empty')
+      : clearArmed ? t('panel.goal.clearArmed') : t('panel.goal.footer'),
   })
 }
 

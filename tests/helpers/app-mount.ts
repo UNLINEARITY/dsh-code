@@ -205,6 +205,7 @@ export function appProps(overrides: Partial<AppProps> = {}): AppProps {
     probeUpdate: () => Promise.reject(new Error('update probe not wired in test')),
     applyUpdate: () => Promise.resolve(0),
     loadJobs: () => [],
+    loadMcpServers: () => [],
     statusline: DEFAULT_STATUSLINE_ITEMS,
     saveStatusline: noop,
     saveLanguage: noop,

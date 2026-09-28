@@ -127,7 +127,7 @@ import {
   type SessionQueryService,
   type SessionRow,
 } from './session/session-directory.ts'
-import type { JobRow } from './panels/kernel-panels.ts'
+import type { JobRow, McpServerRow } from './panels/kernel-panels.ts'
 import { searchHitToRow, type SearchRow } from './runner/search-rows.ts'
 export { searchHitToRow } from './runner/search-rows.ts'
 import { createUserSettingsPersistence } from './settings-file.ts'
@@ -200,6 +200,23 @@ function listJobs(ctx: Context, caller: Agent | undefined): readonly JobRow[] {
       startedAt: job.startedAt,
       finishedAt: job.finishedAt,
     }))
+  } catch {
+    return []
+  }
+}
+
+/**
+ * The /mcp panel's server rows: every live `dsh-mcp-client` loader entry (the
+ * plugin is one instance per server). Loader reads never throw; a missing
+ * loader service renders as the plain empty state.
+ * @param ctx - context carrying the (optional) cordis loader.
+ * @returns server rows in loader order; never throws.
+ */
+function listMcpServers(ctx: Context): readonly McpServerRow[] {
+  try {
+    return listPluginRows(ctx)
+      .filter(row => row.moduleName === '@deepseek-ai/dsh-mcp-client')
+      .map(row => ({ entryId: row.entryId, enabled: row.enabled, phase: row.phase }))
   } catch {
     return []
   }
@@ -1845,6 +1862,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       probeUpdate: () => probeLauncherUpdate(),
       applyUpdate: (onLine, plan) => applyLauncherUpdate(onLine, undefined, plan),
       loadJobs: () => listJobs(ctx, active?.agent),
+      loadMcpServers: () => listMcpServers(ctx),
       statusline: statuslineItems,
       saveStatusline,
       applyEditorKeys,

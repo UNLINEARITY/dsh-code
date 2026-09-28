@@ -78,8 +78,9 @@ import type { SkillsView, SkillRow } from './skills.ts'
 import type { MentionCandidate } from './mentions.ts'
 import type { SubagentFeedView, SubagentRow } from './session/subagents.ts'
 import type { UsageView } from './render/usage.ts'
-import { AgentsPanel, EffortPanel, HistoryPanel, JobsPanel, ModePanel, PermissionPanel, PluginPanel, ResumePanel, ReviewPickerPanel, SearchPanel, StatuslinePanel, runClock, SubagentPanel, UsagePanel, type JobRow, type SearchRow } from './panels/kernel-panels.ts'
+import { AgentsPanel, DeliverablesPanel, EffortPanel, GoalPanel, HistoryPanel, JobsPanel, McpPanel, ModePanel, PermissionPanel, PluginPanel, ResumePanel, ReviewPickerPanel, SearchPanel, StatuslinePanel, runClock, SubagentPanel, UsagePanel, type JobRow, type McpServerRow, type SearchRow } from './panels/kernel-panels.ts'
 import type { PresetRow } from './presets.ts'
+import type { DeliverablesEntry } from './render/projection.ts'
 import type { PermissionRow } from './permissions.ts'
 import type { PluginRow } from './plugin-inventory.ts'
 import { recallEntries, recordLocalEntry } from './session/history.ts'
@@ -354,6 +355,8 @@ export interface AppProps {
   loadPlugins: () => readonly PluginRow[]
   /** Caller-visible background jobs (the host jobs registry, read-only). */
   loadJobs: () => readonly JobRow[]
+  /** Configured MCP servers (dsh-mcp-client loader rows, read-only). */
+  loadMcpServers?: () => readonly McpServerRow[]
   /** Probe the launcher's aligned update plan (read-only; never installs). */
   probeUpdate: () => Promise<LauncherUpdateStatus>
   /** Run the launcher's aligned update; streams sanitized lines; resolves with the exit code. */
@@ -1909,6 +1912,9 @@ export function App(props: AppProps): ReactElement {
   const [updateApplying, setUpdateApplying] = useState(false)
   useEffect(() => subscribeUpdateApplyRunning(setUpdateApplying), [])
   const [jobsOpen, setJobsOpen] = useState(false)
+  const [mcpOpen, setMcpOpen] = useState(false)
+  const [deliverablesOpen, setDeliverablesOpen] = useState(false)
+  const [goalOpen, setGoalOpen] = useState(false)
   const [statuslineOpen, setStatuslineOpen] = useState(false)
   const [statuslineItems, setStatuslineItems] = useState<readonly StatusItemId[]>(() => parseStatuslineItems(props.statusline))
   const [themeOpen, setThemeOpen] = useState(false)
@@ -2011,6 +2017,9 @@ export function App(props: AppProps): ReactElement {
     { hint: '/plugin', open: pluginOpen, close: () => setPluginOpen(false) },
     { hint: '/update', open: updateOpen, close: () => setUpdateOpen(false) },
     { hint: '/jobs', open: jobsOpen, close: () => setJobsOpen(false) },
+    { hint: '/mcp', open: mcpOpen, close: () => setMcpOpen(false) },
+    { hint: '/deliverables', open: deliverablesOpen, close: () => setDeliverablesOpen(false) },
+    { hint: '/goal', open: goalOpen, close: () => setGoalOpen(false) },
     { hint: '/statusline', open: statuslineOpen, close: () => setStatuslineOpen(false) },
     { hint: '/theme', open: themeOpen, close: () => setThemeOpen(false) },
     { hint: '/language', open: languageOpen, close: () => setLanguageOpen(false) },
@@ -2032,6 +2041,12 @@ export function App(props: AppProps): ReactElement {
   const verboseEntries = useMemo(
     () => verboseOpen ? inspectableTranscriptEntries(view.entries) : [],
     [verboseOpen, view.entries],
+  )
+  // Cumulative delivered-file groups for the /deliverables panel: pure view
+  // data, re-derived on every store notification while the panel is open.
+  const deliverableEntries = useMemo(
+    () => view.entries.filter((entry): entry is DeliverablesEntry => entry.kind === 'deliverables'),
+    [view.entries],
   )
   const modalVisible = openPanel !== undefined || inspectorVisible || approvalPending || questionPending
   // While a deletion waits for y/n, the composer takes the keys (the resume
@@ -3171,6 +3186,15 @@ export function App(props: AppProps): ReactElement {
     jobsOpen && !approvalPending && !questionPending
       ? createElement(JobsPanel, { load: props.loadJobs, close: () => setJobsOpen(false) })
       : undefined,
+    mcpOpen && !approvalPending && !questionPending
+      ? createElement(McpPanel, { load: props.loadMcpServers ?? ((): readonly McpServerRow[] => []), close: () => setMcpOpen(false) })
+      : undefined,
+    deliverablesOpen && !approvalPending && !questionPending
+      ? createElement(DeliverablesPanel, { entries: deliverableEntries, close: () => setDeliverablesOpen(false) })
+      : undefined,
+    goalOpen && !approvalPending && !questionPending
+      ? createElement(GoalPanel, { goal: view.goal, dispatch: (line: string) => props.dispatch(line), close: () => setGoalOpen(false) })
+      : undefined,
     statuslineOpen && !approvalPending && !questionPending
       ? createElement(StatuslinePanel, {
         enabled: statuslineItems,
@@ -3366,6 +3390,9 @@ export function App(props: AppProps): ReactElement {
         openPlugin: (query = '') => { setPluginQuery(query); setPluginOpen(true) },
         openUpdate: () => setUpdateOpen(true),
         openJobs: () => setJobsOpen(true),
+        openMcp: () => setMcpOpen(true),
+        openDeliverables: () => setDeliverablesOpen(true),
+        openGoal: () => setGoalOpen(true),
         openStatusline: () => setStatuslineOpen(true),
         openTheme: () => setThemeOpen(true),
         openLanguage: () => setLanguageOpen(true),

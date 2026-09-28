@@ -21,9 +21,9 @@ describe('completionCandidates', () => {
       skill('agentic-workflow'),
     ]
     const rows = completionCandidates('/', descriptors, skills)
-    // 32 local commands + 1 registry command + 1 unshadowed skill (/review is local).
-    expect(rows).toHaveLength(34)
-    expect(rows.filter(row => row.origin === 'command')).toHaveLength(33)
+    // 35 local commands + 1 registry command + 1 unshadowed skill (/review is local).
+    expect(rows).toHaveLength(37)
+    expect(rows.filter(row => row.origin === 'command')).toHaveLength(36)
     expect(rows.filter(row => row.origin === 'skill').map(row => row.label))
       .toEqual(['/agentic-workflow'])
     expect(rows[0]).toMatchObject({ label: '/help', origin: 'command' })
@@ -69,11 +69,13 @@ describe('completionCandidates', () => {
     }
   })
 
-  it('does not expose generic kernel-inspection commands as DSH-Code commands', () => {
+  it('keeps future-batch surfaces out until they ship', () => {
     const names = completionCandidates('/', [], []).map(row => row.label)
-    // /jobs came back with the rc.8 host jobs registry (a real read-only
-    // capability); settings/mcp/hooks stay out as non-core views.
-    for (const name of ['/settings', '/mcp', '/hooks']) expect(names).not.toContain(name)
+    // The read-only /mcp, /deliverables, and /goal views are core now (the
+    // capability plan added them); /settings and /hooks stay out until their
+    // interactive batches land.
+    for (const name of ['/mcp', '/deliverables', '/goal']) expect(names).toContain(name)
+    for (const name of ['/settings', '/hooks']) expect(names).not.toContain(name)
   })
 
   it('offers /permission before any session exists and shadows the registry child', () => {

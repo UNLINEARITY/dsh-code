@@ -496,3 +496,113 @@ describe('/delete and /subagent', () => {
     }
   })
 })
+
+describe('/mcp, /deliverables, and /goal panels', () => {
+  it('/mcp lists configured servers and phases', async () => {
+    const harness = createTty(100, 24)
+    const instance = renderApp(harness, appProps({
+      loadMcpServers: () => [
+        { entryId: 'github', enabled: true, phase: 'active' },
+        { entryId: 'broken', enabled: true, phase: 'failed' },
+        { entryId: 'disabled-srv', enabled: false, phase: null },
+      ],
+    }))
+    try {
+      await wait()
+      harness.stdin.write('/mcp')
+      await wait()
+      harness.output.text = ''
+      harness.stdin.write('\r')
+      await wait()
+      const opened = harness.output.text
+      expect(opened).toContain('/mcp · servers · 3')
+      expect(opened).toContain('github · active')
+      expect(opened).toContain('broken · failed')
+      expect(opened).toContain('disabled-srv · not mounted')
+    } finally {
+      instance.unmount()
+      await wait()
+    }
+  })
+
+  it('/mcp shows the profile-layer pointer in the empty state', async () => {
+    const harness = createTty(100, 24)
+    const instance = renderApp(harness, appProps())
+    try {
+      await wait()
+      harness.stdin.write('/mcp')
+      await wait()
+      harness.output.text = ''
+      harness.stdin.write('\r')
+      await wait()
+      expect(harness.output.text).toContain('no MCP servers configured')
+    } finally {
+      instance.unmount()
+      await wait()
+    }
+  })
+
+  it('/deliverables accumulates presented groups from the transcript', async () => {
+    const harness = createTty(100, 30)
+    const store = createTranscriptStore()
+    store.apply({ type: 'deliverables/presented', seq: 1, time: 1, data: { turn: 1, callId: 'c1', files: [{ path: 'report.md' }, { path: 'slides.md' }] } } as never)
+    const instance = renderApp(harness, appProps({ store }))
+    try {
+      await wait()
+      harness.stdin.write('/deliverables')
+      await wait()
+      harness.output.text = ''
+      harness.stdin.write('\r')
+      await wait()
+      const opened = harness.output.text
+      expect(opened).toContain('delivered files · 1')
+      expect(opened).toContain('2 files')
+      expect(opened).toContain('report.md')
+      expect(opened).toContain('slides.md')
+    } finally {
+      instance.unmount()
+      await wait()
+    }
+  })
+
+  it('/goal shows the folded card and dispatches pause through the registry line', async () => {
+    const harness = createTty(100, 30)
+    const dispatched: string[] = []
+    const store = createTranscriptStore()
+    store.apply({ type: 'goal/change', seq: 1, time: 1, data: { operation: 'create', roundsStarted: 2, goal: { objective: 'ship the audit', phase: 'active', maxGoalRounds: 8 } } } as never)
+    const instance = renderApp(harness, appProps({ store, dispatch: (line: string) => dispatched.push(line) }))
+    try {
+      await wait()
+      harness.stdin.write('/goal')
+      await wait()
+      harness.output.text = ''
+      harness.stdin.write('\r')
+      await wait()
+      expect(harness.output.text).toContain('ship the audit')
+      expect(harness.output.text).toContain('active · round 2/8')
+      harness.stdin.write('p')
+      await wait()
+      expect(dispatched).toEqual(['/goal pause'])
+    } finally {
+      instance.unmount()
+      await wait()
+    }
+  })
+
+  it('/goal offers the composer pointer in the empty state', async () => {
+    const harness = createTty(100, 24)
+    const instance = renderApp(harness, appProps())
+    try {
+      await wait()
+      harness.stdin.write('/goal')
+      await wait()
+      harness.output.text = ''
+      harness.stdin.write('\r')
+      await wait()
+      expect(harness.output.text).toContain('no goal set')
+    } finally {
+      instance.unmount()
+      await wait()
+    }
+  })
+})
