@@ -113,6 +113,23 @@
     - id: file-reference-local
       name: '@deepseek-ai/dsh-file-reference-local'
 
+    # Clock context: durable per-step readings (ISO timestamp, zone policy,
+    # elapsed time) so the model can resolve unqualified times. No config:
+    # omitting timeZone falls back to the process zone — the terminal has no
+    # browser zone to attach. The upstream web-app bundle ships its row
+    # disabled; a terminal session has even fewer time anchors (log reading,
+    # schedule-style questions), so the TUI mounts it enabled.
+    - id: time-context
+      name: '@deepseek-ai/dsh-time-context'
+
+    # tmux location context (opt-in upstream): one durable reading per turn
+    # only when the agent's pane location CHANGED. Terminals that merely
+    # inherit tmux env vars, failed queries, and non-tmux environments add
+    # nothing — safe to mount unconditionally for a TUI that usually lives
+    # inside tmux. refreshIntervalMs stays at the default (inject on change).
+    - id: tmux-context
+      name: '@deepseek-ai/dsh-tmux-context'
+
     # 0.1.7 splits preset provisioning: this registry row provides the
     # agentPresets service, while the four preset compositions themselves
     # (standard/ptc/minimal/cordis) ship as @deepseek-ai/dsh-agent-preset
@@ -176,6 +193,15 @@
     # lists file-tool edits only; subagent sessions are not recorded.
     - id: workspace-changes
       name: '@deepseek-ai/dsh-workspace-changes'
+
+    # Message-level feedback service (thumbs + note per assistant message,
+    # stored beside the session log). Mounted for parity with the web-app
+    # row (same maxNoteBytes cap); the TUI interaction surface arrives with
+    # the later feedback batch — until then the service is inert host state.
+    - id: message-feedback
+      name: '@deepseek-ai/dsh-message-feedback'
+      config:
+        maxNoteBytes: 8192
 
     # Persistent PTY plumbing: the owner-scoped registry and the one backend
     # package in both dialects (pwsh is the Windows/ConPTY path, bash covers
