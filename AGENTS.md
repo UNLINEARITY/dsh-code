@@ -159,14 +159,16 @@ The `update-log-md` and `update-git-log` skills enforce this. Never `git add -f`
 
 Commits stay local. Push only when the user says "push" explicitly.
 
-### 6.2 Batch workflow: report → verify → log → commit
+### 6.2 NEVER commit without explicit per-batch user confirmation
 
-After each batch of changes:
+Every batch of changes requires its own explicit "commit" from the user. A previous authorization covers only that batch — it does not carry forward. The sequence is strictly:
 
 1. Write a detailed report for the user
-2. Wait for manual user verification
+2. **Wait for the user to verify and explicitly say "commit" (or equivalent)**
 3. Write both logs (log.md + git-log.md) — local only
 4. Commit on the current branch
+
+Committing without step 2 — even for "trivial" or "docs-only" changes, even right after a batch the user did authorize — is a violation. The user has reverted commits made this way; do not make them do it again.
 
 ### 6.3 Rendering changes need extended verification
 
