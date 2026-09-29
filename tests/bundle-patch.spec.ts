@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { DEFAULT_SCHEMA, Type, load } from 'js-yaml'
 import { describe, expect, it } from 'vitest'
 
@@ -109,6 +109,8 @@ describe('keystone module lock', () => {
     // Insert rows carry their id→module pairs only in the repo patches
     // themselves, so the resolver walks those too (the generator's parity).
     for (const file of ['cordis.patch.yml', 'lite-preset/cordis.patch.yml', ...patchFiles]) {
+      // lite-preset is a local-only optional checkout; skip it when absent.
+      if (!existsSync(new URL(`../${file}`, import.meta.url))) continue
       const patch = load(readFileSync(new URL(`../${file}`, import.meta.url), 'utf8'), { schema: patchSchema })
       for (const pair of pairsOf(patch)) idToModule.set(pair[0], pair[1])
     }
