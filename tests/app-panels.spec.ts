@@ -707,3 +707,174 @@ describe('batch-4 panel operations', () => {
     }
   })
 })
+
+describe('/hooks and /lsp wizard panels', () => {
+  it('/hooks edits a path inline: enter, type, enter commits the write', async () => {
+    const harness = createTty(100, 24)
+    const written: { dialect: string; path: string }[] = []
+    const instance = renderApp(harness, appProps({
+      hooksStatus: () => [
+        { dialect: 'claude-code', configPath: written.at(-1)?.path ?? '' },
+        { dialect: 'codex', configPath: '' },
+      ],
+      hooksWrite: (dialect, configPath) => {
+        written.push({ dialect, path: configPath })
+        return `saved ${dialect}`
+      },
+    }))
+    try {
+      await wait()
+      harness.stdin.write('/hooks')
+      await wait()
+      harness.output.text = ''
+      harness.stdin.write('\r')
+      await wait()
+      harness.stdin.write('\r')
+      await wait()
+      expect(harness.output.text).toContain('✎ claude-code')
+      harness.output.text = ''
+      harness.stdin.write('/tmp/hooks.json')
+      await wait()
+      harness.stdin.write('\r')
+      await wait()
+      expect(written).toEqual([{ dialect: 'claude-code', path: '/tmp/hooks.json' }])
+      expect(harness.output.text).toContain('saved claude-code')
+    } finally {
+      instance.unmount()
+      await wait()
+    }
+  })
+
+  it('/lsp adds a server inline and removes one with a two-press backspace', async () => {
+    const harness = createTty(120, 30)
+    const servers = [{ extension: '.ts', language: 'typescript', command: 'tsserver' }]
+    const writes: { extension: string; language: string; command: string }[] = []
+    const removed: string[][] = []
+    const instance = renderApp(harness, appProps({
+      lspStatus: () => ({
+        packages: [
+          { pkg: '@deepseek-ai/dsh-lsp', present: true },
+          { pkg: '@deepseek-ai/dsh-lsp-stdio', present: true },
+          { pkg: '@deepseek-ai/dsh-tool-lsp', present: true },
+        ],
+        servers,
+      }),
+      lspWrite: entries => {
+        writes.push(...entries)
+        for (const entry of entries) {
+          const index = servers.findIndex(server => server.extension === entry.extension)
+          if (index < 0) servers.push(entry)
+          else servers[index] = entry
+        }
+        return 'saved'
+      },
+      lspRemove: extensions => {
+        removed.push([...extensions])
+        for (const extension of extensions) {
+          const index = servers.findIndex(server => server.extension === extension)
+          if (index >= 0) servers.splice(index, 1)
+        }
+        return 'removed'
+      },
+      lspInstallCommand: () => 'dsh plugin --profile cli add …',
+    }))
+    try {
+      await wait()
+      harness.stdin.write('/lsp')
+      await wait()
+      harness.output.text = ''
+      harness.stdin.write('\r')
+      await wait()
+      harness.stdin.write('\r')
+      await wait()
+      expect(harness.output.text).toContain('✎')
+      harness.stdin.write('.py:python:pylsp')
+      await wait()
+      harness.stdin.write('\r')
+      await wait()
+      expect(writes).toEqual([{ extension: '.py', language: 'python', command: 'pylsp' }])
+    } finally {
+      instance.unmount()
+      await wait()
+    }
+  })
+
+  it('/lsp names missing packages with the install command in the footer', async () => {
+    const harness = createTty(120, 24)
+    const instance = renderApp(harness, appProps({
+      lspStatus: () => ({ packages: [{ pkg: '@deepseek-ai/dsh-lsp', present: false }], servers: [] }),
+      lspInstallCommand: () => 'dsh plugin --profile cli add @deepseek-ai/dsh-lsp@0.1.7-rc.2',
+    }))
+    try {
+      await wait()
+      harness.stdin.write('/lsp')
+      await wait()
+      harness.output.text = ''
+      harness.stdin.write('\r')
+      await wait()
+      const opened = harness.output.text
+      expect(opened).toContain('✗ @deepseek-ai/dsh-lsp')
+      expect(opened).toContain('dsh plugin --profile cli add')
+    } finally {
+      instance.unmount()
+      await wait()
+    }
+  })
+})
+
+describe('/lsp panel removal', () => {
+  it('backspace twice on a server row removes it', async () => {
+    const harness = createTty(120, 30)
+    const servers = [{ extension: '.ts', language: 'typescript', command: 'tsserver' }]
+    const removed: string[][] = []
+    const instance = renderApp(harness, appProps({
+      lspStatus: () => ({
+        packages: [
+          { pkg: '@deepseek-ai/dsh-lsp', present: true },
+          { pkg: '@deepseek-ai/dsh-lsp-stdio', present: true },
+          { pkg: '@deepseek-ai/dsh-tool-lsp', present: true },
+        ],
+        servers,
+      }),
+      lspWrite: entries => {
+        for (const entry of entries) servers.push(entry)
+        return 'saved'
+      },
+      lspRemove: extensions => {
+        removed.push([...extensions])
+        for (const extension of extensions) {
+          const index = servers.findIndex(server => server.extension === extension)
+          if (index >= 0) servers.splice(index, 1)
+        }
+        return 'removed 1'
+      },
+      lspInstallCommand: () => 'dsh plugin --profile cli add …',
+    }))
+    try {
+      await wait()
+      harness.stdin.write('/lsp')
+      await wait()
+      harness.output.text = ''
+      harness.stdin.write('\r')
+      await wait()
+      // Three package rows precede the .ts server row (one key per chunk).
+      harness.stdin.write('\x1b[B')
+      await wait()
+      harness.stdin.write('\x1b[B')
+      await wait()
+      harness.stdin.write('\x1b[B')
+      await wait()
+      harness.output.text = ''
+      harness.stdin.write('\x7f')
+      await wait()
+      expect(harness.output.text).toContain('press again')
+      harness.stdin.write('\x7f')
+      await wait()
+      expect(removed).toEqual([['.ts']])
+      expect(harness.output.text).toContain('removed 1')
+    } finally {
+      instance.unmount()
+      await wait()
+    }
+  })
+})

@@ -497,7 +497,7 @@ interface DraftFile extends FilePathInspection {
  * While a modal (approval / question / model panel) owns the keys, the
  * box passes every key through untouched.
  */
-export function Composer({ active, frozen, frozenHint, busy, descriptors, skills, dispatch, steer, submitMode, cycleSubmitMode, interrupt, quit, openModel, openEffort, openHelp, openMode, openPermission, openResume, openSearch, openPlugin, openUpdate,  openJobs, openMcp, openDeliverables, openGoal, spawnSubagent, tellSubagent, openStatusline, openTheme, openLanguage, saveLanguage, openHistory, openQueue, openAgents, openSubagent, openTodos, openUsage, openDelete, openDiff, openReviewPicker, reviewChanges, deleteConfirm, confirmDelete, cancelDelete, createSession, forkSession, cancelSessionSwitch, notify, applyEditorKeys, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, inspectImages, prepareImages, inspectFiles, prepareFiles, cycleMode, exportTranscript, renameTitle, copyLastResponse, recallSpace, recordLocal, recordHistory, queued, updateQueued, historyFill, historyConsumed, animations, applyAnimations, applyRainbow, rainbowBurstId, waveTier, waveStyle, maxRows, anchorRowsBelow, tabTitle, onEditorRows, onMenuRows, sessionKey }: {
+export function Composer({ active, frozen, frozenHint, busy, descriptors, skills, dispatch, steer, submitMode, cycleSubmitMode, interrupt, quit, openModel, openEffort, openHelp, openMode, openPermission, openResume, openSearch, openPlugin, openUpdate,  openJobs, openMcp, openDeliverables, openGoal, openHooks, hooksWrite, lspWrite, openLsp, spawnSubagent, tellSubagent, openStatusline, openTheme, openLanguage, saveLanguage, openHistory, openQueue, openAgents, openSubagent, openTodos, openUsage, openDelete, openDiff, openReviewPicker, reviewChanges, deleteConfirm, confirmDelete, cancelDelete, createSession, forkSession, cancelSessionSwitch, notify, applyEditorKeys, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, inspectImages, prepareImages, inspectFiles, prepareFiles, cycleMode, exportTranscript, renameTitle, copyLastResponse, recallSpace, recordLocal, recordHistory, queued, updateQueued, historyFill, historyConsumed, animations, applyAnimations, applyRainbow, rainbowBurstId, waveTier, waveStyle, maxRows, anchorRowsBelow, tabTitle, onEditorRows, onMenuRows, sessionKey }: {
   active: boolean
   frozen: boolean
   /** Frozen-band hint naming the surface that owns the keyboard; an empty
@@ -536,6 +536,14 @@ export function Composer({ active, frozen, frozenHint, busy, descriptors, skills
   spawnSubagent?: (prompt: string) => Promise<string>
   /** Steer one child conversation (/tell <id-prefix> <text>). */
   tellSubagent?: (targetPrefix: string, text: string) => Promise<string>
+  /** Open the /hooks bridges panel. */
+  openHooks: () => void
+  /** Open the /lsp servers panel. */
+  openLsp: () => void
+  /** Persist one hooks bridge row (/hooks <dialect> <path>). */
+  hooksWrite?: (dialect: 'claude-code' | 'codex', configPath: string) => string
+  /** Merge language servers (/lsp <ext>:<language>:<command>…). */
+  lspWrite?: (entries: readonly { extension: string; language: string; command: string }[]) => string
   openStatusline: () => void
   openTheme: () => void
   /** Open the /language picker (bare /language). */
@@ -1503,6 +1511,51 @@ export function Composer({ active, frozen, frozenHint, busy, descriptors, skills
       }
       if (text === '/mcp' || text.startsWith('/mcp ')) {
         openMcp()
+        return
+      }
+      if (text === '/hooks') {
+        openHooks()
+        return
+      }
+      if (text.startsWith('/hooks ') && hooksWrite !== undefined) {
+        const parts = text.slice(7).trim().split(/\s+/u)
+        const dialect = parts[0]
+        const configPath = parts.slice(1).join(' ')
+        if ((dialect === 'claude' || dialect === 'claude-code') && configPath !== '') {
+          try {
+            notify(hooksWrite('claude-code', configPath))
+          } catch (reason: unknown) {
+            notify(t('notice.hooksWriteFailed', { message: reason instanceof Error ? reason.message : String(reason) }), 'error')
+          }
+        } else if (dialect === 'codex' && configPath !== '') {
+          try {
+            notify(hooksWrite('codex', configPath))
+          } catch (reason: unknown) {
+            notify(t('notice.hooksWriteFailed', { message: reason instanceof Error ? reason.message : String(reason) }), 'error')
+          }
+        } else notify(t('notice.hooksUsage'), 'warning')
+        return
+      }
+      if (text === '/lsp') {
+        openLsp()
+        return
+      }
+      if (text.startsWith('/lsp ') && lspWrite !== undefined) {
+        const entries = text.slice(5).trim().split(/\s+/u).flatMap(token => {
+          const parts = token.split(':')
+          return parts.length === 3 && parts.every(part => part !== '')
+            ? [{ extension: parts[0].startsWith('.') ? parts[0] : `.${parts[0]}`, language: parts[1], command: parts[2] }]
+            : []
+        })
+        if (entries.length === 0) {
+          notify(t('notice.lspUsage'), 'warning')
+          return
+        }
+        try {
+          notify(lspWrite(entries))
+        } catch (reason: unknown) {
+          notify(reason instanceof Error ? reason.message : String(reason), 'error')
+        }
         return
       }
       if (text.startsWith('/spawn ') && spawnSubagent !== undefined) {

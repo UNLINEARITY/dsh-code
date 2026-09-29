@@ -78,7 +78,7 @@ import type { SkillsView, SkillRow } from './skills.ts'
 import type { MentionCandidate } from './mentions.ts'
 import type { SubagentFeedView, SubagentRow } from './session/subagents.ts'
 import type { UsageView } from './render/usage.ts'
-import { AgentsPanel, DeliverablesPanel, EffortPanel, GoalPanel, HistoryPanel, JobsPanel, McpPanel, ModePanel, PermissionPanel, PluginPanel, ResumePanel, ReviewPickerPanel, SearchPanel, StatuslinePanel, runClock, SubagentPanel, UsagePanel, type JobRow, type McpServerRow, type SearchRow } from './panels/kernel-panels.ts'
+import { AgentsPanel, DeliverablesPanel, EffortPanel, GoalPanel, HooksPanel, HistoryPanel, JobsPanel, LspPanel, McpPanel, ModePanel, PermissionPanel, PluginPanel, ResumePanel, ReviewPickerPanel, SearchPanel, StatuslinePanel, runClock, SubagentPanel, UsagePanel, type HooksStatusRow, type JobRow, type McpServerRow, type SearchRow } from './panels/kernel-panels.ts'
 import type { PresetRow } from './presets.ts'
 import type { DeliverablesEntry } from './render/projection.ts'
 import type { PermissionRow } from './permissions.ts'
@@ -369,6 +369,18 @@ export interface AppProps {
   spawnSubagent?: (prompt: string) => Promise<string>
   /** Continue one child conversation as the user (/tell). */
   tellSubagent?: (targetPrefix: string, text: string) => Promise<string>
+  /** Read both hook bridges' configured paths for the /hooks panel. */
+  hooksStatus?: () => readonly HooksStatusRow[]
+  /** Persist one hooks bridge row (/hooks <dialect> <path>). */
+  hooksWrite?: (dialect: 'claude-code' | 'codex', configPath: string) => string
+  /** Read LSP package presence and configured servers for the /lsp panel. */
+  lspStatus?: () => { packages: readonly { pkg: string; present: boolean }[]; servers: readonly { extension: string; language: string; command: string }[] }
+  /** Merge language servers into the profile (/lsp <ext>:<lang>:<cmd>). */
+  lspWrite?: (entries: readonly { extension: string; language: string; command: string }[]) => string
+  /** The exact install command the /lsp panel suggests for missing packages. */
+  lspInstallCommand?: () => string
+  /** Remove language servers by extension (the /lsp panel's destructive key). */
+  lspRemove?: (extensions: readonly string[]) => string
   /** Read one background job's retained output as bounded plain lines. */
   jobOutput?: (id: string) => Promise<readonly string[]>
   /** Probe the launcher's aligned update plan (read-only; never installs). */
@@ -1929,6 +1941,10 @@ export function App(props: AppProps): ReactElement {
   const [mcpOpen, setMcpOpen] = useState(false)
   const [deliverablesOpen, setDeliverablesOpen] = useState(false)
   const [goalOpen, setGoalOpen] = useState(false)
+  const [hooksOpen, setHooksOpen] = useState(false)
+  const [lspOpen, setLspOpen] = useState(false)
+  const [hooksEpoch, setHooksEpoch] = useState(0)
+  const [lspEpoch, setLspEpoch] = useState(0)
   const [statuslineOpen, setStatuslineOpen] = useState(false)
   const [statuslineItems, setStatuslineItems] = useState<readonly StatusItemId[]>(() => parseStatuslineItems(props.statusline))
   const [themeOpen, setThemeOpen] = useState(false)
@@ -2034,6 +2050,8 @@ export function App(props: AppProps): ReactElement {
     { hint: '/mcp', open: mcpOpen, close: () => setMcpOpen(false) },
     { hint: '/deliverables', open: deliverablesOpen, close: () => setDeliverablesOpen(false) },
     { hint: '/goal', open: goalOpen, close: () => setGoalOpen(false) },
+    { hint: '/hooks', open: hooksOpen, close: () => setHooksOpen(false) },
+    { hint: '/lsp', open: lspOpen, close: () => setLspOpen(false) },
     { hint: '/statusline', open: statuslineOpen, close: () => setStatuslineOpen(false) },
     { hint: '/theme', open: themeOpen, close: () => setThemeOpen(false) },
     { hint: '/language', open: languageOpen, close: () => setLanguageOpen(false) },
@@ -3221,6 +3239,25 @@ export function App(props: AppProps): ReactElement {
     goalOpen && !approvalPending && !questionPending
       ? createElement(GoalPanel, { goal: view.goal, dispatch: (line: string) => props.dispatch(line), close: () => setGoalOpen(false) })
       : undefined,
+    hooksOpen && !approvalPending && !questionPending
+      ? createElement(HooksPanel, {
+        rows: props.hooksStatus === undefined ? [] : (() => { void hooksEpoch; return props.hooksStatus?.() ?? [] })(),
+        write: props.hooksWrite,
+        onChanged: () => setHooksEpoch(value => value + 1),
+        close: () => setHooksOpen(false),
+      })
+      : undefined,
+    lspOpen && !approvalPending && !questionPending
+      ? createElement(LspPanel, {
+        packages: (() => { void lspEpoch; return props.lspStatus?.().packages ?? [] })(),
+        servers: (() => { void lspEpoch; return props.lspStatus?.().servers ?? [] })(),
+        write: props.lspWrite,
+        remove: props.lspRemove,
+        onChanged: () => setLspEpoch(value => value + 1),
+        installCommand: props.lspInstallCommand === undefined ? '' : props.lspInstallCommand(),
+        close: () => setLspOpen(false),
+      })
+      : undefined,
     statuslineOpen && !approvalPending && !questionPending
       ? createElement(StatuslinePanel, {
         enabled: statuslineItems,
@@ -3420,6 +3457,8 @@ export function App(props: AppProps): ReactElement {
         openMcp: () => setMcpOpen(true),
         openDeliverables: () => setDeliverablesOpen(true),
         openGoal: () => setGoalOpen(true),
+        openHooks: () => setHooksOpen(true),
+        openLsp: () => setLspOpen(true),
         openStatusline: () => setStatuslineOpen(true),
         openTheme: () => setThemeOpen(true),
         openLanguage: () => setLanguageOpen(true),

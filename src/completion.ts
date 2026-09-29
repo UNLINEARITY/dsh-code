@@ -30,6 +30,8 @@ export const LOCAL_COMMANDS: readonly LocalCommand[] = [
   { label: '/goal', descriptionKey: 'cmd.goal' },
   { label: '/spawn', descriptionKey: 'cmd.spawn' },
   { label: '/tell', descriptionKey: 'cmd.tell' },
+  { label: '/hooks', descriptionKey: 'cmd.hooks' },
+  { label: '/lsp', descriptionKey: 'cmd.lsp' },
   { label: '/statusline', descriptionKey: 'cmd.statusline' },
   { label: '/theme', descriptionKey: 'cmd.theme' },
   { label: '/language', descriptionKey: 'cmd.language' },

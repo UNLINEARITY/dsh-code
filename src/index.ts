@@ -1,3 +1,4 @@
+import { statSync } from 'node:fs'
 /**
  * @deepseek-ai/dsh-code — the interactive terminal driver. The bundle patch
  * rides over dsh-base without Host, HTTP, or browser plugins; this runner
@@ -130,6 +131,7 @@ import {
   openAuthorizationUrl,
   subscribeProviderAuthorizations,
 } from './authorization.ts'
+import { readProfilePatch, removeLspServers, upsertLspServers, upsertProfileRow, writeProfilePatch, ProfilePatchShapeError, type ProfilePatchRow } from './runner/profile-patch.ts'
 import { selectForkSeed } from './session/fork.ts'
 import { gitBranch } from './git-workflow.ts'
 import {
@@ -246,6 +248,96 @@ function listJobs(ctx: Context, caller: Agent | undefined): readonly JobRow[] {
  * @param ctx - context carrying the (optional) cordis loader.
  * @returns server rows in loader order; never throws.
  */
+/** Write one hooks bridge row into the profile layer (atomic, backed up). */
+function writeHooksBridge(patchPath: string, dialect: 'claude-code' | 'codex', configPath: string): string {
+  if (patchPath === '') throw new Error('no profile patch path in this boot')
+  const id = dialect === 'claude-code' ? 'hooks-claude-code' : 'hooks-codex'
+  const name = dialect === 'claude-code' ? '@deepseek-ai/dsh-hooks-claude-code' : '@deepseek-ai/dsh-hooks-codex'
+  const next = upsertProfileRow(readProfilePatch(patchPath), { id, name, config: { configPath } } satisfies ProfilePatchRow)
+  writeProfilePatch(patchPath, [...next])
+  return t('notice.hooksWritten', { dialect, path: configPath })
+}
+
+const LSP_PACKAGES = ['@deepseek-ai/dsh-lsp', '@deepseek-ai/dsh-lsp-stdio', '@deepseek-ai/dsh-tool-lsp'] as const
+
+/** Whether one LSP package resolves from a directory's install tree. */
+function lspPackagePresent(anchorDirs: readonly string[], pkg: string): boolean {
+  for (const base of anchorDirs) {
+    try {
+      statSync(`${base}/node_modules/${pkg}`)
+      return true
+    } catch { /* keep probing */ }
+  }
+  return false
+}
+
+function lspInstallCommand(profileName: string): string {
+  return `dsh plugin --profile ${profileName} add ${LSP_PACKAGES.map(pkg => `${pkg}@0.1.7-rc.2`).join(' ')}`
+}
+
+/**
+ * Merge language servers into the profile's lsp-stdio row, creating the
+ * three LSP rows on first add. Missing packages refuse the write with the
+ * exact install command (an enabled row over a missing package fails boot).
+ */
+function writeLspServers(patchPath: string, anchorDirs: readonly string[], entries: readonly { extension: string; language: string; command: string }[]): string {
+  const missing = LSP_PACKAGES.filter(pkg => !lspPackagePresent(anchorDirs, pkg))
+  if (missing.length > 0) throw new Error(t('notice.lspMissingPackages', { command: lspInstallCommand(profileNameOf(patchPath)) }))
+  if (patchPath === '') throw new Error('no profile patch path in this boot')
+  writeProfilePatch(patchPath, [...upsertLspServers(readProfilePatch(patchPath), entries)])
+  return t('notice.lspWritten', { count: entries.length })
+}
+
+/** The profile name from a .../profiles/<name>/cordis.patch.yml path. */
+function profileNameOf(patchPath: string): string {
+  const parts = patchPath.split('/')
+  return parts.at(-2) ?? 'cli'
+}
+
+/** The /hooks panel's rows: both dialects with their configured path. */
+function hooksStatusRows(patchPath: string): readonly { dialect: string; configPath: string }[] {
+  const rows = safeReadProfileRows(patchPath)
+  const byId = new Map(rows.map(row => [row.id, row]))
+  return [
+    { dialect: 'claude-code', configPath: configPathOf(byId.get('hooks-claude-code')) },
+    { dialect: 'codex', configPath: configPathOf(byId.get('hooks-codex')) },
+  ]
+}
+
+function safeReadProfileRows(patchPath: string): readonly ProfilePatchRow[] {
+  if (patchPath === '') return []
+  try {
+    return readProfilePatch(patchPath)
+  } catch (error) {
+    if (error instanceof ProfilePatchShapeError) return []
+    throw error
+  }
+}
+
+function configPathOf(row: ProfilePatchRow | undefined): string {
+  const value = row?.config?.configPath
+  return typeof value === 'string' ? value : ''
+}
+
+/** The /lsp panel's data: package presence plus the configured server map. */
+function lspStatus(patchPath: string, anchorDirs: readonly string[]): { packages: readonly { pkg: string; present: boolean }[]; servers: readonly { extension: string; language: string; command: string }[] } {
+  const serversRow = safeReadProfileRows(patchPath).find(row => row.id === 'lsp-stdio')
+  const serversMap = serversRow?.config?.servers
+  const servers: { extension: string; language: string; command: string }[] = []
+  if (serversMap !== undefined && typeof serversMap === 'object') {
+    for (const [extension, value] of Object.entries(serversMap)) {
+      if (value === null || typeof value !== 'object') continue
+      const command = (value as { command?: unknown }).command
+      const language = (value as { extensionToLanguage?: Record<string, unknown> }).extensionToLanguage?.[extension]
+      if (typeof command === 'string' && typeof language === 'string') servers.push({ extension, language, command })
+    }
+  }
+  return {
+    packages: LSP_PACKAGES.map(pkg => ({ pkg, present: lspPackagePresent(anchorDirs, pkg) })),
+    servers,
+  }
+}
+
 /** Structural slice of the subagent runtime the delegation surface uses. */
 interface SubagentRuntimeFace {
   interrupt(targetSessionId: string, authority: { kind: 'user'; parentSessionId: string }): void
@@ -767,6 +859,13 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
 
   // The bridge the React app registers on mount: local notices from the
   // process side (unknown commands, switch confirmations, cancels).
+  /** The live profile's patch path ('' in a no-profile boot). */
+  const patchPathOfBoot = (): string => (ctx.get('profileContext') as { patchPath?: string } | undefined)?.patchPath ?? ''
+  /** Directories whose node_modules trees answer the LSP package precheck. */
+  const lspAnchorDirs = (): readonly string[] => {
+    const context = ctx.get('profileContext') as { installAnchor?: string; dir?: string } | undefined
+    return [context?.installAnchor, context?.dir].filter((dir): dir is string => typeof dir === 'string')
+  }
   const bridge: AppBridge = { notify: () => {} }
 
   // Same-id capability inheritance. Catalog capabilities flow by route key,
@@ -2011,6 +2110,17 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
         }
         }
       })(),
+        hooksStatus: () => hooksStatusRows(patchPathOfBoot()),
+      hooksWrite: (dialect: 'claude-code' | 'codex', configPath: string) => writeHooksBridge(patchPathOfBoot(), dialect, configPath),
+      lspStatus: () => lspStatus(patchPathOfBoot(), lspAnchorDirs()),
+      lspWrite: (entries: readonly { extension: string; language: string; command: string }[]) => writeLspServers(patchPathOfBoot(), lspAnchorDirs(), entries),
+      lspRemove: (extensions: readonly string[]) => {
+        const patchPath = patchPathOfBoot()
+        if (patchPath === '') throw new Error('no profile patch path in this boot')
+        writeProfilePatch(patchPath, [...removeLspServers(readProfilePatch(patchPath), extensions)])
+        return t('notice.lspRemoved', { count: extensions.length })
+      },
+      lspInstallCommand: () => lspInstallCommand(profileNameOf(patchPathOfBoot())),
       spawnSubagent: (() => {
         const current = active
         return current === undefined ? undefined : (prompt: string) => spawnSubagentChild(ctx.get('subagents') as SubagentRuntimeFace | undefined, current.agent, prompt)

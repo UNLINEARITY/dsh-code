@@ -533,6 +533,189 @@ export function GoalPanel({ goal, dispatch, close }: { goal: GoalFold | undefine
   })
 }
 
+/** One hooks bridge line for the /hooks panel. */
+export interface HooksStatusRow {
+  /** Bridge dialect: `claude-code` or `codex`. */
+  readonly dialect: string
+  /** Config path the profile row names, '' when no row exists. */
+  readonly configPath: string
+}
+
+/**
+ * The interactive /hooks panel. Enter on a dialect row starts inline path
+ * editing (seeded with the current value): typing edits, Enter commits one
+ * atomic profile write, Esc cancels — no retreat to the composer.
+ */
+export function HooksPanel({ rows, write, onChanged, close }: {
+  rows: readonly HooksStatusRow[]
+  /** Persist one bridge row; resolves with the outcome notice, throws on failure. */
+  write?: (dialect: 'claude-code' | 'codex', configPath: string) => string
+  /** Bump after a successful write so the caller re-reads the profile. */
+  onChanged?: () => void
+  close: () => void
+}): ReactElement {
+  const [cursor, setCursor] = useState(0)
+  const [editing, setEditing] = useState<{ dialect: 'claude-code' | 'codex'; draft: string }>()
+  const [notice, setNotice] = useState<string>()
+  useInput((input, key) => {
+    if (editing !== undefined) {
+      if (key.escape) return setEditing(undefined)
+      if (key.return) {
+        const path = editing.draft.trim()
+        if (path !== '' && write !== undefined) {
+          try {
+            setNotice(write(editing.dialect, path))
+            setEditing(undefined)
+            onChanged?.()
+          } catch (reason: unknown) {
+            setNotice(reason instanceof Error ? reason.message : String(reason))
+          }
+        } else setNotice(t('notice.hooksUsage'))
+        return
+      }
+      const next = editQuery(editing.draft, input, key)
+      if (next !== undefined) setEditing({ ...editing, draft: next })
+      return
+    }
+    if (key.escape || input === 'q') return close()
+    if (key.upArrow) return setCursor(value => rows.length === 0 ? 0 : (value + rows.length - 1) % rows.length)
+    if (key.downArrow) return setCursor(value => rows.length === 0 ? 0 : (value + 1) % rows.length)
+    if (key.return && write !== undefined && rows[cursor] !== undefined) {
+      const row = rows[cursor]
+      setEditing({ dialect: row.dialect === 'codex' ? 'codex' : 'claude-code', draft: row.configPath })
+      setNotice(undefined)
+    }
+  })
+  return createElement(ListFrame, {
+    title: t('panel.hooks.title', { count: rows.filter(row => row.configPath !== '').length }),
+    rows: rows.map(row => {
+      if (editing !== undefined && row.dialect === editing.dialect) {
+        return { key: row.dialect, text: `✎ ${row.dialect} · ${editing.draft === '' ? t('panel.hooks.placeholder') : editing.draft}` }
+      }
+      return {
+        key: row.dialect,
+        text: `${row.configPath === '' ? '○' : '●'} ${row.dialect}${row.configPath === '' ? '' : ` · ${row.configPath}`}`,
+      }
+    }),
+    cursor, loading: false, query: '', searching: false,
+    footer: editing !== undefined
+      ? t('panel.hooks.editing')
+      : notice !== undefined ? notice : t('panel.hooks.footer'),
+  })
+}
+
+/** One LSP status line for the /lsp panel. */
+export interface LspStatusRow {
+  /** Package name whose presence the wizard prechecks. */
+  readonly pkg: string
+  /** Whether the package resolves from the profile install. */
+  readonly present: boolean
+}
+
+/**
+ * The interactive /lsp panel. Enter starts one inline `ext:language:command`
+ * draft (seeded from the cursor server row when one is focused, so the same
+ * flow replaces); typing edits, Enter commits the merge write, Esc cancels.
+ * Backspace twice on a server row removes it (the rows disable themselves
+ * when the last server leaves).
+ */
+export function LspPanel({ packages, servers, write, remove, onChanged, installCommand, close }: {
+  packages: readonly LspStatusRow[]
+  servers: readonly { extension: string; language: string; command: string }[]
+  /** Merge servers into the profile; resolves with the notice, throws on failure. */
+  write?: (entries: readonly { extension: string; language: string; command: string }[]) => string
+  /** Remove the listed extensions' servers; resolves with the notice. */
+  remove?: (extensions: readonly string[]) => string
+  /** Bump after a successful write so the caller re-reads the profile. */
+  onChanged?: () => void
+  installCommand: string
+  close: () => void
+}): ReactElement {
+  const [cursor, setCursor] = useState(0)
+  const [draft, setDraft] = useState<string | undefined>(undefined)
+  const [armedExt, setArmedExt] = useState<string>()
+  const [notice, setNotice] = useState<string>()
+  const rowsCount = packages.length + servers.length + 1
+  useInput((input, key) => {
+    if (draft !== undefined) {
+      if (key.escape) return setDraft(undefined)
+      if (key.return) {
+        const token = draft.trim()
+        const parts = token.split(':')
+        if (parts.length === 3 && parts.every(part => part !== '') && write !== undefined) {
+          const entry = { extension: parts[0].startsWith('.') ? parts[0] : `.${parts[0]}`, language: parts[1], command: parts[2] }
+          try {
+            setNotice(write([entry]))
+            setDraft(undefined)
+            onChanged?.()
+          } catch (reason: unknown) {
+            setNotice(reason instanceof Error ? reason.message : String(reason))
+          }
+        } else setNotice(t('notice.lspUsage'))
+        return
+      }
+      const next = editQuery(draft, input, key)
+      if (next !== undefined) setDraft(next)
+      return
+    }
+    if (key.escape || input === 'q') return close()
+    if (key.upArrow) return setCursor(value => (value + rowsCount - 1) % rowsCount)
+    if (key.downArrow) return setCursor(value => (value + 1) % rowsCount)
+    if (key.return && write !== undefined) {
+      const focused = cursor >= packages.length && cursor < packages.length + servers.length
+        ? servers[cursor - packages.length]
+        : undefined
+      setDraft(focused === undefined ? '' : `${focused.extension}:${focused.language}:${focused.command}`)
+      setNotice(undefined)
+      return
+    }
+    if ((key.backspace === true || key.delete === true) && remove !== undefined) {
+      const focused = cursor >= packages.length && cursor < packages.length + servers.length
+        ? servers[cursor - packages.length]
+        : undefined
+      if (focused !== undefined) {
+        if (armedExt === focused.extension) {
+          try {
+            setNotice(remove([focused.extension]))
+            setArmedExt(undefined)
+            onChanged?.()
+          } catch (reason: unknown) {
+            setNotice(reason instanceof Error ? reason.message : String(reason))
+          }
+        } else {
+          setArmedExt(focused.extension)
+          setNotice(undefined)
+        }
+      }
+      return
+    }
+    setArmedExt(input === undefined || input === '' ? armedExt : undefined)
+  })
+  const rows = [
+    ...packages.map(pkg => ({ key: pkg.pkg, text: `${pkg.present ? '✓' : '✗'} ${pkg.pkg}` })),
+    ...servers.map(server => ({
+      key: server.extension,
+      text: `  ${server.extension} → ${server.language} · ${server.command}`,
+    })),
+    ...(draft === undefined ? [{ key: '__add__', text: `+ ${t('panel.lsp.addRow')}` }] : []),
+  ]
+  if (draft !== undefined) rows.push({ key: '__draft__', text: `✎ ${draft === '' ? t('panel.lsp.placeholder') : draft}` })
+  return createElement(ListFrame, {
+    title: t('panel.lsp.title', { count: servers.length }),
+    rows,
+    cursor, loading: false, query: '', searching: false,
+    footer: draft !== undefined
+      ? t('panel.lsp.editing')
+      : notice !== undefined
+        ? notice
+        : armedExt !== undefined
+          ? t('panel.lsp.armed', { id: armedExt })
+          : packages.every(pkg => pkg.present)
+            ? t('panel.lsp.footer')
+            : `${t('panel.lsp.missingPkgs')} — ${installCommand}`,
+  })
+}
+
 export function ResumePanel({ currentCwd, load, readTranscript, select, requestDelete, deleteConfirmId, reloadToken = 0, deleteMode = false, presetId, close }: {
   currentCwd: string
   load: (options: SessionDirectoryOptions, signal?: AbortSignal) => Promise<readonly SessionRow[]>
