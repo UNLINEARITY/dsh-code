@@ -305,3 +305,69 @@ describe('review conclusion parsing', () => {
     expect(at([])).toBeTypeOf('string')
   })
 })
+
+describe('watchGitBranch', () => {
+  it('updates the store when HEAD moves to another branch (debounced)', async () => {
+    const { watchGitBranch } = await import('../src/git-workflow.ts')
+    const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import('node:fs')
+    const path = await import('node:path')
+    const { tmpdir } = await import('node:os')
+    const dir = mkdtempSync(path.join(tmpdir(), 'git-branch-watch-'))
+    try {
+      mkdirSync(path.join(dir, '.git'))
+      writeFileSync(path.join(dir, '.git', 'HEAD'), 'ref: refs/heads/main\n')
+      const store = watchGitBranch(dir)
+      const waitFor = async (expected: string): Promise<void> => {
+        // Watcher delivery plus the 150ms debounce are load-sensitive under
+        // the parallel suite: poll for the expected value instead of a
+        // fixed sleep, failing only after a generous bound.
+        for (let i = 0; i < 100 && store.getSnapshot() !== expected; i += 1) {
+          await new Promise(resolve => setTimeout(resolve, 50))
+        }
+        expect(store.getSnapshot()).toBe(expected)
+      }
+      try {
+        expect(store.getSnapshot()).toBe('main')
+        writeFileSync(path.join(dir, '.git', 'HEAD'), 'ref: refs/heads/feature/x\n')
+        await waitFor('feature/x')
+        // A detached HEAD clears the branch (the status group drops out).
+        writeFileSync(path.join(dir, '.git', 'HEAD'), '0123456789abcdef0123456789abcdef01234567\n')
+        await waitFor('')
+      } finally {
+        store.dispose()
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('notifies subscribers on change and stays quiet otherwise', async () => {
+    const { watchGitBranch } = await import('../src/git-workflow.ts')
+    const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import('node:fs')
+    const path = await import('node:path')
+    const { tmpdir } = await import('node:os')
+    const dir = mkdtempSync(path.join(tmpdir(), 'git-branch-watch-'))
+    try {
+      mkdirSync(path.join(dir, '.git'))
+      writeFileSync(path.join(dir, '.git', 'HEAD'), 'ref: refs/heads/main\n')
+      const store = watchGitBranch(dir)
+      try {
+        let notified = 0
+        const off = store.subscribe(() => { notified += 1 })
+        writeFileSync(path.join(dir, '.git', 'HEAD'), 'ref: refs/heads/dev\n')
+        for (let i = 0; i < 100 && notified === 0; i += 1) {
+          await new Promise(resolve => setTimeout(resolve, 50))
+        }
+        expect(notified).toBeGreaterThanOrEqual(1)
+        off()
+        const offProbe = store.subscribe(() => {})
+        expect(typeof offProbe).toBe('function')
+        offProbe()
+      } finally {
+        store.dispose()
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})

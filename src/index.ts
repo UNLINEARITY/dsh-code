@@ -133,7 +133,7 @@ import {
 } from './authorization.ts'
 import { readProfilePatch, removeLspServers, upsertLspServers, upsertProfileRow, writeProfilePatch, ProfilePatchShapeError, type ProfilePatchRow } from './runner/profile-patch.ts'
 import { selectForkSeed } from './session/fork.ts'
-import { gitBranch } from './git-workflow.ts'
+import { gitBranch, watchGitBranch, type GitBranchStore } from './git-workflow.ts'
 import {
   buildReviewPrompt,
   listReviewBranches,
@@ -859,6 +859,16 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
 
   // The bridge the React app registers on mount: local notices from the
   // process side (unknown commands, switch confirmations, cancels).
+  /** One live branch store per working directory (watchers live for the process). */
+  const branchStores = new Map<string, GitBranchStore>()
+  const gitBranchStoreFor = (cwd: string): GitBranchStore => {
+    let store = branchStores.get(cwd)
+    if (store === undefined) {
+      store = watchGitBranch(cwd)
+      branchStores.set(cwd, store)
+    }
+    return store
+  }
   /** The live profile's patch path ('' in a no-profile boot). */
   const patchPathOfBoot = (): string => (ctx.get('profileContext') as { patchPath?: string } | undefined)?.patchPath ?? ''
   /** Directories whose node_modules trees answer the LSP package precheck. */
@@ -2006,6 +2016,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       cwd: basename(sessionCwd),
       workspaceRoot: sessionCwd,
       branch: gitBranch(sessionCwd),
+      branchStore: gitBranchStoreFor(sessionCwd),
       sessionId: session === undefined ? '' : session.id.slice(-8),
       resumed: active?.resumed ?? false,
       mode: active?.mode ?? pendingMode ?? normalizePresetId(presets.defaultId),

@@ -6,6 +6,7 @@
  */
 
 import { execFile } from 'node:child_process'
+import { watch } from 'node:fs'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { t } from './i18n.ts'
@@ -350,5 +351,67 @@ export function gitBranch(cwd: string): string {
     // Only the single HEAD read is attempted, so the sole reachable failure is
     // a missing repository (or unreadable HEAD file): the branch group drops out.
     return ''
+  }
+}
+
+/** Live git-branch store the status line subscribes to. */
+export interface GitBranchStore {
+  /** Current branch name, '' outside a repository or on a detached HEAD. */
+  getSnapshot(): string
+  /** Subscribe to branch changes; returns the unsubscribe function. */
+  subscribe(listener: () => void): () => void
+  /** Stop watching and drop every listener. */
+  dispose(): void
+}
+
+/**
+ * Watch the repository's HEAD and publish the current branch. Branch
+ * switches rewrite HEAD, so one debounced re-read per burst keeps the
+ * status bar current without polling; a missing repository yields a
+ * permanently quiet '' store instead of throwing.
+ * @param cwd - the session's working directory.
+ */
+export function watchGitBranch(cwd: string): GitBranchStore {
+  let branch = gitBranch(cwd)
+  const listeners = new Set<() => void>()
+  let disposed = false
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const emit = (): void => {
+    for (const listener of listeners) listener()
+  }
+  let watcher: { close(): void } | undefined
+  try {
+    watcher = watch(join(cwd, '.git'), (event, filename) => {
+      if (disposed || (filename !== 'HEAD' && event !== 'rename')) return
+      if (timer !== undefined) clearTimeout(timer)
+      timer = setTimeout(() => {
+        timer = undefined
+        const next = gitBranch(cwd)
+        if (next !== branch) {
+          branch = next
+          emit()
+        }
+      }, 150)
+    })
+  } catch {
+    // No repository (or an unreadable .git): the store stays at its
+    // initial value, exactly like the one-shot read it replaces.
+  }
+  return {
+    getSnapshot(): string {
+      return branch
+    },
+    subscribe(listener: () => void): () => void {
+      listeners.add(listener)
+      return () => {
+        listeners.delete(listener)
+      }
+    },
+    dispose(): void {
+      disposed = true
+      if (timer !== undefined) clearTimeout(timer)
+      watcher?.close()
+      listeners.clear()
+    },
   }
 }

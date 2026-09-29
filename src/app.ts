@@ -219,6 +219,11 @@ export interface AppProps {
   workspaceRoot: string
   /** Git branch name, empty outside a repository. */
   branch: string
+  /**
+   * Live branch store (HEAD watcher); when present the status bar follows
+   * external branch switches without a restart, superseding {@link branch}.
+   */
+  branchStore?: { subscribe(listener: () => void): () => void; getSnapshot(): string }
   /** Short session identifier. */
   sessionId: string
   /** Whether this session was resumed from persistence. */
@@ -1707,6 +1712,16 @@ export function computeSettledRows(
 }
 
 /** The whole terminal app; state arrives via the store, output via Ink. */
+/** Live-branch hook source: the runner's watcher store, or a quiet stand-in
+ * over the mount-time snapshot when no watcher is wired (tests, bare boots). */
+function staticBranchStore(
+  live: { subscribe(listener: () => void): () => void; getSnapshot(): string } | undefined,
+  initial: string,
+): { subscribe(listener: () => void): () => void; getSnapshot(): string } {
+  if (live !== undefined) return live
+  return { subscribe: () => () => {}, getSnapshot: () => initial }
+}
+
 export function App(props: AppProps): ReactElement {
   // The stores are closure-backed singletons whose methods never touch `this`,
   // but a bare method reference still detaches it from its receiver. One stable
@@ -1715,6 +1730,13 @@ export function App(props: AppProps): ReactElement {
   const subscribeTranscript = useCallback((listener: () => void) => props.store.subscribe(listener), [props.store])
   const readTranscript = useCallback(() => props.store.getView(), [props.store])
   const view = useSyncExternalStore(subscribeTranscript, readTranscript)
+  // Live git branch: HEAD-watcher store when the runner wired one, else a
+  // stable stand-in over the mount-time snapshot (both satisfy the hook's
+  // snapshot-identity contract).
+  const branchStore = staticBranchStore(props.branchStore, props.branch)
+  const readBranch = useCallback((): string => branchStore.getSnapshot(), [branchStore])
+  const subscribeBranch = useCallback((listener: () => void): (() => void) => branchStore.subscribe(listener), [branchStore])
+  const branchLive = useSyncExternalStore(subscribeBranch, readBranch)
   // Terminal input anchor: Ink reference-counts raw mode across every active
   // `useInput` hook, so mutually exclusive surfaces (composer <-> approval
   // bar <-> panels) drop the count to zero inside each handoff commit — the
@@ -3547,7 +3569,7 @@ export function App(props: AppProps): ReactElement {
           model: modelLabel,
           mode: props.mode,
           cwd: props.cwd,
-          branch: props.branch,
+          branch: branchLive,
           sessionId: props.sessionId,
           title: view.title,
           plan: view.plan || props.pendingPlan === true,
