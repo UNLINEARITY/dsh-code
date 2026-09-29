@@ -2057,8 +2057,8 @@ export function App(props: AppProps): ReactElement {
    * forgotten in the others.
    */
   const panelSurfaces: readonly { readonly hint: string; readonly open: boolean; readonly close: () => void }[] = [
-    { hint: 'the diff review', open: diffView !== undefined, close: () => setDiffView(undefined) },
-    { hint: 'the review picker', open: reviewPickerOpen, close: () => setReviewPickerOpen(false) },
+    { hint: t('frozen.owner.diffReview'), open: diffView !== undefined, close: () => setDiffView(undefined) },
+    { hint: t('frozen.owner.reviewPicker'), open: reviewPickerOpen, close: () => setReviewPickerOpen(false) },
     {
       hint: '/model',
       open: modelOpen,
@@ -2440,10 +2440,10 @@ export function App(props: AppProps): ReactElement {
   // accept — every key actually feeds the panel (which may or may not
   // filter with it), so the honest hint names the owner and the way out.
   const keyboardOwner = approvalPending
-    ? 'the approval prompt'
+    ? t('frozen.owner.approval')
     : questionPending
-      ? 'the question'
-      : openPanel?.hint ?? (inspectorVisible ? 'history details' : undefined)
+      ? t('frozen.owner.question')
+      : openPanel?.hint ?? (inspectorVisible ? t('frozen.owner.history') : undefined)
   // One way out of every panel, matching Esc: while a panel owns the keys,
   // Ctrl+C closes it instead of silently doing nothing. The composer keeps its
   // own three states (interrupt the turn / clear the draft / quit) whenever no

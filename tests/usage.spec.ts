@@ -148,7 +148,7 @@ describe('usage panel rows', () => {
   it('says the projections are missing instead of showing zeros', () => {
     const body = text({ turns: [] })
     expect(body).toContain('dsh-token-meter')
-    expect(body).toContain('还没有已完成的回合')
+    expect(body).toContain('还没有已完成的轮次')
   })
 
   it('no longer renders a context block', () => {
@@ -242,7 +242,7 @@ describe('usage panel rows', () => {
     })
     expect(body).toContain('按模型 · 2')
     expect(body.indexOf('big')).toBeLessThan(body.indexOf('small'))
-    expect(body.indexOf('按模型')).toBeLessThan(body.indexOf('按回合'))
+    expect(body.indexOf('按模型')).toBeLessThan(body.indexOf('按轮次'))
   })
 
   it('stays inside the column budget it is given', () => {

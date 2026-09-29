@@ -7,6 +7,7 @@ import type { SubagentRow } from '../session/subagents.ts'
 import type { SearchRow } from '../runner/search-rows.ts'
 export type { SearchRow } from '../runner/search-rows.ts'
 import type { PermissionRow } from '../permissions.ts'
+import { permissionPresetLabel } from '../permissions.ts'
 import { presetDisplayText, type PresetRow } from '../presets.ts'
 import { KEYSTONE_MODULES, type PluginRow, type PluginPhase } from '../plugin-inventory.ts'
 import type { DeliverablesEntry, GoalFold } from '../render/projection.ts'
@@ -71,11 +72,11 @@ function ListFrame(props: ListFrameProps): ReactElement {
     return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(singleLineText(`${body} · esc close`), viewport.contentColumns))
   }
   const stateRows = props.loading
-    ? [{ key: 'loading', text: '  loading…' }]
+    ? [{ key: 'loading', text: `  ${t('panel.loading')}` }]
     : props.error !== undefined
       ? [{ key: 'error', text: `  ${singleLineText(props.error)}` }]
       : props.rows.length === 0
-        ? [{ key: 'empty', text: '  no matching entries' }]
+        ? [{ key: 'empty', text: `  ${t('panel.noMatch')}` }]
         : props.rows
   const bodyRows = Math.max(1, viewport.bodyRows - 1)
   const offset = revealRow(0, props.cursor, stateRows.length, bodyRows)
@@ -209,7 +210,7 @@ export function PermissionPanel({ current, load, select, close, defaultPreset, s
     title: t('panel.permission.title', { current }),
     rows: visible.map(row => ({
       key: row.id,
-      text: `${row.id === current ? '●' : '○'} ${row.id}${row.description === undefined ? '' : ` · ${row.description}`}${row.id === defaultId ? ' ★' : ''}`,
+      text: `${row.id === current ? '●' : '○'} ${permissionPresetLabel(row.id)}${row.description === undefined ? '' : ` · ${row.description}`}${row.id === defaultId ? ' ★' : ''}`,
     })),
     cursor, loading, error, query,
     footer: defaultNotice !== undefined
@@ -270,7 +271,7 @@ export function PluginPanel({ load, close, initialQuery = '', toggle }: {
       return {
         key: row.entryId,
         disabled: !row.enabled,
-        text: `${row.enabled ? '●' : '○'} ${row.entryId} · ${row.phase ?? 'not mounted'}${locked ? ' 🔒' : ''}${expanded && index === cursor ? ` · ${row.moduleName}` : ''}`,
+        text: `${row.enabled ? '●' : '○'} ${row.entryId} · ${row.phase ?? t('panel.notMounted')}${locked ? ' 🔒' : ''}${expanded && index === cursor ? ` · ${row.moduleName}` : ''}`,
       }
     }),
     cursor, loading: false, query,
@@ -453,7 +454,7 @@ export function McpPanel({ load, close }: { load: () => readonly McpServerRow[];
     rows: rows.map(row => ({
       key: row.entryId,
       disabled: !row.enabled,
-      text: `${row.enabled ? (row.phase === null ? '○' : MCP_MARK[row.phase]) : '○'} ${row.entryId} · ${row.phase ?? 'not mounted'}`,
+      text: `${row.enabled ? (row.phase === null ? '○' : MCP_MARK[row.phase]) : '○'} ${row.entryId} · ${row.phase ?? t('panel.notMounted')}`,
     })),
     cursor: 0, loading: false, query: '', searching: false,
     footer: rows.length === 0 ? t('panel.mcp.empty') : t('panel.footer.refreshClose'),
@@ -866,7 +867,7 @@ export function ResumePanel({ currentCwd, load, readTranscript, select, requestD
     rows: rows.map(row => ({
       key: row.id,
       disabled: deleteMode ? row.live : !row.resumable,
-      text: `${row.subagent ? '↳' : '○'} ${row.title ?? row.id.slice(-12)}${density === 'comfortable' ? ` · ${formatRelativeTime(row.updatedAt ?? row.createdAt, now)} · ${row.workspace} · ${row.preset}` : ''}${row.live ? ' · live' : ''}${expanded === row.id ? ` · ${row.id} · ${row.cwd}${row.parent === undefined ? '' : ` · parent ${row.parent}`}` : ''}`,
+      text: `${row.subagent ? '↳' : '○'} ${row.title ?? row.id.slice(-12)}${density === 'comfortable' ? ` · ${formatRelativeTime(row.updatedAt ?? row.createdAt, now)} · ${row.workspace} · ${row.preset}` : ''}${row.live ? ` · ${t('panel.live')}` : ''}${expanded === row.id ? ` · ${row.id} · ${row.cwd}${row.parent === undefined ? '' : ` · ${t('panel.parent', { id: row.parent })}`}` : ''}`,
     })), cursor, loading, error, query: options.query, searching,
     footer: t(deleteMode ? 'panel.footer.delete' : 'panel.footer.resume'),
   })
@@ -1671,7 +1672,7 @@ export function AgentsPanel({ live, load, readTranscript, attach, interrupt, clo
     title: t('panel.agents.title', { live: live.length, total: rows.length }),
     rows: rows.map(row => ({
       key: row.id,
-      text: `${row.running ? '●' : row.done ? '✓' : row.live ? '⏸' : '○'} ${row.label} · ${row.activity}${row.live ? ' · live' : ''}`,
+      text: `${row.running ? '●' : row.done ? '✓' : row.live ? '⏸' : '○'} ${row.label} · ${row.activity}${row.live ? ` · ${t('panel.live')}` : ''}`,
     })),
     cursor,
     loading,

@@ -364,7 +364,7 @@ describe('status layout', () => {
       expect(groupText(layout.row1).some(group => group.includes('/mode standard'))).toBe(true)
       expect(groupText(layout.row1).some(group => group.startsWith('上下文 '))).toBe(true)
       expect(groupText(layout.row2)).toEqual(expect.arrayContaining([
-        '回合 93 · 步骤 1655',
+        '轮次 93 · 步骤 1655',
         '模型 45.2s · 延迟 0.6s · 20 tokens/秒 · 工具 2m42s',
         '缓存 9.7K · 80%',
         '入 2.4K · 出 2.4K',

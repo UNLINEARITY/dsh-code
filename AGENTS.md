@@ -136,7 +136,11 @@ fix(status): follow external branch switches without a restart
 <Chinese body — semantic mirror, not word-for-word>
 ```
 
-### 4.5 Report and log formatting
+### 4.5 Commit messages describe outcomes, never process
+
+Never mention internal workflow in a commit message: no "an agent extracted", no "two audits anchored the work", no "the user reported then we investigated". The commit message states WHAT changed and WHY for the end user reading `git log` — not HOW the change came about. Process notes (agent delegation, audit rounds, user corrections) belong in `log.md` only.
+
+### 4.6 Report and log formatting
 
 No emoji headers in reports. No military/drama metaphors. Tables over long prose when comparing options. `---` (three dashes) separates sections in markdown reports.
 

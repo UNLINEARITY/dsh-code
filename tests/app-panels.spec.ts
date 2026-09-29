@@ -179,7 +179,7 @@ describe('interface language on live chrome', () => {
     }))
     try {
       await wait()
-      expect(harness.output.text).toContain('子代理 1 个运行中')
+      expect(harness.output.text).toContain('子智能体 1 个活跃')
       expect(harness.output.text).toContain('共 1 个')
       harness.stdin.write('/help ')
       await wait()

@@ -18,6 +18,7 @@ import { singleLineText, truncateColumns, formatTokens } from './text.ts'
 // Re-exported for the callers that have always read the formatter here.
 export { formatTokens }
 import { t, type MessageKey } from '../i18n.ts'
+import { permissionPresetLabel } from '../permissions.ts'
 
 
 /**
@@ -609,7 +610,7 @@ function buildCandidates(
     right.push({
       span: planStation
         ? { text: t('status.plan.on'), tone: 'plan' }
-        : { text: permission, tone: permissionTone(permission) },
+        : { text: permissionPresetLabel(permission), tone: permissionTone(permission) },
       rank: RANK_BADGE,
       id: 'permission',
     })

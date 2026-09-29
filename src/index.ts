@@ -148,6 +148,7 @@ import { SessionSwitchQueue } from './session/session-switch.ts'
 import { agentPresetsFrom, normalizePresetId, resolvePreset, selectPreset } from './presets.ts'
 import {
   applyPendingPermission,
+  permissionPresetLabel,
   effectivePermission,
   listPermissionRows,
   permissionPresetsFrom,
@@ -1193,7 +1194,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
         if (mode === 'steer') currentAgent.steer(message)
         else currentAgent.followup(message)
       } catch (error: unknown) {
-        bridge.notify(t('notice.messageFailed', { kind: mode === 'steer' ? 'steering' : 'message', message: error instanceof Error ? error.message : String(error) }), 'error')
+        bridge.notify(t('notice.messageFailed', { kind: t(mode === 'steer' ? 'notice.kind.steering' : 'notice.kind.message'), message: error instanceof Error ? error.message : String(error) }), 'error')
       }
     }
     if (parsed.references.length === 0) {
@@ -1351,7 +1352,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     if (images.length === 0 && line.startsWith('/permission ')) {
       try {
         const selected = setPermissionAction(line.slice(12).trim())
-        bridge.notify(t('notice.permissionChanged', { value: selected }))
+        bridge.notify(t('notice.permissionChanged', { value: permissionPresetLabel(selected) }))
       } catch (error: unknown) {
         bridge.notify(t('notice.permissionChangeFailed', { message: error instanceof Error ? error.message : String(error) }), 'error')
       }

@@ -3,6 +3,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { PermissionPresetService } from '@deepseek-ai/dsh-permission-presets'
 import type { Session } from '@deepseek-ai/dsh-session'
+import { t } from './i18n.ts'
 
 /** One selectable permission preset row for the /permission panel. */
 export interface PermissionRow {
@@ -59,6 +60,24 @@ export function applyPendingPermission(
   if (pending !== undefined && effectivePermission(service, session, undefined) !== pending) {
     selectPermission(service, session, pending)
   }
+}
+
+/**
+ * Display label for a permission preset: the three table defaults plus the
+ * derived plan/auto/custom stations carry locale keys; user-configured
+ * presets (added through the profile's patch layer) keep their declared
+ * name or raw id — the TUI never invents translations for those.
+ */
+export function permissionPresetLabel(raw: string): string {
+  const known: Record<string, string> = {
+    'read-only': t('permission.readOnly'),
+    'workspace-write': t('permission.workspaceWrite'),
+    'danger-full-access': t('permission.dangerFullAccess'),
+    'auto': t('permission.auto'),
+    'custom': t('permission.custom'),
+    'plan': t('permission.plan'),
+  }
+  return known[raw] ?? raw
 }
 
 /**
