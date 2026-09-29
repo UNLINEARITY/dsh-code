@@ -40,7 +40,7 @@ describe('streaming token bursts', () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     const { stdin, stdout, read } = tty(140, 30)
     const store = createTranscriptStore()
-    // uETS contract: getSnapshot must return a cached identity — a fresh
+    // uETS contract: getSnapshot must return a cached identity · a fresh
     // object per call manufactures the very infinite loop this suite guards
     // against, so the snapshots are module-stable constants.
     const approvalSnapshot = frozen({ pending: undefined, answered: false, queued: 0 })
@@ -124,7 +124,7 @@ describe('streaming token bursts', () => {
       store.apply({ type: 'user/message', seq: 4, time: 4, data: { content: [{ type: 'text', text: '1' }], source: { kind: 'user' } } } as unknown as SessionEvent)
       await wait()
 
-      // One synchronous drain of 120 reasoning tokens — the shape the zai
+      // One synchronous drain of 120 reasoning tokens · the shape the zai
       // adapter delivers when it flushes its token buffer (dt 0-2ms). The
       // store must coalesce this into a single re-render; per-event
       // notification cascades past React's 50-nested-passive-update guard.
@@ -251,7 +251,7 @@ describe('streaming token bursts', () => {
       await wait()
 
       // The adapter's REAL sustained shape: 150 sub-millisecond batches, each
-      // its own microtask — not one synchronous drain. A microtask-spaced
+      // its own microtask · not one synchronous drain. A microtask-spaced
       // notification chain once raced SyncLane uETS rerenders across batches
       // past React's 50-deep nested-update guard; the setImmediate boundary
       // lets every render finish before the next notification fires.

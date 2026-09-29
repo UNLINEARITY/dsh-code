@@ -102,7 +102,7 @@ describe('agents transcript expansion', () => {
       const after = visibleBodyLines(harness.read())
       expect(after).toBeGreaterThan(before)
       expect(harness.read()).toContain('expanded')
-      // Esc leaves for the list directly — the preview is not a level to
+      // Esc leaves for the list directly · the preview is not a level to
       // back through.
       harness.stdin.write('\u001b')
       await wait()

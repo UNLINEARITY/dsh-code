@@ -340,7 +340,7 @@ describe('settledRows incremental cache (pure)', () => {
     expect(result.built).toBe(base.length)
     const firstFlat = result.cache.flat
 
-    // Appending one settled row builds ONLY that row — the prefix is never
+    // Appending one settled row builds ONLY that row · the prefix is never
     // rescanned or rebuilt, and every existing element keeps identity.
     const grown = [...base, assistantEntry('msg-120')]
     result = computeSettledRows(result.cache, grown, grown.length, false, false, 0)
@@ -376,7 +376,7 @@ describe('settledRows incremental cache (pure)', () => {
     expect(result.cache.flat).toBe(flatBeforeResize)
     expect(result.cache.columns).toBe(80)
 
-    // Source-backed replay (epoch bump — resize, Ctrl+L, or an idle Ctrl+R):
+    // Source-backed replay (epoch bump · resize, Ctrl+L, or an idle Ctrl+R):
     // full rebuild of the current rows UNIFORMLY at the current fold state.
     result = computeSettledRows(result.cache, expanded, expanded.length, true, false, 1, 100)
     expect(result.built).toBe(expanded.length)
@@ -451,8 +451,8 @@ describe('settled tool/command name sanitization', () => {
       // The app writes exactly one managed tab-title OSC-0 itself
       // (terminal-title.ts), whose payload is sanitized free of control
       // bytes; in this fixture that is the "deepseek" default. Any OSC-0
-      // beyond that well-formed managed sequence — in particular one riding
-      // untrusted tool or command names — never reaches the terminal bytes.
+      // beyond that well-formed managed sequence · in particular one riding
+      // untrusted tool or command names · never reaches the terminal bytes.
       const titleOsc = /\x1b\]0;([^\x07\u0000-\u001F\u007F]*)\x07/g
       const payloads = [...output.text.matchAll(titleOsc)].map(match => match[1])
       expect(payloads.length).toBeGreaterThan(0)
@@ -494,12 +494,12 @@ describe('incremental settled transcript cache', () => {
     try {
       await wait()
       // While the command runs it stays in the LIVE mutable tail (a flush
-      // boundary), rendering exactly one row — it never flushes to <Static>.
+      // boundary), rendering exactly one row · it never flushes to <Static>.
       expect(output.text.match(/\/lint/g)).toHaveLength(1)
 
       // command/done resolves the entry: it now settles, and the summary
       // appears IMMEDIATELY (the cache append path flushes the resolved
-      // row) — no resize needed — exactly once.
+      // row) · no resize needed · exactly once.
       store.apply(fixtureEvent({
         type: 'command/done',
         seq: 3,
@@ -511,7 +511,7 @@ describe('incremental settled transcript cache', () => {
 
       // A later source-backed replay (resize) re-flushes the CURRENT row set:
       // the resolved command still appears exactly once in the rebuilt slice
-      // — no ghost of the running copy.
+      // · no ghost of the running copy.
       stdout.columns = 80
       stdout.emit('resize')
       await wait()
@@ -840,7 +840,7 @@ describe('settled row cap window', () => {
     expect(state.cache.droppedEntries).toBe(2)
     expect(state.cache.flat).toHaveLength(1 + 1 + 18)
     // Growing inside cap + 25% hysteresis never trims: rows append, head stays.
-    // (The window holds 28 of 30 — the 2 dropped at rebuild stay dropped.)
+    // (The window holds 28 of 30 · the 2 dropped at rebuild stay dropped.)
     state = computeSettledRows(state.cache, tight, tight.length, false, false, 0, 80, 30)
     expect(state.cache.needsTrim).toBe(false)
     expect(state.cache.entries).toHaveLength(28)

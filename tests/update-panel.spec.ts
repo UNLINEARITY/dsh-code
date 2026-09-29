@@ -132,10 +132,10 @@ describe('updatePlanView', () => {
 
 describe('updateFooter and clipUpdateLines', () => {
   it('names the confirm key only when the plan is runnable', () => {
-    expect(updateFooter('plan', true, false)).toBe('enter update · r recheck · esc close')
-    expect(updateFooter('plan', false, true)).toBe('up to date · r recheck · esc close')
-    expect(updateFooter('plan', false, false)).toBe('blocked · r recheck · esc close')
-    expect(updateFooter('apply', true, false)).toBe('updating… · ↑↓ scroll · esc waits')
+    expect(updateFooter('plan', true, false)).toBe('enter update · r retry · esc close')
+    expect(updateFooter('plan', false, true)).toBe('up to date · r retry · esc close')
+    expect(updateFooter('plan', false, false)).toBe('blocked · r retry · esc close')
+    expect(updateFooter('apply', true, false)).toBe('updating… · ↑↓ scroll · esc locked until done')
   })
 
   it("keeps only the newest UPDATE_OUTPUT_CAP lines", () => {
@@ -246,7 +246,7 @@ describe('UpdatePanel lifecycle', () => {
     await wait()
     text = harness.text()
     expect(text).toContain('restart dsh to load the new version')
-    expect(notices).toContain('update installed — restart dsh to activate')
+    expect(notices).toContain('update installed · restart dsh to activate')
     instance.unmount()
   })
 
@@ -321,7 +321,7 @@ describe('UpdatePanel lifecycle', () => {
     }), { stdin: harness.stdin, stdout: harness.stdout, stderr: harness.stdout, exitOnCtrlC: false })
     await wait()
     expect(harness.text()).toContain('ECONNRESET')
-    expect(harness.text()).toContain('r recheck')
+    expect(harness.text()).toContain('r retry')
     instance.unmount()
   })
 })

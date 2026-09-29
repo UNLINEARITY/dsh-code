@@ -150,7 +150,7 @@ describe('/agents panel', () => {
     }))
     try {
       await wait()
-      expect(harness.output.text).toContain('agents 1 live')
+      expect(harness.output.text).toContain('agents live: 1')
       harness.stdin.write('/agents')
       await wait()
       harness.stdin.write('\r')
@@ -236,7 +236,7 @@ describe('/usage panel', () => {
       harness.stdin.write('\r')
       await wait()
       const opened = harness.output.text
-      expect(opened).toContain('/usage — usage of this session')
+      expect(opened).toContain('/usage · usage of this session')
       // The four buckets are listed apart: the uncached input is not the
       // billed prompt side, so the cached 920M can never hide inside it.
       expect(opened).toContain('15.6M')
@@ -256,7 +256,7 @@ describe('/usage panel', () => {
       harness.stdin.write('q')
       await wait()
       expect(harness.output.text.lastIndexOf('type a message')).toBeGreaterThan(
-        harness.output.text.lastIndexOf('/usage — usage of this session'),
+        harness.output.text.lastIndexOf('/usage · usage of this session'),
       )
     } finally {
       instance.unmount()
@@ -482,7 +482,7 @@ describe('/delete and /subagent', () => {
       await wait()
       harness.stdin.write('\r')
       await wait()
-      expect(harness.output.text).toContain('/subagent — model for delegated agents')
+      expect(harness.output.text).toContain('/subagent · model for delegated agents')
       expect(harness.output.text).toContain('inherit')
       harness.stdin.write('\x1b[B')
       await wait()

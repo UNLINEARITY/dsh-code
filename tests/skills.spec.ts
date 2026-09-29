@@ -141,7 +141,7 @@ describe('watchSkills', () => {
     // agent B's.
     await new Promise(resolve => setImmediate(resolve))
     expect(deferred).toHaveLength(3)
-    // The newer agent's catalog lands first, then the older one's — the stale
+    // The newer agent's catalog lands first, then the older one's · the stale
     // result must be dropped.
     deferred[2]?.resolve([summary('beta', true, true)])
     await new Promise(resolve => setImmediate(resolve))

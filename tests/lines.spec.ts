@@ -223,7 +223,7 @@ describe('styled terminal lines', () => {
     const lines = transcriptEntryLines(entry, 40)
     expect(lines.length).toBeGreaterThan(10)
     for (const line of lines.slice(2)) {
-      // Detail rows share the ⎿/└ four-column hanging gutter — never the
+      // Detail rows share the ⎿/└ four-column hanging gutter · never the
       // shallower two-column prefix that made cards read as unindented.
       expect(line.segments.map(segment => segment.text).join('')).toMatch(/^    /u)
       expect(visibleColumns(line.segments.map(segment => segment.text).join(''))).toBeLessThanOrEqual(40)

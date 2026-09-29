@@ -344,7 +344,7 @@ describe('/model provider credentials', () => {
       // screen (the old split hid configuration behind Tab).
       app.stdin.push('\r')
       await wait()
-      expect(app.output()).toContain('/model — configure DeepSeek')
+      expect(app.output()).toContain('/model · configure DeepSeek')
       expect(app.output()).toContain('key')
       expect(app.output()).toContain('url')
       expect(app.output()).toContain('official default')
@@ -360,7 +360,7 @@ describe('/model provider credentials', () => {
       expect(savedKey).toBe('sk-super-secret')
       expect(savedConfig).toEqual({ models: [] })
       expect(app.output()).toContain('provider configuration saved: DeepSeek · API key updated')
-      expect(app.output()).toContain('/model — providers')
+      expect(app.output()).toContain('/model · providers')
     } finally {
       app.unmount()
     }
@@ -446,7 +446,7 @@ describe('/model provider credentials', () => {
       // page's endpoint draft and a cancellation channel.
       app.stdin.push('\t')
       await wait()
-      expect(app.output()).toContain('/model — discover DeepSeek')
+      expect(app.output()).toContain('/model · discover DeepSeek')
       expect(requests).toEqual([{ baseURL: 'https://gw.example/v1', signal: true }])
       expect(app.output()).toContain('3 advertised · 3 new · 0 checked')
 
@@ -507,7 +507,7 @@ describe('/model provider credentials', () => {
       await wait()
       app.stdin.push('\r')
       await wait()
-      // The key rides the same Enter as the configuration — never dropped.
+      // The key rides the same Enter as the configuration · never dropped.
       expect(savedKey).toBe('sk-for-dormant-route')
       expect(savedConfig).toEqual({ models: [] })
       expect(app.output()).toContain('API key updated')
@@ -548,7 +548,7 @@ describe('/model provider credentials', () => {
       expect(app.output()).toContain('cannot be written here')
       expect(keys).toBe(0)
       expect(configs).toBe(0)
-      expect(app.output()).toContain('/model — configure DeepSeek')
+      expect(app.output()).toContain('/model · configure DeepSeek')
     } finally {
       app.unmount()
     }
@@ -646,7 +646,7 @@ describe('/model provider credentials', () => {
       // 'c' opens the donor picker; the zai declaration is listed verbatim.
       app.stdin.push('c')
       await wait()
-      expect(app.output()).toContain('/model — copy efforts')
+      expect(app.output()).toContain('/model · copy efforts')
       expect(app.output()).toContain('zai/glm-5.3')
       app.stdin.push('\r')
       await wait()
@@ -759,7 +759,7 @@ describe('/model provider credentials', () => {
       app.clearOutput()
       app.stdin.push('d')
       await wait()
-      expect(app.output()).toContain('/model — remove API key')
+      expect(app.output()).toContain('/model · remove API key')
       app.stdin.push('y')
       await wait()
       expect(unsets).toBe(1)
@@ -768,7 +768,7 @@ describe('/model provider credentials', () => {
       app.clearOutput()
       app.stdin.push('x')
       await wait()
-      expect(app.output()).toContain('/model — remove provider')
+      expect(app.output()).toContain('/model · remove provider')
       app.stdin.push('y')
       await wait()
       expect(removals).toBe(1)

@@ -74,7 +74,7 @@ for (const file of patchFiles) {
 
 describe('bundle patch rows', () => {
   // The 1.0.7 release mounted an enabled row over @deepseek-ai/dsh-tool-
-  // session-query — a package the host does not bundle and the bundle only
+  // session-query · a package the host does not bundle and the bundle only
   // declared as an optional peer, which autoInstallPeers: false keeps out of
   // every profile. The loader resolved rows from the profile directory and
   // the boot died on ERR_MODULE_NOT_FOUND before drawing a frame. A row that

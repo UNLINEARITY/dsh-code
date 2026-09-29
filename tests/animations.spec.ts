@@ -48,7 +48,7 @@ import {
   WAVE_SURFACE_WAVELENGTH,
 } from '../src/render/animations.ts'
 
-/** The wave's tint base in production is the composer band — pin fixtures to it. */
+/** The wave's tint base in production is the composer band · pin fixtures to it. */
 const WAVE_BASE_DARK = PALETTES.dark.composerBand
 const WAVE_BASE_LIGHT = PALETTES.light.composerBand
 
@@ -354,7 +354,7 @@ describe('deepseekWaveColumnBg', () => {
 
   it('spans the full band width from the first plateau frame', () => {
     // tick 14 (0.462s rendered, 0.385s sampled): the fade envelope is at its
-    // plateau and the surface line runs edge to edge — every column paints.
+    // plateau and the surface line runs edge to edge · every column paints.
     for (const column of [0, 5, 20, 35, 39]) {
       expect(deepseekWaveColumnBg(14, column, width, 'flash', 'wave', flashHues, WAVE_BASE_DARK)).not.toBeNull()
     }
@@ -363,7 +363,7 @@ describe('deepseekWaveColumnBg', () => {
   it('weaves the second deepseek band against the first: it covers cells the single flash band does not', () => {
     // The second DeepSeek band sweeps RIGHT-TO-LEFT while the flash band
     // eases left-to-right, so mid-flight the counter-sweeping band lights
-    // cells the flash timeline cannot reach yet — the weave's crossing.
+    // cells the flash timeline cannot reach yet · the weave's crossing.
     let woven = false
     for (let tick = 0; tick < 40 && !woven; tick += 1) {
       for (let column = 0; column < width; column += 1) {
@@ -398,7 +398,7 @@ describe('deepseekWaveColumnBg', () => {
   it('keeps the wave color distribution smooth: adjacent columns shift gently', () => {
     // The anti-fragmentation contract: with the hard core line gone and
     // Aurora-wide thickness, neighboring columns (and rows) may only drift
-    // a little per step — no sharp brightness cliffs anywhere on the surface.
+    // a little per step · no sharp brightness cliffs anywhere on the surface.
     for (let tick = 2; tick < 36; tick += 3) {
       for (const row of [0, 1, 2]) {
         let previous = deepseekWaveColumnBg(tick, 0, width, 'deepseek', 'wave', deepseekHues, WAVE_BASE_DARK, row, 3)
@@ -417,7 +417,7 @@ describe('deepseekWaveColumnBg', () => {
 
   it('is mirror-symmetric about the center column on every row', () => {
     // d = |x − 19.5| drives the phase, so columns 19−j and 20+j sample the
-    // exact same surface point — the center symmetry the design promises.
+    // exact same surface point · the center symmetry the design promises.
     for (let tick = 2; tick < 40; tick += 3) {
       for (let j = 0; j < 20; j += 1) {
         for (const row of [0, 1, 2]) {
@@ -453,7 +453,7 @@ describe('deepseekWaveColumnBg', () => {
   it('keeps the pulse inside the soft alpha cap like the swell and aurora', () => {
     // The detonation is a notch punchier than the swell but stays in the
     // same Aurora-grade family: every painted cell within the mixed-hue
-    // spread at the pulse cap — no brightness spikes beyond the palette.
+    // spread at the pulse cap · no brightness spikes beyond the palette.
     const base = WAVE_BASE_DARK
     for (const tier of ['flash', 'deepseek'] as const) {
       const hues = tier === 'flash' ? flashHues : deepseekHues
@@ -483,8 +483,8 @@ describe('deepseekWaveColumnBg', () => {
 
   it('curves the pulse ring: the hole opens at the center row first', () => {
     // On a 5-row band (rows=5), the ring around the band's center cell leaves
-    // the exact center column unpainted while the outer rows — whose distance
-    // from the ring's origin includes the row offset — still paint it. That
+    // the exact center column unpainted while the outer rows · whose distance
+    // from the ring's origin includes the row offset · still paint it. That
     // curvature is what makes the ring read as a circle instead of bars.
     let holeFirstAtCenter = false
     for (let tick = 3; tick < 32; tick += 1) {
@@ -611,7 +611,7 @@ describe('three ignition styles', () => {
 
   it('Aurora paints a drifting band that blends multiple hues (weights sum, not max)', () => {
     // Mid-flight Aurora: some column should carry a mixed hue that is NOT a
-    // pure hue-0 blend — the sum-weighted mix makes weights[1] visible.
+    // pure hue-0 blend · the sum-weighted mix makes weights[1] visible.
     let mixedSeen = false
     for (let tick = 5; tick < 30; tick += 1) {
       for (let column = 0; column < width; column += 1) {
@@ -638,7 +638,7 @@ describe('three ignition styles', () => {
     expect(deepseekWaveColumnBg(4, center - 2, width, 'flash', 'pulse', flashHues, WAVE_BASE_DARK)).not.toBeNull()
     expect(deepseekWaveColumnBg(4, center + 2, width, 'flash', 'pulse', flashHues, WAVE_BASE_DARK)).not.toBeNull()
     // …tick 9 (≈0.244s, radius ≈8): the ring and its inner edge have both
-    // cleared the exact center — it sits in the hole while the band paints
+    // cleared the exact center · it sits in the hole while the band paints
     // farther out.
     expect(deepseekWaveColumnBg(9, center, width, 'flash', 'pulse', flashHues, WAVE_BASE_DARK)).toBeNull()
     expect(deepseekWaveColumnBg(6, center + 5, width, 'flash', 'pulse', flashHues, WAVE_BASE_DARK)).not.toBeNull()

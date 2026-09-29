@@ -397,7 +397,7 @@ describe('cancelPreservingQueue', () => {
     }
     // Cancel clears pending work and never wakes the driver, so the followups
     // must come after it and carry the identical messages (same ids, same
-    // content) — that re-submission is what latches the wake.
+    // content) · that re-submission is what latches the wake.
     expect(cancelPreservingQueue(agent)).toBe(2)
     expect(order).toEqual(['cancel', `followup:${first.id}`, `followup:${second.id}`])
     expect(followed).toEqual([first, second])

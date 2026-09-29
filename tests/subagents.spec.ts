@@ -113,7 +113,7 @@ describe('createSubagentFeed', () => {
 
   it('rebuilds a resumed session’s children from replayed catalog facts', async () => {
     // Resume path: the root log already carries subagent/catalog facts, but
-    // constructor seeds never fire on the live bus — activation must replay
+    // constructor seeds never fire on the live bus · activation must replay
     // the filtered seed after reset or the child rows vanish behind a restart.
     const feed = createSubagentFeed()
     feed.apply('a', event('request/header', {}, 1))

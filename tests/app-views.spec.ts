@@ -165,7 +165,7 @@ describe('Ctrl+O history details', () => {
       await wait()
       harness.stdin.write('\r')
       await wait()
-      expect(harness.output.text).toContain('/theme — color palette')
+      expect(harness.output.text).toContain('/theme · color palette')
       harness.stdin.write('\x1b[B')
       await wait()
       harness.output.text = ''

@@ -125,7 +125,7 @@ describe('deferred session remount', () => {
   // 'pending', then remounts it with the real session id after the first
   // user message. A key-change remount does not erase the <Static> rows of
   // the previous tree, so the runner must clear the screen (resizeClear)
-  // before the remount — otherwise the whale header ghosts (two
+  // before the remount · otherwise the whale header ghosts (two
   // 'DeepSeek Harness' wordmarks on screen at once). This locks the App
   // contract: a cleared key-change remount repaints exactly one header.
   it('repaints exactly one header across a cleared key-change remount', async () => {
@@ -207,7 +207,7 @@ describe('deferred session remount', () => {
   // append-only <Static> region would ghost the retired line on screen
   // (the user sees the first message twice until a resize replays). A tiny
   // terminal forces Ink's full-screen branch, where every render rewrites
-  // clearTerminal + the accumulated static + the live frame — exactly the
+  // clearTerminal + the accumulated static + the live frame · exactly the
   // physical screen. The landed message must paint exactly once there.
   it('never flushes the queued row, so the landed first message paints once', async () => {
     const stdin = Object.assign(new PassThrough(), {
@@ -316,7 +316,7 @@ describe('queued inbox rows in a mixed mutable tail', () => {
     const third = createUserMessage({ content: [{ type: 'text', text: 'three' }], source: { kind: 'user' } })
     // Mirror the runner's remove path: the durable splice retires the pending
     // row, so the next Delete sees a shrunken queue (newest-first). Only the
-    // remove action retires a row — edit and steer must reuse the same splice.
+    // remove action retires a row · edit and steer must reuse the same splice.
     const retire = (id: string): void => {
       cancelled.push(id)
       // The runner echoes back the durable message id as a plain string; the

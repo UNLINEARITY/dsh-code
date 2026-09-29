@@ -383,7 +383,7 @@ describe('transcript projection', () => {
     // (llmMs reaches back to step/start) and the FIRST attempt owns the
     // first-token anchor (a retry never re-times the step). The live path
     // accrues through stream frames; a resumed session replays only the
-    // settlements — both must land on the same figures.
+    // settlements · both must land on the same figures.
     const attemptStream = (t0: number): [{ type: 'text-chunks'; time0: number; index: number; dt: readonly number[]; texts: readonly string[] }] =>
       [{ type: 'text-chunks', time0: t0, index: 0, dt: [0], texts: ['x'] }]
     // Live: step/start → attempt 1 frames → failed attempt settles → retry
@@ -885,7 +885,7 @@ describe('transcript projection', () => {
     }) as unknown as SessionEvent
     const toolResult = (id: string, seq: number) => toolResultEvent(ToolCallId(id), 'done', false, seq)
     // Empty transcript flushes nothing; a transcript with no running work
-    // flushes EVERYTHING (the completed tail included — later events only
+    // flushes EVERYTHING (the completed tail included · later events only
     // append new rows, so resizes never re-print the conversation).
     expect(settledEntryCount([])).toBe(0)
     let view = projectEvents([
@@ -1286,7 +1286,7 @@ describe('context segment estimates', () => {
     let view = projectEvent(createTranscriptView(), systemMessage('you are helpful', 1))
     expect(view.systemPrompt).toBe('you are helpful')
     expect(view.stats.contextSegments.system).toBe(4)
-    // An EMPTY append records an empty later node — it does not erase the
+    // An EMPTY append records an empty later node · it does not erase the
     // head (only a replacement covering the head's seq can).
     view = projectEvent(view, systemMessage(undefined, 2))
     expect(view.systemPrompt).toBe('you are helpful')
@@ -1331,7 +1331,7 @@ describe('context segment estimates', () => {
 
   it('keeps the surviving head when a replacement only clears a later system node', () => {
     // The in-history route appends later nodes and may later normalize them
-    // away with a replace carrying empty content — the head node survives and
+    // away with a replace carrying empty content · the head node survives and
     // the estimate must not drop to zero.
     const systemMessage = (text: string | undefined, seq: number, surfaceOp: 'append' | { op: 'replace'; startSeq: number; endSeq: number }) => ({
       type: 'system/message',
@@ -1680,7 +1680,7 @@ describe('replay accumulator', () => {
         }
         default: {
           // Orphan updates: results/retries/commands whose partner never
-          // arrived — exercises the replay's index-miss fallback scans.
+          // arrived · exercises the replay's index-miss fallback scans.
           switch (Math.floor(rand() * 4)) {
             case 0:
               push('tool/result', { turn: 1, step: 1, message: createToolResultMessage({ callId: ToolCallId('orphan-' + seq), content: [{ type: 'text', text: 'orphan result' }], isError: false }) })
@@ -1774,7 +1774,7 @@ describe('replay accumulator', () => {
         if (rand() < 0.7) {
           push('compaction/summary', { compactionId: id, turn: current, summary: [], shadowedRange: { start: 1, end: 9 }, shadowedSeqs: [], shadowedTokenCount: 5_000 + Math.floor(rand() * 10_000), provider: 'p', model: 'm', llmStreamCall: true, rawOutput: [] })
           if (rand() < 0.8) push('compaction/end', { compactionId: id, turn: current })
-          // else: summary without end — capped residue must stay bounded.
+          // else: summary without end · capped residue must stay bounded.
         } else {
           push('compaction/end', { compactionId: id, turn: current, error: 'summary failed' })
         }
@@ -1827,7 +1827,7 @@ describe('replay accumulator', () => {
 
     // Contrast with the naive COW lower bound: every append event copies the
     // whole array so far, so a sequential fold costs Σ(length at each append),
-    // which is quadratic. The replay must stay far below it — deterministic,
+    // which is quadratic. The replay must stay far below it · deterministic,
     // no wall-clock thresholds.
     let naiveOps = 0
     let naiveLength = 0
@@ -2026,7 +2026,7 @@ describe('settledEntryCount tail invariant', () => {
     // earlier siblings still run): only the FIRST mutable entry defines the
     // flush boundary. A tail-scan shortcut returning the LAST mutable index
     // would flush a still-running tool into the append-only <Static> and
-    // ghost its state change — which is exactly why a pure tail scan is not a
+    // ghost its state change · which is exactly why a pure tail scan is not a
     // safe optimization for this function.
     const view = projectEvents([
       { type: 'turn/start', seq: 1, time: 0, data: { turn: 1 } },

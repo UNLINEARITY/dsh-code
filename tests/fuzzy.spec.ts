@@ -19,7 +19,7 @@ describe('rankByName', () => {
   })
 
   it('ranks prefix hits before gapped matches', () => {
-    // `mo` prefixes `mode`; `x-mode` only contains the subsequence — the
+    // `mo` prefixes `mode`; `x-mode` only contains the subsequence · the
     // prefix hit leads regardless of source order.
     expect(rankByName(named('x-mode', 'mode'), 'mo').map(item => item.name)).toEqual(['mode', 'x-mode'])
   })

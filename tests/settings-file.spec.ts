@@ -41,7 +41,7 @@ describe('createUserSettingsPersistence', () => {
       b.save(path, snapshotB),
     ])
     // Two terminals writing one user file: both saves must settle, and
-    // the file must hold one of the two complete snapshots — never a
+    // the file must hold one of the two complete snapshots · never a
     // consumed temp file (ENOENT) or a mixed document.
     // Statuses carry rejection reasons so a rare transient failure
     // reports its errno instead of a bare fulfilled/rejected diff.

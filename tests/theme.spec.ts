@@ -264,7 +264,7 @@ describe('tui theme contrast (WCAG 2.x)', () => {
   // Terminal background assumptions: the dark palette paints on a black
   // terminal, the light palette on a white one. Body-size tokens must clear
   // AA 4.5:1; accent/status tokens (bold labels, borders, dots) clear the
-  // 3:1 UI-component threshold — the light brand blue deliberately keeps the
+  // 3:1 UI-component threshold · the light brand blue deliberately keeps the
   // design-platform value at ≈4.2:1 for bold/accent spans only.
   const channel = (value: number): number => {
     const s = value / 255
@@ -350,7 +350,7 @@ describe('tui theme contrast (WCAG 2.x)', () => {
   })
 
   it('keeps the prismatic ring and flow anchors legible on black', () => {
-    // Panel borders/titles cycle the ring — accent threshold.
+    // Panel borders/titles cycle the ring · accent threshold.
     for (const accent of ACCENT_RING) {
       expect(ratio(accent, BLACK)).toBeGreaterThanOrEqual(3)
     }

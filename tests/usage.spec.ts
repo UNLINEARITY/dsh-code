@@ -112,7 +112,7 @@ describe('per-turn slicing', () => {
   it('attributes a turn from its own messages when the meter withheld routes', () => {
     const events = turn(5, [billedBy('glm-5.3', 51), billedBy('glm-5.3', 52), billedBy('gpt-5.6-sol', 53)])
     // The meter refuses `routes` unless EVERY attempt is attributed, so the
-    // turn's own messages answer — by majority, never by the current pick.
+    // turn's own messages answer · by majority, never by the current pick.
     const rows = turnUsages(events, () => ({ uncachedInputTokens: 1, outputTokens: 1, totalTokens: 2 }))
     expect(rows[0].model).toBe('glm-5.3')
   })

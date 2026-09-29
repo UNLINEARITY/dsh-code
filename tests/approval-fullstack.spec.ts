@@ -177,7 +177,7 @@ describe('full-stack approval probe (split stdin, real mount shape)', () => {
       await wait()
       // A1 regression: with the App's always-active input anchor holding the
       // reference count >= 1, the REAL stdin must never leave raw mode while
-      // the app is mounted — before the anchor, every approval cycle dropped
+      // the app is mounted · before the anchor, every approval cycle dropped
       // the count to zero twice (setRawMode(false) + unref), and the
       // cooked-mode windows stranded keystrokes in the line buffer.
       expect(real.state.log.filter(entry => entry === 'raw=false' || entry === 'unref')).toEqual([])
@@ -218,7 +218,7 @@ describe('approval body completeness', () => {
         answer: () => {}, signal: undefined,
       } as unknown as ApprovalRequest, () => Promise.resolve<ApprovalOutcome>('unavailable'))
       await wait()
-      // The whole argument payload — path included — is visible in the body,
+      // The whole argument payload · path included · is visible in the body,
       // with no card-preview ellipsis cutting it at 80 characters.
       expect(output).toContain('/Users/nonlinear/GitHub/dsh-code/lite-preset')
       expect(output).toContain('"action":"install_bundle"')

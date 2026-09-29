@@ -240,8 +240,8 @@ describe('update orchestration', () => {
       'dsh plugin add',
       'dsh plugin add @deepseek-ai/dsh-web-search-exa@0.1.5-rc.1',
     ])
-    // The two mandatory steps stop the sequence on failure — a half-run
-    // update would strand host and bundle on different lines — and each
+    // The two mandatory steps stop the sequence on failure · a half-run
+    // update would strand host and bundle on different lines · and each
     // names the exact manual command to recover with.
     expect(steps[0]).toMatchObject({ fatal: true, remedy: 'npm install -g @deepseek-ai/dsh@0.1.5-rc.1 dsh-code@1.0.6' })
     expect(steps[1]).toMatchObject({ fatal: true, remedy: 'dsh plugin --profile cli add dsh-code@1.0.6' })
@@ -347,7 +347,7 @@ describe('update orchestration', () => {
   it('still finds a root when no environment hint is set', () => {
     // The regression: a link-mounted checkout runs the launcher outside any
     // npm script context, so npm_config_prefix, PREFIX, and APPDATA are all
-    // absent — the execPath-implied root must keep host discovery working.
+    // absent · the execPath-implied root must keep host discovery working.
     const roots = globalDshRoots({}, '/Users/x/.nvm/versions/node/v24.20.0/bin/node', 'darwin')
     expect(roots).toEqual(['/Users/x/.nvm/versions/node/v24.20.0/lib/node_modules'])
     // Env hints stay first; the execPath-implied root joins as its own entry.

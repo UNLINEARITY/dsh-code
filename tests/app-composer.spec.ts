@@ -453,7 +453,7 @@ describe('composer image attachments', () => {
 
   it('tags an attachment delivery with the composing session for the runner-side stale guard', async () => {
     // Ink unmounts asynchronously, so a prepare resolving after the app went
-    // away still reaches dispatch on the microtask timeline — the delivery
+    // away still reaches dispatch on the microtask timeline · the delivery
     // must carry the composing session's key (the runner drops it when the
     // active session moved on; see submissionBelongsToSession).
     const harness = createTty(120, 24)
@@ -536,7 +536,7 @@ describe('multiline composer', () => {
       harness.stdin.write('first')
       await wait()
       // Kitty Shift+Enter (13;2) and Ctrl+Enter (13;5) normalize to the LF
-      // byte; Alt+Enter keeps its escape form with meta — all three insert a
+      // byte; Alt+Enter keeps its escape form with meta · all three insert a
       // newline instead of submitting.
       harness.stdin.write('\x1b[13;2u')
       await wait()
@@ -934,7 +934,7 @@ describe('prompt fidelity', () => {
     try {
       await wait()
       // Bracketed paste of indented code: the leading spaces and the inner
-      // newline are content, not noise — the composer must forward the draft
+      // newline are content, not noise · the composer must forward the draft
       // verbatim instead of the trimmed form.
       harness.stdin.write('\x1b[200~  if cond:\n    run()\x1b[201~')
       await wait(180)
@@ -962,7 +962,7 @@ describe('prompt fidelity', () => {
       // '/help ' is a local TUI action: the trimmed command routes to the
       // overlay, never to dispatch.
       expect(dispatch).not.toHaveBeenCalled()
-      expect(harness.output.text).toContain('/help — keys and commands')
+      expect(harness.output.text).toContain('/help · keys and commands')
     } finally {
       instance.unmount()
       harness.stdin.destroy()

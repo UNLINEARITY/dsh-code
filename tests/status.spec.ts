@@ -609,7 +609,7 @@ describe('status width degradation', () => {
   })
 
   it('shrinks the context bar before dropping it, without touching other segments', () => {
-    // Every width keeps the same identity — only the bar interior width
+    // Every width keeps the same identity · only the bar interior width
     // changes while it survives, then the whole group drops below a floor.
     let previousContextWidth = 0
     for (let columns = 76; columns <= 140; columns += 2) {

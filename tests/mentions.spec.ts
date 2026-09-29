@@ -112,7 +112,7 @@ describe('createMentions.candidates (fileReferences service)', () => {
   it('falls back to the official search over the launch cwd before any session exists', async () => {
     // The service is agent-scoped, but @ file completion is session-
     // independent: with no agent yet the SAME official WorkspaceFileSearch
-    // runs against the launch cwd — even when the service is mounted (its
+    // runs against the launch cwd · even when the service is mounted (its
     // list() never runs without an agent) and when it is absent.
     const root = fixture(['alpha.ts', 'nested/beta.md'])
     try {
@@ -124,7 +124,7 @@ describe('createMentions.candidates (fileReferences service)', () => {
           expect(['file', 'directory']).toContain(row.kind)
         }
       }
-      // A bare @ lists default rows too — the menu is live before typing.
+      // A bare @ lists default rows too · the menu is live before typing.
       const bare = await createMentions(bareContext(), undefined, root).candidates('')
       expect(bare.length).toBeGreaterThan(0)
     } finally {

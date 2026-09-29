@@ -107,7 +107,7 @@ describe('DeepSeek model-switch easter egg', () => {
 
       // Mid-wave (~0.7s in): the input row paints per-column wave backgrounds
       // (a truecolor `48;2;` run per sampled gradient column) while the draft
-      // area stays readable — the tint blends at ≤ 0.55 toward the base.
+      // area stays readable · the tint blends at ≤ 0.55 toward the base.
       await sleep(700)
       const distinctBg = (): number => new Set((output.match(/48;2;\d{1,3};\d{1,3};\d{1,3}/g) ?? [])).size
       expect(distinctBg()).toBeGreaterThanOrEqual(5)
@@ -119,7 +119,7 @@ describe('DeepSeek model-switch easter egg', () => {
       expect(output).toContain('✧')
 
       // Past the 1.5s duration: fresh frames carry no wave backgrounds and no
-      // sparkles — the band settles back to its static background color.
+      // sparkles · the band settles back to its static background color.
       await sleep(900)
       const settled = output.length
       await sleep(400)
@@ -128,7 +128,7 @@ describe('DeepSeek model-switch easter egg', () => {
       expect(settledDelta).not.toContain('✦')
 
       // Switch away from DeepSeek: the prompt restores the static brand ❯ and
-      // drops the » glyph — the tier accent is not sticky on other routes.
+      // drops the » glyph · the tier accent is not sticky on other routes.
       // The panel-open frames still show the tier » in the frozen composer,
       // so the brand ❯ must be the LAST prompt painted after the selection.
       // The reopened list rests on the APPLIED deepseek row: one up reaches
@@ -245,10 +245,10 @@ describe('DeepSeek model-switch easter egg', () => {
       await wait()
       stdin.write('\r')
       await wait()
-      expect(output).toContain('model → next step uses acme/think@max')
+      expect(output).toContain('model → acme/think@max (applies from the next step)')
 
-      // The applied label is acme/think@max — a non-DeepSeek route with an
-      // effort strictly above high — so the "Into the Unknown" wave plays
+      // The applied label is acme/think@max · a non-DeepSeek route with an
+      // effort strictly above high · so the "Into the Unknown" wave plays
       // the deepseek-tier motion: per-column backgrounds mid-wave…
       await sleep(700)
       const distinctBg = (): number => new Set((output.match(/48;2;\d{1,3};\d{1,3};\d{1,3}/g) ?? [])).size
@@ -265,7 +265,7 @@ describe('DeepSeek model-switch easter egg', () => {
       expect(output).toContain('✧')
 
       // Past the 1.5s duration: fresh frames carry no wave backgrounds and no
-      // sparkles — the band settles back to its static background color.
+      // sparkles · the band settles back to its static background color.
       await sleep(900)
       const settled = output.length
       await sleep(400)
@@ -289,7 +289,7 @@ describe('DeepSeek model-switch easter egg', () => {
       await wait()
       stdin.write('\r')
       await wait()
-      expect(output).toContain('model → next step uses acme/think@high')
+      expect(output).toContain('model → acme/think@high (applies from the next step)')
       await sleep(400)
       expect(bareWordmark(output)).toBeNull()
     } finally {
@@ -302,7 +302,7 @@ describe('DeepSeek model-switch easter egg', () => {
     }
   }, 20_000)
 
-  it('plays the wave exactly once per trigger — busy cycles and /animation toggles never replay it', async () => {
+  it('plays the wave exactly once per trigger · busy cycles and /animation toggles never replay it', async () => {
     const originalChalkLevel = chalk.level
     chalk.level = 3
     const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0)
@@ -351,7 +351,7 @@ describe('DeepSeek model-switch easter egg', () => {
 
     try {
       await wait()
-      // Switch onto the official DeepSeek route (bottom row) — the sweep
+      // Switch onto the official DeepSeek route (bottom row) · the sweep
       // must play exactly once.
       stdin.write('/model')
       await wait()
@@ -367,7 +367,7 @@ describe('DeepSeek model-switch easter egg', () => {
       expect(output).toContain('✧')
 
       // A full busy cycle on the UNCHANGED model+effort pair drops and raises
-      // the wave gate — a completed sweep must never restart from it.
+      // the wave gate · a completed sweep must never restart from it.
       store.apply({ type: 'turn/start', seq: 1, time: 1, data: { turn: 1 } } as SessionEvent)
       await sleep(300)
       store.apply({ type: 'turn/end', seq: 2, time: 2, data: { turn: 1, reason: { kind: 'completed' } } } as SessionEvent)
@@ -420,7 +420,7 @@ describe('DeepSeek model-switch easter egg', () => {
     }
   }, 25_000)
 
-  it('consumes triggers that land while animations are off — /animation on never queues a wave', async () => {
+  it('consumes triggers that land while animations are off · /animation on never queues a wave', async () => {
     const originalChalkLevel = chalk.level
     chalk.level = 3
     const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0)

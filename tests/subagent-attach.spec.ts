@@ -1,6 +1,6 @@
 /**
  * Subagent attachment: Enter from the agents preview attaches the child as
- * the whole view — its transcript rides <Static> through the same rendering
+ * the whole view · its transcript rides <Static> through the same rendering
  * as the main conversation, live events and token frames stream in real
  * time, and Esc/Ctrl+D detaches back to the agents list with the parent's
  * Static replayed.
@@ -107,7 +107,7 @@ async function attachFromAgents(harness: { stdin: NodeJS.ReadStream; read: () =>
   harness.stdin.write('\r')
   await wait()
   await wait()
-  expect(harness.read()).toContain('observing')
+  expect(harness.read()).toContain('watching')
 }
 
 describe('subagent attachment', () => {
@@ -192,7 +192,7 @@ describe('subagent attachment', () => {
       harness.stdin.write('r')
       await wait()
       expect(dbl.load).toHaveBeenCalledTimes(2)
-      expect(harness.read()).toContain('observing')
+      expect(harness.read()).toContain('watching')
     } finally {
       harness.close()
     }

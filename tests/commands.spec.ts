@@ -43,7 +43,7 @@ describe('submissionPayload', () => {
 
   it('keeps slash-looking prose raw when it is not a syntactic command', () => {
     // Multiline drafts never parse as slash lines, and a leading '/(' is not
-    // a command name — both must reach the model exactly as typed.
+    // a command name · both must reach the model exactly as typed.
     expect(submissionPayload('/* block\ncomment */')).toBe('/* block\ncomment */')
     expect(submissionPayload('/path/to/file tail')).toBe('/path/to/file tail')
   })

@@ -36,7 +36,7 @@ describe('launcherUpdateCommand', () => {
     const command = launcherUpdateCommand(['update', '--json'], 'file:///C:/repo/dsh-cli/lib/index.mjs')
     expect(command.command).toBe(process.execPath)
     // fileURLToPath renders the drive URL per host convention: backslash
-    // drive paths on Windows, a /C:/ root elsewhere — assert both shapes so
+    // drive paths on Windows, a /C:/ root elsewhere · assert both shapes so
     // the sibling resolution is pinned on every platform.
     expect(command.args[0]).toBe(process.platform === 'win32'
       ? 'C:\\repo\\dsh-cli\\bin\\deepseek.mjs'

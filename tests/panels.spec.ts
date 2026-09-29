@@ -701,7 +701,7 @@ describe('queued messages and global recall', () => {
       await wait()
       expect(cancelled).toEqual([later.id])
 
-      // A non-empty draft keeps Delete as text editing — no cancellation.
+      // A non-empty draft keeps Delete as text editing · no cancellation.
       output = ''
       stdin.write('draft text')
       await wait()
@@ -1967,7 +1967,7 @@ describe('/model effort stage', () => {
       await wait()
       stdin.write('\r')
       await wait()
-      // The list opens on the APPLIED model (acme/plain, row 3 of 4) — the
+      // The list opens on the APPLIED model (acme/plain, row 3 of 4) · the
       // cursor follows the current pick. Jump to the first row to reach the
       // multi-level DeepSeek model.
       expect(output).toContain('· 3/4')
@@ -1985,7 +1985,7 @@ describe('/model effort stage', () => {
       expect(picked).toHaveLength(0)
 
       // Esc returns to the model list without applying anything. The cursor
-      // re-positions on the APPLIED model (acme/plain, index 2) — one up
+      // re-positions on the APPLIED model (acme/plain, index 2) · one up
       // reaches acme/single.
       output = ''
       stdin.write('\x1b')
@@ -2001,7 +2001,7 @@ describe('/model effort stage', () => {
       stdin.write('\r')
       await wait()
       expect(picked).toEqual([{ row: rows[1], effortId: 'high' }])
-      expect(output).toContain('model → next step uses acme/single@high')
+      expect(output).toContain('model → acme/single@high (applies from the next step)')
 
       // A model without reasoning applies with no effort at all. The list
       // now opens on the APPLIED model (acme/single from the last pick):
@@ -2019,7 +2019,7 @@ describe('/model effort stage', () => {
         { row: rows[1], effortId: 'high' },
         { row: rows[2] },
       ])
-      expect(output).toContain('model → next step uses acme/plain')
+      expect(output).toContain('model → acme/plain (applies from the next step)')
 
       // Re-open the multi-level model and pick the third level. The list
       // opens on acme/plain again: filter to the DeepSeek row, then the
@@ -2043,7 +2043,7 @@ describe('/model effort stage', () => {
         { row: rows[2] },
         { row: rows[0], effortId: 'max' },
       ])
-      expect(output).toContain('model → next step uses deepseek-official/deepseek-v4@max')
+      expect(output).toContain('model → deepseek-official/deepseek-v4@max (applies from the next step)')
       expect(output).toContain('type a message')
 
       // A model WITHOUT an adapter-declared default leads the effort stage
@@ -2138,7 +2138,7 @@ describe('/effort command', () => {
       commands: { descriptors: [], subscribe: () => noop, setAgent: noop },
       skills: { rows: [], subscribe: () => noop, setAgent: noop },
       // The deployment default names the route `deepseek`, while the catalog
-      // registers `deepseek-official` for the same model id — the fallback
+      // registers `deepseek-official` for the same model id · the fallback
       // match must still resolve the row and open the effort stage.
       model: 'deepseek/deepseek-v4',
       cwd: 'dsh-cli',
@@ -2431,7 +2431,7 @@ describe('panel row sanitization', () => {
       try {
         await wait()
         const output = read()
-        // One visible line shows the current selection and the exit — never
+        // One visible line shows the current selection and the exit · never
         // a hidden surface whose keys still act invisibly. Selection leads so
         // narrow terminals never truncate the escape hint away.
         expect(output).toContain('❯ ○ read-only')
@@ -2741,7 +2741,7 @@ describe('/model typing filter', () => {
       stdin.write('q')
       await wait()
       expect(output).toContain("no models match 'gptq'")
-      expect(output).toContain('/model — select model')
+      expect(output).toContain('/model · select model')
       stdin.write('\x7f')
       await wait()
       expect(output).toContain("2 of 4 match 'gpt'")
@@ -2828,7 +2828,7 @@ describe('panel query q-key guard', () => {
   })
 })
 
-describe('/model typing filter — late directory and compact copy', () => {
+describe('/model typing filter · late directory and compact copy', () => {
   it('positions on the filtered list when the directory resolves after typing started', async () => {
     const stdin = Object.assign(new PassThrough(), {
       isTTY: true,
@@ -3060,7 +3060,7 @@ describe('/model typing filter — late directory and compact copy', () => {
  * Every panel is mutually exclusive with the composer. These cases pin the
  * single panel-state list: a panel added to the app has to own the keys, name
  * itself in the frozen band, and get out of the way when a human approval
- * arrives — without those three drifting apart again.
+ * arrives · without those three drifting apart again.
  */
 describe('panel keyboard ownership', () => {
   /** One TTY plus a mutable approval snapshot the test can drive. */

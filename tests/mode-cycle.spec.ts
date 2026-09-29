@@ -38,7 +38,7 @@ describe('planCycleDecision', () => {
   it('covers the plan-commit lag: an in-flight on-intent reads as in-plan', () => {
     // /plan went out during an open turn: upstream queued the switch and the
     // committed plan/mode fold is still false. The next press must see the
-    // user's choice, not the stale fold — otherwise it re-issues plan-on and
+    // user's choice, not the stale fold · otherwise it re-issues plan-on and
     // the cycle never leaves the plan station.
     expect(planCycleDecision({ names, current: 'read-only', inPlan: false, planIntent: true, planAvailable: true }))
       .toEqual({ kind: 'plan-off', preset: 'workspace-write' })

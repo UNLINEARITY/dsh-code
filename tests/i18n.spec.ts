@@ -73,13 +73,13 @@ describe('i18n catalog', () => {
   it('translates the panel chrome and notices that used to be hardcoded', () => {
     try {
       setLanguage('en')
-      expect(t('notice.updateInstalled')).toBe('update installed — restart dsh to activate')
+      expect(t('notice.updateInstalled')).toBe('update installed · restart dsh to activate')
       expect(t('notice.updateFailedExit', { code: 2 })).toBe('update failed (exit 2)')
-      expect(t('help.title', { from: 1, to: 2, total: 3 })).toBe('/help — keys and commands · rows 1-2/3')
-      expect(t('completion.footer.complete', { count: 4 })).toBe('↑↓ choose · 4 items · tab complete')
-      expect(t('status.agents.live', { count: 1 })).toBe('agents 1 live')
+      expect(t('help.title', { from: 1, to: 2, total: 3 })).toBe('/help · keys and commands · rows 1-2/3')
+      expect(t('completion.footer.complete', { count: 4 })).toBe('↑↓ move · 4 items · tab complete')
+      expect(t('status.agents.live', { count: 1 })).toBe('agents live: 1')
       expect(t('status.todos.progress', { done: 1, total: 3 })).toBe('todos 1/3')
-      expect(t('panel.confirm.title', { action: t('panel.confirm.removeKey') })).toBe('/model — remove API key')
+      expect(t('panel.confirm.title', { action: t('panel.confirm.removeKey') })).toBe('/model · remove API key')
       setLanguage('zh')
       expect(t('notice.updateInstalled')).toContain('重启')
       expect(t('notice.permissionChangeFailed', { message: 'x' })).toContain('权限')
