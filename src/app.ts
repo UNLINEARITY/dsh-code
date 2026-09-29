@@ -363,8 +363,12 @@ export interface AppProps {
   jobKill?: (id: string) => Promise<string>
   /** Toggle one plugin row through the manager service (non-management rows). */
   pluginToggle?: (entryId: string, rowId: string, enabled: boolean) => Promise<string>
-  /** Loader entry ids the manager may edit; empty when the service is absent. */
-  pluginEditable?: () => Promise<readonly string[]>
+  /** Interrupt one running subagent child of the active session. */
+  subagentInterrupt?: (childId: string) => void
+  /** Spawn a continuable child from the user (/spawn); resolves with its id. */
+  spawnSubagent?: (prompt: string) => Promise<string>
+  /** Continue one child conversation as the user (/tell). */
+  tellSubagent?: (targetPrefix: string, text: string) => Promise<string>
   /** Read one background job's retained output as bounded plain lines. */
   jobOutput?: (id: string) => Promise<readonly string[]>
   /** Probe the launcher's aligned update plan (read-only; never installs). */
@@ -3188,7 +3192,6 @@ export function App(props: AppProps): ReactElement {
       ? createElement(PluginPanel, {
         load: props.loadPlugins,
         initialQuery: pluginQuery,
-        editableEntries: props.pluginEditable,
         toggle: props.pluginToggle,
         close: () => setPluginOpen(false),
       })
@@ -3283,6 +3286,7 @@ export function App(props: AppProps): ReactElement {
         load: props.loadSubagents,
         readTranscript: props.loadSessionTranscript,
         attach: props.attachSubagent === undefined ? undefined : attachTo,
+        interrupt: props.subagentInterrupt,
         close: () => setAgentsOpen(false),
       })
       : undefined,

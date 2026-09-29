@@ -28,6 +28,8 @@ export const LOCAL_COMMANDS: readonly LocalCommand[] = [
   { label: '/mcp', descriptionKey: 'cmd.mcp' },
   { label: '/deliverables', descriptionKey: 'cmd.deliverables' },
   { label: '/goal', descriptionKey: 'cmd.goal' },
+  { label: '/spawn', descriptionKey: 'cmd.spawn' },
+  { label: '/tell', descriptionKey: 'cmd.tell' },
   { label: '/statusline', descriptionKey: 'cmd.statusline' },
   { label: '/theme', descriptionKey: 'cmd.theme' },
   { label: '/language', descriptionKey: 'cmd.language' },

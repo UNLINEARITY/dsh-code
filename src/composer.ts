@@ -497,7 +497,7 @@ interface DraftFile extends FilePathInspection {
  * While a modal (approval / question / model panel) owns the keys, the
  * box passes every key through untouched.
  */
-export function Composer({ active, frozen, frozenHint, busy, descriptors, skills, dispatch, steer, submitMode, cycleSubmitMode, interrupt, quit, openModel, openEffort, openHelp, openMode, openPermission, openResume, openSearch, openPlugin, openUpdate,  openJobs, openMcp, openDeliverables, openGoal, openStatusline, openTheme, openLanguage, saveLanguage, openHistory, openQueue, openAgents, openSubagent, openTodos, openUsage, openDelete, openDiff, openReviewPicker, reviewChanges, deleteConfirm, confirmDelete, cancelDelete, createSession, forkSession, cancelSessionSwitch, notify, applyEditorKeys, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, inspectImages, prepareImages, inspectFiles, prepareFiles, cycleMode, exportTranscript, renameTitle, copyLastResponse, recallSpace, recordLocal, recordHistory, queued, updateQueued, historyFill, historyConsumed, animations, applyAnimations, applyRainbow, rainbowBurstId, waveTier, waveStyle, maxRows, anchorRowsBelow, tabTitle, onEditorRows, onMenuRows, sessionKey }: {
+export function Composer({ active, frozen, frozenHint, busy, descriptors, skills, dispatch, steer, submitMode, cycleSubmitMode, interrupt, quit, openModel, openEffort, openHelp, openMode, openPermission, openResume, openSearch, openPlugin, openUpdate,  openJobs, openMcp, openDeliverables, openGoal, spawnSubagent, tellSubagent, openStatusline, openTheme, openLanguage, saveLanguage, openHistory, openQueue, openAgents, openSubagent, openTodos, openUsage, openDelete, openDiff, openReviewPicker, reviewChanges, deleteConfirm, confirmDelete, cancelDelete, createSession, forkSession, cancelSessionSwitch, notify, applyEditorKeys, hasNotice, dismissNotice, toggleReasoning, openVerbose, clearView, refresh, loadMentions, inspectImages, prepareImages, inspectFiles, prepareFiles, cycleMode, exportTranscript, renameTitle, copyLastResponse, recallSpace, recordLocal, recordHistory, queued, updateQueued, historyFill, historyConsumed, animations, applyAnimations, applyRainbow, rainbowBurstId, waveTier, waveStyle, maxRows, anchorRowsBelow, tabTitle, onEditorRows, onMenuRows, sessionKey }: {
   active: boolean
   frozen: boolean
   /** Frozen-band hint naming the surface that owns the keyboard; an empty
@@ -532,6 +532,10 @@ export function Composer({ active, frozen, frozenHint, busy, descriptors, skills
   openMcp: () => void
   openDeliverables: () => void
   openGoal: () => void
+  /** Spawn a continuable subagent from the user's prompt (/spawn). */
+  spawnSubagent?: (prompt: string) => Promise<string>
+  /** Steer one child conversation (/tell <id-prefix> <text>). */
+  tellSubagent?: (targetPrefix: string, text: string) => Promise<string>
   openStatusline: () => void
   openTheme: () => void
   /** Open the /language picker (bare /language). */
@@ -1499,6 +1503,31 @@ export function Composer({ active, frozen, frozenHint, busy, descriptors, skills
       }
       if (text === '/mcp' || text.startsWith('/mcp ')) {
         openMcp()
+        return
+      }
+      if (text.startsWith('/spawn ') && spawnSubagent !== undefined) {
+        const prompt = text.slice(7).trim()
+        if (prompt !== '') {
+          void spawnSubagent(prompt).then(
+            id => notify(t('notice.subagentSpawned', { id: id.slice(-12) })),
+            error => notify(t('notice.subagentSpawnFailed', { message: error instanceof Error ? error.message : String(error) }), 'error'),
+          )
+        } else notify(t('notice.subagentSpawnUsage'), 'warning')
+        return
+      }
+      if (text.startsWith('/tell ') && tellSubagent !== undefined) {
+        const argument = text.slice(6).trim()
+        const separator = argument.indexOf(' ')
+        const target = separator < 0 ? argument : argument.slice(0, separator)
+        const message = separator < 0 ? '' : argument.slice(separator + 1).trim()
+        if (target === '' || message === '') {
+          notify(t('notice.subagentTellUsage'), 'warning')
+          return
+        }
+        void tellSubagent(target, message).then(
+          id => notify(t('notice.subagentTold', { id: id.slice(-12) })),
+          error => notify(t('notice.subagentTellFailed', { message: error instanceof Error ? error.message : String(error) }), 'error'),
+        )
         return
       }
       if (text === '/deliverables' || text.startsWith('/deliverables ')) {

@@ -95,6 +95,32 @@ describe('approval answerer', () => {
     await expect(settled).resolves.toBe('allowed-once')
   })
 
+  it('claims a subagent of the root session and answers it on the same bar', async () => {
+    const harness = fakeContext()
+    // The production predicate shape: own agent id, or a child session
+    // stamped with this root's id as parentSession.
+    const ownsTree = (candidate: Agent): boolean =>
+      candidate.id === agent.id || candidate.session.header.parentSession === 'root-session'
+    const store = mountApprovalAnswerer(harness.ctx, ownsTree, () => 'cmd')
+    const subagent = {
+      id: 'child-agent',
+      session: { header: { parentSession: 'root-session' } },
+    } as unknown as Agent
+    let nexted = 0
+    const settled = harness.listener()(
+      request({ agent: subagent }),
+      () => {
+        nexted += 1
+        return Promise.resolve<ApprovalOutcome>('unavailable')
+      },
+    )
+    // Claimed, not deferred: the bar renders and next() never runs.
+    expect(nexted).toBe(0)
+    expect(store.getSnapshot().pending).toBeDefined()
+    store.getSnapshot().pending?.answer('allowed-once')
+    await expect(settled).resolves.toBe('allowed-once')
+  })
+
   it('defers foreign agents back into the waterfall', async () => {
     const harness = fakeContext()
     mountApprovalAnswerer(harness.ctx, candidate => candidate.id === agent.id, () => '')

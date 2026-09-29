@@ -246,6 +246,49 @@ function listJobs(ctx: Context, caller: Agent | undefined): readonly JobRow[] {
  * @param ctx - context carrying the (optional) cordis loader.
  * @returns server rows in loader order; never throws.
  */
+/** Structural slice of the subagent runtime the delegation surface uses. */
+interface SubagentRuntimeFace {
+  interrupt(targetSessionId: string, authority: { kind: 'user'; parentSessionId: string }): void
+  sendMessage(sender: unknown, targetId: string, content: readonly { type: 'text'; text: string }[], options: { signal: AbortSignal }): Promise<unknown>
+  startContinuable(spec: {
+    provider: string
+    label: string
+    request: { prompt: readonly { type: 'text'; text: string }[]; parent: unknown }
+    signal: AbortSignal
+  }): Promise<{ id: string }>
+}
+
+/**
+ * Spawn a continuable background child from the USER (not the model): the
+ * same `spawn` provider the delegation tool uses, parented on the active
+ * root agent. Resolves with the child's session id.
+ */
+async function spawnSubagentChild(
+  runtime: SubagentRuntimeFace | undefined, parent: unknown, prompt: string,
+): Promise<string> {
+  if (runtime === undefined || parent === undefined) throw new Error('subagent runtime unavailable')
+  const label = prompt.length > 48 ? `${prompt.slice(0, 47)}…` : prompt
+  const started = await runtime.startContinuable({
+    provider: 'spawn',
+    label,
+    request: { prompt: [{ type: 'text', text: prompt }], parent },
+    signal: new AbortController().signal,
+  })
+  return started.id
+}
+
+/**
+ * Continue one live child conversation as the user: one steered message from
+ * the root agent into the child's inbox (running targets admit it at the
+ * nearest step boundary; idle targets start a turn).
+ */
+async function tellSubagentChild(
+  runtime: SubagentRuntimeFace | undefined, sender: unknown, targetId: string, text: string,
+): Promise<void> {
+  if (runtime === undefined || sender === undefined) throw new Error('subagent runtime unavailable')
+  await runtime.sendMessage(sender, targetId, [{ type: 'text', text }], { signal: new AbortController().signal })
+}
+
 /** Structural slice of the plugin manager the /plugin toggle uses. */
 interface PluginManagerFace {
   listPlugins(): Promise<readonly { rowId: string; moduleName: string; entryId?: string; patchId?: string; readOnlyReason?: string }[]>
@@ -270,17 +313,6 @@ async function togglePluginRow(services: PluginManagerFace | undefined, entryId:
       : application === 'applied'
         ? 'notice.pluginToggledApplied'
         : 'notice.pluginToggledOther', { row: rowId, state, application })
-}
-
-/** Which loader entries the manager may edit (non-management rows only). */
-async function editablePluginEntries(services: PluginManagerFace | undefined): Promise<readonly string[]> {
-  if (services === undefined) return []
-  try {
-    const rows = await services.listPlugins()
-    return rows.filter(row => row.entryId !== undefined && row.readOnlyReason === undefined).map(row => row.entryId as string)
-  } catch {
-    return []
-  }
 }
 
 /** Structural slice of the jobs registry the panel actions use. */
@@ -678,12 +710,20 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   const skills: SkillsView = watchSkills(ctx, cwd)
   if (agent !== undefined) skills.setAgent(agent)
 
-  // Approval answerer: renders the ask as a y/n bar; only this TUI's agent is
-  // claimed, every other ask falls through to the fail-closed waterfall. The
-  // owner predicate is empty until the first session exists.
+  // Approval answerer: renders the ask as a y/n bar. Claims the on-screen
+  // agent AND the subagents of its session tree — the kernel stamps child
+  // sessions with `parentSession` (the root id), and a delegated ask the
+  // user can meaningfully answer used to fall through the waterfall to a
+  // silent fail-closed rejection. Foreign roots still defer; the predicate
+  // stays empty until the first session exists.
+  const ownsInSessionTree = (candidate: Agent): boolean => {
+    if (agent === undefined) return false
+    if (candidate.id === agent.id) return true
+    return candidate.session.header.parentSession === agent.session.id
+  }
   const approval: ApprovalStore = mountApprovalAnswerer(
     ctx,
-    candidate => agent !== undefined && candidate.id === agent.id,
+    ownsInSessionTree,
     request => approvalCommandPreview(store.getView().entries, request.callId, request.toolName),
   )
 
@@ -1960,7 +2000,34 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       loadMcpServers: () => listMcpServers(ctx),
       jobKill: (id: string) => killJob(ctx.get('jobs') as JobsServiceFace | undefined, active?.agent?.session.id, id),
       pluginToggle: (entryId: string, rowId: string, enabled: boolean) => togglePluginRow(ctx.get('pluginManager') as PluginManagerFace | undefined, entryId, rowId, enabled),
-      pluginEditable: () => editablePluginEntries(ctx.get('pluginManager') as PluginManagerFace | undefined),
+      subagentInterrupt: (() => {
+        const current = active
+        return current === undefined ? undefined : (childId: string) => {
+        try {
+          ;(ctx.get('subagents') as SubagentRuntimeFace | undefined)?.interrupt(childId, { kind: 'user', parentSessionId: current.agent.session.id })
+          bridge.notify(t('notice.subagentInterrupted', { id: childId.slice(-12) }))
+        } catch (error: unknown) {
+          bridge.notify(t('notice.subagentInterruptFailed', { message: error instanceof Error ? error.message : String(error) }), 'error')
+        }
+        }
+      })(),
+      spawnSubagent: (() => {
+        const current = active
+        return current === undefined ? undefined : (prompt: string) => spawnSubagentChild(ctx.get('subagents') as SubagentRuntimeFace | undefined, current.agent, prompt)
+      })(),
+      tellSubagent: (() => {
+        const current = active
+        return current === undefined ? undefined : async (targetPrefix: string, text: string) => {
+        // Resolve the prefix against the live child feed (the same rows the
+        // /agents roster shows); an ambiguous or absent prefix is a usage
+        // error the composer reports verbatim.
+        const rows = subagents.getSnapshot()
+        const matches = rows.filter(row => row.id === targetPrefix || row.id.startsWith(targetPrefix))
+        if (matches.length !== 1) throw new Error(t(matches.length === 0 ? 'notice.subagentTellUnknown' : 'notice.subagentTellAmbiguous'))
+          await tellSubagentChild(ctx.get('subagents') as SubagentRuntimeFace | undefined, current.agent, matches[0].id, text)
+          return matches[0].id
+        }
+      })(),
       jobOutput: (id: string) => readJobOutput(ctx.get('jobs') as JobsServiceFace | undefined, active?.agent?.session.id, id),
       permissionDefault: {
         load: () => loadDefaultPermissionPreset(ctx.get('settings') as SettingsFormsFace | undefined),

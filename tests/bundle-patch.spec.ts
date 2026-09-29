@@ -98,3 +98,55 @@ describe('bundle patch rows', () => {
     expect(violations).toEqual([])
   })
 })
+
+describe('keystone module lock', () => {
+  it('locks exactly what this bundle\'s own patch names, plus itself and llm-pi-ai', async () => {
+    const { KEYSTONE_MODULES } = await import('../src/plugin-inventory.ts')
+    const basePairs = JSON.parse(
+      readFileSync(new URL('./base-row-ids.json', import.meta.url), 'utf8'),
+    ) as readonly (readonly [string, string])[]
+    const idToModule = new Map(basePairs)
+    // Insert rows carry their id→module pairs only in the repo patches
+    // themselves, so the resolver walks those too (the generator's parity).
+    for (const file of ['cordis.patch.yml', 'lite-preset/cordis.patch.yml', ...patchFiles]) {
+      const patch = load(readFileSync(new URL(`../${file}`, import.meta.url), 'utf8'), { schema: patchSchema })
+      for (const pair of pairsOf(patch)) idToModule.set(pair[0], pair[1])
+    }
+    const own = load(readFileSync(new URL('../cordis.patch.yml', import.meta.url), 'utf8'), { schema: patchSchema })
+    const expected = new Set<string>(['dsh-code', 'dsh-code/session-query', 'dsh-code/startup', '@deepseek-ai/dsh-llm-pi-ai'])
+    for (const id of idsOf(own)) {
+      const module = idToModule.get(id)
+      if (module !== undefined) expected.add(module)
+      else if (id.startsWith('dsh-code')) expected.add(id)
+    }
+    expect([...KEYSTONE_MODULES].sort()).toEqual([...expected].sort())
+  })
+})
+
+/** Every id→module pair a parsed patch tree declares (cordis: groups excluded). */
+function* pairsOf(node: unknown): Generator<readonly [string, string]> {
+  if (Array.isArray(node)) {
+    for (const item of node) yield* pairsOf(item)
+    return
+  }
+  if (node !== null && typeof node === 'object') {
+    const row = node as { id?: unknown; name?: unknown; insert?: unknown; config?: unknown }
+    if (typeof row.id === 'string' && typeof row.name === 'string' && !row.name.startsWith('cordis:')) yield [row.id, row.name]
+    yield* pairsOf(row.insert)
+    yield* pairsOf(row.config)
+  }
+}
+
+/** Every row id anywhere in a parsed patch tree (bare disables included). */
+function* idsOf(node: unknown): Generator<string> {
+  if (Array.isArray(node)) {
+    for (const item of node) yield* idsOf(item)
+    return
+  }
+  if (node !== null && typeof node === 'object') {
+    const row = node as { id?: unknown; insert?: unknown; config?: unknown }
+    if (typeof row.id === 'string') yield row.id
+    yield* idsOf(row.insert)
+    yield* idsOf(row.config)
+  }
+}

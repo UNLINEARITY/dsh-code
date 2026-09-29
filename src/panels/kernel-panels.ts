@@ -8,7 +8,7 @@ import type { SearchRow } from '../runner/search-rows.ts'
 export type { SearchRow } from '../runner/search-rows.ts'
 import type { PermissionRow } from '../permissions.ts'
 import { presetDisplayText, type PresetRow } from '../presets.ts'
-import type { PluginRow, PluginPhase } from '../plugin-inventory.ts'
+import { KEYSTONE_MODULES, type PluginRow, type PluginPhase } from '../plugin-inventory.ts'
 import type { DeliverablesEntry, GoalFold } from '../render/projection.ts'
 import type { SessionDirectoryOptions, SessionRow } from '../session/session-directory.ts'
 import { formatRelativeTime, matchSessionRow } from '../session/session-directory.ts'
@@ -218,12 +218,10 @@ export function PermissionPanel({ current, load, select, close, defaultPreset, s
   })
 }
 
-export function PluginPanel({ load, close, initialQuery = '', editableEntries, toggle }: {
+export function PluginPanel({ load, close, initialQuery = '', toggle }: {
   load: () => readonly PluginRow[]
   close: () => void
   initialQuery?: string
-  /** Loader entry ids the manager may edit (the keystone lock); undefined disables editing. */
-  editableEntries?: () => Promise<readonly string[]>
   /** Toggle one row's enablement; resolves with the outcome notice text. */
   toggle?: (entryId: string, rowId: string, enabled: boolean) => Promise<string>
 }): ReactElement {
@@ -231,18 +229,9 @@ export function PluginPanel({ load, close, initialQuery = '', editableEntries, t
   const [query, setQuery] = useState(initialQuery)
   const [cursor, setCursor] = useState(0)
   const [expanded, setExpanded] = useState(false)
-  const [editable, setEditable] = useState<readonly string[] | undefined>(editableEntries === undefined ? undefined : [])
   const [actionNotice, setActionNotice] = useState<string>()
   // eslint-disable-next-line react-hooks/exhaustive-deps -- epoch is the panel's explicit registry refresh trigger
   const rows = useMemo(() => load().filter(row => `${row.entryId} ${row.moduleName} ${row.phase ?? ''}`.toLowerCase().includes(query.toLowerCase())), [epoch, load, query])
-  // Re-read the editable set on open and refresh: the manager's own
-  // management-protection (base + bundle rows) IS the keystone lock; the
-  // service refuses those edits even if this set were stale.
-  const refreshEditable = useCallback((): void => {
-    if (editableEntries === undefined) return
-    void Promise.resolve(editableEntries()).then(setEditable, () => { setEditable([]) })
-  }, [editableEntries])
-  useEffect(refreshEditable, [refreshEditable])
   useEffect(() => setCursor(value => Math.min(value, Math.max(0, rows.length - 1))), [rows.length])
   useInput((input, key) => {
     if (key.escape) return close()
@@ -250,18 +239,18 @@ export function PluginPanel({ load, close, initialQuery = '', editableEntries, t
     if (input === 'q' && query === '') return close()
     if (input === 'r' && query === '') {
       setEpoch(value => value + 1)
-      refreshEditable()
       return
     }
     if (key.upArrow) return setCursor(value => rows.length === 0 ? 0 : (value + rows.length - 1) % rows.length)
     if (key.downArrow) return setCursor(value => rows.length === 0 ? 0 : (value + 1) % rows.length)
     if (key.return) return setExpanded(value => !value)
     // Space toggles the cursor row — the unified safe-action key (a toggle is
-    // reversible, so no arm step): only rows the manager marks editable;
-    // keystone rows (base/bundle composition) stay read-only by design.
-    if (input === ' ' && query === '' && toggle !== undefined && editable !== undefined) {
+    // reversible, so no arm step). The STATIC keystone set is the authority:
+    // every row the shipped layers declare stays read-only (the service's
+    // management protection proved row-incomplete against base rows).
+    if (input === ' ' && query === '' && toggle !== undefined) {
       const row = rows[cursor]
-      if (row !== undefined && editable.includes(row.entryId)) {
+      if (row !== undefined && !KEYSTONE_MODULES.has(row.moduleName)) {
         const next = !row.enabled
         setActionNotice(undefined)
         void Promise.resolve(toggle(row.entryId, row.entryId, next)).then(
@@ -277,7 +266,7 @@ export function PluginPanel({ load, close, initialQuery = '', editableEntries, t
   return createElement(ListFrame, {
     title: t('panel.plugin.title'),
     rows: rows.map((row, index) => {
-      const locked = toggle === undefined || editable === undefined || !editable.includes(row.entryId)
+      const locked = toggle === undefined || KEYSTONE_MODULES.has(row.moduleName)
       return {
         key: row.entryId,
         disabled: !row.enabled,
@@ -647,20 +636,25 @@ export function ResumePanel({ currentCwd, load, readTranscript, select, requestD
     if (key.pageDown) return setCursor(value => Math.min(rows.length - 1, value + 8))
     if (input === 'g') return setCursor(0)
     if (input === 'G') return setCursor(Math.max(0, rows.length - 1))
-    if (input === 'e' && rows[cursor] !== undefined) {
-      return setExpanded(value => value === rows[cursor].id ? undefined : rows[cursor].id)
-    }
-    if (input === 't' && rows[cursor] !== undefined) {
+    // Space is the unified safe-action key and here it drills one row
+    // progressively: collapsed → details → transcript, then back to
+    // collapsed. Esc keeps stepping back out of the same stack.
+    if (input === ' ' && rows[cursor] !== undefined) {
       const row = rows[cursor]
-      transcriptLoad.current?.abort()
-      setTranscript({ id: row.id })
-      const controller = new AbortController()
-      transcriptLoad.current = controller
-      Promise.resolve().then(() => readTranscript(row.id, controller.signal)).then(
-        text => { if (!controller.signal.aborted) setTranscript({ id: row.id, text }) },
-        reason => { if (!controller.signal.aborted) setTranscript({ id: row.id, error: reason instanceof Error ? reason.message : String(reason) }) },
-      )
-      return
+      if (expanded !== row.id) return setExpanded(row.id)
+      if (transcript?.id !== row.id) {
+        transcriptLoad.current?.abort()
+        setTranscript({ id: row.id })
+        const controller = new AbortController()
+        transcriptLoad.current = controller
+        Promise.resolve().then(() => readTranscript(row.id, controller.signal)).then(
+          text => { if (!controller.signal.aborted) setTranscript({ id: row.id, text }) },
+          reason => { if (!controller.signal.aborted) setTranscript({ id: row.id, error: reason instanceof Error ? reason.message : String(reason) }) },
+        )
+        return
+      }
+      setExpanded(undefined)
+      return setTranscript(undefined)
     }
     if (key.return && rows[cursor] !== undefined) {
       if (deleteMode) {
@@ -755,7 +749,7 @@ function DocumentPanel({ title, text, error, close, onRefresh, onExpand }: {
   const lines = useMemo(() => text === undefined ? [] : markdownLines(text, viewport.contentColumns), [text, viewport.contentColumns])
   const maxScroll = Math.max(0, lines.length - viewport.bodyRows)
   useInput((input, key) => {
-    if (key.escape || input === 'q' || input === 't') return close()
+    if (key.escape || input === 'q') return close()
     // Ctrl+D keeps its step-out meaning: empty-draft exit in the composer,
     // leave-the-document here.
     if (expanded && key.ctrl && input === 'd') return close()
@@ -1362,7 +1356,7 @@ interface AgentsEntry {
  * Enter/t opening the child's full transcript in the shared read-only
  * document view (the same projection the exporter uses).
  */
-export function AgentsPanel({ live, load, readTranscript, attach, close }: {
+export function AgentsPanel({ live, load, readTranscript, attach, interrupt, close }: {
   /** Live feed rows (child sessions observed this process). */
   live: readonly SubagentRow[]
   /** Load this session's persisted child sessions by lineage. */
@@ -1371,8 +1365,11 @@ export function AgentsPanel({ live, load, readTranscript, attach, close }: {
   readTranscript: (id: string, signal?: AbortSignal) => Promise<string>
   /** Attach to one child as the whole view (the runner's live buses). */
   attach: ((id: string, label: string) => void) | undefined
+  /** Interrupt one running child's current turn (the unified destructive key). */
+  interrupt?: (id: string) => void
   close: () => void
 }): ReactElement {
+  const [interruptArmed, setInterruptArmed] = useState<string>()
   const [dirRows, setDirRows] = useState<readonly SessionRow[] | undefined>(undefined)
   const [error, setError] = useState<string>()
   const [loading, setLoading] = useState(true)
@@ -1439,10 +1436,29 @@ export function AgentsPanel({ live, load, readTranscript, attach, close }: {
   }
   useInput((input, key) => {
     if (key.escape || input === 'q') return close()
-    if (input === 'r') return refresh()
+    if (input === 'r') {
+      setInterruptArmed(undefined)
+      return refresh()
+    }
     if (key.upArrow) return setCursor(value => rows.length === 0 ? 0 : (value + rows.length - 1) % rows.length)
     if (key.downArrow) return setCursor(value => rows.length === 0 ? 0 : (value + 1) % rows.length)
-    if ((key.return || input === 't') && rows[cursor] !== undefined) return openTranscript()
+    // Enter is the unified primary action: open the child's transcript.
+    if (key.return && rows[cursor] !== undefined) return openTranscript()
+    // Backspace twice interrupts a running child — the unified destructive
+    // pattern; the footer names the armed target and any other key disarms.
+    if (key.backspace === true || key.delete === true) {
+      const row = rows[cursor]
+      if (interrupt !== undefined && row !== undefined && row.running) {
+        if (interruptArmed === row.id) {
+          setInterruptArmed(undefined)
+          interrupt(row.id)
+        } else {
+          setInterruptArmed(row.id)
+        }
+      }
+      return
+    }
+    setInterruptArmed(input === undefined || input === '' ? interruptArmed : undefined)
   }, { isActive: transcript === undefined })
   if (transcript !== undefined) {
     return createElement(DocumentPanel, {
