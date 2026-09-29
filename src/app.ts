@@ -489,7 +489,11 @@ function DeepDivingLine({ since, themeFlowAnimated = true }: { since: number; th
 export function streamTailBodyColumns(rowColumns: number, prefix: string, continuationPrefix = prefix): number {
   const width = Math.max(1, Math.floor(rowColumns))
   const prefixColumns = Math.max(visibleColumns(prefix), visibleColumns(continuationPrefix))
-  return Math.max(1, width - prefixColumns)
+  // One safety column: displayTail's kinsoku overhang can paint up to 2
+  // cells past columnLimit on a filled row, so the content budget stays one
+  // short of the terminal edge to keep the overhung row within the painted
+  // width (the columns−1 contract the rest of the layout already follows).
+  return Math.max(1, width - prefixColumns - 1)
 }
 
 interface StreamTailLayout {
@@ -1178,7 +1182,11 @@ function NoticeLine({ text, tone, columns }: {
     createElement(
       Text,
       { color: inkColor(color), wrap: 'truncate-end' },
-      truncateColumns(`${mark} ${singleLineText(text)}`, Math.max(1, columns - 2)),
+      // columns - 3 (padding 2 + 1 safety) keeps the painted row one column
+      // short of the terminal edge — the columns−1 contract the status line
+      // and composer band already follow (VS Code autowrap on the exact last
+      // column produces an unaccounted Ink row).
+      truncateColumns(`${mark} ${singleLineText(text)}`, Math.max(1, columns - 3)),
     ),
   )
 }
@@ -2211,13 +2219,11 @@ export function App(props: AppProps): ReactElement {
       if (replayTimer !== undefined) clearTimeout(replayTimer)
       replayTimer = setTimeout(() => {
         resizeBurstHeld.current = false
-        // Rows-only bursts skip the clear + source replay entirely: budgets
-        // update reactively, and no wrapped row changes shape. The held
-        // synchronized frame still closes atomically.
-        if (terminalSizeRef.current.columns === lastReflowColumns.current) {
-          appStdout.write(SYNCHRONIZED_UPDATE_END)
-          return
-        }
+        // Any size change (columns OR rows) replays: rows-only growth leaves
+        // the flush cursor (only-forward) behind the grown budget, and the
+        // anchored Box pads the gap with real blank rows; the launch-time
+        // row-storm concern is handled by the 75ms debounce settling the
+        // burst before the single clear + replay runs.
         lastReflowColumns.current = terminalSizeRef.current.columns
         synchronizedReplayPending.current = true
         appStdout.write(RESIZE_REFLOW_CLEAR)
@@ -2415,9 +2421,16 @@ export function App(props: AppProps): ReactElement {
     0,
     dynamicRows,
   )
-  const anchoredSurfaceRows = dynamicRows
-    + (transcriptVisible && view.todos.length > 0 ? 1 : 0)
-    + (transcriptVisible && agentRows.length > 0 ? 1 : 0)
+  // Clamp the anchored height to the actual content: when the flush cursor
+  // has pushed more rows into Static than the budget grew to hold (rows-only
+  // resize before this render replays), the live tail is shorter than the
+  // budget and a fixed-height Box would pad the gap with real blank rows
+  // between the transcript and the composer. The min() keeps the Box at the
+  // content's own height until the replay fills the new budget.
+  const anchoredSurfaceRows = Math.min(
+    dynamicRows,
+    Math.max(1, allLiveLines.length),
+  )
   const surfaceAnchored = transcriptVisible ? transcriptViewportFilled : modalViewportFilled
   const frozenModalLines = surfaceAnchored && !transcriptVisible
     ? allLiveLines.slice(-dynamicRows)

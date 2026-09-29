@@ -1300,9 +1300,11 @@ export function SearchPanel({ load, select, initialQuery = '', close }: {
     const state = loading ? 'searching…' : error !== undefined ? `error: ${error}` : rows.length === 0 ? 'no results yet' : `❯ ${rows[cursor]?.label ?? ''}`
     return createElement(Text, { wrap: 'truncate-end' }, truncateColumns(`/search · ${state} · ${t('panel.close')}`, viewport.contentColumns))
   }
-  const bodyRows = Math.max(1, viewport.bodyRows - 1)
-  const offset = revealRow(0, cursor, rows.length, bodyRows)
-  const visible = rows.slice(offset, offset + bodyRows)
+  // Each search result renders TWO physical rows (main + snippet), so the
+  // viewport slice halves to stay within the panel's maxHeight budget.
+  const entryRows = Math.max(1, Math.floor(viewport.bodyRows / 2) - 1)
+  const offset = revealRow(0, cursor, rows.length, entryRows)
+  const visible = rows.slice(offset, offset + entryRows)
   const header = error !== undefined
     ? t('search.compact.error', { message: truncateColumns(singleLineText(error), Math.max(6, viewport.contentColumns - 14)) })
     : loading

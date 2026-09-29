@@ -70,10 +70,41 @@ export const internals: {
       const tuiStdin = createSplitStdin(process.stdin)
       // Ink only touches isTTY/setRawMode/ref/read on stdin; the object-mode
       // proxy satisfies that contract without the full ReadStream surface.
+      //
+      // Synchronized-output stdout wrapper: Ink's log-update erases and
+      // rewrites the entire dynamic region on every frame (no line diff),
+      // and during streaming that means ~30 full-screen rewrites per
+      // second. Without DEC 2026 the terminal shows the intermediate
+      // erase-then-partially-rewrite state, which reads as persistent
+      // flickering. Wrapping every Ink frame in ?2026h / ?2026l makes
+      // the terminal buffer the frame and present only the final state.
+      // Terminals without DEC 2026 support silently ignore the sequences.
+      //
+      // A plain object (NOT a Proxy): Proxy's Reflect.get with the proxy as
+      // receiver re-entered Node's stdout getter chain and crashed with
+      // "Maximum call stack size exceeded". This wrapper delegates only the
+      // surface Ink actually reads (write/rows/columns/isTTY/on/off), each
+      // write concatenated into one atomic chunk so any callback fires once.
+      const realStdout = process.stdout
+      const synchronizedStdout = {
+        write(chunk: string | Uint8Array, ...rest: unknown[]): boolean {
+          const text = typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8')
+          if (text.includes('\x1b[2K') || text.includes('\x1b[3J') || text.includes('\x1b[H')) {
+            return realStdout.write('\x1b[?2026h' + text + '\x1b[?2026l', ...rest as [])
+          }
+          return realStdout.write(text, ...rest as [])
+        },
+        get columns(): number { return realStdout.columns },
+        get rows(): number { return realStdout.rows },
+        get isTTY(): boolean | undefined { return realStdout.isTTY },
+        on(...args: Parameters<typeof realStdout.on>) { return realStdout.on(...args) },
+        off(...args: Parameters<typeof realStdout.off>) { return realStdout.off(...args) },
+        removeListener(...args: Parameters<typeof realStdout.removeListener>) { return realStdout.removeListener(...args) },
+      } as unknown as NodeJS.WriteStream
       const instance = render(element, {
         exitOnCtrlC: false,
         stdin: tuiStdin.stdin as unknown as NodeJS.ReadStream,
-        stdout: process.stdout,
+        stdout: synchronizedStdout,
       })
       return {
         rerender(element: ReactElement): void {

@@ -710,11 +710,11 @@ describe('physical-row transcript viewport', () => {
     }
   })
 
-  it('skips the source replay for rows-only resize bursts', async () => {
-    // Settled Static rows wrap at COLUMNS only, so a rows-only resize never
-    // needs the clear + replay. Launch-time row storms (pane settling) would
-    // otherwise stack one re-emitted whale banner per burst on terminals
-    // that keep scrollback across the replay clear's \x1b[3J.
+  it('replays once after rows-only resize bursts settle (fill the grown budget)', async () => {
+    // Rows-only growth now also replays: the flush cursor only moves forward,
+    // so a grown budget leaves the anchored Box taller than the live tail and
+    // Ink pads the gap with real blank rows. The 75ms debounce coalesces the
+    // burst into exactly one clear + replay, and the banner re-emits once.
     const harness = createTty(100, 24)
     const { stdin, stdout, output } = harness
     const instance = renderApp(harness, appProps({ store: createTranscriptStore() }))
@@ -722,14 +722,19 @@ describe('physical-row transcript viewport', () => {
       await wait()
       expect(output.text.match(/╭─/gu)).toHaveLength(1)
       output.text = ''
+      // Fire the burst as one rapid volley (a real drag fires events per
+      // frame), then wait once for the debounce to coalesce into a single
+      // clear + replay.
       for (const rows of [30, 36, 42, 48]) {
         stdout.rows = rows
         stdout.emit('resize')
-        await wait(200)
       }
-      // No managed replay clear, and the banner was written exactly once.
-      expect(output.text).not.toContain(resizeClear)
-      expect(output.text.match(/╭─/gu)).toBeNull()
+      await wait(200)
+      // Exactly one replay clear for the coalesced burst.
+      const clearCount = (output.text.match(new RegExp(resizeClear.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) ?? []).length
+      expect(clearCount).toBe(1)
+      // The banner was re-emitted exactly once for the single replay.
+      expect(output.text.match(/╭─/gu)).toHaveLength(1)
       // A width change still reflows exactly once per settled burst.
       output.text = ''
       stdout.columns = 80
@@ -806,12 +811,13 @@ describe('physical-row transcript viewport', () => {
 })
 
 describe('stream wrap budget', () => {
-  it('wraps streamed body text at the same column settled markdown uses', () => {
+  it('wraps streamed body text one column inside the terminal edge', () => {
     const terminal = 80
     const row = terminal - 2
-    // Settled assistant markdown wraps at row-2 after the two-column gutter.
-    expect(streamTailBodyColumns(row, '  ')).toBe(row - 2)
-    expect(streamTailBodyColumns(row, '✻ ', '  ')).toBe(row - 2)
+    // The safety column added to streamTailBodyColumns keeps the kinsoku
+    // overhang's +2 cell tail within the painted width (columns−1 contract).
+    expect(streamTailBodyColumns(row, '  ')).toBe(row - 2 - 1)
+    expect(streamTailBodyColumns(row, '✻ ', '  ')).toBe(row - 2 - 1)
   })
 })
 describe('settled row cap window', () => {

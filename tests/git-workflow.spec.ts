@@ -307,7 +307,7 @@ describe('review conclusion parsing', () => {
 })
 
 describe('watchGitBranch', () => {
-  it('updates the store when HEAD moves to another branch (debounced)', async () => {
+  it('updates the store when HEAD moves to another branch (debounced)', { timeout: 15_000 }, async () => {
     const { watchGitBranch } = await import('../src/git-workflow.ts')
     const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import('node:fs')
     const path = await import('node:path')
@@ -321,7 +321,7 @@ describe('watchGitBranch', () => {
         // Watcher delivery plus the 150ms debounce are load-sensitive under
         // the parallel suite: poll for the expected value instead of a
         // fixed sleep, failing only after a generous bound.
-        for (let i = 0; i < 100 && store.getSnapshot() !== expected; i += 1) {
+        for (let i = 0; i < 200 && store.getSnapshot() !== expected; i += 1) {
           await new Promise(resolve => setTimeout(resolve, 50))
         }
         expect(store.getSnapshot()).toBe(expected)

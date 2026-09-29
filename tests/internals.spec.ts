@@ -49,11 +49,12 @@ describe('production TUI mount', () => {
     try {
       const mounted = internals.mount(element)
       // stdin rides the keypress splitter so a coalesced chunk never
-      // becomes one lost keypress; stdout stays the real terminal stream.
+      // becomes one lost keypress; stdout rides the synchronized-output
+      // proxy (DEC 2026) that makes every Ink frame atomic.
       expect(ink.render).toHaveBeenCalledWith(element, {
         exitOnCtrlC: false,
         stdin: inputSplit.calls[0]?.stdin,
-        stdout: process.stdout,
+        stdout: expect.objectContaining({ write: expect.any(Function) }),
       })
       expect(stdoutWrite).toHaveBeenNthCalledWith(1, KEYBOARD_ENHANCE_ENABLE + BRACKETED_PASTE_ENABLE)
 
