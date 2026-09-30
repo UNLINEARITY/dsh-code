@@ -32,6 +32,25 @@ export interface TuiMount {
 /** The Ink mount seam: renders the app element and returns its handle. */
 export type Mount = (element: ReactElement) => TuiMount
 
+/** Keep a frame and its DEC 2026 delimiters in a single write/callback. */
+export function createSynchronizedStdout(realStdout: NodeJS.WriteStream): NodeJS.WriteStream {
+  return {
+    write(chunk: string | Uint8Array, ...rest: unknown[]): boolean {
+      const text = typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8')
+      if (text.includes('\x1b[2K') || text.includes('\x1b[3J') || text.includes('\x1b[H')) {
+        return realStdout.write('\x1b[?2026h' + text + '\x1b[?2026l', ...rest as [])
+      }
+      return realStdout.write(text, ...rest as [])
+    },
+    get columns(): number { return realStdout.columns },
+    get rows(): number { return realStdout.rows },
+    get isTTY(): boolean | undefined { return realStdout.isTTY },
+    on(...args: Parameters<typeof realStdout.on>) { return realStdout.on(...args) },
+    off(...args: Parameters<typeof realStdout.off>) { return realStdout.off(...args) },
+    removeListener(...args: Parameters<typeof realStdout.removeListener>) { return realStdout.removeListener(...args) },
+  } as unknown as NodeJS.WriteStream
+}
+
 /** Substitutable runner effects; production values write to the real terminal. */
 export const internals: {
   /** Ink renderer mount; tests substitute a fake that captures the element. */
@@ -85,22 +104,7 @@ export const internals: {
       // "Maximum call stack size exceeded". This wrapper delegates only the
       // surface Ink actually reads (write/rows/columns/isTTY/on/off), each
       // write concatenated into one atomic chunk so any callback fires once.
-      const realStdout = process.stdout
-      const synchronizedStdout = {
-        write(chunk: string | Uint8Array, ...rest: unknown[]): boolean {
-          const text = typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8')
-          if (text.includes('\x1b[2K') || text.includes('\x1b[3J') || text.includes('\x1b[H')) {
-            return realStdout.write('\x1b[?2026h' + text + '\x1b[?2026l', ...rest as [])
-          }
-          return realStdout.write(text, ...rest as [])
-        },
-        get columns(): number { return realStdout.columns },
-        get rows(): number { return realStdout.rows },
-        get isTTY(): boolean | undefined { return realStdout.isTTY },
-        on(...args: Parameters<typeof realStdout.on>) { return realStdout.on(...args) },
-        off(...args: Parameters<typeof realStdout.off>) { return realStdout.off(...args) },
-        removeListener(...args: Parameters<typeof realStdout.removeListener>) { return realStdout.removeListener(...args) },
-      } as unknown as NodeJS.WriteStream
+      const synchronizedStdout = createSynchronizedStdout(process.stdout)
       const instance = render(element, {
         exitOnCtrlC: false,
         stdin: tuiStdin.stdin as unknown as NodeJS.ReadStream,

@@ -1,0 +1,71 @@
+diff --git a/build/ink.js b/build/ink.js
+index a9c444ff161ed4b6ea13909591844909015fe97c..f0a9893bf8dade8be395cfa70b25e3faec31a677 100644
+--- a/build/ink.js
++++ b/build/ink.js
+@@ -21,6 +21,8 @@ export default class Ink {
+     // Ignore last render after unmounting a tree to prevent empty output before exit
+     isUnmounted;
+     lastOutput;
++    lastRenderOverflowed = false;
++    lastStaticNode;
+     container;
+     rootNode;
+     // This variable is used only in debug mode to store full static output
+@@ -98,6 +100,12 @@ export default class Ink {
+         if (this.isUnmounted) {
+             return;
+         }
++        // A keyed Static remount replays a new history window, not an append
++        // to the previous window. Keep clear-all replays source-backed.
++        if (this.lastStaticNode !== this.rootNode.staticNode) {
++            this.fullStaticOutput = '';
++            this.lastStaticNode = this.rootNode.staticNode;
++        }
+         const { output, outputHeight, staticOutput } = render(this.rootNode);
+         // If <Static> output isn't empty, it means new children have been added to it
+         const hasStaticOutput = staticOutput && staticOutput !== '\n';
+@@ -118,8 +126,15 @@ export default class Ink {
+         if (hasStaticOutput) {
+             this.fullStaticOutput += staticOutput;
+         }
+-        if (outputHeight >= this.options.stdout.rows) {
+-            this.options.stdout.write(ansiEscapes.clearTerminal + this.fullStaticOutput + output);
++        const overflowing = outputHeight >= this.options.stdout.rows;
++        if (overflowing || this.lastRenderOverflowed) {
++            // Oversized frames scroll live rows into history. Rebuild once on
++            // recovery instead of erasing against the pre-overflow ledger.
++            // Preserve log-update's parked newline and synchronize its ledger.
++            this.throttledLog.cancel();
++            this.options.stdout.write(ansiEscapes.clearTerminal + this.fullStaticOutput + output + '\n');
++            this.log.sync(output);
++            this.lastRenderOverflowed = overflowing;
+             this.lastOutput = output;
+             return;
+         }
+diff --git a/build/log-update.d.ts b/build/log-update.d.ts
+index 8068bd3bbc1b62d77b8fd85e91f39e180b2d0e5a..cbeb31944c2210062c13bff97f214521132ade8d 100644
+--- a/build/log-update.d.ts
++++ b/build/log-update.d.ts
+@@ -1,5 +1,6 @@
+ import { type Writable } from 'node:stream';
+ export type LogUpdate = {
++    sync: (str: string) => void;
+     clear: () => void;
+     done: () => void;
+     (str: string): void;
+diff --git a/build/log-update.js b/build/log-update.js
+index 547421e47903fbdce8ecab87e4fbdce901663f03..b71e213c8f43946395706933e9b3d98b24afde0e 100644
+--- a/build/log-update.js
++++ b/build/log-update.js
+@@ -17,6 +17,11 @@ const create = (stream, { showCursor = false } = {}) => {
+         stream.write(ansiEscapes.eraseLines(previousLineCount) + output);
+         previousLineCount = output.split('\n').length;
+     };
++    // Record a frame written atomically by Ink's full-screen replay path.
++    render.sync = (str) => {
++        previousOutput = str + '\n';
++        previousLineCount = previousOutput.split('\n').length;
++    };
+     render.clear = () => {
+         stream.write(ansiEscapes.eraseLines(previousLineCount));
+         previousOutput = '';

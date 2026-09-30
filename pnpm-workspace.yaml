@@ -119,3 +119,5 @@ minimumReleaseAgeExclude:
   - '@deepseek-ai/dsh-native-command@0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2'
   - '@deepseek-ai/dsh-typert-registry@0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2'
   - '@deepseek-ai/dsh-util-workspace-path@0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2'
+patchedDependencies:
+  ink@5.2.1: patches/ink@5.2.1.patch

@@ -556,6 +556,8 @@ export const zh: MessageCatalog = {
   'panel.model.footer.select': '输入过滤 · ↑↓ 移动 · pgup/pgdn 翻页 · 回车选择{providers} · r 重试 · esc/q 关闭',
   'panel.model.footer.filteredSelect': '↑↓ 移动 · pgup/pgdn 翻页 · 回车选择 · 退格编辑 · esc 关闭',
   'panel.model.providers': 'tab 提供商',
+  'panel.model.candidate': ' · 回车导入',
+  'panel.model.importCompact': '导入',
   'panel.provider.failure': '不可用的提供商：{providers}',
   'panel.provider.loading': '提供商加载中…',
   'panel.provider.empty': '暂无可配置的提供商',

@@ -143,7 +143,7 @@ export function ModelPanel({ directory, error, current, onSelect, onProviders, o
         : error !== undefined
           ? t('panel.model.error')
           : query === '' ? t('panel.model.noModels') : t('panel.model.compactNoMatch', { query: singleLineText(query) })
-      : `❯ ${filtered[cursor]?.modelName ?? filtered[cursor]?.model ?? ''}`
+      : `❯ ${filtered[cursor]?.candidate === true ? `${t('panel.model.importCompact')} ` : ''}${filtered[cursor]?.modelName ?? filtered[cursor]?.model ?? ''}`
     const tail = query === ''
       ? t('panel.model.footer.filter')
       : t('panel.model.footer.filtered')
@@ -194,9 +194,10 @@ export function ModelPanel({ directory, error, current, onSelect, onProviders, o
     ...visible.map((row) => {
       const index = filtered.indexOf(row)
       const capability = row.inputModalities?.includes('image') === true ? ' · image' : ''
+      const candidate = row.candidate === true ? t('panel.model.candidate') : ''
       // Table layout: the provider column pads to the filtered list's widest
       // name so every model lines up behind it.
-      const label = padColumns(displayText(row.providerName), providerWidth) + '  ' + displayText(row.modelName) + capability
+      const label = padColumns(displayText(row.providerName), providerWidth) + '  ' + displayText(row.modelName) + capability + candidate
       return createElement(
         Text,
         {

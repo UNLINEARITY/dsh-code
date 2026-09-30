@@ -28,9 +28,29 @@ const inputSplit = vi.hoisted(() => {
 vi.mock('ink', () => ({ render: ink.render }))
 vi.mock('../src/input-split.ts', () => ({ createSplitStdin: inputSplit.createSplitStdin }))
 
-const { internals } = await import('../src/internals.ts')
+const { internals, createSynchronizedStdout } = await import('../src/internals.ts')
 
 describe('production TUI mount', () => {
+  it('writes synchronized frames atomically and delegates live dimensions without a Proxy', async () => {
+    const sink = Object.assign(new PassThrough(), { rows: 24, columns: 80, isTTY: true })
+    const chunks: string[] = []
+    sink.on('data', (chunk: Buffer) => chunks.push(chunk.toString()))
+    const stdout = createSynchronizedStdout(sink as unknown as NodeJS.WriteStream)
+    const callback = vi.fn()
+    try {
+      stdout.write('\x1b[2Kframe', callback)
+      await vi.waitFor(() => expect(callback).toHaveBeenCalledTimes(1))
+      expect(chunks).toEqual(['\x1b[?2026h\x1b[2Kframe\x1b[?2026l'])
+      sink.rows = 48
+      sink.columns = 100
+      expect(stdout.rows).toBe(48)
+      expect(stdout.columns).toBe(100)
+      expect(stdout.isTTY).toBe(true)
+    } finally {
+      sink.destroy()
+    }
+  })
+
   beforeEach(() => {
     ink.render.mockReset()
     inputSplit.createSplitStdin.mockClear()

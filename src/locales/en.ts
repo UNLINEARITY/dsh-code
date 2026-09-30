@@ -554,6 +554,8 @@ export const en = {
   'panel.model.footer.select': 'type to filter · ↑↓ move · pgup/pgdn page · enter select{providers} · r retry · esc/q close',
   'panel.model.footer.filteredSelect': '↑↓ move · pgup/pgdn page · enter select · backspace edits · esc close',
   'panel.model.providers': 'tab providers',
+  'panel.model.candidate': ' · enter to import',
+  'panel.model.importCompact': 'import',
   'panel.provider.failure': 'unavailable providers: {providers}',
   'panel.provider.loading': 'loading providers…',
   'panel.provider.empty': 'no configurable providers',

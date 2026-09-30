@@ -328,6 +328,7 @@
     "@types/node": "^24.0.0",
     "@types/react": "~18.3.1",
     "@vitest/coverage-v8": "^3.2.7",
+    "@xterm/headless": "^6.0.0",
     "eslint": "^10.10.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "tsdown": "^0.22.2",

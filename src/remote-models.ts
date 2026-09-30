@@ -5,10 +5,9 @@
  * a cache window avoids re-fetching on every panel open. Network failures
  * keep the static list — discovery never blocks the panel.
  *
- * Codex (OpenAI ChatGPT Plus/Pro subscription): the OAuth credential pi's
- * login flow persists at ~/.pi/agent/auth.json carries the access token;
- * the Codex backend serves its live model catalog at
- * chatgpt.com/backend-api/codex/models.
+ * Codex uses pi's public catalog, with its local models-store.json as an
+ * offline fallback. Neither source is a credential store. Only validated
+ * model profile fields cross into the Harness configuration boundary.
  *
  * @module @deepseek-ai/dsh-tui/remote-models
  */
@@ -21,15 +20,27 @@ import { homedir } from 'node:os'
 const CACHE_TTL_MS = 4 * 60 * 60 * 1000
 /** Per-attempt timeout: a slow catalog must not stall the panel load. */
 const FETCH_TIMEOUT_MS = 4_000
-/** Codex backend model-catalog endpoint (from the Codex CLI source). */
-const CODEX_MODELS_URL = 'https://chatgpt.com/backend-api/codex/models'
-/** Where pi persists OAuth credentials. */
-const PI_AUTH_PATH = join(homedir(), '.pi', 'agent', 'auth.json')
+/** Public pi catalog for all model types (only Codex chat models pass validation). */
+const CODEX_CATALOG_URL = 'https://pi.dev/api/models/providers/openai-codex?types=chat%2Cimage%2Cclassifier'
+const PI_MODELS_STORE_PATH = join(homedir(), '.pi', 'agent', 'models-store.json')
+const CODEX_API = 'openai-codex-responses'
+const CODEX_BASE_URL = 'https://chatgpt.com/backend-api'
+const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
 
 /** One model discovered from a provider's live API. */
 export interface RemoteModel {
   readonly id: string
   readonly name: string
+}
+
+/** Whitelisted fields accepted by Harness's pi-ai model profile. */
+export interface CodexModelProfile {
+  readonly id: string
+  readonly name: string
+  readonly contextWindow: number
+  readonly maxTokens: number
+  readonly input: readonly ('text' | 'image')[]
+  readonly reasoningEfforts: false | Readonly<Partial<Record<typeof THINKING_LEVELS[number], string>>>
 }
 
 interface CacheEntry {
@@ -108,66 +119,100 @@ export async function fetchDeepSeekAccountModels(
   }
 }
 
-/**
- * Read the Codex OAuth access token pi's login flow persisted. Returns
- * undefined when the credential is absent or expired — the caller treats
- * that as "no overlay" and keeps the static catalog.
- */
-function readCodexToken(): string | undefined {
-  try {
-    const raw: unknown = JSON.parse(readFileSync(PI_AUTH_PATH, 'utf8'))
-    if (typeof raw !== 'object' || raw === null) return undefined
-    const credential = (raw as Record<string, unknown>)['openai-codex']
-    if (typeof credential !== 'object' || credential === null) return undefined
-    const access = (credential as { readonly access?: unknown }).access
-    if (typeof access !== 'string' || access === '') return undefined
-    const expires = (credential as { readonly expires?: unknown }).expires
-    if (typeof expires === 'number' && expires <= Date.now()) return undefined
-    return access
-  } catch {
-    return undefined
+/** Only these pi catalog facts may enter a Harness model profile. */
+function codexProfile(value: unknown): CodexModelProfile | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
+  const row = value as Record<string, unknown>
+  if (row.provider !== 'openai-codex' || row.api !== CODEX_API || row.baseUrl !== CODEX_BASE_URL) return undefined
+  if (row.type !== undefined && row.type !== 'chat') return undefined
+  if (typeof row.id !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(row.id)) return undefined
+  if (typeof row.name !== 'string' || row.name.length === 0 || row.name.length > 160
+    || [...row.name].some(char => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127)) return undefined
+  if (!Array.isArray(row.input) || row.input.length === 0
+    || row.input.some(input => input !== 'text' && input !== 'image')) return undefined
+  if (!Number.isSafeInteger(row.contextWindow) || (row.contextWindow as number) <= 0
+    || !Number.isSafeInteger(row.maxTokens) || (row.maxTokens as number) <= 0) return undefined
+  if (row.reasoning !== undefined && typeof row.reasoning !== 'boolean') return undefined
+  if (row.thinkingLevelMap !== undefined && (typeof row.thinkingLevelMap !== 'object'
+    || row.thinkingLevelMap === null || Array.isArray(row.thinkingLevelMap))) return undefined
+  if (row.reasoning === undefined && row.thinkingLevelMap === undefined) return undefined
+  const levels = (row.thinkingLevelMap ?? {}) as Record<string, unknown>
+  for (const [level, wire] of Object.entries(levels)) {
+    if (!THINKING_LEVELS.some(known => known === level)) return undefined
+    if (wire !== null && (typeof wire !== 'string' || wire.length === 0)) return undefined
+  }
+  // pi's map is sparse: null disables a level, ordinary missing levels use
+  // identity dispatch, and xhigh/max require an explicit mapping. Codex's
+  // implicit off dispatch is "none", not Harness's null (omit the parameter).
+  const efforts: Record<string, string> = {}
+  for (const level of THINKING_LEVELS) {
+    const wire = levels[level]
+    if (wire === null || ((level === 'xhigh' || level === 'max') && wire === undefined)) continue
+    efforts[level] = typeof wire === 'string' ? wire : level === 'off' ? 'none' : level
+  }
+  if (row.reasoning !== false && !Object.keys(efforts).some(level => level !== 'off')) return undefined
+  return {
+    id: row.id,
+    name: row.name,
+    contextWindow: row.contextWindow as number,
+    maxTokens: row.maxTokens as number,
+    input: row.input.map((input: unknown): 'text' | 'image' => input === 'image' ? 'image' : 'text'),
+    reasoningEfforts: row.reasoning === false ? false : efforts,
   }
 }
 
-/**
- * Fetch the Codex subscription's live model catalog from the ChatGPT
- * backend. The response carries model metadata beyond the plain id; the
- * slug (or id) names each selectable entry. Every failure path returns
- * an empty overlay — the static catalog stays visible.
- */
-export async function fetchCodexModels(): Promise<readonly RemoteModel[]> {
-  const now = Date.now()
-  const key = 'openai-codex'
-  const hit = cached(key, now)
-  if (hit !== undefined) return hit
-  const token = readCodexToken()
-  if (token === undefined) return []
+function parseCodexCatalog(value: unknown): readonly CodexModelProfile[] {
+  if (!Array.isArray(value)) return []
+  const models = new Map<string, CodexModelProfile>()
+  for (const valueRow of value) {
+    const profile = codexProfile(valueRow)
+    if (profile !== undefined && !models.has(profile.id)) models.set(profile.id, profile)
+  }
+  return [...models.values()]
+}
+
+/** Read pi's public-catalog cache only; never open its credential file. */
+function cachedPiCatalog(): readonly CodexModelProfile[] {
   try {
-    const response = await fetch(CODEX_MODELS_URL, {
-      headers: { Authorization: `Bearer ${token}` },
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-    })
-    if (!response.ok) return []
-    const body: unknown = await response.json()
-    if (typeof body !== 'object' || body === null) return []
-    const data: unknown = (body as { readonly data?: unknown }).data ?? (body as { readonly models?: unknown }).models
-    if (!Array.isArray(data)) return []
-    const models: RemoteModel[] = []
-    for (const entry of data) {
-      if (typeof entry !== 'object' || entry === null) continue
-      const record = entry as Record<string, unknown>
-      const id = typeof record.slug === 'string' && record.slug !== '' ? record.slug
-        : typeof record.id === 'string' && record.id !== '' ? record.id
-        : undefined
-      if (id === undefined) continue
-      const label = typeof record.label === 'string' && record.label !== '' ? record.label
-        : typeof record.name === 'string' && record.name !== '' ? record.name
-        : id
-      models.push({ id, name: label })
-    }
-    store(key, models, now)
-    return models
+    const stored: unknown = JSON.parse(readFileSync(PI_MODELS_STORE_PATH, 'utf8'))
+    if (typeof stored !== 'object' || stored === null || Array.isArray(stored)) return []
+    const entry: unknown = (stored as Record<string, unknown>)['openai-codex']
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) return []
+    return parseCodexCatalog((entry as Record<string, unknown>).models)
   } catch {
     return []
   }
+}
+
+let codexCache: { fetchedAt: number; models: readonly CodexModelProfile[] } | undefined
+
+/** Fetch pi's public catalog; use its validated local cache when offline. */
+export async function fetchCodexCatalog(refresh = false): Promise<readonly CodexModelProfile[]> {
+  const now = Date.now()
+  if (!refresh && codexCache !== undefined && now - codexCache.fetchedAt < CACHE_TTL_MS) return codexCache.models
+  try {
+    const response = await fetch(CODEX_CATALOG_URL, {
+      headers: { Accept: 'application/json' },
+      redirect: 'error',
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    })
+    if (response.ok) {
+      const body: unknown = await response.json()
+      const models = parseCodexCatalog(body)
+      if (models.length > 0) {
+        codexCache = { fetchedAt: now, models }
+        return models
+      }
+    }
+  } catch {
+    // Network errors never hide a valid local catalog.
+  }
+  // A failed refresh must not replace the last successful remote directory
+  // with an older, independently maintained pi cache.
+  return codexCache?.models ?? cachedPiCatalog()
+}
+
+/** Backward-compatible display rows while callers move to rich model profiles. */
+export async function fetchCodexModels(): Promise<readonly RemoteModel[]> {
+  return (await fetchCodexCatalog()).map(model => ({ id: model.id, name: model.name }))
 }

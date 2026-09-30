@@ -255,7 +255,9 @@ export interface AppProps {
   /** Quit: unmount, flush, and request process exit. */
   quit: () => void
   /** Load the selectable model directory (called when /model opens). */
-  loadModels: () => Promise<ModelDirectory>
+  loadModels: (refresh?: boolean) => Promise<ModelDirectory>
+  /** Explicitly adopt a public Codex candidate into the provider settings on Enter. */
+  activateModelCandidate?: (row: ModelRow) => Promise<ModelRow>
   /** Load @mention candidates for the typed query (files + sessions). */
   loadMentions: (query: string, signal?: AbortSignal) => Promise<readonly MentionCandidate[]>
   /** Validate draft image paths without committing attachment objects. */
@@ -1877,15 +1879,18 @@ export function App(props: AppProps): ReactElement {
   useEffect(() => {
     onBridgeReady({ notify })
   }, [notify, onBridgeReady])
+  const modelCatalogRefresh = useRef(false)
   useEffect(() => {
     if (!modelOpen) return
+    const refresh = modelCatalogRefresh.current
+    modelCatalogRefresh.current = false
     let cancelled = false
     setDirectory(undefined)
     setModelError(undefined)
     // Enter the promise chain before invoking the loader so a provider that
     // throws synchronously becomes an in-panel error instead of escaping the
     // React effect and tearing down Ink.
-    Promise.resolve().then(() => loadModels()).then((loaded) => {
+    Promise.resolve().then(() => loadModels(refresh)).then((loaded) => {
       if (!cancelled) setDirectory(loaded)
     }, (error: unknown) => {
       if (!cancelled) setModelError(error instanceof Error ? error.message : String(error))
@@ -2149,10 +2154,9 @@ export function App(props: AppProps): ReactElement {
     rows: appStdout?.rows ?? 30,
   }))
   const terminalSizeRef = useRef(terminalSize)
-  // Columns the settled Static rows were last reflowed at. Static wrapping
-  // depends on columns only, so a rows-only resize never needs the replay —
-  // launch-time row storms would otherwise stack a re-emitted whale banner
-  // on terminals that keep scrollback across the replay clear's \x1b[3J.
+  // Columns the settled Static rows were last reflowed at. Wrapping only
+  // depends on columns; either dimension still replays the Static/live split
+  // after resize settles because its retained-row budget depends on rows.
   const lastReflowColumns = useRef(terminalSize.columns)
   const settledRowsCache = useRef<SettledRowsCache | undefined>(undefined)
   const viewportFlushRef = useRef({ sessionKey: props.sessionKey, epoch: refreshEpoch, rows: 0 })
@@ -2296,7 +2300,9 @@ export function App(props: AppProps): ReactElement {
   const maximumTranscriptRows = liveRegionBudget({
     terminalRows,
     composerRows: 1,
-    statusBarRows: 1,
+    // Status rows are persistent chrome. Retaining against a hypothetical
+    // one-row bar hides a real history row indefinitely at the Static split.
+    statusBarRows,
     menuRows: 0,
     gutterRows: composerGutterRows,
     notice: false,
@@ -2612,8 +2618,35 @@ export function App(props: AppProps): ReactElement {
   const sessionHasImages = useMemo(() => view.entries.some(entry =>
     (entry.kind === 'user' || entry.kind === 'pending') && (entry.images?.length ?? 0) > 0), [view.entries])
 
-  /** Apply one /model pick: record the selection, close the panel, report via notice. */
+  const modelActivationBusy = useRef(false)
+  /** Adopt a Codex candidate first; only a registry-backed row may be selected. */
   const applyModel = (row: ModelRow, effortId: string | undefined): void => {
+    if (modelActivationBusy.current) return
+    if (row.candidate) {
+      const activateCandidate = props.activateModelCandidate
+      if (activateCandidate === undefined) {
+        notify(t('notice.modelSwitchFailed', { message: 'Codex model registration is unavailable' }), 'error')
+        return
+      }
+      modelActivationBusy.current = true
+      const epoch = effortLookupEpoch.current
+      void Promise.resolve().then(() => activateCandidate(row)).then(ready => {
+        modelActivationBusy.current = false
+        if (epoch !== effortLookupEpoch.current) return
+        reloadModelSurfaces()
+        if (ready.reasoning !== undefined && ready.reasoning.efforts.length > 1) {
+          setEffortFor(ready)
+        } else {
+          applyModel(ready, ready.reasoning?.efforts.length === 1 ? ready.reasoning.efforts[0].id : undefined)
+        }
+      }, (error: unknown) => {
+        modelActivationBusy.current = false
+        if (epoch === effortLookupEpoch.current) {
+          notify(t('notice.modelSwitchFailed', { message: error instanceof Error ? error.message : String(error) }), 'error')
+        }
+      })
+      return
+    }
     try {
       const label = props.selectModel(row, effortId)
       setModelLabel(label)
@@ -2926,7 +2959,10 @@ export function App(props: AppProps): ReactElement {
         ...(props.loadModelProviders === undefined || props.saveModelProviderConfiguration === undefined
           ? {}
           : { onProviders: () => setProviderOpen(true) }),
-        onRetry: reloadModelSurfaces,
+        onRetry: () => {
+          modelCatalogRefresh.current = true
+          reloadModelSurfaces()
+        },
         onClose: closeModelSurface,
       })
     }

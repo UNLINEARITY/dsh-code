@@ -97,7 +97,7 @@ import { mountApprovalAnswerer, type ApprovalStore } from './approval.ts'
 import { isSlashLine, missingKernelCommand, submissionPayload, watchCommands, type CommandsView } from './commands.ts'
 import { internals, type TuiMount } from './internals.ts'
 import { syncModelCapabilities } from './model-capabilities.ts'
-import { buildModelSelection, applyModelSelectionToConfig, loadModelDirectory, modelSelectionLabel, pendingModelSelection, resolveEffectiveSelection, type ModelRow } from './models.ts'
+import { activateModelCandidate, buildModelSelection, applyModelSelectionToConfig, loadModelDirectory, modelSelectionLabel, pendingModelSelection, resolveEffectiveSelection, type ModelRow } from './models.ts'
 import {
   discoverProviderModels,
   loadProviderSettings,
@@ -2028,7 +2028,8 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       steer,
       interrupt,
       quit,
-      loadModels: () => loadModelDirectory(ctx),
+      loadModels: refresh => loadModelDirectory(ctx, refresh),
+      activateModelCandidate: row => activateModelCandidate(ctx, row),
       loadModelProviders: () => loadProviderSettings(ctx),
       subscribeModelProviders: listener => subscribeProviderSettings(ctx, listener),
       saveModelProviderCredential: (target, key) => saveProviderCredential(ctx, target, key),

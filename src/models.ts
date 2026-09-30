@@ -19,7 +19,8 @@ import {
   type LlmResolvedModelInfo,
   type ModelModality,
 } from '@deepseek-ai/dsh-llm'
-import { fetchCodexModels, fetchDeepSeekAccountModels, type RemoteModel } from './remote-models.ts'
+import { fetchCodexCatalog, fetchDeepSeekAccountModels, type RemoteModel } from './remote-models.ts'
+import { activateCodexModel } from './codex-model-activation.ts'
 
 /** Display metadata for one adapter-owned reasoning effort (mirrors `LlmReasoningEffortInfo`). */
 export interface ModelReasoningEffort {
@@ -53,6 +54,8 @@ export interface ModelRow {
   inputModalities?: readonly ModelModality[]
   /** Adapter-owned selectable reasoning levels when the model exposes any. */
   reasoning?: ModelReasoning
+  /** A validated public catalog candidate; Enter adopts it before selection. */
+  candidate?: boolean
 }
 
 /** The resolved directory: rows plus per-provider discovery failures. */
@@ -233,43 +236,45 @@ export function applyModelSelectionToConfig(resolved: LlmCallConfig, selection: 
  * @param ctx - context carrying the `llm` service.
  * @returns the resolved directory; empty rows when `llm` is unavailable.
  */
-export async function loadModelDirectory(ctx: Context): Promise<ModelDirectory> {
+export async function loadModelDirectory(ctx: Context, refresh = false): Promise<ModelDirectory> {
   const llm = ctx.get('llm')
   if (llm === undefined) return { rows: [], failures: [], reasoningFailures: [] }
-  // Subscription overlay: the DeepSeek Account's static catalog is a floor,
-  // a live `/models` fetch overlays fresh entries on top (pi's remote-catalog
-  // pattern — cached per window, network failures keep the static list).
-  const remoteOverlay = await overlaySubscriptionModels(ctx)
+  const providers = llm.listProviders()
+  // Only fetch a remote catalog when its route exists in the live registry.
+  const remoteOverlay = await overlaySubscriptionModels(ctx, providers.some(provider => provider.id === 'openai-codex'), refresh)
   // Call resolveModelInfo AS A METHOD (llm.resolveModelInfo(...)): destructured
   // off the service it loses `this` — this.registration() then throws on the
   // first provider, the catch swallows it, and every row lands in
   // reasoningFailures ("capability lookup failed") even though the adapter
   // itself never fails.
   const llmResolve = llm as { resolveModelInfo?: (provider: string, model: string) => Promise<LlmResolvedModelInfo> }
-  const providers = llm.listProviders()
   const listed = await Promise.all(providers.map(async (provider) => {
     try {
       let models: readonly LlmModelInfo[] = await llm.listModels(provider.id)
-      // Overlay remote entries: same-id replaces, new-id appends (the static
-      // floor survives every network outcome; the merge is display-layer only).
+      const registered = new Set(models.map(model => model.id))
       const overlay = remoteOverlay.get(provider.id)
       if (overlay !== undefined && overlay.length > 0) {
         const byId = new Map(models.map(model => [model.id, model]))
         for (const remote of overlay) {
+          // Registered models retain their adapter-owned metadata. A Codex
+          // remote-only row is a candidate, not yet a usable model.
+          if (provider.id === 'openai-codex' && byId.has(remote.id)) continue
           byId.set(remote.id, { provider: provider.id, id: remote.id, name: remote.name })
         }
         models = [...byId.values()]
       }
       const reasoningFailures: string[] = []
       const rows = await Promise.all(models.map(async (model): Promise<ModelRow> => {
+        const candidate = provider.id === 'openai-codex' && !registered.has(model.id)
         const row: ModelRow = {
           provider: provider.id,
           providerName: provider.name,
           model: model.id,
           modelName: model.name,
           ...model.inputModalities === undefined ? {} : { inputModalities: [...model.inputModalities] },
+          ...(candidate ? { candidate: true } : {}),
         }
-        if (llmResolve.resolveModelInfo === undefined) return row
+        if (candidate || llmResolve.resolveModelInfo === undefined) return row
         try {
           const resolved = await llmResolve.resolveModelInfo(provider.id, model.id)
           return {
@@ -298,21 +303,33 @@ export async function loadModelDirectory(ctx: Context): Promise<ModelDirectory> 
   return { rows, failures, reasoningFailures }
 }
 
+/** Adopt one explicitly selected public Codex candidate, then return its registered capabilities. */
+export async function activateModelCandidate(ctx: Context, row: ModelRow): Promise<ModelRow> {
+  if (row.provider !== 'openai-codex' || row.candidate !== true) throw new Error('not a Codex candidate')
+  const candidate = (await fetchCodexCatalog()).find(entry => entry.id === row.model)
+  if (candidate === undefined) throw new Error(`Codex catalog no longer advertises ${row.model}`)
+  await activateCodexModel(ctx, candidate)
+  const directory = await loadModelDirectory(ctx)
+  const ready = directory.rows.find(entry => entry.provider === row.provider && entry.model === row.model && !entry.candidate)
+  if (ready === undefined || directory.reasoningFailures?.includes(`${row.provider}/${row.model}`)) {
+    throw new Error(`Codex model ${row.model} was not registered successfully`)
+  }
+  return ready
+}
+
 /**
  * Fetch remote model overlays for subscription providers. The DeepSeek
- * Account reads its OAuth token from the kernel's account service; the
- * Codex (OpenAI ChatGPT Plus/Pro) subscription reads the token pi's login
- * flow persisted. Returns a provider→models map; every failure path
- * contributes nothing — the static catalog is always the floor.
+ * Account resolves its token through Harness; Codex uses pi's public catalog
+ * (or its validated offline cache) without borrowing pi's OAuth credential.
  */
-async function overlaySubscriptionModels(ctx: Context): Promise<Map<string, readonly RemoteModel[]>> {
+async function overlaySubscriptionModels(ctx: Context, hasCodex: boolean, refresh: boolean): Promise<Map<string, readonly RemoteModel[]>> {
   const result = new Map<string, readonly RemoteModel[]>()
   const account = (ctx as unknown as { get?: (name: string) => unknown }).get?.('deepseekAccount') as
     | { resolveToken?: (url: string) => Promise<string | undefined> }
     | undefined
   const [deepseek, codex] = await Promise.all([
     account?.resolveToken === undefined ? Promise.resolve([]) : fetchDeepSeekAccountModels(url => account.resolveToken!(url)),
-    fetchCodexModels(),
+    hasCodex ? fetchCodexCatalog(refresh) : Promise.resolve([]),
   ])
   if (deepseek.length > 0) result.set('deepseek-account', deepseek)
   if (codex.length > 0) result.set('openai-codex', codex)
