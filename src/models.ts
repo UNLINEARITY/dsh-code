@@ -19,6 +19,7 @@ import {
   type LlmResolvedModelInfo,
   type ModelModality,
 } from '@deepseek-ai/dsh-llm'
+import { fetchCodexModels, fetchDeepSeekAccountModels, type RemoteModel } from './remote-models.ts'
 
 /** Display metadata for one adapter-owned reasoning effort (mirrors `LlmReasoningEffortInfo`). */
 export interface ModelReasoningEffort {
@@ -235,6 +236,10 @@ export function applyModelSelectionToConfig(resolved: LlmCallConfig, selection: 
 export async function loadModelDirectory(ctx: Context): Promise<ModelDirectory> {
   const llm = ctx.get('llm')
   if (llm === undefined) return { rows: [], failures: [], reasoningFailures: [] }
+  // Subscription overlay: the DeepSeek Account's static catalog is a floor,
+  // a live `/models` fetch overlays fresh entries on top (pi's remote-catalog
+  // pattern — cached per window, network failures keep the static list).
+  const remoteOverlay = await overlaySubscriptionModels(ctx)
   // Call resolveModelInfo AS A METHOD (llm.resolveModelInfo(...)): destructured
   // off the service it loses `this` — this.registration() then throws on the
   // first provider, the catch swallows it, and every row lands in
@@ -244,7 +249,17 @@ export async function loadModelDirectory(ctx: Context): Promise<ModelDirectory> 
   const providers = llm.listProviders()
   const listed = await Promise.all(providers.map(async (provider) => {
     try {
-      const models: readonly LlmModelInfo[] = await llm.listModels(provider.id)
+      let models: readonly LlmModelInfo[] = await llm.listModels(provider.id)
+      // Overlay remote entries: same-id replaces, new-id appends (the static
+      // floor survives every network outcome; the merge is display-layer only).
+      const overlay = remoteOverlay.get(provider.id)
+      if (overlay !== undefined && overlay.length > 0) {
+        const byId = new Map(models.map(model => [model.id, model]))
+        for (const remote of overlay) {
+          byId.set(remote.id, { provider: provider.id, id: remote.id, name: remote.name })
+        }
+        models = [...byId.values()]
+      }
       const reasoningFailures: string[] = []
       const rows = await Promise.all(models.map(async (model): Promise<ModelRow> => {
         const row: ModelRow = {
@@ -281,4 +296,25 @@ export async function loadModelDirectory(ctx: Context): Promise<ModelDirectory> 
   const failures = listed.filter(entry => 'failed' in entry && entry.failed === true).map(entry => entry.provider)
   const reasoningFailures = listed.flatMap(entry => 'failed' in entry ? [] : entry.reasoningFailures)
   return { rows, failures, reasoningFailures }
+}
+
+/**
+ * Fetch remote model overlays for subscription providers. The DeepSeek
+ * Account reads its OAuth token from the kernel's account service; the
+ * Codex (OpenAI ChatGPT Plus/Pro) subscription reads the token pi's login
+ * flow persisted. Returns a provider→models map; every failure path
+ * contributes nothing — the static catalog is always the floor.
+ */
+async function overlaySubscriptionModels(ctx: Context): Promise<Map<string, readonly RemoteModel[]>> {
+  const result = new Map<string, readonly RemoteModel[]>()
+  const account = (ctx as unknown as { get?: (name: string) => unknown }).get?.('deepseekAccount') as
+    | { resolveToken?: (url: string) => Promise<string | undefined> }
+    | undefined
+  const [deepseek, codex] = await Promise.all([
+    account?.resolveToken === undefined ? Promise.resolve([]) : fetchDeepSeekAccountModels(url => account.resolveToken!(url)),
+    fetchCodexModels(),
+  ])
+  if (deepseek.length > 0) result.set('deepseek-account', deepseek)
+  if (codex.length > 0) result.set('openai-codex', codex)
+  return result
 }
