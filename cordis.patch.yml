@@ -111,14 +111,12 @@
     - id: file-reference-local
       name: '@deepseek-ai/dsh-file-reference-local'
 
-    # Clock context: durable per-step readings (ISO timestamp, zone policy,
-    # elapsed time) so the model can resolve unqualified times. No config:
-    # omitting timeZone falls back to the process zone — the terminal has no
-    # browser zone to attach. The upstream web-app bundle ships its row
-    # disabled; a terminal session has even fewer time anchors (log reading,
-    # schedule-style questions), so the TUI mounts it enabled.
-    - id: time-context
-      name: '@deepseek-ai/dsh-time-context'
+    # Clock context (dsh-time-context) and the reminder tools
+    # (dsh-tool-schedule) belong to the standard, ptc, and cordis presets since
+    # 0.2.1, as upstream declares them; minimal omits both. The reminder tools
+    # register only once a Host `schedule` service exists, which this terminal
+    # composition does not mount (its delivery needs the Web Session
+    # controller), so the CLI exposes no schedule_* tools.
 
     # tmux location context (opt-in upstream): one durable reading per turn
     # only when the agent's pane location CHANGED. Terminals that merely

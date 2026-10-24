@@ -62,6 +62,9 @@ export const TRANSCRIPT_SESSION_EVENT_TYPES = [
   'turn/end',
   'turn/start',
   'user/message',
+  // 0.2.1 execution-directory changes: the fold records the committed
+  // directory that the status line's cwd segment and branch watcher follow.
+  'working-directory/change',
   // v4 turn change announcements: the fold records the marker the live
   // summary joins by seq.
   'workspace/changes',
@@ -109,9 +112,6 @@ export const IGNORED_SESSION_EVENT_TYPES = [
   'team/message/queued',
   'team/task',
   'web/deepseek-search-llm-request',
-  // 0.2.1 execution-directory changes: the working_directory tool result
-  // already renders in the transcript; the status line keeps the header cwd.
-  'working-directory/change',
 ] as const
 
 const EVENT_DISPOSITIONS = new Map<string, Exclude<SessionEventDisposition, 'unknown'>>([

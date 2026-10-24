@@ -14,6 +14,7 @@
  * @module @deepseek-ai/dsh-code/app
  */
 
+import { basename } from 'node:path'
 import {
   createElement, memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactElement,
 } from 'react'
@@ -224,6 +225,11 @@ export interface AppProps {
    * external branch switches without a restart, superseding {@link branch}.
    */
   branchStore?: { subscribe(listener: () => void): () => void; getSnapshot(): string }
+  /**
+   * Branch store for another directory, used once `working_directory` moves the
+   * session away from {@link workspaceRoot}; the runner caches one per path.
+   */
+  branchStoreFor?: (cwd: string) => { subscribe(listener: () => void): () => void; getSnapshot(): string }
   /** Short session identifier. */
   sessionId: string
   /** Whether this session was resumed from persistence. */
@@ -608,28 +614,61 @@ function DiffPanel({ view, onClose }: { view: GitDiffView; onClose: () => void }
  * form without the kernel line.
  */
 /**
- * One whale-glyph row painted as a frozen seven-color spectrum (column 0
- * red, column 25 violet). Spaces stay uncolored so the silhouette punches
- * through; adjacent same-hue blocks merge into one span.
+ * Whether full blocks paint as background cells. macOS Terminal draws block
+ * glyphs from the font and leaves line spacing between rows, which slices the
+ * whale into stripes; background colors fill the whole cell with no gap, so
+ * Claude Code draws its logo body the same way there.
  */
-function rainbowGlyphRow(row: string, rowKey: number): ReactElement {
-  const span = Math.max(1, WHALE_GLYPH_COLUMNS - 1)
-  const children: ReactElement[] = []
+export function blockFillTerminal(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.TERM_PROGRAM === 'Apple_Terminal'
+}
+
+/** One run of a whale row: blank cells, background-filled blocks, or glyphs. */
+export interface WhaleRowSegment {
+  readonly start: number
+  readonly text: string
+  readonly kind: 'blank' | 'fill' | 'glyph'
+}
+
+/**
+ * Split one whale row into runs. With `fillBlocks`, `█` runs become `fill`
+ * (painted as background-colored spaces); half blocks stay glyphs either way.
+ * `split` breaks a non-blank run where the caller's color changes.
+ */
+export function whaleRowSegments(
+  row: string,
+  fillBlocks: boolean,
+  split: (left: number, right: number) => boolean = () => false,
+): readonly WhaleRowSegment[] {
+  const kindOf = (cell: string): WhaleRowSegment['kind'] =>
+    cell === ' ' ? 'blank' : fillBlocks && cell === '█' ? 'fill' : 'glyph'
+  const segments: WhaleRowSegment[] = []
   let start = 0
   while (start < row.length) {
-    if (row[start] === ' ') {
-      let end = start + 1
-      while (end < row.length && row[end] === ' ') end += 1
-      children.push(createElement(Text, { key: start }, row.slice(start, end)))
-      start = end
-      continue
-    }
-    const color = inkColor(rainbowSpectrumHue(start / span))
+    const kind = kindOf(row[start])
     let end = start + 1
-    while (end < row.length && row[end] !== ' ' && inkColor(rainbowSpectrumHue(end / span)) === color) end += 1
-    children.push(createElement(Text, { key: start, color }, row.slice(start, end)))
+    while (end < row.length && kindOf(row[end]) === kind && (kind === 'blank' || !split(end - 1, end))) end += 1
+    segments.push({ start, kind, text: kind === 'fill' ? ' '.repeat(end - start) : row.slice(start, end) })
     start = end
   }
+  return segments
+}
+
+/**
+ * One whale-glyph row in the brand color, or as a frozen seven-color spectrum
+ * (column 0 red, column 25 violet) under the rainbow theme. Blank cells stay
+ * uncolored so the silhouette punches through; adjacent same-color cells
+ * merge into one span.
+ */
+function whaleGlyphRow(row: string, rowKey: number, rainbow: boolean, fillBlocks: boolean): ReactElement {
+  const span = Math.max(1, WHALE_GLYPH_COLUMNS - 1)
+  const colorAt = (column: number): string => inkColor(rainbow ? rainbowSpectrumHue(column / span) : getPalette().brand)
+  const children = whaleRowSegments(row, fillBlocks, (left, right) => colorAt(left) !== colorAt(right)).map(segment =>
+    segment.kind === 'blank'
+      ? createElement(Text, { key: segment.start }, segment.text)
+      : segment.kind === 'fill'
+        ? createElement(Text, { key: segment.start, backgroundColor: colorAt(segment.start) }, segment.text)
+        : createElement(Text, { key: segment.start, color: colorAt(segment.start) }, segment.text))
   return createElement(Text, { key: rowKey }, ...children)
 }
 
@@ -687,10 +726,7 @@ function Header({ resumed }: { resumed: boolean }): ReactElement {
     createElement(
       Box,
       { flexDirection: 'column', width: WHALE_GLYPH_COLUMNS, justifyContent: 'center' },
-      ...WHALE_GLYPH.map((row, index) =>
-        isRainbow()
-          ? rainbowGlyphRow(row, index)
-          : createElement(Text, { key: index, color: inkColor(getPalette().brand) }, row)),
+      ...WHALE_GLYPH.map((row, index) => whaleGlyphRow(row, index, isRainbow(), blockFillTerminal())),
     ),
     createElement(
       Box,
@@ -1743,7 +1779,14 @@ export function App(props: AppProps): ReactElement {
   // Live git branch: HEAD-watcher store when the runner wired one, else a
   // stable stand-in over the mount-time snapshot (both satisfy the hook's
   // snapshot-identity contract).
-  const branchStore = staticBranchStore(props.branchStore, props.branch)
+  // A `working_directory` change moves both the cwd segment and the branch
+  // watcher to the committed directory; before one, the mount-time root holds.
+  const movedDirectory = view.workingDirectory !== '' && view.workingDirectory !== props.workspaceRoot
+    ? view.workingDirectory
+    : ''
+  const branchStore = movedDirectory !== '' && props.branchStoreFor !== undefined
+    ? props.branchStoreFor(movedDirectory)
+    : staticBranchStore(props.branchStore, props.branch)
   const readBranch = useCallback((): string => branchStore.getSnapshot(), [branchStore])
   const subscribeBranch = useCallback((listener: () => void): (() => void) => branchStore.subscribe(listener), [branchStore])
   const branchLive = useSyncExternalStore(subscribeBranch, readBranch)
@@ -3617,7 +3660,7 @@ export function App(props: AppProps): ReactElement {
         facts: {
           model: modelLabel,
           mode: props.mode,
-          cwd: props.cwd,
+          cwd: movedDirectory !== '' ? basename(movedDirectory) : props.cwd,
           branch: branchLive,
           sessionId: props.sessionId,
           title: view.title,

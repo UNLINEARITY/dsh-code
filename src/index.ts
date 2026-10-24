@@ -2028,6 +2028,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       workspaceRoot: sessionCwd,
       branch: gitBranch(sessionCwd),
       branchStore: gitBranchStoreFor(sessionCwd),
+      branchStoreFor: gitBranchStoreFor,
       sessionId: session === undefined ? '' : session.id.slice(-8),
       resumed: active?.resumed ?? false,
       mode: active?.mode ?? pendingMode ?? normalizePresetId(presets.defaultId),

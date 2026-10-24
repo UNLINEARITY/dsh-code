@@ -578,6 +578,11 @@ export interface TranscriptView {
   plan: boolean
   /** Active permission preset folded from the last `permission/preset` event, empty before one. */
   permission: string
+  /**
+   * Current execution directory folded from the last `working-directory/change`
+   * event, empty before one (the session header's cwd still applies then).
+   */
+  workingDirectory: string
   /** Latest session title folded from the last `session/title` event, empty before one. */
   title: string
   /**
@@ -835,6 +840,11 @@ interface ImageOffloadData {
   targets: ReadonlyArray<{ seq: number; imageIndexes: readonly number[] }>
 }
 
+/** Payload of `working-directory/change` (dsh-working-directory's map merge). */
+interface WorkingDirectoryChangeData {
+  cwd: string
+}
+
 /** Payload of `hook/result` (dsh-hook-protocol's map merge). */
 interface HookResultData {
   point?: unknown
@@ -886,6 +896,7 @@ export function createTranscriptView(): TranscriptView {
     model: '',
     plan: false,
     permission: '',
+    workingDirectory: '',
     title: '',
     systemPrompt: '',
     sandbox: '',
@@ -1560,6 +1571,12 @@ export function projectEvent(view: TranscriptView, event: SessionEvent): Transcr
       // vocabulary). Log-only upstream: deriveMessages ignores them, so the
       // sub rows are pure display state on the parent run_code card.
       const type = event.type as string
+      if (type === 'working-directory/change') {
+        // The map merge lives in dsh-working-directory; the status line shows
+        // the committed directory, and replay restores it from the same event.
+        const data = event.data as WorkingDirectoryChangeData | undefined
+        return typeof data?.cwd === 'string' && data.cwd !== view.workingDirectory ? { ...view, workingDirectory: data.cwd } : view
+      }
       if (type === 'image/offload') {
         // Offload parity for the segmented bar (the map merge lives in
         // dsh-compaction-image-offload): consumed image prices leave the
@@ -1766,6 +1783,7 @@ export interface ReplayAccumulator {
   model: string
   plan: boolean
   permission: string
+  workingDirectory: string
   title: string
   systemPrompt: string
   sandbox: string
@@ -1813,6 +1831,7 @@ export function createReplayAccumulator(): ReplayAccumulator {
     model: '',
     plan: false,
     permission: '',
+    workingDirectory: '',
     title: '',
     systemPrompt: '',
     sandbox: '',
@@ -2402,6 +2421,12 @@ export function replayProjectEvent(acc: ReplayAccumulator, event: SessionEvent):
       // parent run_code row is addressed through the same call-id index the
       // tool/result case uses.
       const type = event.type as string
+      if (type === 'working-directory/change') {
+        const data = event.data as WorkingDirectoryChangeData | undefined
+        if (typeof data?.cwd !== 'string' || data.cwd === acc.workingDirectory) return false
+        acc.workingDirectory = data.cwd
+        return true
+      }
       if (type === 'image/offload') {
         // Offload parity — see the reducer's default-block case.
         const data = event.data as ImageOffloadData | undefined
@@ -2576,6 +2601,7 @@ function materializeReplayView(acc: ReplayAccumulator, copy: boolean): Transcrip
     model: acc.model,
     plan: acc.plan,
     permission: acc.permission,
+    workingDirectory: acc.workingDirectory,
     title: acc.title,
     systemPrompt: acc.systemPrompt,
     sandbox: acc.sandbox,

@@ -646,6 +646,16 @@ describe('transcript projection', () => {
     expect(view.permission).toBe('workspace-write')
   })
 
+  it('folds the current working directory identically on the live and replay paths', () => {
+    const change = (cwd: string, seq: number) => ({
+      type: 'working-directory/change', seq, time: seq, data: { cwd },
+    }) as unknown as SessionEvent
+    const events = [change('/repo/a', 1), change('/repo/b', 2)]
+    expect(createTranscriptView().workingDirectory).toBe('')
+    expect(projectEvents(events).workingDirectory).toBe('/repo/b')
+    expect(events.reduce(projectEvent, createTranscriptView()).workingDirectory).toBe('/repo/b')
+  })
+
   it('marks non-error turn outcomes with dim marker rows', () => {
     const marker = (reason: unknown, seq: number) => ({
       type: 'turn/end',
