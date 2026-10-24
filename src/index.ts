@@ -249,11 +249,20 @@ function listJobs(ctx: Context, caller: Agent | undefined): readonly JobRow[] {
  * @param ctx - context carrying the (optional) cordis loader.
  * @returns server rows in loader order; never throws.
  */
-/** Write one hooks bridge row into the profile layer (atomic, backed up). */
-function writeHooksBridge(patchPath: string, dialect: 'claude-code' | 'codex', configPath: string): string {
+/**
+ * Write one hooks bridge row into the profile layer (atomic, backed up). The
+ * host stopped bundling the bridges with 0.2.1, so a missing bridge or its
+ * protocol peer refuses the write with the exact install command (an enabled
+ * row over a missing package fails boot).
+ */
+function writeHooksBridge(patchPath: string, anchorDirs: readonly string[], dialect: 'claude-code' | 'codex', configPath: string): string {
   if (patchPath === '') throw new Error('no profile patch path in this boot')
   const id = dialect === 'claude-code' ? 'hooks-claude-code' : 'hooks-codex'
   const name = dialect === 'claude-code' ? '@deepseek-ai/dsh-hooks-claude-code' : '@deepseek-ai/dsh-hooks-codex'
+  const required = [name, '@deepseek-ai/dsh-hook-protocol']
+  if (required.some(pkg => !packagePresent(anchorDirs, pkg))) {
+    throw new Error(t('notice.hooksMissingPackages', { command: profileInstallCommand(profileNameOf(patchPath), required) }))
+  }
   const next = upsertProfileRow(readProfilePatch(patchPath), { id, name, config: { configPath } } satisfies ProfilePatchRow)
   writeProfilePatch(patchPath, [...next])
   return t('notice.hooksWritten', { dialect, path: configPath })
@@ -261,8 +270,8 @@ function writeHooksBridge(patchPath: string, dialect: 'claude-code' | 'codex', c
 
 const LSP_PACKAGES = ['@deepseek-ai/dsh-lsp', '@deepseek-ai/dsh-lsp-stdio', '@deepseek-ai/dsh-tool-lsp'] as const
 
-/** Whether one LSP package resolves from a directory's install tree. */
-function lspPackagePresent(anchorDirs: readonly string[], pkg: string): boolean {
+/** Whether one package resolves from a directory's install tree. */
+function packagePresent(anchorDirs: readonly string[], pkg: string): boolean {
   for (const base of anchorDirs) {
     try {
       statSync(`${base}/node_modules/${pkg}`)
@@ -272,8 +281,9 @@ function lspPackagePresent(anchorDirs: readonly string[], pkg: string): boolean 
   return false
 }
 
-function lspInstallCommand(profileName: string): string {
-  return `dsh plugin --profile ${profileName} add ${LSP_PACKAGES.map(pkg => `${pkg}@0.1.7-rc.2`).join(' ')}`
+/** The `dsh plugin add` command that installs packages at the aligned harness line. */
+function profileInstallCommand(profileName: string, packages: readonly string[]): string {
+  return `dsh plugin --profile ${profileName} add ${packages.map(pkg => `${pkg}@${EXPECTED_HARNESS_VERSION}`).join(' ')}`
 }
 
 /**
@@ -282,8 +292,8 @@ function lspInstallCommand(profileName: string): string {
  * exact install command (an enabled row over a missing package fails boot).
  */
 function writeLspServers(patchPath: string, anchorDirs: readonly string[], entries: readonly { extension: string; language: string; command: string }[]): string {
-  const missing = LSP_PACKAGES.filter(pkg => !lspPackagePresent(anchorDirs, pkg))
-  if (missing.length > 0) throw new Error(t('notice.lspMissingPackages', { command: lspInstallCommand(profileNameOf(patchPath)) }))
+  const missing = LSP_PACKAGES.filter(pkg => !packagePresent(anchorDirs, pkg))
+  if (missing.length > 0) throw new Error(t('notice.lspMissingPackages', { command: profileInstallCommand(profileNameOf(patchPath), LSP_PACKAGES) }))
   if (patchPath === '') throw new Error('no profile patch path in this boot')
   writeProfilePatch(patchPath, [...upsertLspServers(readProfilePatch(patchPath), entries)])
   return t('notice.lspWritten', { count: entries.length })
@@ -334,7 +344,7 @@ function lspStatus(patchPath: string, anchorDirs: readonly string[]): { packages
     }
   }
   return {
-    packages: LSP_PACKAGES.map(pkg => ({ pkg, present: lspPackagePresent(anchorDirs, pkg) })),
+    packages: LSP_PACKAGES.map(pkg => ({ pkg, present: packagePresent(anchorDirs, pkg) })),
     servers,
   }
 }
@@ -872,8 +882,8 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   }
   /** The live profile's patch path ('' in a no-profile boot). */
   const patchPathOfBoot = (): string => (ctx.get('profileContext') as { patchPath?: string } | undefined)?.patchPath ?? ''
-  /** Directories whose node_modules trees answer the LSP package precheck. */
-  const lspAnchorDirs = (): readonly string[] => {
+  /** Directories whose node_modules trees answer the LSP and hooks package prechecks. */
+  const profileAnchorDirs = (): readonly string[] => {
     const context = ctx.get('profileContext') as { installAnchor?: string; dir?: string } | undefined
     return [context?.installAnchor, context?.dir].filter((dir): dir is string => typeof dir === 'string')
   }
@@ -2124,16 +2134,16 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
         }
       })(),
         hooksStatus: () => hooksStatusRows(patchPathOfBoot()),
-      hooksWrite: (dialect: 'claude-code' | 'codex', configPath: string) => writeHooksBridge(patchPathOfBoot(), dialect, configPath),
-      lspStatus: () => lspStatus(patchPathOfBoot(), lspAnchorDirs()),
-      lspWrite: (entries: readonly { extension: string; language: string; command: string }[]) => writeLspServers(patchPathOfBoot(), lspAnchorDirs(), entries),
+      hooksWrite: (dialect: 'claude-code' | 'codex', configPath: string) => writeHooksBridge(patchPathOfBoot(), profileAnchorDirs(), dialect, configPath),
+      lspStatus: () => lspStatus(patchPathOfBoot(), profileAnchorDirs()),
+      lspWrite: (entries: readonly { extension: string; language: string; command: string }[]) => writeLspServers(patchPathOfBoot(), profileAnchorDirs(), entries),
       lspRemove: (extensions: readonly string[]) => {
         const patchPath = patchPathOfBoot()
         if (patchPath === '') throw new Error('no profile patch path in this boot')
         writeProfilePatch(patchPath, [...removeLspServers(readProfilePatch(patchPath), extensions)])
         return t('notice.lspRemoved', { count: extensions.length })
       },
-      lspInstallCommand: () => lspInstallCommand(profileNameOf(patchPathOfBoot())),
+      lspInstallCommand: () => profileInstallCommand(profileNameOf(patchPathOfBoot()), LSP_PACKAGES),
       spawnSubagent: (() => {
         const current = active
         return current === undefined ? undefined : (prompt: string) => spawnSubagentChild(ctx.get('subagents') as SubagentRuntimeFace | undefined, current.agent, prompt)

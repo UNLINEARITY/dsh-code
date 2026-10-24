@@ -198,6 +198,7 @@ export const zh: MessageCatalog = {
   'panel.lsp.title': '/lsp · 语言服务器 · {count}',
   'panel.lsp.footer': '回车 添加或替换 · 连按两次退格 移除 · 重启后生效 · esc 关闭',
   'panel.lsp.missingPkgs': 'LSP 包未安装到 profile',
+  'notice.hooksMissingPackages': '请先安装钩子桥相关包：{command}',
   'notice.hooksWritten': '钩子桥 {dialect} → {path} 已保存（重启后生效）',
   'notice.hooksUsage': '用法：/hooks <claude|codex> <hooks.json 路径>',
   'notice.hooksWriteFailed': '钩子写入失败：{message}',

@@ -23,14 +23,14 @@ DeepSeek Harness registers models, tools, storage, policies, and interfaces as p
 
 ## 2. Quick start
 
-Requires Node `^22.19 || >=24` and the preview `dsh` CLI (current release line: `@deepseek-ai/dsh@0.2.0-rc.2`). You can still enter the TUI, browse sessions, and use non-model features without configuring a model; press `Tab` in `/model` to manage API keys, OAuth, device-code sign-in, endpoints, and models.
+Requires Node `^22.19 || >=24` and the preview `dsh` CLI (current release line: `@deepseek-ai/dsh@0.2.1-rc.3`). You can still enter the TUI, browse sessions, and use non-model features without configuring a model; press `Tab` in `/model` to manage API keys, OAuth, device-code sign-in, endpoints, and models.
 
 ### 1. Install and update
 
 Install from npm (recommended). `/update` and `deepseek update --apply` both work afterwards: they check npm for a newer version and walk you through the upgrade.
 
 ```sh
-npm install -g @deepseek-ai/dsh@0.2.0-rc.2 pnpm
+npm install -g --allow-scripts=@deepseek-ai/dsh-subprocess-local,koffi,node-pty,@google/genai,protobufjs @deepseek-ai/dsh@0.2.1-rc.3 pnpm
 npm install -g dsh-code@2.0.0
 dsh plugin --profile cli add dsh-code@2.0.0
 ```
@@ -38,14 +38,14 @@ dsh plugin --profile cli add dsh-code@2.0.0
 When npm is unreachable (restricted network, a mirror outage), install the GitHub Release tarball instead. CI builds it on every tag and attaches it to the release; lib is prebuilt, so the installing machine needs no toolchain:
 
 ```sh
-npm install -g @deepseek-ai/dsh@0.2.0-rc.2 pnpm
+npm install -g --allow-scripts=@deepseek-ai/dsh-subprocess-local,koffi,node-pty,@google/genai,protobufjs @deepseek-ai/dsh@0.2.1-rc.3 pnpm
 npm install -g https://github.com/unlinearity/dsh-code/releases/download/2.0.0/dsh-code-2.0.0.tgz
 dsh plugin --profile cli add https://github.com/unlinearity/dsh-code/releases/download/2.0.0/dsh-code-2.0.0.tgz
 ```
 
-> npm script prompts: npm 11.6+ may print `npm warn install-scripts` during a global install (unapproved build scripts for node-pty, koffi, and friends). The host ships prebuilt artifacts, so common platforms can ignore the warning; if a native-module error appears after installing, follow npm's own hint and rerun with `npm install -g --allow-scripts=<package list>`.
+> Native install scripts: npm 11.6+ skips the install scripts of global dependencies unless they are approved. `--allow-scripts` approves the ones dsh needs: `node-pty` (terminals), `koffi` (session persistence), `@deepseek-ai/dsh-subprocess-local` (process sandbox), `@google/genai`, and `protobufjs`. Without it the install prints `npm warn install-scripts` and native modules can fail at startup; rerun the same command to fix it.
 >
-> Version alignment: dsh-code targets dsh `0.2.0-rc.2`, with every Harness dependency pinned exactly to `0.2.0-rc.2`. A local `link:` mount should be rebuilt with `git pull && pnpm install && pnpm build`; do not run the updater against a checkout.
+> Version alignment: dsh-code targets dsh `0.2.1-rc.3`, with every Harness dependency pinned exactly to `0.2.1-rc.3`. A local `link:` mount should be rebuilt with `git pull && pnpm install && pnpm build`; do not run the updater against a checkout.
 >
 > Upgrade notes: sessions and startup arguments recorded under the legacy `code` preset map automatically to the upstream-renamed `ptc` — no manual migration. The session-log reader follows upstream to format v4: older logs migrate in the kernel on read (v3 to v4), and the original files on disk stay untouched.
 >
@@ -53,7 +53,32 @@ dsh plugin --profile cli add https://github.com/unlinearity/dsh-code/releases/do
 >
 > A GitHub tarball install can lead npm by one release (until the registry carries the same version). The updater only reads npm, so it reports that this install is newer and refuses to downgrade, instead of claiming everything is up to date; use `/update` once npm catches up.
 
-### 2. Launch commands
+### 2. Upgrade and install troubleshooting
+
+Before upgrading `@deepseek-ai/dsh`, quit every running `dsh` / `deepseek` session: a global install replaces the files a running TUI is still reading, and that session dies with `read EIO`. After every install or upgrade, check the composition:
+
+```sh
+dsh --profile cli --dump-config   # must print no "skipping", "disabling", or "not found" lines
+deepseek doctor
+```
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `npm warn install-scripts`, then `Failed to load native module` (`pty.node`, `koffi`) or a terminal / persistence plugin failing to load | npm 11.6+ skips the install scripts of global dependencies unless they are approved | Rerun the install with the approval list: `npm install -g --allow-scripts=@deepseek-ai/dsh-subprocess-local,koffi,node-pty,@google/genai,protobufjs @deepseek-ai/dsh@0.2.1-rc.3 pnpm` |
+| A running session crashes with `read EIO` during an upgrade | The global install replaced files the session was reading | Quit every `dsh` session, rerun the install, then start again |
+| `--dump-config` prints `skipping` or `disabling` with a peer-version mismatch | A package installed into the profile is still on the previous Harness line | Reinstall it on the aligned line, for example `dsh plugin --profile cli add @deepseek-ai/dsh-tool-session-query@0.2.1-rc.3`; every `@deepseek-ai/dsh-*` package in `~/.dsh/profiles/cli/package.json` must carry the same version |
+| `patch: entry "<id>" not found` | `~/.dsh/profiles/cli/cordis.patch.yml` overrides a row the new line removed. 0.2.1 removed `tool-ralph`, `skill-badge`, and the `*-invariant` rows | Delete that entry from the profile patch |
+| `Cannot find module '@deepseek-ai/dsh-invariants'` or `.../invariant` | The runtime invariant packages were removed in 0.2.1 | Delete rows naming `@deepseek-ai/dsh-invariants` or ending in `/invariant` from the profile patch |
+| Every model request fails before it is sent with `unknown prompt variable "{{cwd}}"` | 0.2.1 removed the `{{cwd}}` prompt variable; the session directory now reaches the model as context | Remove the `{{cwd}}` clause from any `personaPrefix` / `suffix` in the profile patch |
+| `tool-subagent` config rejects `backgroundMode`, `persona`, or `toolFilter` | 0.2.1 replaced these with managed subagent activations and Agent Presets | Delete those keys from the profile patch |
+| Tools config rejects `mode: both` or `DSH_TOOLS_MODE=both` | Tool presentation accepts only `native` or `ptc` | Use `native` or `ptc` |
+| `AUTH: Authentication Fails, Your api key ... is invalid` after upgrading, although the exported key works | Since 0.2.1 a key saved in `~/.dsh/.credentials.yaml` wins over an exported variable with the same name | Replace the saved key in `/model` (press Tab for provider management), or delete that name under `refs` in `~/.dsh/.credentials.yaml` to fall back to the exported variable |
+| The DeepSeek group or another provider disappears from `/model` | API-key routes now hide their models until the credential is configured | Configure the key in `/model`, or export the variable the route's `apiKeyEnv` names |
+| `/hooks` refuses with an install command | The host no longer bundles the hooks bridges | Run the printed command, e.g. `dsh plugin --profile cli add @deepseek-ai/dsh-hooks-claude-code@0.2.1-rc.3 @deepseek-ai/dsh-hook-protocol@0.2.1-rc.3`, then restart |
+
+The Harness upgrade guides list every migration in detail: [docs/upgrade-guide](https://github.com/deepseek-ai/deepseek-harness/tree/main/docs/upgrade-guide). More problems and fixes: [Troubleshooting](docs/problems.md).
+
+### 3. Launch commands
 
 Available launch commands:
 
@@ -272,7 +297,7 @@ The following official plugins are installed but opt-in (append rows in the user
   ```
 
   (HTTP transports use `transport: streamable-http` plus `url`; an unreachable server degrades to a reconnect loop and never breaks startup.)
-- **Claude Code / Codex hooks bridges** (`@deepseek-ai/dsh-hooks-claude-code` / `-codex`): run existing hooks configurations at the interception seams; a missing hooks file is a silent no-op:
+- **Claude Code / Codex hooks bridges** (`@deepseek-ai/dsh-hooks-claude-code` / `-codex`): run existing hooks configurations at the interception seams; a missing hooks file is a silent no-op. Since 0.2.1 the host no longer bundles the bridges: install a bridge with its protocol peer first (`dsh plugin --profile cli add @deepseek-ai/dsh-hooks-claude-code@0.2.1-rc.3 @deepseek-ai/dsh-hook-protocol@0.2.1-rc.3`; the Codex bridge needs the same peer). `/hooks` refuses to write a row while either package is missing and prints this command. Then add the row:
 
   ```yaml
   - insert:
@@ -282,7 +307,7 @@ The following official plugins are installed but opt-in (append rows in the user
           configPath: C:/Users/you/.claude/hooks.json
   ```
 - **LSP navigation**: the composition carries `lsp` / `lsp-stdio` / `tool-lsp` rows in a disabled state — language-server binaries resolve at mount, and a missing binary would fail the whole composition boot. The host CLI does not bundle the three packages: install them into the profile first (`dsh plugin --profile cli add @deepseek-ai/dsh-lsp @deepseek-ai/dsh-lsp-stdio @deepseek-ai/dsh-tool-lsp`), then flip the three rows to `disabled: false` in the user layer and configure `lsp-stdio` `servers` (extension to language to server command); the model then gets the `lsp` tool (goToDefinition / findReferences / goToImplementation / hover).
-- **Persistent terminals**: the PTY service and platform backends (pwsh dialect on Windows, bash on POSIX) mount by default, but the six model tools `terminal_open` / `terminal_send` / `terminal_read` / `terminal_signal` / `terminal_close` / `terminal_list` ship DISABLED — enabling them grants shell capability to every session, which the preset layer is supposed to gate, so deployments opt in explicitly. `@deepseek-ai/dsh-tool-terminal` is likewise not bundled by the host: run `dsh plugin --profile cli add @deepseek-ai/dsh-tool-terminal` first, then enable in the user layer:
+- **Persistent terminals**: the PTY service and platform backends (pwsh dialect on Windows, bash on POSIX) mount by default, but the six model tools `terminal_open` / `terminal_send` / `terminal_read` / `terminal_signal` / `terminal_close` / `terminal_list` ship DISABLED — enabling them grants shell capability to every session, which the preset layer is supposed to gate, so deployments opt in explicitly. Since 0.2.1 the host bundles `@deepseek-ai/dsh-tool-terminal`, so enabling the row in the user layer is enough:
   ```yaml
   - id: tool-terminal
     disabled: false

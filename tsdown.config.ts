@@ -1,7 +1,7 @@
 import { defineConfig } from 'tsdown'
 
 export default defineConfig({
-  entry: ['src/index.ts', 'src/startup.ts', 'src/invariant.ts', 'src/session-query.ts'],
+  entry: ['src/index.ts', 'src/startup.ts', 'src/session-query.ts'],
   outDir: 'lib',
   format: 'esm',
   target: 'es2024',

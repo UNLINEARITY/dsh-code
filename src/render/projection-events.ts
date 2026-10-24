@@ -91,6 +91,10 @@ export const IGNORED_SESSION_EVENT_TYPES = [
   'feedback/message-delete',
   'feedback/message-put',
   'feedback/record',
+  // 0.2.1 job lifecycle records: the /jobs panel reads the live registry, so
+  // the durable registration/settlement pair needs no transcript row.
+  'job/registered',
+  'job/settled',
   'session-log-deepseek/delivery-accepted',
   'session/end-seed',
   // Reminders left the composition with 0.1.7-rc.2 (the delivery stack is
@@ -105,6 +109,9 @@ export const IGNORED_SESSION_EVENT_TYPES = [
   'team/message/queued',
   'team/task',
   'web/deepseek-search-llm-request',
+  // 0.2.1 execution-directory changes: the working_directory tool result
+  // already renders in the transcript; the status line keeps the header cwd.
+  'working-directory/change',
 ] as const
 
 const EVENT_DISPOSITIONS = new Map<string, Exclude<SessionEventDisposition, 'unknown'>>([

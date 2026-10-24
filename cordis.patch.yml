@@ -15,7 +15,7 @@
 - id: system-prompt
   config:
     personaPrefix: >-
-      You are a coding agent powered by the {{model}} model. Your working directory is {{cwd}}.
+      You are a coding agent powered by the {{model}} model.
 
 # 0.1.7 retargets the row to @deepseek-ai/dsh-hmr with an empty module root:
 # it no longer reloads plugin modules, it owns live profile-CONFIG reload for
@@ -86,8 +86,6 @@
 - id: workflow-ptc
   disabled: true
 - id: tool-workflow
-  disabled: true
-- id: tool-ralph
   disabled: true
 - id: agent-instructions
   disabled: true

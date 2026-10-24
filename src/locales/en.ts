@@ -196,6 +196,7 @@ export const en = {
   'panel.lsp.title': '/lsp · language servers · {count}',
   'panel.lsp.footer': 'enter add/replace server · backspace ×2 remove · applies on restart · esc close',
   'panel.lsp.missingPkgs': 'LSP packages missing from the profile',
+  'notice.hooksMissingPackages': 'install the hooks bridge packages first: {command}',
   'notice.hooksWritten': 'hooks bridge {dialect} → {path} saved (restart to apply)',
   'notice.hooksUsage': 'usage: /hooks <claude|codex> <path-to-hooks.json>',
   'notice.hooksWriteFailed': 'hooks write failed: {message}',

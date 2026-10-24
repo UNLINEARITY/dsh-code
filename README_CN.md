@@ -25,14 +25,14 @@ DeepSeek Harness 将模型、工具、存储、策略和界面作为插件，通
 
 ## 二、快速开始
 
-需要 Node `^22.19 || >=24` 和预览版 `dsh` CLI（当前版本线：`@deepseek-ai/dsh@0.2.0-rc.2`）。未配置模型时仍可进入 TUI、查看会话和使用非模型功能；在 `/model` 中按 Tab 进入供应商管理，配置 API key、OAuth 与设备码登录。
+需要 Node `^22.19 || >=24` 和预览版 `dsh` CLI（当前版本线：`@deepseek-ai/dsh@0.2.1-rc.3`）。未配置模型时仍可进入 TUI、查看会话和使用非模型功能；在 `/model` 中按 Tab 进入供应商管理，配置 API key、OAuth 与设备码登录。
 
 ### 1. 安装与更新
 
 从 npm 安装（推荐）。装好后 `/update` 和 `deepseek update --apply` 都能用：它们查询 npm 上的新版本，确认后按提示升级。
 
 ```sh
-npm install -g @deepseek-ai/dsh@0.2.0-rc.2 pnpm
+npm install -g --allow-scripts=@deepseek-ai/dsh-subprocess-local,koffi,node-pty,@google/genai,protobufjs @deepseek-ai/dsh@0.2.1-rc.3 pnpm
 npm install -g dsh-code@2.0.0
 dsh plugin --profile cli add dsh-code@2.0.0
 ```
@@ -40,14 +40,14 @@ dsh plugin --profile cli add dsh-code@2.0.0
 npm 不可达时（网络受限、镜像临时故障），改用 GitHub Release tarball。每次打 tag 由 CI 构建并挂到 Release，lib 已预构建，安装机不需要工具链：
 
 ```sh
-npm install -g @deepseek-ai/dsh@0.2.0-rc.2 pnpm
+npm install -g --allow-scripts=@deepseek-ai/dsh-subprocess-local,koffi,node-pty,@google/genai,protobufjs @deepseek-ai/dsh@0.2.1-rc.3 pnpm
 npm install -g https://github.com/unlinearity/dsh-code/releases/download/2.0.0/dsh-code-2.0.0.tgz
 dsh plugin --profile cli add https://github.com/unlinearity/dsh-code/releases/download/2.0.0/dsh-code-2.0.0.tgz
 ```
 
-> npm 脚本提示：npm 11.6+ 可能在全局安装时提示 `npm warn install-scripts`（node-pty、koffi 等原生依赖的构建脚本未获批准）。宿主随包自带预编译产物，常规平台可直接忽略；若安装后出现原生模块报错，按 npm 提示执行 `npm install -g --allow-scripts=<包名列表>` 后重装。
+> 原生安装脚本：npm 11.6+ 默认跳过未经批准的全局依赖安装脚本。`--allow-scripts` 批准 dsh 需要的几项：`node-pty`（终端）、`koffi`（会话持久化）、`@deepseek-ai/dsh-subprocess-local`（进程沙箱）、`@google/genai` 和 `protobufjs`。省略该参数时安装会提示 `npm warn install-scripts`，启动时原生模块可能加载失败；重新执行同一条命令即可修复。
 >
-> 版本对齐：dsh-code 面向 dsh `0.2.0-rc.2` 构建，全部 Harness 依赖均精确锁定为 `0.2.0-rc.2`。本地 `link:` 挂载请先 `git pull && pnpm install && pnpm build`，不要对开发挂载跑更新器。
+> 版本对齐：dsh-code 面向 dsh `0.2.1-rc.3` 构建，全部 Harness 依赖均精确锁定为 `0.2.1-rc.3`。本地 `link:` 挂载请先 `git pull && pnpm install && pnpm build`，不要对开发挂载跑更新器。
 >
 > 升级说明：旧会话与旧参数中记录的 `code` 预设会自动映射到上游已改名的 `ptc`，无需手动迁移。会话日志读取端随上游升级到格式 v4：旧格式日志在读取时由内核自动迁移（v3→v4），磁盘上的原始文件保持不变。
 >
@@ -55,7 +55,32 @@ dsh plugin --profile cli add https://github.com/unlinearity/dsh-code/releases/do
 >
 > 从 GitHub tarball 装的版本可能领先 npm 一步（npm 上还没同步这个版本时）。更新器只认 npm，这种情况会写明「新于 npm，不降级」而不是「已是最新」；等 npm 同步后再用 `/update`。
 
-### 2. 启动指令
+### 2. 升级与安装排障
+
+升级 `@deepseek-ai/dsh` 前，先退出所有正在运行的 `dsh` / `deepseek` 会话：全局安装会替换运行中 TUI 仍在读取的文件，该会话会以 `read EIO` 退出。每次安装或升级后检查组合：
+
+```sh
+dsh --profile cli --dump-config   # 输出中不应出现 "skipping"、"disabling" 或 "not found"
+deepseek doctor
+```
+
+| 现象 | 原因 | 处理 |
+|---|---|---|
+| 出现 `npm warn install-scripts`，之后报 `Failed to load native module`（`pty.node`、`koffi`），或终端、会话持久化插件加载失败 | npm 11.6+ 默认跳过未经批准的全局依赖安装脚本 | 带上批准列表重装：`npm install -g --allow-scripts=@deepseek-ai/dsh-subprocess-local,koffi,node-pty,@google/genai,protobufjs @deepseek-ai/dsh@0.2.1-rc.3 pnpm` |
+| 升级过程中正在运行的会话以 `read EIO` 崩溃 | 全局安装替换了会话正在读取的文件 | 退出所有 `dsh` 会话，重新执行安装，再重新启动 |
+| `--dump-config` 输出 `skipping` 或 `disabling`，并提示 peer 版本不匹配 | 装进 profile 的包还停留在上一条 Harness 版本线 | 按对齐版本重装，例如 `dsh plugin --profile cli add @deepseek-ai/dsh-tool-session-query@0.2.1-rc.3`；`~/.dsh/profiles/cli/package.json` 中所有 `@deepseek-ai/dsh-*` 包必须是同一版本 |
+| `patch: entry "<id>" not found` | `~/.dsh/profiles/cli/cordis.patch.yml` 覆盖了新版本线已删除的行。0.2.1 删除了 `tool-ralph`、`skill-badge` 和 `*-invariant` 各行 | 从 profile patch 中删除该条目 |
+| `Cannot find module '@deepseek-ai/dsh-invariants'` 或 `.../invariant` | 0.2.1 删除了运行时 invariant 相关包 | 从 profile patch 中删除名为 `@deepseek-ai/dsh-invariants` 或以 `/invariant` 结尾的行 |
+| 每次模型请求都在发送前失败，报 `unknown prompt variable "{{cwd}}"` | 0.2.1 删除了 `{{cwd}}` 提示变量，会话目录改为以上下文形式提供给模型 | 删除 profile patch 中 `personaPrefix` / `suffix` 里含 `{{cwd}}` 的句子 |
+| `tool-subagent` 配置拒绝 `backgroundMode`、`persona` 或 `toolFilter` | 0.2.1 改用托管子代理激活和 Agent Preset | 从 profile patch 中删除这些键 |
+| 工具配置拒绝 `mode: both` 或 `DSH_TOOLS_MODE=both` | 工具呈现方式只接受 `native` 或 `ptc` | 改为 `native` 或 `ptc` |
+| 升级后报 `AUTH: Authentication Fails, Your api key ... is invalid`，但导出的 key 本身可用 | 自 0.2.1 起，`~/.dsh/.credentials.yaml` 中保存的同名 key 优先于导出的环境变量 | 在 `/model` 中替换已保存的 key（按 Tab 进入供应商管理），或删除 `~/.dsh/.credentials.yaml` 中 `refs` 下的同名条目，改用导出的变量 |
+| `/model` 中 DeepSeek 或其他供应商分组消失 | API key 路线在凭据配置前不再列出模型 | 在 `/model` 中配置 key，或导出该路线 `apiKeyEnv` 指定的变量 |
+| `/hooks` 拒绝写入并给出安装命令 | 宿主不再捆绑钩子桥 | 执行提示的命令，例如 `dsh plugin --profile cli add @deepseek-ai/dsh-hooks-claude-code@0.2.1-rc.3 @deepseek-ai/dsh-hook-protocol@0.2.1-rc.3`，然后重启 |
+
+Harness 升级指南逐项列出了全部迁移步骤：[docs/upgrade-guide](https://github.com/deepseek-ai/deepseek-harness/tree/main/docs/upgrade-guide)。更多问题与处理：[常见问题与排障](docs/problems.md)。
+
+### 3. 启动指令
 
 可用的启动指令：
 ```sh
@@ -278,7 +303,7 @@ DSH-Code 读取 Harness 的实时注册表，不在本地维护另一套副本�
   ```
 
   （HTTP 传输改用 `transport: streamable-http` + `url`；服务器不可达时安全降级为重连循环，不影响启动。）
-- **Claude Code / Codex hooks 桥**（`@deepseek-ai/dsh-hooks-claude-code` / `-codex`）：在拦截缝上运行既有 hooks 配置；hooks 文件缺失时静默不生效：
+- **Claude Code / Codex hooks 桥**（`@deepseek-ai/dsh-hooks-claude-code` / `-codex`）：在拦截缝上运行既有 hooks 配置；hooks 文件缺失时静默不生效。自 0.2.1 起宿主不再捆绑钩子桥：先连同协议 peer 一起装入 profile（`dsh plugin --profile cli add @deepseek-ai/dsh-hooks-claude-code@0.2.1-rc.3 @deepseek-ai/dsh-hook-protocol@0.2.1-rc.3`；Codex 桥需要同一个 peer）。任一包缺失时 `/hooks` 拒绝写入并给出这条命令。然后添加该行：
 
   ```yaml
   - insert:
@@ -288,7 +313,7 @@ DSH-Code 读取 Harness 的实时注册表，不在本地维护另一套副本�
           configPath: C:/Users/you/.claude/hooks.json
   ```
 - **LSP 导航**：组合里预置了 `lsp` / `lsp-stdio` / `tool-lsp` 三行（禁用状态——语言服务器二进制在挂载期解析，缺失会让整个组合启动失败）。这三个包宿主 CLI 未捆绑：先装入 profile（`dsh plugin --profile cli add @deepseek-ai/dsh-lsp @deepseek-ai/dsh-lsp-stdio @deepseek-ai/dsh-tool-lsp`），再在用户层将三行 `disabled: false` 并为 `lsp-stdio` 配置 `servers`（扩展名到语言再到服务器命令），模型即获得 `lsp` 工具（goToDefinition / findReferences / goToImplementation / hover）。
-- **持久终端**：PTY 服务与平台后端（Windows 走 pwsh 方言、POSIX 走 bash）已默认挂载，但六个模型工具 `terminal_open` / `terminal_send` / `terminal_read` / `terminal_signal` / `terminal_close` / `terminal_list` 出厂禁用——启用等于向所有会话放开 shell 能力，与 preset 把关原则一致，由部署显式决定。`@deepseek-ai/dsh-tool-terminal` 同样不在宿主捆绑内：先 `dsh plugin --profile cli add @deepseek-ai/dsh-tool-terminal`，再在用户层开启：
+- **持久终端**：PTY 服务与平台后端（Windows 走 pwsh 方言、POSIX 走 bash）已默认挂载，但六个模型工具 `terminal_open` / `terminal_send` / `terminal_read` / `terminal_signal` / `terminal_close` / `terminal_list` 出厂禁用——启用等于向所有会话放开 shell 能力，与 preset 把关原则一致，由部署显式决定。自 0.2.1 起宿主已捆绑 `@deepseek-ai/dsh-tool-terminal`，在用户层开启该行即可：
   ```yaml
   - id: tool-terminal
     disabled: false

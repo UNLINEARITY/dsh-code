@@ -44,6 +44,10 @@
   "@deepseek-ai/dsh-api-gateway"
  ],
  [
+  "remote-access",
+  "@deepseek-ai/dsh-api-remote-access"
+ ],
+ [
   "session-title",
   "@deepseek-ai/dsh-session-title"
  ],
@@ -112,6 +116,14 @@
   "@deepseek-ai/dsh-session-query-sqlite"
  ],
  [
+  "working-directory",
+  "@deepseek-ai/dsh-working-directory"
+ ],
+ [
+  "tool-working-directory",
+  "@deepseek-ai/dsh-tool-working-directory"
+ ],
+ [
   "session-projection",
   "@deepseek-ai/dsh-session-projection"
  ],
@@ -130,6 +142,10 @@
  [
   "session-projection-cache",
   "@deepseek-ai/dsh-session-projection-cache"
+ ],
+ [
+  "otel",
+  "@deepseek-ai/dsh-otel"
  ],
  [
   "session-telemetry-otel",
@@ -202,10 +218,6 @@
  [
   "skill-filesystem",
   "@deepseek-ai/dsh-skill-filesystem"
- ],
- [
-  "skill-badge",
-  "@deepseek-ai/dsh-skill-badge"
  ],
  [
   "tool-skill",
@@ -320,10 +332,6 @@
   "@deepseek-ai/dsh-tool-goal"
  ],
  [
-  "tool-ralph",
-  "@deepseek-ai/dsh-tool-ralph"
- ],
- [
   "repeat-tool-reminder",
   "@deepseek-ai/dsh-repeat-tool-reminder"
  ],
@@ -334,6 +342,10 @@
  [
   "web-search-deepseek",
   "@deepseek-ai/dsh-web-search-deepseek"
+ ],
+ [
+  "web-deepseek-api",
+  "@deepseek-ai/dsh-web-deepseek-api"
  ],
  [
   "web-fetch-http",
