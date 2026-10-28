@@ -23,7 +23,7 @@ import { realpathSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 
 /** The one Harness release this build was validated against. */
-export const EXPECTED_HARNESS_VERSION = '0.2.1-rc.3'
+export const EXPECTED_HARNESS_VERSION = '0.2.1-rc.4'
 
 /** Host packages whose bundled copy the plugin binds to at runtime. */
 export const HARNESS_GATE_PACKAGES = [
