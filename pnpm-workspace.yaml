@@ -1,3 +1,4 @@
+nodeLinker: hoisted
 overrides:
   # GHSA-2883-xcg3-v3hh: every Cordis/Harness path must use the patched
   # merge-key limiter, not only this workspace's direct development copy.

@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest'
 
 type PackageManifest = {
   packageManager: string
+  bundleDependencies: boolean
+  scripts: Record<string, string>
   dependencies: Record<string, string>
   peerDependencies: Record<string, string>
   peerDependenciesMeta: Record<string, { optional?: boolean }>
@@ -16,6 +18,11 @@ const manifest = JSON.parse(
 describe('package tooling contract', () => {
   it('pins the pnpm release used by local and CI installs', () => {
     expect(manifest.packageManager).toBe('pnpm@12.4.1')
+  })
+  it('supports npm publish with audited bundled dependencies instead of a hard refusal', () => {
+    expect(manifest.bundleDependencies).toBe(true)
+    expect(manifest.scripts.prepublishOnly).toContain('scripts/verify-publish.ts')
+    expect(manifest.scripts.prepublishOnly).not.toContain('throw new Error')
   })
 })
 

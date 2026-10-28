@@ -51,4 +51,6 @@ The Harness upgrade guides list every migration in detail: [docs/upgrade-guide](
 
 ## Release packaging
 
-Release tarballs bundle the audited production dependencies. Contributors run `pnpm pack:release --pack-destination dist` after the verification suite; it builds in a temporary production install, includes platform bindings, and installs and audits the resulting tarball. Publish that tarball with `npm publish dist/dsh-code-2.1.0.tgz`; publishing directly from the checkout is refused.
+Run `npm publish` from the repository directory. Its prepublish checks run the production audit, release identity check, verification suite, and build, then pack the exact directory payload and verify a fresh consumer installation, dependency audit, and runtime import. Production dependencies are bundled using the hoisted dependency layout. Use `npm publish --dry-run` to check this flow without publishing.
+
+To generate a local tarball separately, run `pnpm pack:release --pack-destination dist`. That flow uses a temporary production install, includes platform bindings, and installs and audits the resulting tarball. You can also publish that artifact with `npm publish dist/dsh-code-2.1.0.tgz`.

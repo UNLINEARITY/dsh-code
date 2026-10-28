@@ -14,12 +14,12 @@ const scratch = realpathSync(mkdtempSync(join(tmpdir(), 'dsh-release-pack-')))
 const stage = join(scratch, 'package')
 const npm = npmInvocation()
 function run(args: string[], cwd = process.cwd()): void {
-  const result = spawnSync(npm.command, [...npm.args, ...args], { cwd, stdio: 'inherit' })
+  const result = spawnSync(npm.command, [...npm.args, ...args, '--dry-run=false'], { cwd, stdio: 'inherit' })
   if (result.status !== 0) throw new Error(`release package step failed: npm ${args[0]}`)
 }
 try {
-  const value = JSON.parse(readFileSync('package.json', 'utf8')) as { name: string; version: string; files: string[]; dependencies: Record<string, string>; devDependencies?: unknown; scripts?: unknown }
-  const { devDependencies: _dev, scripts: _scripts, ...production } = value
+  const value = JSON.parse(readFileSync('package.json', 'utf8')) as { name: string; version: string; files: string[]; dependencies: Record<string, string>; devDependencies?: unknown; scripts?: unknown; bundleDependencies?: unknown }
+  const { devDependencies: _dev, scripts: _scripts, bundleDependencies: _bundles, ...production } = value
   mkdirSync(stage)
   for (const name of [...value.files, 'LICENSE', 'README.md', 'README_CN.md']) {
     const path = relative(process.cwd(), resolve(name))
@@ -35,7 +35,7 @@ try {
   for (const [path, entry] of Object.entries(lock.packages)) {
     if ((entry.os === undefined && entry.cpu === undefined) || existsSync(join(stage, path))) continue
     const name = path.slice(path.lastIndexOf('node_modules/') + 'node_modules/'.length)
-    const packed = spawnSync(npm.command, [...npm.args, 'pack', `${name}@${entry.version}`, '--ignore-scripts', '--pack-destination', scratch, '--json'], { encoding: 'utf8' })
+    const packed = spawnSync(npm.command, [...npm.args, 'pack', `${name}@${entry.version}`, '--ignore-scripts', '--pack-destination', scratch, '--json', '--dry-run=false'], { encoding: 'utf8' })
     if (packed.status !== 0) throw new Error(`cannot fetch platform binding: ${name}`)
     const files = JSON.parse(packed.stdout) as { filename: string }[]
     const target = join(stage, path)
