@@ -109,6 +109,10 @@ export const internals: {
         exitOnCtrlC: false,
         stdin: tuiStdin.stdin as unknown as NodeJS.ReadStream,
         stdout: synchronizedStdout,
+        // Both descriptors paint the same terminal. Ink's console diagnostics
+        // must pass through stdout's IME cursor restoration too, or a log
+        // written after log.clear() lands inside the Static header.
+        stderr: synchronizedStdout,
       })
       return {
         rerender(element: ReactElement): void {

@@ -34,7 +34,7 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm typecheck:tests
       - run: pnpm test
-      - run: pnpm pack --pack-destination dist
+      - run: pnpm pack:release --pack-destination dist
       - name: Create the GitHub release with the packed bundle
         run: |
           NOTES="docs/releases/${GITHUB_REF_NAME}.md"

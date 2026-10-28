@@ -7,7 +7,7 @@ English | [中文](README_CN.md)
 <p align="center"><img alt="Typing SVG" src="https://readme-typing-svg.herokuapp.com?font=JetBrains+Mono&amp;weight=500&amp;size=22&amp;duration=4000&amp;pause=700&amp;color=4176E6&amp;center=true&amp;vCenter=true&amp;width=680&amp;lines=DeepSeek+Harness+Code;Terminal+Coding+Interface+for+the+DSH+Core"></p>
 <p align="center">
   <a href="https://github.com/deepseek-ai/deepseek-harness"><img alt="DeepSeek Harness" src="https://img.shields.io/badge/DeepSeek-Harness-4176E6?style=for-the-badge&amp;logo=deepseek&amp;logoColor=white&amp;labelColor=1c1917"></a>
-  <a href="https://www.npmjs.com/package/@deepseek-ai/dsh"><img alt="dsh version" src="https://img.shields.io/badge/dsh-0.2.0--rc.2-4176E6?style=for-the-badge&amp;logo=deepseek&amp;logoColor=white&amp;labelColor=1c1917"></a>
+  <a href="https://www.npmjs.com/package/@deepseek-ai/dsh"><img alt="dsh version" src="https://img.shields.io/badge/dsh-0.2.1--rc.4-4176E6?style=for-the-badge&amp;logo=deepseek&amp;logoColor=white&amp;labelColor=1c1917"></a>
   <a href="https://github.com/UNLINEARITY/dsh-code/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/UNLINEARITY/dsh-code?label=Stars&amp;style=for-the-badge&amp;logo=github&amp;logoColor=white&amp;color=4176E6&amp;labelColor=1c1917"></a>
   <a href="https://www.npmjs.com/package/dsh-code"><img alt="npm version" src="https://img.shields.io/npm/v/dsh-code?label=npm&amp;style=for-the-badge&amp;logo=npm&amp;color=cb3837&amp;labelColor=1c1917"></a>
   <a href="https://github.com/UNLINEARITY/dsh-code/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/github/license/UNLINEARITY/dsh-code?label=License&amp;style=for-the-badge&amp;logo=opensourceinitiative&amp;color=4176E6&amp;labelColor=1c1917"></a>
@@ -23,62 +23,24 @@ DeepSeek Harness registers models, tools, storage, policies, and interfaces as p
 
 ## 2. Quick start
 
+[2.1.0 release notes](docs/releases/2.1.0.md)
+
 Requires Node `^22.19 || >=24` and the preview `dsh` CLI (current release line: `@deepseek-ai/dsh@0.2.1-rc.4`). You can still enter the TUI, browse sessions, and use non-model features without configuring a model; press `Tab` in `/model` to manage API keys, OAuth, device-code sign-in, endpoints, and models.
 
 ### 1. Install and update
 
-Install from npm (recommended). `/update` and `deepseek update --apply` both work afterwards: they check npm for a newer version and walk you through the upgrade.
+Install from npm. Close all running `dsh` / `deepseek` sessions before installing or upgrading.
 
 ```sh
 npm install -g --allow-scripts=@deepseek-ai/dsh-subprocess-local,koffi,node-pty,@google/genai,protobufjs @deepseek-ai/dsh@0.2.1-rc.4 pnpm
-npm install -g dsh-code@2.0.0
-dsh plugin --profile cli add dsh-code@2.0.0
+npm install -g dsh-code@2.1.0
+deepseek repair-deps
+dsh plugin --profile cli add dsh-code@2.1.0
 ```
 
-When npm is unreachable (restricted network, a mirror outage), install the GitHub Release tarball instead. CI builds it on every tag and attaches it to the release; lib is prebuilt, so the installing machine needs no toolchain:
+Use `/update` or `deepseek update --apply` for later updates. See [installation and upgrade troubleshooting](docs/installation.md) for version alignment, dependency repair, and migration errors.
 
-```sh
-npm install -g --allow-scripts=@deepseek-ai/dsh-subprocess-local,koffi,node-pty,@google/genai,protobufjs @deepseek-ai/dsh@0.2.1-rc.4 pnpm
-npm install -g https://github.com/unlinearity/dsh-code/releases/download/2.0.0/dsh-code-2.0.0.tgz
-dsh plugin --profile cli add https://github.com/unlinearity/dsh-code/releases/download/2.0.0/dsh-code-2.0.0.tgz
-```
-
-> Native install scripts: npm 11.6+ skips the install scripts of global dependencies unless they are approved. `--allow-scripts` approves the ones dsh needs: `node-pty` (terminals), `koffi` (session persistence), `@deepseek-ai/dsh-subprocess-local` (process sandbox), `@google/genai`, and `protobufjs`. Without it the install prints `npm warn install-scripts` and native modules can fail at startup; rerun the same command to fix it.
->
-> Version alignment: dsh-code targets dsh `0.2.1-rc.4`, with every Harness dependency pinned exactly to `0.2.1-rc.4`. A local `link:` mount should be rebuilt with `git pull && pnpm install && pnpm build`; do not run the updater against a checkout.
->
-> Upgrade notes: sessions and startup arguments recorded under the legacy `code` preset map automatically to the upstream-renamed `ptc` — no manual migration. The session-log reader follows upstream to format v4: older logs migrate in the kernel on read (v3 to v4), and the original files on disk stay untouched.
->
-> Settings migration: on the first boot of a dsh 0.1.7-targeting build, the host imports the retired global `settings.yaml` into the active profile once (the file is then renamed to `settings.yaml.imported`). Upgrade dsh and dsh-code together so no degraded boot falls in between. If provider/model configuration goes missing after an upgrade, the TUI detects it at startup and re-imports the stranded sections automatically through the host's own settings pipe — no manual steps, no re-login (credentials are unaffected). Only when the settings service is unwritable do you need the manual fallback: copy `settings.yaml.imported` to `settings.yaml` under the dsh home and restart.
->
-> A GitHub tarball install can lead npm by one release (until the registry carries the same version). The updater only reads npm, so it reports that this install is newer and refuses to downgrade, instead of claiming everything is up to date; use `/update` once npm catches up.
-
-### 2. Upgrade and install troubleshooting
-
-Before upgrading `@deepseek-ai/dsh`, quit every running `dsh` / `deepseek` session: a global install replaces the files a running TUI is still reading, and that session dies with `read EIO`. After every install or upgrade, check the composition:
-
-```sh
-dsh --profile cli --dump-config   # must print no "skipping", "disabling", or "not found" lines
-deepseek doctor
-```
-
-| Symptom | Cause | Fix |
-|---|---|---|
-| `npm warn install-scripts`, then `Failed to load native module` (`pty.node`, `koffi`) or a terminal / persistence plugin failing to load | npm 11.6+ skips the install scripts of global dependencies unless they are approved | Rerun the install with the approval list: `npm install -g --allow-scripts=@deepseek-ai/dsh-subprocess-local,koffi,node-pty,@google/genai,protobufjs @deepseek-ai/dsh@0.2.1-rc.4 pnpm` |
-| A running session crashes with `read EIO` during an upgrade | The global install replaced files the session was reading | Quit every `dsh` session, rerun the install, then start again |
-| `--dump-config` prints `skipping` or `disabling` with a peer-version mismatch | A package installed into the profile is still on the previous Harness line | Reinstall it on the aligned line, for example `dsh plugin --profile cli add @deepseek-ai/dsh-tool-session-query@0.2.1-rc.4`; every `@deepseek-ai/dsh-*` package in `~/.dsh/profiles/cli/package.json` must carry the same version |
-| `patch: entry "<id>" not found` | `~/.dsh/profiles/cli/cordis.patch.yml` overrides a row the new line removed. 0.2.1 removed `tool-ralph`, `skill-badge`, and the `*-invariant` rows | Delete that entry from the profile patch |
-| `Cannot find module '@deepseek-ai/dsh-invariants'` or `.../invariant` | The runtime invariant packages were removed in 0.2.1 | Delete rows naming `@deepseek-ai/dsh-invariants` or ending in `/invariant` from the profile patch |
-| Every model request fails before it is sent with `unknown prompt variable "{{cwd}}"` | 0.2.1 removed the `{{cwd}}` prompt variable; the session directory now reaches the model as context | Remove the `{{cwd}}` clause from any `personaPrefix` / `suffix` in the profile patch |
-| `tool-subagent` config rejects `backgroundMode`, `persona`, or `toolFilter` | 0.2.1 replaced these with managed subagent activations and Agent Presets | Delete those keys from the profile patch |
-| Tools config rejects `mode: both` or `DSH_TOOLS_MODE=both` | Tool presentation accepts only `native` or `ptc` | Use `native` or `ptc` |
-| `AUTH: Authentication Fails, Your api key ... is invalid` after upgrading, although the exported key works | Since 0.2.1 a key saved in `~/.dsh/.credentials.yaml` wins over an exported variable with the same name | Replace the saved key in `/model` (press Tab for provider management), or delete that name under `refs` in `~/.dsh/.credentials.yaml` to fall back to the exported variable |
-| The DeepSeek group or another provider disappears from `/model` | API-key routes now hide their models until the credential is configured | Configure the key in `/model`, or export the variable the route's `apiKeyEnv` names |
-| `/hooks` refuses with an install command | The host no longer bundles the hooks bridges | Run the printed command, e.g. `dsh plugin --profile cli add @deepseek-ai/dsh-hooks-claude-code@0.2.1-rc.4 @deepseek-ai/dsh-hook-protocol@0.2.1-rc.4`, then restart |
-
-The Harness upgrade guides list every migration in detail: [docs/upgrade-guide](https://github.com/deepseek-ai/deepseek-harness/tree/main/docs/upgrade-guide). More problems and fixes: [Troubleshooting](docs/problems.md).
-
-### 3. Launch commands
+### 2. Launch commands
 
 Available launch commands:
 
@@ -91,8 +53,6 @@ dsh-code
 `dsh --profile cli`, `deepseek`, and `dsh-code` are equivalent launch commands. `deepseek` and `dsh-code` are global aliases for `dsh --profile cli`, and all additional arguments are forwarded unchanged, for example `deepseek --resume abc123`.
 
 > DeepSeek Harness is still a developer preview and may introduce compatibility-breaking changes. DSH-Code will continue to track the evolution of its plugin interfaces.
-
-For installation, native-module, and plugin-loading issues, run `deepseek doctor` first, then see [Troubleshooting](docs/problems.md).
 
 ## 3. Core features and usage
 
@@ -231,7 +191,7 @@ The following built-in commands are available inside the TUI. Additional Harness
 | Command | Purpose |
 | --- | --- |
 | `/plugin [query]` | Inspect loaded extensions and their status |
-| `/update` | Checks npm for a newer version and confirms the upgrade. A GitHub tarball install can lead npm, in which case it says so and refuses to downgrade |
+| `/update` | Checks npm for a newer version and confirms the upgrade |
 | `/statusline` | Select the items displayed in the status bar |
 | `/vscode-keys` | Pass Ctrl+R through VS Code-family terminals (idempotent user-level keybindings.json write) |
 | `/theme` | Switch colors: `dark` / `light` / `prismatic` / `rainbow` / `auto` |
@@ -366,6 +326,8 @@ pnpm run gen:whale   # regenerate src/whale-glyph.ts from the vendored logo path
 ```
 
 `tsconfig.test.json` puts the specs inside a TypeScript project, so a fixture that drifts from the interface it fakes fails `pnpm typecheck:tests` instead of surfacing (or not) at runtime.
+
+For release packaging, see the [packaging guide](docs/installation.md#release-packaging).
 
 The whale glyph is generated from the DeepSeek FishLogo geometry vendored in `scripts/fish-logo.ts` (source: DeepSeek Harness, MIT).
 

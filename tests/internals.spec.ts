@@ -75,7 +75,10 @@ describe('production TUI mount', () => {
         exitOnCtrlC: false,
         stdin: inputSplit.calls[0]?.stdin,
         stdout: expect.objectContaining({ write: expect.any(Function) }),
+        stderr: expect.objectContaining({ write: expect.any(Function) }),
       })
+      const options = ink.render.mock.calls[0]?.[1] as { stdout: unknown; stderr: unknown }
+      expect(options.stderr).toBe(options.stdout)
       expect(stdoutWrite).toHaveBeenNthCalledWith(1, KEYBOARD_ENHANCE_ENABLE + BRACKETED_PASTE_ENABLE)
 
       const next = {} as ReactElement

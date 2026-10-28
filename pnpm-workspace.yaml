@@ -2,6 +2,12 @@ overrides:
   # GHSA-2883-xcg3-v3hh: every Cordis/Harness path must use the patched
   # merge-key limiter, not only this workspace's direct development copy.
   js-yaml: 4.3.2
+  # rc.4 pins these transitive versions; use the patched same-major releases
+  # for GHSA-mrhx-c7xc-m3w5 and the undici 8.12.2 security fixes.
+  zod@4.4.3: 4.6.6
+  undici@8.11.2: 8.12.2
+  '@modelcontextprotocol/client@2.2.0': 2.3.0
+  fflate@0.8.2: 0.8.3
 allowBuilds:
   # esbuild ships the native binary tsdown/vitest resolve through; its install
   # script only downloads/links that binary.

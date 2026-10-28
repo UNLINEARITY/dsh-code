@@ -7,7 +7,7 @@
 <p align="center"><img alt="Typing SVG" src="https://readme-typing-svg.herokuapp.com?font=JetBrains+Mono&amp;weight=500&amp;size=22&amp;duration=4000&amp;pause=700&amp;color=4176E6&amp;center=true&amp;vCenter=true&amp;width=680&amp;lines=DeepSeek+Harness+Code;DSH+%E5%86%85%E6%A0%B8%E7%9A%84%E7%BB%88%E7%AB%AF%E7%BC%96%E7%A0%81%E7%95%8C%E9%9D%A2"></p>
 <p align="center">
   <a href="https://github.com/deepseek-ai/deepseek-harness"><img alt="DeepSeek Harness" src="https://img.shields.io/badge/DeepSeek-Harness-4176E6?style=for-the-badge&amp;logo=deepseek&amp;logoColor=white&amp;labelColor=1c1917"></a>
-  <a href="https://www.npmjs.com/package/@deepseek-ai/dsh"><img alt="dsh version" src="https://img.shields.io/badge/dsh-0.2.0--rc.2-4176E6?style=for-the-badge&amp;logo=deepseek&amp;logoColor=white&amp;labelColor=1c1917"></a>
+  <a href="https://www.npmjs.com/package/@deepseek-ai/dsh"><img alt="dsh version" src="https://img.shields.io/badge/dsh-0.2.1--rc.4-4176E6?style=for-the-badge&amp;logo=deepseek&amp;logoColor=white&amp;labelColor=1c1917"></a>
   <a href="https://github.com/UNLINEARITY/dsh-code/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/UNLINEARITY/dsh-code?label=Stars&amp;style=for-the-badge&amp;logo=github&amp;logoColor=white&amp;color=4176E6&amp;labelColor=1c1917"></a>
   <a href="https://www.npmjs.com/package/dsh-code"><img alt="npm version" src="https://img.shields.io/npm/v/dsh-code?label=npm&amp;style=for-the-badge&amp;logo=npm&amp;color=cb3837&amp;labelColor=1c1917"></a>
   <a href="https://github.com/UNLINEARITY/dsh-code/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/github/license/UNLINEARITY/dsh-code?label=License&amp;style=for-the-badge&amp;logo=opensourceinitiative&amp;color=4176E6&amp;labelColor=1c1917"></a>
@@ -25,62 +25,24 @@ DeepSeek Harness 将模型、工具、存储、策略和界面作为插件，通
 
 ## 二、快速开始
 
+[2.1.0 更新说明](docs/releases/2.1.0_CN.md)
+
 需要 Node `^22.19 || >=24` 和预览版 `dsh` CLI（当前版本线：`@deepseek-ai/dsh@0.2.1-rc.4`）。未配置模型时仍可进入 TUI、查看会话和使用非模型功能；在 `/model` 中按 Tab 进入供应商管理，配置 API key、OAuth 与设备码登录。
 
 ### 1. 安装与更新
 
-从 npm 安装（推荐）。装好后 `/update` 和 `deepseek update --apply` 都能用：它们查询 npm 上的新版本，确认后按提示升级。
+从 npm 安装。安装或升级前，先关闭所有正在运行的 `dsh` / `deepseek` 会话。
 
 ```sh
 npm install -g --allow-scripts=@deepseek-ai/dsh-subprocess-local,koffi,node-pty,@google/genai,protobufjs @deepseek-ai/dsh@0.2.1-rc.4 pnpm
-npm install -g dsh-code@2.0.0
-dsh plugin --profile cli add dsh-code@2.0.0
+npm install -g dsh-code@2.1.0
+deepseek repair-deps
+dsh plugin --profile cli add dsh-code@2.1.0
 ```
 
-npm 不可达时（网络受限、镜像临时故障），改用 GitHub Release tarball。每次打 tag 由 CI 构建并挂到 Release，lib 已预构建，安装机不需要工具链：
+后续使用 `/update` 或 `deepseek update --apply` 更新。版本对齐、依赖修复与迁移错误详见[安装、升级与排障](docs/installation_CN.md)。
 
-```sh
-npm install -g --allow-scripts=@deepseek-ai/dsh-subprocess-local,koffi,node-pty,@google/genai,protobufjs @deepseek-ai/dsh@0.2.1-rc.4 pnpm
-npm install -g https://github.com/unlinearity/dsh-code/releases/download/2.0.0/dsh-code-2.0.0.tgz
-dsh plugin --profile cli add https://github.com/unlinearity/dsh-code/releases/download/2.0.0/dsh-code-2.0.0.tgz
-```
-
-> 原生安装脚本：npm 11.6+ 默认跳过未经批准的全局依赖安装脚本。`--allow-scripts` 批准 dsh 需要的几项：`node-pty`（终端）、`koffi`（会话持久化）、`@deepseek-ai/dsh-subprocess-local`（进程沙箱）、`@google/genai` 和 `protobufjs`。省略该参数时安装会提示 `npm warn install-scripts`，启动时原生模块可能加载失败；重新执行同一条命令即可修复。
->
-> 版本对齐：dsh-code 面向 dsh `0.2.1-rc.4` 构建，全部 Harness 依赖均精确锁定为 `0.2.1-rc.4`。本地 `link:` 挂载请先 `git pull && pnpm install && pnpm build`，不要对开发挂载跑更新器。
->
-> 升级说明：旧会话与旧参数中记录的 `code` 预设会自动映射到上游已改名的 `ptc`，无需手动迁移。会话日志读取端随上游升级到格式 v4：旧格式日志在读取时由内核自动迁移（v3→v4），磁盘上的原始文件保持不变。
->
-> 设置迁移：面向 dsh 0.1.x 的旧版本首次启动时，宿主会把旧版全局 `settings.yaml` 一次性迁入当前 profile（文件随后改名为 `settings.yaml.imported`）。请让 dsh 与 dsh-code 同步升级，避免夹在中间的降级启动。若升级后发现模型/供应商配置消失：TUI 会在启动时检测并经由宿主自己的设置管道自动重新导入，无需手动操作（凭据不受影响，无需重新登录）；仅在设置服务不可写的极端情况下，才需要把 dsh 主目录下的 `settings.yaml.imported` 复制为 `settings.yaml` 后重启。
->
-> 从 GitHub tarball 装的版本可能领先 npm 一步（npm 上还没同步这个版本时）。更新器只认 npm，这种情况会写明「新于 npm，不降级」而不是「已是最新」；等 npm 同步后再用 `/update`。
-
-### 2. 升级与安装排障
-
-升级 `@deepseek-ai/dsh` 前，先退出所有正在运行的 `dsh` / `deepseek` 会话：全局安装会替换运行中 TUI 仍在读取的文件，该会话会以 `read EIO` 退出。每次安装或升级后检查组合：
-
-```sh
-dsh --profile cli --dump-config   # 输出中不应出现 "skipping"、"disabling" 或 "not found"
-deepseek doctor
-```
-
-| 现象 | 原因 | 处理 |
-|---|---|---|
-| 出现 `npm warn install-scripts`，之后报 `Failed to load native module`（`pty.node`、`koffi`），或终端、会话持久化插件加载失败 | npm 11.6+ 默认跳过未经批准的全局依赖安装脚本 | 带上批准列表重装：`npm install -g --allow-scripts=@deepseek-ai/dsh-subprocess-local,koffi,node-pty,@google/genai,protobufjs @deepseek-ai/dsh@0.2.1-rc.4 pnpm` |
-| 升级过程中正在运行的会话以 `read EIO` 崩溃 | 全局安装替换了会话正在读取的文件 | 退出所有 `dsh` 会话，重新执行安装，再重新启动 |
-| `--dump-config` 输出 `skipping` 或 `disabling`，并提示 peer 版本不匹配 | 装进 profile 的包还停留在上一条 Harness 版本线 | 按对齐版本重装，例如 `dsh plugin --profile cli add @deepseek-ai/dsh-tool-session-query@0.2.1-rc.4`；`~/.dsh/profiles/cli/package.json` 中所有 `@deepseek-ai/dsh-*` 包必须是同一版本 |
-| `patch: entry "<id>" not found` | `~/.dsh/profiles/cli/cordis.patch.yml` 覆盖了新版本线已删除的行。0.2.1 删除了 `tool-ralph`、`skill-badge` 和 `*-invariant` 各行 | 从 profile patch 中删除该条目 |
-| `Cannot find module '@deepseek-ai/dsh-invariants'` 或 `.../invariant` | 0.2.1 删除了运行时 invariant 相关包 | 从 profile patch 中删除名为 `@deepseek-ai/dsh-invariants` 或以 `/invariant` 结尾的行 |
-| 每次模型请求都在发送前失败，报 `unknown prompt variable "{{cwd}}"` | 0.2.1 删除了 `{{cwd}}` 提示变量，会话目录改为以上下文形式提供给模型 | 删除 profile patch 中 `personaPrefix` / `suffix` 里含 `{{cwd}}` 的句子 |
-| `tool-subagent` 配置拒绝 `backgroundMode`、`persona` 或 `toolFilter` | 0.2.1 改用托管子代理激活和 Agent Preset | 从 profile patch 中删除这些键 |
-| 工具配置拒绝 `mode: both` 或 `DSH_TOOLS_MODE=both` | 工具呈现方式只接受 `native` 或 `ptc` | 改为 `native` 或 `ptc` |
-| 升级后报 `AUTH: Authentication Fails, Your api key ... is invalid`，但导出的 key 本身可用 | 自 0.2.1 起，`~/.dsh/.credentials.yaml` 中保存的同名 key 优先于导出的环境变量 | 在 `/model` 中替换已保存的 key（按 Tab 进入供应商管理），或删除 `~/.dsh/.credentials.yaml` 中 `refs` 下的同名条目，改用导出的变量 |
-| `/model` 中 DeepSeek 或其他供应商分组消失 | API key 路线在凭据配置前不再列出模型 | 在 `/model` 中配置 key，或导出该路线 `apiKeyEnv` 指定的变量 |
-| `/hooks` 拒绝写入并给出安装命令 | 宿主不再捆绑钩子桥 | 执行提示的命令，例如 `dsh plugin --profile cli add @deepseek-ai/dsh-hooks-claude-code@0.2.1-rc.4 @deepseek-ai/dsh-hook-protocol@0.2.1-rc.4`，然后重启 |
-
-Harness 升级指南逐项列出了全部迁移步骤：[docs/upgrade-guide](https://github.com/deepseek-ai/deepseek-harness/tree/main/docs/upgrade-guide)。更多问题与处理：[常见问题与排障](docs/problems.md)。
-
-### 3. 启动指令
+### 2. 启动指令
 
 可用的启动指令：
 ```sh
@@ -93,8 +55,6 @@ dsh-code
 
 
 > DeepSeek Harness 目前仍处于 developer preview，可能出现破坏兼容性的变化；DSH-Code 会持续跟随其插件接口演进。
-
-安装、原生模块和插件加载问题，请先运行 `deepseek doctor` 自检，更多排查见[常见问题与排障](docs/problems.md)。
 
 ## 三、核心功能与使用方式
 
@@ -237,7 +197,7 @@ dsh --profile cli --session my-id    # 使用指定 id 新建会话
 | 命令 | 用途 |
 | --- | --- |
 | `/plugin [query]` | 查看已加载扩展及其状态 |
-| `/update` | 查询 npm 上的新版本并确认升级。从 GitHub tarball 装的版本可能领先 npm，此时会写明不降级 |
+| `/update` | 查询 npm 上的新版本并确认升级 |
 | `/statusline` | 选择状态栏显示的项目 |
 | `/vscode-keys` | 将 Ctrl+R 放行进 VS Code 系终端（幂等写入用户级 keybindings.json） |
 | `/theme` | 切换配色：`dark` / `light` / `prismatic` / `rainbow` / `auto` |
@@ -372,6 +332,8 @@ pnpm run gen:whale   # 从 vendored Logo 路径重新生成 src/whale-glyph.ts
 ```
 
 测试文件由 `tsconfig.test.json` 纳入类型检查：spec 里的假实现若与真实接口脱节，会在 `pnpm typecheck:tests` 直接报错，而不是留到运行时。
+
+发行打包流程见[打包指南](docs/installation_CN.md#发行打包)。
 
 鲸鱼字形由 `scripts/fish-logo.ts` 中 vendored 的 DeepSeek FishLogo 几何数据生成（来源：DeepSeek Harness，MIT）。
 

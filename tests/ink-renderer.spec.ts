@@ -4,6 +4,7 @@ import { Box, Static, Text, render } from 'ink'
 import headless from '@xterm/headless'
 import { describe, expect, it, vi } from 'vitest'
 import { createSynchronizedStdout } from '../src/internals.ts'
+import { installImeCursorAnchor } from '../src/render/ime-cursor.ts'
 import { App } from '../src/app.ts'
 import { appProps, createAssistantMessage, createTranscriptStore, createTty, type SessionEvent } from './helpers/app-mount.ts'
 
@@ -36,6 +37,40 @@ function view(items: string[], rows: number, staticKey = 0, prefix = 'live') {
 }
 
 describe('Ink terminal-state regressions', () => {
+  it('keeps asynchronous console diagnostics below Static while the IME cursor is displaced', async () => {
+    const screen = screenHarness()
+    const header = Array.from({ length: 8 }, (_, index) => `header-${index}`)
+    const instance = render(view(header, 5), {
+      stdin: screen.tty.stdin, stdout: screen.stdout, stderr: screen.stdout, exitOnCtrlC: false,
+    })
+    const anchor = installImeCursorAnchor(screen.stdout)!
+    try {
+      await vi.waitFor(() => expect(screen.tty.output.text).toContain('live-4'))
+      anchor.anchor(3, 2)
+      const diagnostic = '[llm-deepseek-account] ' + 'catalog diagnostic '.repeat(8)
+      console.error(diagnostic)
+      await vi.waitFor(async () => {
+        const lines = await screen.lines()
+        expect(lines.slice(0, header.length)).toEqual(header)
+        expect(lines[header.length]).toContain('[llm-deepseek-account]')
+        expect(lines.filter(line => /^live-\d$/u.test(line))).toEqual(
+          Array.from({ length: 5 }, (_, index) => `live-${index}`),
+        )
+      })
+      anchor.anchor(3, 2)
+      instance.rerender(view(header, 5, 0, 'updated'))
+      await vi.waitFor(async () => {
+        const lines = await screen.lines()
+        expect(lines.slice(0, header.length)).toEqual(header)
+        expect(lines.filter(line => /^updated-\d$/u.test(line))).toHaveLength(5)
+      })
+    } finally {
+      anchor.release()
+      instance.unmount()
+      screen.dispose()
+    }
+  })
+
   it.each([24, 30])('recovers from a %i-row padded frame without scrollback gaps or duplicates', async (height) => {
     const screen = screenHarness()
     const instance = render(view(['static-A'], 5), {

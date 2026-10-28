@@ -43,7 +43,7 @@ describe('global launcher aliases', () => {
   })
 
   it('pins setup to this release so pnpm can install it on publication day', () => {
-    expect(setupBundle([])).toBe('dsh-code@2.0.0')
+    expect(setupBundle([])).toBe('dsh-code@2.1.0')
   })
 
   it('starts dsh with inherited stdio and preserves its exit code', () => {
@@ -237,6 +237,7 @@ describe('update orchestration', () => {
     expect(blockers).toEqual([])
     expect(steps.map(step => step.label)).toEqual([
       'npm install',
+      'repair host dependencies',
       'dsh plugin add',
       'dsh plugin add @deepseek-ai/dsh-web-search-exa@0.1.5-rc.1',
     ])
@@ -244,10 +245,12 @@ describe('update orchestration', () => {
     // update would strand host and bundle on different lines · and each
     // names the exact manual command to recover with.
     expect(steps[0]).toMatchObject({ fatal: true, remedy: 'npm install -g @deepseek-ai/dsh@0.1.5-rc.1 dsh-code@1.0.6' })
-    expect(steps[1]).toMatchObject({ fatal: true, remedy: 'dsh plugin --profile cli add dsh-code@1.0.6' })
+    expect(steps[1]).toMatchObject({ fatal: true, remedy: 'deepseek repair-deps' })
+    expect(steps[1].args.at(-1)).toBe('repair-deps')
+    expect(steps[2]).toMatchObject({ fatal: true, remedy: 'dsh plugin --profile cli add dsh-code@1.0.6' })
     // The companion carry is best-effort: one plugin without a build on the
     // target line must not strand the finished upgrade.
-    expect(steps[2]).toMatchObject({ fatal: false, remedy: 'dsh plugin --profile cli add @deepseek-ai/dsh-web-search-exa@0.1.5-rc.1' })
+    expect(steps[3]).toMatchObject({ fatal: false, remedy: 'dsh plugin --profile cli add @deepseek-ai/dsh-web-search-exa@0.1.5-rc.1' })
 
     // Unresolvable dsh commands are blockers, enforced before any step runs:
     // starting the host install without a working profile step is the
@@ -257,12 +260,12 @@ describe('update orchestration', () => {
       'dsh-code: could not resolve the dsh command for the profile update',
       'dsh-code: could not resolve the dsh command for @deepseek-ai/dsh-web-search-exa@0.1.5-rc.1',
     ])
-    expect(unresolvable.steps).toHaveLength(1)
+    expect(unresolvable.steps).toHaveLength(2)
 
-    // A checkout-mounted profile carries no steps beyond the host install.
+    // A checkout keeps its mount but still repairs the newly installed host.
     const linked = updatePlan({ latestCode: '1.0.6', peers: { '@deepseek-ai/dsh-session': '0.1.5-rc.1' }, profileSpec: 'link:C:/repo' })
     const checkout = updateSteps({ plan: linked, npm, resolveCommand: () => undefined })
-    expect(checkout.steps).toHaveLength(1)
+    expect(checkout.steps).toHaveLength(2)
     expect(checkout.blockers).toEqual([])
   })
 
@@ -385,7 +388,7 @@ describe('update orchestration', () => {
   describe('buildUpdateStatus', () => {
     const registry = (): Record<string, PackagePeers | undefined> => ({
       // view(subject) returns the FIELD value, so the peers map is bare.
-      'dsh-code@2.0.1': { '@deepseek-ai/dsh-session': '0.2.0-rc.2' },
+      'dsh-code@2.1.1': { '@deepseek-ai/dsh-session': '0.2.0-rc.2' },
     })
     // Profile readers stay injectable: the real machine state must not leak
     // into these contract tests (a link-mounted dev profile would flip every
@@ -394,14 +397,14 @@ describe('update orchestration', () => {
 
     it('reports an aligned upgrade with the plugin carry and no blockers', () => {
       const status = buildUpdateStatus({
-        view: subjectParts => subjectParts[0] === 'dsh-code' ? '2.0.1' : registry()[subjectParts[0]],
+        view: subjectParts => subjectParts[0] === 'dsh-code' ? '2.1.1' : registry()[subjectParts[0]],
         installedDsh: () => '0.1.7-rc.2',
         ...readers,
       })
-      expect(status.code).toEqual({ running: packageVersion, latest: '2.0.1' })
+      expect(status.code).toEqual({ running: packageVersion, latest: '2.1.1' })
       expect(status.host).toEqual({ installed: '0.1.7-rc.2', targetLine: '0.2.0-rc.2' })
       expect(status.plan.dshSpec).toBe('@deepseek-ai/dsh@0.2.0-rc.2')
-      expect(status.plan.codeSpec).toBe('dsh-code@2.0.1')
+      expect(status.plan.codeSpec).toBe('dsh-code@2.1.1')
       expect(status.blockers).toEqual({ registry: null, downgrade: false, localCheckout: null })
       expect(status.upToDate).toBe(false)
     })

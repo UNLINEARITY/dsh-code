@@ -6,6 +6,7 @@ import { createRequire } from 'node:module'
 import { homedir } from 'node:os'
 import { dirname, join, posix, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { findRuntimeRoot, repairRuntimeDependencies } from './runtime-deps.mjs'
 
 const packageRequire = createRequire(import.meta.url)
 /** This launcher's release version (exported for probes and tests). */
@@ -14,7 +15,7 @@ export const packageVersion = packageRequire('../package.json').version
 /** Arguments required to boot DSH-Code's conventional profile. */
 export const profileArgs = (args = []) => ['--profile', 'cli', ...args]
 
-export const OPERATION_COMMANDS = ['setup', 'doctor', 'completion', 'update']
+export const OPERATION_COMMANDS = ['setup', 'doctor', 'completion', 'update', 'repair-deps']
 
 /** Exact first-day package spec used by setup (pnpm delays an unpinned release). */
 export const setupBundle = (args = []) => args.includes('--local')
@@ -248,6 +249,12 @@ export function updateSteps({ plan, npm = npmInvocation(), resolveCommand = rawD
     label: 'npm install',
     fatal: true,
     remedy: `npm install -g ${plan.dshSpec} ${plan.codeSpec}`,
+  }, {
+    command: process.execPath,
+    args: [fileURLToPath(import.meta.url), 'repair-deps'],
+    label: 'repair host dependencies',
+    fatal: true,
+    remedy: 'deepseek repair-deps',
   }]
   if (!plan.profileStep) return { steps, blockers: [] }
   const blockers = []
@@ -425,11 +432,18 @@ export function dshCommand(args, options = {}) {
 
 /** Static shell completion for wrapper commands and the TUI's local flags. */
 export function completionScript(shell) {
-  const words = 'setup doctor completion update --help --version --resume --continue --session --mode --theme --image'
+  const words = 'setup doctor completion update repair-deps --help --version --resume --continue --session --mode --theme --image'
   if (shell === 'bash') return `_deepseek_complete() { COMPREPLY=( $(compgen -W "${words}" -- "\${COMP_WORDS[COMP_CWORD]}") ); }\ncomplete -F _deepseek_complete deepseek dsh-code`
   if (shell === 'zsh') return `#compdef deepseek dsh-code\n_arguments '1:command:(${words})'`
   if (shell === 'powershell' || shell === 'pwsh') return `Register-ArgumentCompleter -Native -CommandName deepseek,dsh-code -ScriptBlock { param($wordToComplete) '${words}'.Split(' ') | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object { [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_) } }`
   throw new Error('completion needs one shell: bash, zsh, or powershell')
+}
+
+function currentRuntimeRepair(check = false) {
+  return repairRuntimeDependencies({
+    root: findRuntimeRoot(process.platform === 'win32' ? 'dsh.cmd' : 'dsh'),
+    npm: npmInvocation(), check,
+  })
 }
 
 function printDoctor(resolveCommand = rawDshCommand, spawnCommand = spawnSync) {
@@ -439,6 +453,12 @@ function printDoctor(resolveCommand = rawDshCommand, spawnCommand = spawnSync) {
   const command = resolveCommand(['--profile', 'cli', '--dump-config'])
   checks.push({ ok: command !== undefined, label: '@deepseek-ai/dsh', detail: command === undefined ? 'not found beside dsh-code' : 'entrypoint resolved' })
   checks.push({ ok: profileHasDshCode(), label: 'cli profile', detail: cliProfileDir() })
+  try {
+    const { rows } = currentRuntimeRepair(true)
+    checks.push({ ok: true, label: 'host dependencies', detail: rows.map(row => `${row.dependency}@${row.version}`).join(', ') })
+  } catch (error) {
+    checks.push({ ok: false, label: 'host dependencies', detail: error.message })
+  }
   if (command !== undefined && profileHasDshCode()) {
     const probe = spawnCommand(command.command, command.args, { encoding: 'utf8', windowsHide: true })
     const output = String(probe.stdout ?? '')
@@ -737,7 +757,22 @@ export function launchOperation(args = process.argv.slice(2)) {
     printDoctor()
     return true
   }
+  if (operation === 'repair-deps') {
+    try {
+      const result = currentRuntimeRepair(args.includes('--check'))
+      for (const row of result.rows) console.log(`ok   ${row.owner} -> ${row.dependency}@${row.version}`)
+    } catch (error) {
+      console.error(`dsh-code: ${error.message}`)
+      process.exitCode = 1
+    }
+    return true
+  }
   if (operation === 'setup') {
+    try { currentRuntimeRepair() } catch (error) {
+      console.error(`dsh-code: ${error.message}`)
+      process.exitCode = 1
+      return true
+    }
     // pnpm deliberately delays unpinned packages during their first 24 hours.
     // Setup must mount the exact globally installed release on launch day.
     const command = rawDshCommand(['plugin', '--profile', 'cli', 'add', setupBundle(args)])
