@@ -276,10 +276,6 @@
   "@deepseek-ai/dsh-tool-subagent-control"
  ],
  [
-  "tool-subagent-list-agents",
-  "@deepseek-ai/dsh-tool-subagent-control/list-agents"
- ],
- [
   "tool-subagent",
   "@deepseek-ai/dsh-tool-subagent"
  ],
@@ -362,6 +358,14 @@
  [
   "tools",
   "@deepseek-ai/dsh-tools"
+ ],
+ [
+  "tool-executor-native",
+  "@deepseek-ai/dsh-tool-executor-native"
+ ],
+ [
+  "tool-executor-ptc",
+  "@deepseek-ai/dsh-tool-executor-ptc"
  ],
  [
   "system-prompt",

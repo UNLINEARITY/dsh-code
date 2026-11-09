@@ -33,7 +33,7 @@ interface ServiceRow {
 /** Context double exposing a canned `fileReferences.list` (and optionally sessions). */
 function serviceContext(
   rows: readonly ServiceRow[] | Error,
-  options: { queries?: string[]; sessionQueries?: string[]; sessions?: readonly SessionReferenceCandidate[] } = {},
+  options: { queries?: string[]; sessionQueries?: string[]; sessions?: readonly SessionReferenceCandidate[]; prepared?: unknown[][] } = {},
 ): Context {
   return {
     get: (name: string): unknown => {
@@ -52,7 +52,10 @@ function serviceContext(
             options.sessionQueries?.push(query)
             return options.sessions ?? []
           },
-          prepare: async (_agent: unknown, content: unknown) => ({ content, additionalContext: undefined }),
+          prepare: async (...args: unknown[]) => {
+            options.prepared?.push(args)
+            return { content: args[1], additionalContext: undefined }
+          },
         }
       }
       return undefined
@@ -65,8 +68,32 @@ function bareContext(): Context {
   return { get: (): undefined => undefined } as unknown as Context
 }
 
-const agent = { id: 'a' } as unknown as Agent
+const agent = { id: 'a', model: { current: () => ({ provider: 'route', model: 'picked' }) } } as unknown as Agent
 const nowhere = join(tmpdir(), 'dsh-code-mentions-no-cwd')
+
+describe('createMentions.prepare', () => {
+  it('captures the selected route and passes cancellation after it', async () => {
+    const prepared: unknown[][] = []
+    const api = createMentions(serviceContext([], { prepared }), agent, nowhere)
+    const parsed = api.parse(api.sessionMention({ sessionId: 'session-1234' as never, label: 'prior', sameWorkspace: true, createdAt: 1 }))
+    expect(parsed.references).toHaveLength(1)
+    const signal = new AbortController().signal
+    await api.prepare(parsed, signal)
+    expect(prepared).toEqual([[
+      agent, [{ type: 'text', text: parsed.text }], parsed.references,
+      { provider: 'route', model: 'picked' }, signal,
+    ]])
+  })
+
+  it('rejects session references without a selected route before resolving content', async () => {
+    const prepared: unknown[][] = []
+    const missingModel = { model: { current: () => undefined } } as unknown as Agent
+    const api = createMentions(serviceContext([], { prepared }), missingModel, nowhere)
+    await expect(api.prepare(api.parse(api.sessionMention({ sessionId: 'session-1234' as never, label: 'prior', sameWorkspace: true, createdAt: 1 }))))
+      .rejects.toThrow('Select a model')
+    expect(prepared).toEqual([])
+  })
+})
 
 describe('createMentions.candidates (fileReferences service)', () => {
   it('works when the callback is detached from the API object', async () => {

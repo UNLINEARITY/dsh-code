@@ -207,10 +207,13 @@ export function createMentions(ctx: Context, agent: Agent | undefined, cwd: stri
       if (parsed.references.length === 0 || resolver === undefined || agent === undefined) {
         return { text: parsed.text, references: parsed.references }
       }
+      const selection = agent.model.current()
+      if (selection === undefined) throw new Error('Select a model before referencing a session')
       const prepared = await resolver.prepare(
         agent,
         [{ type: 'text', text: parsed.text }],
         parsed.references,
+        selection,
         signal,
       )
       return {

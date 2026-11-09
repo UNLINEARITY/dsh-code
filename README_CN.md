@@ -7,7 +7,7 @@
 <p align="center"><img alt="Typing SVG" src="https://readme-typing-svg.herokuapp.com?font=JetBrains+Mono&amp;weight=500&amp;size=22&amp;duration=4000&amp;pause=700&amp;color=4176E6&amp;center=true&amp;vCenter=true&amp;width=680&amp;lines=DeepSeek+Harness+Code;DSH+%E5%86%85%E6%A0%B8%E7%9A%84%E7%BB%88%E7%AB%AF%E7%BC%96%E7%A0%81%E7%95%8C%E9%9D%A2"></p>
 <p align="center">
   <a href="https://github.com/deepseek-ai/deepseek-harness"><img alt="DeepSeek Harness" src="https://img.shields.io/badge/DeepSeek-Harness-4176E6?style=for-the-badge&amp;logo=deepseek&amp;logoColor=white&amp;labelColor=1c1917"></a>
-  <a href="https://www.npmjs.com/package/@deepseek-ai/dsh"><img alt="dsh version" src="https://img.shields.io/badge/dsh-0.2.1--rc.4-4176E6?style=for-the-badge&amp;logo=deepseek&amp;logoColor=white&amp;labelColor=1c1917"></a>
+  <a href="https://www.npmjs.com/package/@deepseek-ai/dsh"><img alt="dsh version" src="https://img.shields.io/badge/dsh-0.2.2--rc.1-4176E6?style=for-the-badge&amp;logo=deepseek&amp;logoColor=white&amp;labelColor=1c1917"></a>
   <a href="https://github.com/UNLINEARITY/dsh-code/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/UNLINEARITY/dsh-code?label=Stars&amp;style=for-the-badge&amp;logo=github&amp;logoColor=white&amp;color=4176E6&amp;labelColor=1c1917"></a>
   <a href="https://www.npmjs.com/package/dsh-code"><img alt="npm version" src="https://img.shields.io/npm/v/dsh-code?label=npm&amp;style=for-the-badge&amp;logo=npm&amp;color=cb3837&amp;labelColor=1c1917"></a>
   <a href="https://github.com/UNLINEARITY/dsh-code/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/github/license/UNLINEARITY/dsh-code?label=License&amp;style=for-the-badge&amp;logo=opensourceinitiative&amp;color=4176E6&amp;labelColor=1c1917"></a>
@@ -27,11 +27,11 @@ DeepSeek Harness 将模型、工具、存储、策略和界面作为插件，通
 
 [2.1.0 更新说明](docs/releases/2.1.0_CN.md)
 
-需要 Node `^22.19 || >=24` 和预览版 `dsh` CLI（当前版本线：`@deepseek-ai/dsh@0.2.1-rc.4`）。未配置模型时仍可进入 TUI、查看会话和使用非模型功能；在 `/model` 中按 Tab 进入供应商管理，配置 API key、OAuth 与设备码登录。
+需要 Node `>=24.9.0` 和预览版 `dsh` CLI（当前版本线：`@deepseek-ai/dsh@0.2.2-rc.1`）。未配置模型时仍可进入 TUI、查看会话和使用非模型功能；在 `/model` 中按 Tab 进入供应商管理，配置 API key、OAuth 与设备码登录。
 
 ### 1. 安装与更新
 
-从 npm 安装。安装或升级前，先关闭所有正在运行的 `dsh` / `deepseek` 会话。
+以下命令安装已发布的 `dsh-code@2.1.0` 及其匹配的 Harness 版本。当前源码对齐 Harness `0.2.2-rc.1`，请使用下方源码安装流程。安装或升级前，先关闭所有正在运行的 `dsh` / `deepseek` 会话。
 
 ```sh
 npm install -g --allow-scripts=@deepseek-ai/dsh-subprocess-local,koffi,node-pty,@google/genai,protobufjs @deepseek-ai/dsh@0.2.1-rc.4 pnpm
@@ -238,15 +238,15 @@ dsh --profile cli --session my-id    # 使用指定 id 新建会话
 
 ### 1. 运行时组合
 
-DSH-Code 读取 Harness 的实时注册表，不在本地维护另一套副本。模型适配器、工具 provider、技能来源、命令、权限策略、持久化后端、sandbox 和 subagent provider 都可以通过 DSH composition 添加或替换。
+DSH-Code 读取 Harness 的实时注册表，不在本地维护另一套副本。Harness 包通过 optional peer 使用已安装的 `dsh` 宿主副本；只有本地编译与测试安装开发副本。发布包仅携带终端自身依赖，不再捆绑第二套 Harness runtime。模型适配器、工具 provider、技能来源、命令、权限策略、持久化后端、sandbox 和 subagent provider 都可以通过 DSH composition 添加或替换。
 
 `/plugin` 提供当前 Cordis loader 状态的只读视图。
 
 ### 2. 内置扩展与可选官方插件
 
-以下官方插件已随 DSH-Code 一起安装并在组合中默认启用：
+以下官方插件由 `dsh` 宿主提供，并在 DSH-Code 组合中默认启用：
 
-- **会话检索**：模型获得 `session_search` / `session_event_search` / `session_trace` / `session_event_trace` / `session_event_read` 五个只读工具，可检索历史会话内容（索引持久化于 dsh 主目录：首次搜索一次性构建、此后增量维护；跨会话访问按工作目录精确匹配授权；Node 22 上首次搜索会当场打印一次 `node:sqlite` 实验性警告，属正常现象）。
+- **会话检索**：模型获得 `session_search` / `session_event_search` / `session_trace` / `session_event_trace` / `session_event_read` 五个只读工具，可检索历史会话内容（索引持久化于 dsh 主目录：首次搜索一次性构建、此后增量维护；跨会话访问按工作目录精确匹配授权）。
 
 以下官方插件已安装但需按需启用（在用户层 `~/.dsh/profiles/cli/cordis.patch.yml` 追加行，或按说明安装）：
 
@@ -263,7 +263,7 @@ DSH-Code 读取 Harness 的实时注册表，不在本地维护另一套副本�
   ```
 
   （HTTP 传输改用 `transport: streamable-http` + `url`；服务器不可达时安全降级为重连循环，不影响启动。）
-- **Claude Code / Codex hooks 桥**（`@deepseek-ai/dsh-hooks-claude-code` / `-codex`）：在拦截缝上运行既有 hooks 配置；hooks 文件缺失时静默不生效。自 0.2.1 起宿主不再捆绑钩子桥：先连同协议 peer 一起装入 profile（`dsh plugin --profile cli add @deepseek-ai/dsh-hooks-claude-code@0.2.1-rc.4 @deepseek-ai/dsh-hook-protocol@0.2.1-rc.4`；Codex 桥需要同一个 peer）。任一包缺失时 `/hooks` 拒绝写入并给出这条命令。然后添加该行：
+- **Claude Code / Codex hooks 桥**（`@deepseek-ai/dsh-hooks-claude-code` / `-codex`）：在拦截缝上运行既有 hooks 配置；hooks 文件缺失时静默不生效。自 0.2.1 起宿主不再捆绑钩子桥：先连同协议 peer 一起装入 profile（`dsh plugin --profile cli add @deepseek-ai/dsh-hooks-claude-code@0.2.2-rc.1 @deepseek-ai/dsh-hook-protocol@0.2.2-rc.1`；Codex 桥需要同一个 peer）。任一包缺失时 `/hooks` 拒绝写入并给出这条命令。然后添加该行：
 
   ```yaml
   - insert:
@@ -342,7 +342,11 @@ pnpm run gen:whale   # 从 vendored Logo 路径重新生成 src/whale-glyph.ts
 本地 checkout 可使用：
 
 ```sh
-dsh plugin --profile cli add file:C:/path/to/dsh-code
+npm install -g --allow-scripts=@deepseek-ai/dsh-subprocess-local,koffi,node-pty,@google/genai,protobufjs @deepseek-ai/dsh@0.2.2-rc.1
+pnpm install
+pnpm build
+npm install -g .
+dsh plugin --profile cli add .
 ```
 
 GitHub 安装可用于源码开发：

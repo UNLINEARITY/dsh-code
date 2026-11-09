@@ -309,13 +309,10 @@ describe('review conclusion parsing', () => {
 describe('watchGitBranch', () => {
   it('updates the store when HEAD moves to another branch (debounced)', { timeout: 15_000 }, async () => {
     const { watchGitBranch } = await import('../src/git-workflow.ts')
-    const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import('node:fs')
+    const { writeFileSync, renameSync, rmSync } = await import('node:fs')
     const path = await import('node:path')
-    const { tmpdir } = await import('node:os')
-    const dir = mkdtempSync(path.join(tmpdir(), 'git-branch-watch-'))
+    const dir = await tempRepo()
     try {
-      mkdirSync(path.join(dir, '.git'))
-      writeFileSync(path.join(dir, '.git', 'HEAD'), 'ref: refs/heads/main\n')
       const store = watchGitBranch(dir)
       const waitFor = async (expected: string): Promise<void> => {
         // Watcher delivery plus the 150ms debounce are load-sensitive under
@@ -328,10 +325,13 @@ describe('watchGitBranch', () => {
       }
       try {
         expect(store.getSnapshot()).toBe('main')
-        writeFileSync(path.join(dir, '.git', 'HEAD'), 'ref: refs/heads/feature/x\n')
+        await runGit(dir, 'symbolic-ref', 'HEAD', 'refs/heads/feature/x')
         await waitFor('feature/x')
         // A detached HEAD clears the branch (the status group drops out).
-        writeFileSync(path.join(dir, '.git', 'HEAD'), '0123456789abcdef0123456789abcdef01234567\n')
+        // Git replaces HEAD through its lock file rather than modifying it
+        // in place; exercise that same filesystem notification path.
+        writeFileSync(path.join(dir, '.git', 'HEAD.lock'), '0123456789abcdef0123456789abcdef01234567\n')
+        renameSync(path.join(dir, '.git', 'HEAD.lock'), path.join(dir, '.git', 'HEAD'))
         await waitFor('')
       } finally {
         store.dispose()

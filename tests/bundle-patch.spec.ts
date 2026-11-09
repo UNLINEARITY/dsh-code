@@ -13,13 +13,11 @@ const manifest = JSON.parse(
 ) as PackageManifest
 
 /**
- * The @deepseek-ai packages a stock host install resolves: the direct
- * dependencies of @deepseek-ai/dsh plus every transitive package npm's flat
- * global tree hoists beside them. Generated from an installed host of the
- * aligned line:
- *
- *   ls <global root>/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai \
- *     | sed 's|^|@deepseek-ai/|' | sort | node -e "…write the JSON array"
+ * The platform-independent @deepseek-ai names in the tagged host's runtime
+ * dependency closure, including its peers and optional dependencies. Read
+ * package manifests with git show at the exact Harness release tag, then
+ * verify these names against the installed host. Platform-specific native
+ * bindings are checked through the real host rather than this row fixture.
  *
  * Regenerate whenever the bundle aligns to a new harness line: an upstream
  * line that stops shipping a package turns every patch row over that

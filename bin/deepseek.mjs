@@ -449,7 +449,7 @@ function currentRuntimeRepair(check = false) {
 function printDoctor(resolveCommand = rawDshCommand, spawnCommand = spawnSync) {
   const checks = []
   const [major, minor] = process.versions.node.split('.').map(Number)
-  checks.push({ ok: major > 22 || (major === 22 && minor >= 19), label: `Node ${process.versions.node}`, detail: 'requires ^22.19 or >=24' })
+  checks.push({ ok: major > 24 || (major === 24 && minor >= 9), label: `Node ${process.versions.node}`, detail: 'requires >=24.9.0' })
   const command = resolveCommand(['--profile', 'cli', '--dump-config'])
   checks.push({ ok: command !== undefined, label: '@deepseek-ai/dsh', detail: command === undefined ? 'not found beside dsh-code' : 'entrypoint resolved' })
   checks.push({ ok: profileHasDshCode(), label: 'cli profile', detail: cliProfileDir() })

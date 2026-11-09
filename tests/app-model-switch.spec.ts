@@ -570,6 +570,9 @@ describe('DeepSeek model-switch easter egg', () => {
       await wait()
       stdin.write('deepseek')
       await wait()
+      // Menu selection backgrounds are static UI, outside the animation
+      // sample. Capture from confirmation so a switch-time wave still fails.
+      output = ''
       stdin.write('\r')
       await wait()
       expect(output).toContain('»')

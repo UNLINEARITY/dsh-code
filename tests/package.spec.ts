@@ -27,6 +27,16 @@ describe('package tooling contract', () => {
 })
 
 describe('package peer dependencies', () => {
+  it('uses host-owned Harness packages without shipping a second runtime', () => {
+    const hostBundled = JSON.parse(readFileSync(new URL('./host-bundled.json', import.meta.url), 'utf8')) as string[]
+    expect(Object.keys(manifest.dependencies).filter(name => name.startsWith('@deepseek-ai/'))).toEqual([])
+    for (const name of Object.keys(manifest.peerDependencies).filter(name => name.startsWith('@deepseek-ai/'))) {
+      // Optional extensions are compiled locally but installed into the
+      // profile only when enabled; host-owned packages need no extra copy.
+      if (!hostBundled.includes(name) || manifest.devDependencies[name] === undefined) continue
+      expect(manifest.devDependencies[name]).toBe(manifest.peerDependencies[name])
+    }
+  })
   it('leaves Harness peers for the DSH profile instead of npm auto-installation', () => {
     expect(Object.keys(manifest.peerDependenciesMeta).sort()).toEqual(
       Object.keys(manifest.peerDependencies).sort(),
@@ -41,6 +51,6 @@ describe('package peer dependencies', () => {
       .flatMap(group => Object.entries(group))
       .filter(([name]) => name.startsWith('@deepseek-ai/dsh-'))
       .map(([, version]) => version)
-    expect(new Set(versions)).toEqual(new Set(['0.2.1-rc.4']))
+    expect(new Set(versions)).toEqual(new Set(['0.2.2-rc.1']))
   })
 })

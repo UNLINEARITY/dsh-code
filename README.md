@@ -7,7 +7,7 @@ English | [中文](README_CN.md)
 <p align="center"><img alt="Typing SVG" src="https://readme-typing-svg.herokuapp.com?font=JetBrains+Mono&amp;weight=500&amp;size=22&amp;duration=4000&amp;pause=700&amp;color=4176E6&amp;center=true&amp;vCenter=true&amp;width=680&amp;lines=DeepSeek+Harness+Code;Terminal+Coding+Interface+for+the+DSH+Core"></p>
 <p align="center">
   <a href="https://github.com/deepseek-ai/deepseek-harness"><img alt="DeepSeek Harness" src="https://img.shields.io/badge/DeepSeek-Harness-4176E6?style=for-the-badge&amp;logo=deepseek&amp;logoColor=white&amp;labelColor=1c1917"></a>
-  <a href="https://www.npmjs.com/package/@deepseek-ai/dsh"><img alt="dsh version" src="https://img.shields.io/badge/dsh-0.2.1--rc.4-4176E6?style=for-the-badge&amp;logo=deepseek&amp;logoColor=white&amp;labelColor=1c1917"></a>
+  <a href="https://www.npmjs.com/package/@deepseek-ai/dsh"><img alt="dsh version" src="https://img.shields.io/badge/dsh-0.2.2--rc.1-4176E6?style=for-the-badge&amp;logo=deepseek&amp;logoColor=white&amp;labelColor=1c1917"></a>
   <a href="https://github.com/UNLINEARITY/dsh-code/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/UNLINEARITY/dsh-code?label=Stars&amp;style=for-the-badge&amp;logo=github&amp;logoColor=white&amp;color=4176E6&amp;labelColor=1c1917"></a>
   <a href="https://www.npmjs.com/package/dsh-code"><img alt="npm version" src="https://img.shields.io/npm/v/dsh-code?label=npm&amp;style=for-the-badge&amp;logo=npm&amp;color=cb3837&amp;labelColor=1c1917"></a>
   <a href="https://github.com/UNLINEARITY/dsh-code/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/github/license/UNLINEARITY/dsh-code?label=License&amp;style=for-the-badge&amp;logo=opensourceinitiative&amp;color=4176E6&amp;labelColor=1c1917"></a>
@@ -25,11 +25,11 @@ DeepSeek Harness registers models, tools, storage, policies, and interfaces as p
 
 [2.1.0 release notes](docs/releases/2.1.0.md)
 
-Requires Node `^22.19 || >=24` and the preview `dsh` CLI (current release line: `@deepseek-ai/dsh@0.2.1-rc.4`). You can still enter the TUI, browse sessions, and use non-model features without configuring a model; press `Tab` in `/model` to manage API keys, OAuth, device-code sign-in, endpoints, and models.
+Requires Node `>=24.9.0` and the preview `dsh` CLI (current release line: `@deepseek-ai/dsh@0.2.2-rc.1`). You can still enter the TUI, browse sessions, and use non-model features without configuring a model; press `Tab` in `/model` to manage API keys, OAuth, device-code sign-in, endpoints, and models.
 
 ### 1. Install and update
 
-Install from npm. Close all running `dsh` / `deepseek` sessions before installing or upgrading.
+The commands below install the published `dsh-code@2.1.0` with its matching Harness version. This checkout targets Harness `0.2.2-rc.1`; use the source installation below for this checkout. Close all running `dsh` / `deepseek` sessions before installing or upgrading.
 
 ```sh
 npm install -g --allow-scripts=@deepseek-ai/dsh-subprocess-local,koffi,node-pty,@google/genai,protobufjs @deepseek-ai/dsh@0.2.1-rc.4 pnpm
@@ -232,15 +232,15 @@ The following built-in commands are available inside the TUI. Additional Harness
 
 ### 1. Runtime composition
 
-DSH-Code reads the live Harness registries instead of maintaining a separate local copy. Model adapters, tool providers, skill sources, commands, permission policies, persistence backends, sandboxes, and subagent providers can all be added or replaced through DSH composition.
+DSH-Code reads the live Harness registries instead of maintaining a separate local copy. Harness packages resolve from the installed `dsh` host through optional peers; only local compilation and tests install development copies. The published bundle carries its terminal dependencies without a second Harness runtime. Model adapters, tool providers, skill sources, commands, permission policies, persistence backends, sandboxes, and subagent providers can all be added or replaced through DSH composition.
 
 `/plugin` provides a read-only view of the current Cordis loader state.
 
 ### 2. Bundled and optional official plugins
 
-The following official plugins ship with DSH-Code and are enabled in the composition by default:
+The following official plugins resolve from the `dsh` host and are enabled by DSH-Code by default:
 
-- **Session search**: the model gets five read-only tools — `session_search`, `session_event_search`, `session_trace`, `session_event_trace`, `session_event_read` — over prior session logs (the index persists under the dsh home: the first search builds it once and later searches maintain it incrementally; cross-session access is scoped by exact working directory; on Node 22 the first search prints a one-time `node:sqlite` experimental warning, which is expected).
+- **Session search**: the model gets five read-only tools — `session_search`, `session_event_search`, `session_trace`, `session_event_trace`, `session_event_read` — over prior session logs (the index persists under the dsh home: the first search builds it once and later searches maintain it incrementally; cross-session access is scoped by exact working directory).
 
 The following official plugins are installed but opt-in (append rows in the user layer `~/.dsh/profiles/cli/cordis.patch.yml`, or install as noted):
 
@@ -257,7 +257,7 @@ The following official plugins are installed but opt-in (append rows in the user
   ```
 
   (HTTP transports use `transport: streamable-http` plus `url`; an unreachable server degrades to a reconnect loop and never breaks startup.)
-- **Claude Code / Codex hooks bridges** (`@deepseek-ai/dsh-hooks-claude-code` / `-codex`): run existing hooks configurations at the interception seams; a missing hooks file is a silent no-op. Since 0.2.1 the host no longer bundles the bridges: install a bridge with its protocol peer first (`dsh plugin --profile cli add @deepseek-ai/dsh-hooks-claude-code@0.2.1-rc.4 @deepseek-ai/dsh-hook-protocol@0.2.1-rc.4`; the Codex bridge needs the same peer). `/hooks` refuses to write a row while either package is missing and prints this command. Then add the row:
+- **Claude Code / Codex hooks bridges** (`@deepseek-ai/dsh-hooks-claude-code` / `-codex`): run existing hooks configurations at the interception seams; a missing hooks file is a silent no-op. Since 0.2.1 the host no longer bundles the bridges: install a bridge with its protocol peer first (`dsh plugin --profile cli add @deepseek-ai/dsh-hooks-claude-code@0.2.2-rc.1 @deepseek-ai/dsh-hook-protocol@0.2.2-rc.1`; the Codex bridge needs the same peer). `/hooks` refuses to write a row while either package is missing and prints this command. Then add the row:
 
   ```yaml
   - insert:
@@ -336,7 +336,11 @@ The whale glyph is generated from the DeepSeek FishLogo geometry vendored in `sc
 For a local checkout:
 
 ```sh
-dsh plugin --profile cli add file:C:/path/to/dsh-code
+npm install -g --allow-scripts=@deepseek-ai/dsh-subprocess-local,koffi,node-pty,@google/genai,protobufjs @deepseek-ai/dsh@0.2.2-rc.1
+pnpm install
+pnpm build
+npm install -g .
+dsh plugin --profile cli add .
 ```
 
 GitHub installation is available for source development:

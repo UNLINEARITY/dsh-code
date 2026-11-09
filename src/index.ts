@@ -18,7 +18,7 @@ import { createElement } from 'react'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { installModelSelection } from '@deepseek-ai/dsh-agent'
-import type { Agent, AgentHandle, ModelSelection, ModelSelectionRef } from '@deepseek-ai/dsh-agent'
+import type { Agent, AgentHandle, ModelSelection } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
 import type {} from '@deepseek-ai/dsh-attachment'
 import { createUserMessage, type ContentBlock } from '@deepseek-ai/dsh-llm'
@@ -97,7 +97,8 @@ import { mountApprovalAnswerer, type ApprovalStore } from './approval.ts'
 import { isSlashLine, missingKernelCommand, submissionPayload, watchCommands, type CommandsView } from './commands.ts'
 import { internals, type TuiMount } from './internals.ts'
 import { syncModelCapabilities } from './model-capabilities.ts'
-import { activateModelCandidate, buildModelSelection, applyModelSelectionToConfig, loadModelDirectory, modelSelectionLabel, pendingModelSelection, resolveEffectiveSelection, type ModelRow } from './models.ts'
+import { activateModelCandidate, buildModelSelection, loadModelDirectory, modelSelectionLabel, type ModelRow } from './models.ts'
+import { applySubagentModel } from './runner/subagent-model.ts'
 import {
   discoverProviderModels,
   loadProviderSettings,
@@ -546,7 +547,6 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     store: ReturnType<typeof createTranscriptStore>
     mentions: MentionsApi
     mode: string
-    selection: { picked?: ModelSelection }
     resumed: boolean
     /**
      * Root-log `subagent/catalog` facts (resume path): constructor seeds
@@ -560,12 +560,6 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   /** Prepare a complete next session before disturbing the currently visible one. */
   const prepare = async (next: Target): Promise<ActiveSession> => {
     const nextCwd = next.cwd ?? cwd
-    // A bare launch can pick a model before any session exists: the process
-    // keeps that explicit choice and every prepared session starts from it
-    // (the documented precedence: explicit pick > session header > default).
-    const selectionState: { picked?: ModelSelection } = pendingSelection === undefined
-      ? {}
-      : { picked: pendingSelection }
     let mode = next.resume ? next.mode : next.mode ?? pendingMode
     // An explicit `--mode` or the settings-layer service default may still name
     // an id an upstream rename retired (code → ptc); normalize both.
@@ -579,17 +573,11 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
         : mode
       const mounted = await presets.mount(agentCtx, sessionPreset)
       mode = mounted.id
-      const selection: ModelSelectionRef = {
-        get current(): ModelSelection | undefined {
-          return resolveEffectiveSelection(selectionState.picked, agent.session.requestHeader()?.config, currentDefaults())
-        },
-        set current(value: ModelSelection | undefined) { selectionState.picked = value },
-        assembled: undefined,
-      }
-      installModelSelection(agentCtx, selection)
+      installModelSelection(agentCtx)
+      if (pendingSelection !== undefined) agent.model.select(pendingSelection)
     }
-    // AgentOptions seed the loop's fallback route; effort rides the selection
-    // ref (installModelSelection), so only the provider/model pair is seeded.
+    // AgentOptions provide the fallback; the Agent restores durable choices
+    // on resume and records an explicit pre-session pick during setup.
     const seedOptions = pendingSelection === undefined
       ? { provider: currentDefaults().provider, model: currentDefaults().model }
       : { provider: pendingSelection.provider, model: pendingSelection.model }
@@ -625,13 +613,6 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       applyPendingPermission(permissionPresets, session, pendingPermission)
     }
     const seedEvents = session.snapshotEvents()
-    // Resume precedence, middle layer: the log's unconsumed `model/selection`
-    // (a pick the web host recorded that no request ever assembled) outranks
-    // the older request header; an in-process pick still outranks both.
-    if (next.resume && selectionState.picked === undefined) {
-      const pending = pendingModelSelection(seedEvents)
-      if (pending !== undefined) selectionState.picked = pending
-    }
     return {
       handle,
       agent: handle.agent,
@@ -639,7 +620,6 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       store: createTranscriptStore(seedEvents),
       mentions: createMentions(ctx, handle.agent, session.header.cwd ?? nextCwd),
       mode: mode ?? 'standard',
-      selection: selectionState,
       resumed: next.resume,
       catalogSeed: subagentCatalogSeed(seedEvents),
     }
@@ -830,34 +810,15 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     request => approvalCommandPreview(store.getView().entries, request.callId, request.toolName),
   )
 
-  // Subagent model routing. The kernel seeds child agents from the parent's
-  // CREATE-TIME AgentOptions (resolveChildAgentOptions), which a mid-session
-  // /model switch never touches — delegated work would keep running on the
-  // launch-time route. This plugin-level listener mirrors installModelSelection
-  // for subagent-origin requests (scope filtering delivers the agent subject
-  // inside the payload): the explicit /subagent override wins, else the root's
-  // effective selection (explicit pick > session header > deployment default).
-  // Effort rides the selection exactly like the kernel listener applies it.
+  // Select before the child prepares a step. The kernel captures the route
+  // before prompt assembly and rejects route changes in agent/request.
   let subagentOverride: ModelSelection | undefined
-  ctx.on('agent/request', (payload, next) => {
-    const subject = payload.agent
-    const header = subject.session.header
-    if (header.parentSession === undefined && header.origin !== 'subagent') return next()
-    // Only the ACTIVE session's explicit pick may steer a subagent request.
-    // During a switch window the old agent can still be mid-flight; routing
-    // it by the NEW session's pick sent one of its requests to the wrong
-    // model. A subject outside the active tree falls back to its own request
-    // header (plus any explicit /subagent override, which is user intent).
-    const activeAgent = active
-    const belongsToActive = activeAgent !== undefined
-      && (header.parentSession ?? subject.session.id) === activeAgent.session.id
-    const picked = subagentOverride
-      ?? resolveEffectiveSelection(
-        belongsToActive && activeAgent !== undefined ? (activeAgent.selection.picked ?? pendingSelection) : undefined,
-        subject.session.requestHeader()?.config,
-        currentDefaults(),
-      )
-    return next().then(resolved => applyModelSelectionToConfig(resolved, picked))
+  const syncSubagentModels = (): void => {
+    for (const child of agents.list()) applySubagentModel(child, active?.agent, subagentOverride)
+  }
+  ctx.on('agent/created', ({ agent: child }) => {
+    applySubagentModel(child, active?.agent, subagentOverride)
+    return undefined
   })
 
   // ask_user_question answerer: one waterfall listener, one request on
@@ -1519,7 +1480,8 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
       // first composed session starts from it.
       pendingSelection = selection
     } else {
-      active.selection.picked = selection
+      active.agent.model.select(selection)
+      syncSubagentModels()
     }
     // Global default (web selectModel parity): every pick is persisted as the
     // deployment default through the same agentDefaultModel service the web
@@ -1558,6 +1520,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   /** Apply one /subagent model pick; returns the override label. */
   const setSubagentModel = (row: ModelRow, effortId?: string): string => {
     subagentOverride = buildModelSelection(row, effortId)
+    syncSubagentModels()
     renderCurrent()
     return modelSelectionLabel(subagentOverride)
   }
@@ -1565,6 +1528,7 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
   /** Drop the /subagent override: delegated agents follow the current model again. */
   const clearSubagentModel = (): void => {
     subagentOverride = undefined
+    syncSubagentModels()
     renderCurrent()
   }
 
@@ -2000,16 +1964,9 @@ async function run(ctx: Context, startup: TuiStartup, io: TuiIo): Promise<void> 
     const sessionCwd = session?.header.cwd ?? cwd
     const currentView = store.getView()
     const defaults = currentDefaults()
-    const model = currentView.model !== ''
-      ? currentView.model
-      : pendingSelection !== undefined
-        ? `${pendingSelection.provider}/${pendingSelection.model}`
-        : `${defaults.provider}/${defaults.model}`
-    const effort = resolveEffectiveSelection(
-      active?.selection.picked ?? pendingSelection,
-      session?.requestHeader()?.config,
-      defaults,
-    ).reasoningEffort
+    const selection = active?.agent.model.current() ?? pendingSelection ?? defaults
+    const model = `${selection.provider}/${selection.model}`
+    const effort = selection.reasoningEffort
     const permission = permissionPresets === undefined
       ? currentView.permission
       : effectivePermission(permissionPresets, session, pendingPermission)

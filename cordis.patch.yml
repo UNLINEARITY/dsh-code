@@ -22,9 +22,10 @@
 # the volatile settings forms. The terminal follows the base default (enabled
 # in profile boots) instead of keeping the old module-reload disable.
 
-- id: tools
-  config:
-    mode: !!js process.env.DSH_TOOLS_MODE
+- id: tool-executor-native
+  disabled: !!js process.env.DSH_TOOLS_MODE === 'ptc'
+- id: tool-executor-ptc
+  disabled: !!js process.env.DSH_TOOLS_MODE !== 'ptc'
 
 # The base row keeps full-text search off entirely (openAt: never) so nothing
 # imports node:sqlite at boot; the terminal replaces it with the bundle's
@@ -73,8 +74,6 @@
 - id: tool-result-pruner
   disabled: true
 - id: tool-subagent-control
-  disabled: true
-- id: tool-subagent-list-agents
   disabled: true
 - id: tool-subagent
   disabled: true

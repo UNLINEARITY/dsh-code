@@ -12,7 +12,7 @@ const mentioned = (label: string, id: string): string =>
 const fakeCtx = (services: Record<string, unknown>): never =>
   ({ get: (name: string) => services[name] }) as never
 
-const agent = { id: 'session-agent-1' } as never
+const agent = { id: 'session-agent-1', model: { current: () => ({ provider: 'route', model: 'picked' }) } } as never
 
 describe('isPathLikeMentionQuery', () => {
   it('treats slash-containing queries as path navigation', () => {
