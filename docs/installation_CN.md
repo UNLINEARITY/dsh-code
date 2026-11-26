@@ -53,6 +53,8 @@ Harness 升级指南逐项列出了全部迁移步骤：[docs/upgrade-guide](htt
 
 ## 发行打包
 
-在仓库目录直接运行 `npm publish`。发布前会自动执行生产依赖审计、版本检查、验证套件与构建，再对当前目录生成的安装包进行全新安装、依赖审计和运行时导入检查。生产依赖通过 hoisted 布局随包发布。只做预检时运行 `npm publish --dry-run`，不会实际发布。
+在仓库目录直接运行 `npm publish`。发布前会自动执行生产依赖审计、版本检查、验证套件与构建，再对当前目录生成的安装包进行全新安装、依赖审计和运行时导入检查。生产依赖通过 hoisted 布局随包发布。准备新版本时，可用 `npm publish --dry-run` 预检发布流程。
+
+在 Linux 上，如果现有工作区仍使用硬链接安装依赖，且 npm 打包时报 `Exit handler never called!`，运行一次 `pnpm install --force --frozen-lockfile` 重建 `node_modules`，然后重新打包。
 
 如果只需要单独生成本地 tarball，运行 `pnpm pack:release --pack-destination dist`。该流程使用临时生产环境，包含平台绑定，并重新安装、审计生成的 tarball；也可以使用 `npm publish dist/dsh-code-2.1.0.tgz` 发布该产物。

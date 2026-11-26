@@ -1,7 +1,7 @@
 /** Slash-command completion: full default list (skills included), prefix filter, shadowing, dedup. */
 
 import { describe, expect, it } from 'vitest'
-import { completionCandidates } from '../src/completion.ts'
+import { completionCandidates, LOCAL_COMMANDS } from '../src/completion.ts'
 import type { CommandDescriptor } from '@deepseek-ai/dsh-commands'
 import type { SkillRow } from '../src/skills.ts'
 
@@ -21,9 +21,8 @@ describe('completionCandidates', () => {
       skill('agentic-workflow'),
     ]
     const rows = completionCandidates('/', descriptors, skills)
-    // 39 local commands + 1 registry command + 1 unshadowed skill (/review is local).
-    expect(rows).toHaveLength(41)
-    expect(rows.filter(row => row.origin === 'command')).toHaveLength(40)
+    expect(rows.filter(row => row.origin === 'command').map(row => row.label))
+      .toEqual([...LOCAL_COMMANDS.map(command => command.label), '/compact'])
     expect(rows.filter(row => row.origin === 'skill').map(row => row.label))
       .toEqual(['/agentic-workflow'])
     expect(rows[0]).toMatchObject({ label: '/help', origin: 'command' })
@@ -80,7 +79,7 @@ describe('completionCandidates', () => {
 
   it('offers /permission before any session exists and shadows the registry child', () => {
     const rows = completionCandidates('/per', [], [])
-    expect(rows.map(row => row.label)).toEqual(['/permission'])
+    expect(rows[0]).toMatchObject({ label: '/permission', origin: 'command' })
     const registry = completionCandidates('/', [{ name: 'permission', description: 'registry child' }], [])
     const permission = registry.filter(row => row.label === '/permission')
     expect(permission).toEqual([

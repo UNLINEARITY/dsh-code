@@ -53,6 +53,8 @@ The Harness upgrade guides list every migration in detail: [docs/upgrade-guide](
 
 ## Release packaging
 
-Run `npm publish` from the repository directory. Its prepublish checks run the production audit, release identity check, verification suite, and build, then pack the exact directory payload and verify a fresh consumer installation, dependency audit, and runtime import. Production dependencies are bundled using the hoisted dependency layout. Use `npm publish --dry-run` to check this flow without publishing.
+Run `npm publish` from the repository directory. Its prepublish checks run the production audit, release identity check, verification suite, and build, then pack the exact directory payload and verify a fresh consumer installation, dependency audit, and runtime import. Production dependencies are bundled using the hoisted dependency layout. For a new release version, use `npm publish --dry-run` to check this flow without publishing.
+
+On Linux, if npm reports `Exit handler never called!` when packaging an existing checkout with hard-linked dependencies, run `pnpm install --force --frozen-lockfile` once to recreate `node_modules`, then retry packaging.
 
 To generate a local tarball separately, run `pnpm pack:release --pack-destination dist`. That flow uses a temporary production install, includes platform bindings, and installs and audits the resulting tarball. You can also publish that artifact with `npm publish dist/dsh-code-2.1.0.tgz`.

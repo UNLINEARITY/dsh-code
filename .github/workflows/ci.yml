@@ -35,13 +35,19 @@ jobs:
               - 'tests/**'
               - 'bin/**'
               - 'lib/**'
+              - 'scripts/**'
+              - 'patches/**'
               - 'presets/**'
               - 'cordis.patch.yml'
               - 'package.json'
               - 'pnpm-lock.yaml'
+              - 'pnpm-workspace.yaml'
+              - 'eslint.config.js'
               - 'tsconfig*.json'
               - 'tsdown.config.ts'
-              - '.github/workflows/ci.yml'
+              - 'vitest.config.ts'
+              - '.gitattributes'
+              - '.github/workflows/**'
 
   verify:
     needs: changes
@@ -74,6 +80,8 @@ jobs:
       # historically did not repair deterministic cross-platform failures.
       - run: pnpm test
       - run: pnpm build
+      - name: Verify the npm package in a fresh install
+        run: pnpm exec tsx scripts/verify-publish.ts
 
   coverage:
     needs: changes

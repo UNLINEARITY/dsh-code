@@ -8,8 +8,8 @@ import tseslint from 'typescript-eslint'
  * drives durable sessions through async service boundaries, so promise and
  * `any`-flow mistakes are exactly the class of bug worth failing a gate on.
  * One project (`tsconfig.test.json`) contains every linted TypeScript file —
- * `src`, `tests`, `scripts`, and the root `*.config.ts` — so the type-aware
- * pass resolves each file exactly once.
+ * `src`, `tests`, `scripts`, CLI declarations, and root configs — so the
+ * type-aware pass resolves each file exactly once.
  *
  * Deliberately absent: formatting rules. The repository keeps its own style
  * (no semicolons, single quotes) and formatting is not a lint concern here.

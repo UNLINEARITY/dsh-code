@@ -4,6 +4,7 @@ import { createRequire } from 'node:module'
 import { mkdtempSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { npmInvocation } from '../bin/deepseek.mjs'
 
 const scratch = realpathSync(mkdtempSync(join(tmpdir(), 'dsh-publish-check-')))
@@ -28,7 +29,7 @@ try {
   // pnpm's isolated layout can produce an apparently clean archive whose
   // transitive packages cannot be resolved. Exercise a real runtime import.
   const requireFromConsumer = createRequire(join(consumer, 'node_modules/dsh-code/package.json'))
-  await import(requireFromConsumer.resolve('js-yaml'))
+  await import(pathToFileURL(requireFromConsumer.resolve('js-yaml')).href)
   console.log('Verified npm publish payload: bundled dependencies, consumer audit, and runtime import passed')
 } finally {
   rmSync(scratch, { recursive: true, force: true })

@@ -307,32 +307,23 @@ describe('review conclusion parsing', () => {
 })
 
 describe('watchGitBranch', () => {
-  it('updates the store when HEAD moves to another branch (debounced)', { timeout: 15_000 }, async () => {
+  it('updates the store when HEAD moves to another branch (debounced)', { timeout: 20_000 }, async () => {
     const { watchGitBranch } = await import('../src/git-workflow.ts')
     const { writeFileSync, renameSync, rmSync } = await import('node:fs')
     const path = await import('node:path')
     const dir = await tempRepo()
     try {
       const store = watchGitBranch(dir)
-      const waitFor = async (expected: string): Promise<void> => {
-        // Watcher delivery plus the 150ms debounce are load-sensitive under
-        // the parallel suite: poll for the expected value instead of a
-        // fixed sleep, failing only after a generous bound.
-        for (let i = 0; i < 200 && store.getSnapshot() !== expected; i += 1) {
-          await new Promise(resolve => setTimeout(resolve, 50))
-        }
-        expect(store.getSnapshot()).toBe(expected)
-      }
       try {
         expect(store.getSnapshot()).toBe('main')
         await runGit(dir, 'symbolic-ref', 'HEAD', 'refs/heads/feature/x')
-        await waitFor('feature/x')
+        await expect.poll(() => store.getSnapshot(), { timeout: 8_000 }).toBe('feature/x')
         // A detached HEAD clears the branch (the status group drops out).
         // Git replaces HEAD through its lock file rather than modifying it
         // in place; exercise that same filesystem notification path.
         writeFileSync(path.join(dir, '.git', 'HEAD.lock'), '0123456789abcdef0123456789abcdef01234567\n')
         renameSync(path.join(dir, '.git', 'HEAD.lock'), path.join(dir, '.git', 'HEAD'))
-        await waitFor('')
+        await expect.poll(() => store.getSnapshot(), { timeout: 8_000 }).toBe('')
       } finally {
         store.dispose()
       }
@@ -341,33 +332,22 @@ describe('watchGitBranch', () => {
     }
   })
 
-  it('notifies subscribers on change and stays quiet otherwise', async () => {
+  it('notifies subscribers on branch changes until they unsubscribe', { timeout: 20_000 }, async () => {
     const { watchGitBranch } = await import('../src/git-workflow.ts')
-    const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import('node:fs')
-    const path = await import('node:path')
-    const { tmpdir } = await import('node:os')
-    const dir = mkdtempSync(path.join(tmpdir(), 'git-branch-watch-'))
+    const dir = await tempRepo()
+    const store = watchGitBranch(dir)
+    const notified: string[] = []
+    const off = store.subscribe(() => { notified.push(store.getSnapshot()) })
     try {
-      mkdirSync(path.join(dir, '.git'))
-      writeFileSync(path.join(dir, '.git', 'HEAD'), 'ref: refs/heads/main\n')
-      const store = watchGitBranch(dir)
-      try {
-        let notified = 0
-        const off = store.subscribe(() => { notified += 1 })
-        writeFileSync(path.join(dir, '.git', 'HEAD'), 'ref: refs/heads/dev\n')
-        for (let i = 0; i < 100 && notified === 0; i += 1) {
-          await new Promise(resolve => setTimeout(resolve, 50))
-        }
-        expect(notified).toBeGreaterThanOrEqual(1)
-        off()
-        const offProbe = store.subscribe(() => {})
-        expect(typeof offProbe).toBe('function')
-        offProbe()
-      } finally {
-        store.dispose()
-      }
+      await runGit(dir, 'symbolic-ref', 'HEAD', 'refs/heads/dev')
+      await expect.poll(() => notified, { timeout: 8_000 }).toEqual(['dev'])
+      off()
+      await runGit(dir, 'symbolic-ref', 'HEAD', 'refs/heads/main')
+      await expect.poll(() => store.getSnapshot(), { timeout: 8_000 }).toBe('main')
+      expect(notified).toEqual(['dev'])
     } finally {
-      rmSync(dir, { recursive: true, force: true })
+      store.dispose()
+      await rm(dir, { recursive: true, force: true })
     }
   })
 })
