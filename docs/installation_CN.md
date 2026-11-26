@@ -10,7 +10,7 @@ npm 11.6+ 默认跳过未经批准的全局依赖安装脚本。`--allow-scripts
 
 ## 版本对齐
 
-dsh-code 面向 dsh `0.2.2-rc.1` 构建，全部 Harness 依赖均精确锁定为 `0.2.2-rc.1`。本地 `link:` 挂载请先 `git pull && pnpm install && pnpm build`，不要对开发挂载跑更新器。
+dsh-code 面向 dsh `0.2.2-rc.5` 构建，全部 Harness 依赖均精确锁定为 `0.2.2-rc.5`。本地 `link:` 挂载请先 `git pull && pnpm install && pnpm build`，不要对开发挂载跑更新器。
 
 Harness 包与 `schemastery` 通过 optional peer 使用已安装的宿主副本。开发副本用于本地编译与测试，发行包只捆绑终端依赖。此版本线无需在 profile 中单独安装 `@deepseek-ai/dsh-tool-session-query`，可用 `dsh plugin --profile cli remove @deepseek-ai/dsh-tool-session-query` 移除重复依赖。
 
@@ -37,9 +37,9 @@ deepseek doctor
 
 | 现象 | 原因 | 处理 |
 |---|---|---|
-| 出现 `npm warn install-scripts`，之后报 `Failed to load native module`（`pty.node`、`koffi`），或终端、会话持久化插件加载失败 | npm 11.6+ 默认跳过未经批准的全局依赖安装脚本 | 带上批准列表重装：`npm install -g --allow-scripts=@deepseek-ai/dsh-subprocess-local,koffi,node-pty,@google/genai,protobufjs @deepseek-ai/dsh@0.2.2-rc.1 pnpm` |
+| 出现 `npm warn install-scripts`，之后报 `Failed to load native module`（`pty.node`、`koffi`），或终端、会话持久化插件加载失败 | npm 11.6+ 默认跳过未经批准的全局依赖安装脚本 | 带上批准列表重装：`npm install -g --allow-scripts=@deepseek-ai/dsh-subprocess-local,koffi,node-pty,@google/genai,protobufjs @deepseek-ai/dsh@0.2.2-rc.5 pnpm` |
 | 升级过程中正在运行的会话以 `read EIO` 崩溃 | 全局安装替换了会话正在读取的文件 | 退出所有 `dsh` 会话，重新执行安装，再重新启动 |
-| `--dump-config` 输出 `skipping` 或 `disabling`，并提示 peer 版本不匹配 | 装进 profile 的包还停留在上一条 Harness 版本线 | 按对齐版本重装，例如 `dsh plugin --profile cli add @deepseek-ai/dsh-tool-session-query@0.2.2-rc.1`；`~/.dsh/profiles/cli/package.json` 中所有 `@deepseek-ai/dsh-*` 包必须是同一版本 |
+| `--dump-config` 输出 `skipping` 或 `disabling`，并提示 peer 版本不匹配 | 装进 profile 的包还停留在上一条 Harness 版本线 | 按对齐版本重装，例如 `dsh plugin --profile cli add @deepseek-ai/dsh-tool-session-query@0.2.2-rc.5`；`~/.dsh/profiles/cli/package.json` 中所有 `@deepseek-ai/dsh-*` 包必须是同一版本 |
 | `patch: entry "<id>" not found` | `~/.dsh/profiles/cli/cordis.patch.yml` 覆盖了新版本线已删除的行。0.2.1 删除了 `tool-ralph`、`skill-badge` 和 `*-invariant` 各行 | 从 profile patch 中删除该条目 |
 | `Cannot find module '@deepseek-ai/dsh-invariants'` 或 `.../invariant` | 0.2.1 删除了运行时 invariant 相关包 | 从 profile patch 中删除名为 `@deepseek-ai/dsh-invariants` 或以 `/invariant` 结尾的行 |
 | 每次模型请求都在发送前失败，报 `unknown prompt variable "{{cwd}}"` | 0.2.1 删除了 `{{cwd}}` 提示变量，会话目录改为以上下文形式提供给模型 | 删除 profile patch 中 `personaPrefix` / `suffix` 里含 `{{cwd}}` 的句子 |
@@ -47,7 +47,7 @@ deepseek doctor
 | 工具配置拒绝 `mode: both` 或 `DSH_TOOLS_MODE=both` | 工具呈现方式只接受 `native` 或 `ptc` | 改为 `native` 或 `ptc` |
 | 升级后报 `AUTH: Authentication Fails, Your api key ... is invalid`，但导出的 key 本身可用 | 自 0.2.1 起，`~/.dsh/.credentials.yaml` 中保存的同名 key 优先于导出的环境变量 | 在 `/model` 中替换已保存的 key（按 Tab 进入供应商管理），或删除 `~/.dsh/.credentials.yaml` 中 `refs` 下的同名条目，改用导出的变量 |
 | `/model` 中 DeepSeek 或其他供应商分组消失 | API key 路线在凭据配置前不再列出模型 | 在 `/model` 中配置 key，或导出该路线 `apiKeyEnv` 指定的变量 |
-| `/hooks` 拒绝写入并给出安装命令 | 宿主不再捆绑钩子桥 | 执行提示的命令，例如 `dsh plugin --profile cli add @deepseek-ai/dsh-hooks-claude-code@0.2.2-rc.1 @deepseek-ai/dsh-hook-protocol@0.2.2-rc.1`，然后重启 |
+| `/hooks` 拒绝写入并给出安装命令 | 宿主不再捆绑钩子桥 | 执行提示的命令，例如 `dsh plugin --profile cli add @deepseek-ai/dsh-hooks-claude-code@0.2.2-rc.5 @deepseek-ai/dsh-hook-protocol@0.2.2-rc.5`，然后重启 |
 
 Harness 升级指南逐项列出了全部迁移步骤：[docs/upgrade-guide](https://github.com/deepseek-ai/deepseek-harness/tree/main/docs/upgrade-guide)。更多问题与处理：[常见问题与排障](problems.md)。
 

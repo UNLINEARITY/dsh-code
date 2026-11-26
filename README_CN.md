@@ -27,11 +27,11 @@ DeepSeek Harness 将模型、工具、存储、策略和界面作为插件，通
 
 [2.1.0 更新说明](docs/releases/2.1.0_CN.md)
 
-需要 Node `>=24.9.0` 和预览版 `dsh` CLI（当前版本线：`@deepseek-ai/dsh@0.2.2-rc.1`）。未配置模型时仍可进入 TUI、查看会话和使用非模型功能；在 `/model` 中按 Tab 进入供应商管理，配置 API key、OAuth 与设备码登录。
+需要 Node `>=24.9.0` 和预览版 `dsh` CLI（当前版本线：`@deepseek-ai/dsh@0.2.2-rc.5`）。未配置模型时仍可进入 TUI、查看会话和使用非模型功能；在 `/model` 中按 Tab 进入供应商管理，配置 API key、OAuth 与设备码登录。
 
 ### 1. 安装与更新
 
-以下命令安装已发布的 `dsh-code@2.1.0` 及其匹配的 Harness 版本。当前源码对齐 Harness `0.2.2-rc.1`，请使用下方源码安装流程。安装或升级前，先关闭所有正在运行的 `dsh` / `deepseek` 会话。
+以下命令安装已发布的 `dsh-code@2.1.0` 及其匹配的 Harness 版本。当前源码对齐 Harness `0.2.2-rc.5`，请使用下方源码安装流程。安装或升级前，先关闭所有正在运行的 `dsh` / `deepseek` 会话。
 
 ```sh
 npm install -g --allow-scripts=@deepseek-ai/dsh-subprocess-local,koffi,node-pty,@google/genai,protobufjs @deepseek-ai/dsh@0.2.1-rc.4 pnpm
@@ -263,7 +263,7 @@ DSH-Code 读取 Harness 的实时注册表，不在本地维护另一套副本�
   ```
 
   （HTTP 传输改用 `transport: streamable-http` + `url`；服务器不可达时安全降级为重连循环，不影响启动。）
-- **Claude Code / Codex hooks 桥**（`@deepseek-ai/dsh-hooks-claude-code` / `-codex`）：在拦截缝上运行既有 hooks 配置；hooks 文件缺失时静默不生效。自 0.2.1 起宿主不再捆绑钩子桥：先连同协议 peer 一起装入 profile（`dsh plugin --profile cli add @deepseek-ai/dsh-hooks-claude-code@0.2.2-rc.1 @deepseek-ai/dsh-hook-protocol@0.2.2-rc.1`；Codex 桥需要同一个 peer）。任一包缺失时 `/hooks` 拒绝写入并给出这条命令。然后添加该行：
+- **Claude Code / Codex hooks 桥**（`@deepseek-ai/dsh-hooks-claude-code` / `-codex`）：在拦截缝上运行既有 hooks 配置；hooks 文件缺失时静默不生效。自 0.2.1 起宿主不再捆绑钩子桥：先连同协议 peer 一起装入 profile（`dsh plugin --profile cli add @deepseek-ai/dsh-hooks-claude-code@0.2.2-rc.5 @deepseek-ai/dsh-hook-protocol@0.2.2-rc.5`；Codex 桥需要同一个 peer）。任一包缺失时 `/hooks` 拒绝写入并给出这条命令。然后添加该行：
 
   ```yaml
   - insert:
@@ -342,7 +342,7 @@ pnpm run gen:whale   # 从 vendored Logo 路径重新生成 src/whale-glyph.ts
 本地 checkout 可使用：
 
 ```sh
-npm install -g --allow-scripts=@deepseek-ai/dsh-subprocess-local,koffi,node-pty,@google/genai,protobufjs @deepseek-ai/dsh@0.2.2-rc.1
+npm install -g --allow-scripts=@deepseek-ai/dsh-subprocess-local,koffi,node-pty,@google/genai,protobufjs @deepseek-ai/dsh@0.2.2-rc.5
 pnpm install
 pnpm build
 npm install -g .

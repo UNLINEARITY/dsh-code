@@ -10,7 +10,7 @@ npm 11.6+ skips the install scripts of global dependencies unless they are appro
 
 ## Version alignment
 
-dsh-code targets dsh `0.2.2-rc.1`, with every Harness dependency pinned exactly to `0.2.2-rc.1`. A local `link:` mount should be rebuilt with `git pull && pnpm install && pnpm build`; do not run the updater against a checkout.
+dsh-code targets dsh `0.2.2-rc.5`, with every Harness dependency pinned exactly to `0.2.2-rc.5`. A local `link:` mount should be rebuilt with `git pull && pnpm install && pnpm build`; do not run the updater against a checkout.
 
 Harness packages and `schemastery` are optional peers supplied by the installed host. Development copies support local compilation and tests; the release payload bundles only terminal dependencies. A separate profile installation of `@deepseek-ai/dsh-tool-session-query` is unnecessary on this line and can be removed with `dsh plugin --profile cli remove @deepseek-ai/dsh-tool-session-query`.
 
@@ -37,9 +37,9 @@ deepseek doctor
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `npm warn install-scripts`, then `Failed to load native module` (`pty.node`, `koffi`) or a terminal / persistence plugin failing to load | npm 11.6+ skips the install scripts of global dependencies unless they are approved | Rerun the install with the approval list: `npm install -g --allow-scripts=@deepseek-ai/dsh-subprocess-local,koffi,node-pty,@google/genai,protobufjs @deepseek-ai/dsh@0.2.2-rc.1 pnpm` |
+| `npm warn install-scripts`, then `Failed to load native module` (`pty.node`, `koffi`) or a terminal / persistence plugin failing to load | npm 11.6+ skips the install scripts of global dependencies unless they are approved | Rerun the install with the approval list: `npm install -g --allow-scripts=@deepseek-ai/dsh-subprocess-local,koffi,node-pty,@google/genai,protobufjs @deepseek-ai/dsh@0.2.2-rc.5 pnpm` |
 | A running session crashes with `read EIO` during an upgrade | The global install replaced files the session was reading | Quit every `dsh` session, rerun the install, then start again |
-| `--dump-config` prints `skipping` or `disabling` with a peer-version mismatch | A package installed into the profile is still on the previous Harness line | Reinstall it on the aligned line, for example `dsh plugin --profile cli add @deepseek-ai/dsh-tool-session-query@0.2.2-rc.1`; every `@deepseek-ai/dsh-*` package in `~/.dsh/profiles/cli/package.json` must carry the same version |
+| `--dump-config` prints `skipping` or `disabling` with a peer-version mismatch | A package installed into the profile is still on the previous Harness line | Reinstall it on the aligned line, for example `dsh plugin --profile cli add @deepseek-ai/dsh-tool-session-query@0.2.2-rc.5`; every `@deepseek-ai/dsh-*` package in `~/.dsh/profiles/cli/package.json` must carry the same version |
 | `patch: entry "<id>" not found` | `~/.dsh/profiles/cli/cordis.patch.yml` overrides a row the new line removed. 0.2.1 removed `tool-ralph`, `skill-badge`, and the `*-invariant` rows | Delete that entry from the profile patch |
 | `Cannot find module '@deepseek-ai/dsh-invariants'` or `.../invariant` | The runtime invariant packages were removed in 0.2.1 | Delete rows naming `@deepseek-ai/dsh-invariants` or ending in `/invariant` from the profile patch |
 | Every model request fails before it is sent with `unknown prompt variable "{{cwd}}"` | 0.2.1 removed the `{{cwd}}` prompt variable; the session directory now reaches the model as context | Remove the `{{cwd}}` clause from any `personaPrefix` / `suffix` in the profile patch |
@@ -47,7 +47,7 @@ deepseek doctor
 | Tools config rejects `mode: both` or `DSH_TOOLS_MODE=both` | Tool presentation accepts only `native` or `ptc` | Use `native` or `ptc` |
 | `AUTH: Authentication Fails, Your api key ... is invalid` after upgrading, although the exported key works | Since 0.2.1 a key saved in `~/.dsh/.credentials.yaml` wins over an exported variable with the same name | Replace the saved key in `/model` (press Tab for provider management), or delete that name under `refs` in `~/.dsh/.credentials.yaml` to fall back to the exported variable |
 | The DeepSeek group or another provider disappears from `/model` | API-key routes now hide their models until the credential is configured | Configure the key in `/model`, or export the variable the route's `apiKeyEnv` names |
-| `/hooks` refuses with an install command | The host no longer bundles the hooks bridges | Run the printed command, e.g. `dsh plugin --profile cli add @deepseek-ai/dsh-hooks-claude-code@0.2.2-rc.1 @deepseek-ai/dsh-hook-protocol@0.2.2-rc.1`, then restart |
+| `/hooks` refuses with an install command | The host no longer bundles the hooks bridges | Run the printed command, e.g. `dsh plugin --profile cli add @deepseek-ai/dsh-hooks-claude-code@0.2.2-rc.5 @deepseek-ai/dsh-hook-protocol@0.2.2-rc.5`, then restart |
 
 The Harness upgrade guides list every migration in detail: [docs/upgrade-guide](https://github.com/deepseek-ai/deepseek-harness/tree/main/docs/upgrade-guide). More problems and fixes: [Troubleshooting](problems.md).
 

@@ -51,6 +51,6 @@ describe('package peer dependencies', () => {
       .flatMap(group => Object.entries(group))
       .filter(([name]) => name.startsWith('@deepseek-ai/dsh-'))
       .map(([, version]) => version)
-    expect(new Set(versions)).toEqual(new Set(['0.2.2-rc.1']))
+    expect(new Set(versions)).toEqual(new Set(['0.2.2-rc.5']))
   })
 })

@@ -110,6 +110,7 @@ export const IGNORED_SESSION_EVENT_TYPES = [
   'team/member',
   'team/message/delivered',
   'team/message/queued',
+  'team/mode',
   'team/task',
   'web/deepseek-search-llm-request',
 ] as const

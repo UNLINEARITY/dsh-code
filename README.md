@@ -25,11 +25,11 @@ DeepSeek Harness registers models, tools, storage, policies, and interfaces as p
 
 [2.1.0 release notes](docs/releases/2.1.0.md)
 
-Requires Node `>=24.9.0` and the preview `dsh` CLI (current release line: `@deepseek-ai/dsh@0.2.2-rc.1`). You can still enter the TUI, browse sessions, and use non-model features without configuring a model; press `Tab` in `/model` to manage API keys, OAuth, device-code sign-in, endpoints, and models.
+Requires Node `>=24.9.0` and the preview `dsh` CLI (current release line: `@deepseek-ai/dsh@0.2.2-rc.5`). You can still enter the TUI, browse sessions, and use non-model features without configuring a model; press `Tab` in `/model` to manage API keys, OAuth, device-code sign-in, endpoints, and models.
 
 ### 1. Install and update
 
-The commands below install the published `dsh-code@2.1.0` with its matching Harness version. This checkout targets Harness `0.2.2-rc.1`; use the source installation below for this checkout. Close all running `dsh` / `deepseek` sessions before installing or upgrading.
+The commands below install the published `dsh-code@2.1.0` with its matching Harness version. This checkout targets Harness `0.2.2-rc.5`; use the source installation below for this checkout. Close all running `dsh` / `deepseek` sessions before installing or upgrading.
 
 ```sh
 npm install -g --allow-scripts=@deepseek-ai/dsh-subprocess-local,koffi,node-pty,@google/genai,protobufjs @deepseek-ai/dsh@0.2.1-rc.4 pnpm
@@ -257,7 +257,7 @@ The following official plugins are installed but opt-in (append rows in the user
   ```
 
   (HTTP transports use `transport: streamable-http` plus `url`; an unreachable server degrades to a reconnect loop and never breaks startup.)
-- **Claude Code / Codex hooks bridges** (`@deepseek-ai/dsh-hooks-claude-code` / `-codex`): run existing hooks configurations at the interception seams; a missing hooks file is a silent no-op. Since 0.2.1 the host no longer bundles the bridges: install a bridge with its protocol peer first (`dsh plugin --profile cli add @deepseek-ai/dsh-hooks-claude-code@0.2.2-rc.1 @deepseek-ai/dsh-hook-protocol@0.2.2-rc.1`; the Codex bridge needs the same peer). `/hooks` refuses to write a row while either package is missing and prints this command. Then add the row:
+- **Claude Code / Codex hooks bridges** (`@deepseek-ai/dsh-hooks-claude-code` / `-codex`): run existing hooks configurations at the interception seams; a missing hooks file is a silent no-op. Since 0.2.1 the host no longer bundles the bridges: install a bridge with its protocol peer first (`dsh plugin --profile cli add @deepseek-ai/dsh-hooks-claude-code@0.2.2-rc.5 @deepseek-ai/dsh-hook-protocol@0.2.2-rc.5`; the Codex bridge needs the same peer). `/hooks` refuses to write a row while either package is missing and prints this command. Then add the row:
 
   ```yaml
   - insert:
@@ -336,7 +336,7 @@ The whale glyph is generated from the DeepSeek FishLogo geometry vendored in `sc
 For a local checkout:
 
 ```sh
-npm install -g --allow-scripts=@deepseek-ai/dsh-subprocess-local,koffi,node-pty,@google/genai,protobufjs @deepseek-ai/dsh@0.2.2-rc.1
+npm install -g --allow-scripts=@deepseek-ai/dsh-subprocess-local,koffi,node-pty,@google/genai,protobufjs @deepseek-ai/dsh@0.2.2-rc.5
 pnpm install
 pnpm build
 npm install -g .
