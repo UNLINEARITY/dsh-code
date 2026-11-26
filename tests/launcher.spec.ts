@@ -29,7 +29,7 @@ import {
   updatePlan,
   updateSteps,
 } from '../bin/deepseek.mjs'
-import type { PackagePeers, SpawnOptions, SpawnProcess } from '../bin/deepseek.mjs'
+import type { SpawnOptions, SpawnProcess } from '../bin/deepseek.mjs'
 
 describe('global launcher aliases', () => {
   it('recognizes wrapper operations without stealing ordinary prompts', () => {
@@ -43,7 +43,7 @@ describe('global launcher aliases', () => {
   })
 
   it('pins setup to this release so pnpm can install it on publication day', () => {
-    expect(setupBundle([])).toBe('dsh-code@2.1.0')
+    expect(setupBundle([])).toBe(`dsh-code@${packageVersion}`)
   })
 
   it('starts dsh with inherited stdio and preserves its exit code', () => {
@@ -386,25 +386,25 @@ describe('update orchestration', () => {
   })
 
   describe('buildUpdateStatus', () => {
-    const registry = (): Record<string, PackagePeers | undefined> => ({
-      // view(subject) returns the FIELD value, so the peers map is bare.
-      'dsh-code@2.1.1': { '@deepseek-ai/dsh-session': '0.2.0-rc.2' },
-    })
     // Profile readers stay injectable: the real machine state must not leak
     // into these contract tests (a link-mounted dev profile would flip every
     // fixture into the local-checkout refusal).
     const readers = { readSpec: () => packageVersion, readMounted: () => packageVersion, readPlugins: () => [] }
 
-    it('reports an aligned upgrade with the plugin carry and no blockers', () => {
+    it('reports an aligned upgrade with no blockers', () => {
+      const [major, minor, patch] = packageVersion.split('-')[0].split('.').map(Number)
+      const nextVersion = `${major}.${minor}.${patch + 1}`
       const status = buildUpdateStatus({
-        view: subjectParts => subjectParts[0] === 'dsh-code' ? '2.1.1' : registry()[subjectParts[0]],
+        view: ([subject]) => subject === 'dsh-code'
+          ? nextVersion
+          : subject === `dsh-code@${nextVersion}` ? { '@deepseek-ai/dsh-session': '0.2.0-rc.2' } : undefined,
         installedDsh: () => '0.1.7-rc.2',
         ...readers,
       })
-      expect(status.code).toEqual({ running: packageVersion, latest: '2.1.1' })
+      expect(status.code).toEqual({ running: packageVersion, latest: nextVersion })
       expect(status.host).toEqual({ installed: '0.1.7-rc.2', targetLine: '0.2.0-rc.2' })
       expect(status.plan.dshSpec).toBe('@deepseek-ai/dsh@0.2.0-rc.2')
-      expect(status.plan.codeSpec).toBe('dsh-code@2.1.1')
+      expect(status.plan.codeSpec).toBe(`dsh-code@${nextVersion}`)
       expect(status.blockers).toEqual({ registry: null, downgrade: false, localCheckout: null })
       expect(status.upToDate).toBe(false)
     })

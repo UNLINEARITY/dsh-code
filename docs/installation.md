@@ -6,13 +6,13 @@ Use this page for native-module failures, version alignment, settings migration,
 
 ## Native install scripts
 
-npm 11.6+ skips the install scripts of global dependencies unless they are approved. `--allow-scripts` approves the ones dsh needs: `node-pty` (terminals), `koffi` (session persistence), `@deepseek-ai/dsh-subprocess-local` (process sandbox), `@google/genai`, and `protobufjs`. Without it the install prints `npm warn install-scripts` and native modules can fail at startup; rerun the same command to fix it.
+If npm reports `npm warn install-scripts` or dsh fails to load a native module, rerun the npm command in the quick start with its `--allow-scripts` option. It approves the dependencies dsh needs for terminals, session storage, and the process sandbox, along with `@google/genai` and `protobufjs`.
 
 ## Version alignment
 
-dsh-code targets dsh `0.2.2-rc.5`, with every Harness dependency pinned exactly to `0.2.2-rc.5`. A local `link:` mount should be rebuilt with `git pull && pnpm install && pnpm build`; do not run the updater against a checkout.
+DSH-Code 2.2.0 requires Node.js 24.9.0 or later and exactly `@deepseek-ai/dsh@0.2.2-rc.5`. Upgrade dsh, DSH-Code, and any separately installed Harness profile plugins together. If your profile uses a local `link:` mount, update the host, then rebuild the checkout with `pnpm install --frozen-lockfile && pnpm build`.
 
-Harness packages and `schemastery` are optional peers supplied by the installed host. Development copies support local compilation and tests; the release payload bundles only terminal dependencies. A separate profile installation of `@deepseek-ai/dsh-tool-session-query` is unnecessary on this line and can be removed with `dsh plugin --profile cli remove @deepseek-ai/dsh-tool-session-query`.
+The host supplies the session-query tool. If your `cli` profile already installs `@deepseek-ai/dsh-tool-session-query` separately, remove the duplicate with `dsh plugin --profile cli remove @deepseek-ai/dsh-tool-session-query`.
 
 ## Session migration
 
@@ -39,7 +39,7 @@ deepseek doctor
 |---|---|---|
 | `npm warn install-scripts`, then `Failed to load native module` (`pty.node`, `koffi`) or a terminal / persistence plugin failing to load | npm 11.6+ skips the install scripts of global dependencies unless they are approved | Rerun the install with the approval list: `npm install -g --allow-scripts=@deepseek-ai/dsh-subprocess-local,koffi,node-pty,@google/genai,protobufjs @deepseek-ai/dsh@0.2.2-rc.5 pnpm` |
 | A running session crashes with `read EIO` during an upgrade | The global install replaced files the session was reading | Quit every `dsh` session, rerun the install, then start again |
-| `--dump-config` prints `skipping` or `disabling` with a peer-version mismatch | A package installed into the profile is still on the previous Harness line | Reinstall it on the aligned line, for example `dsh plugin --profile cli add @deepseek-ai/dsh-tool-session-query@0.2.2-rc.5`; every `@deepseek-ai/dsh-*` package in `~/.dsh/profiles/cli/package.json` must carry the same version |
+| `--dump-config` prints `skipping` or `disabling` with a peer-version mismatch | An installed profile plugin targets an older Harness release | Reinstall the plugin named in the message at version `0.2.2-rc.5`. Remove any separately installed `@deepseek-ai/dsh-tool-session-query` entry because the host supplies it |
 | `patch: entry "<id>" not found` | `~/.dsh/profiles/cli/cordis.patch.yml` overrides a row the new line removed. 0.2.1 removed `tool-ralph`, `skill-badge`, and the `*-invariant` rows | Delete that entry from the profile patch |
 | `Cannot find module '@deepseek-ai/dsh-invariants'` or `.../invariant` | The runtime invariant packages were removed in 0.2.1 | Delete rows naming `@deepseek-ai/dsh-invariants` or ending in `/invariant` from the profile patch |
 | Every model request fails before it is sent with `unknown prompt variable "{{cwd}}"` | 0.2.1 removed the `{{cwd}}` prompt variable; the session directory now reaches the model as context | Remove the `{{cwd}}` clause from any `personaPrefix` / `suffix` in the profile patch |
@@ -50,11 +50,3 @@ deepseek doctor
 | `/hooks` refuses with an install command | The host no longer bundles the hooks bridges | Run the printed command, e.g. `dsh plugin --profile cli add @deepseek-ai/dsh-hooks-claude-code@0.2.2-rc.5 @deepseek-ai/dsh-hook-protocol@0.2.2-rc.5`, then restart |
 
 The Harness upgrade guides list every migration in detail: [docs/upgrade-guide](https://github.com/deepseek-ai/deepseek-harness/tree/main/docs/upgrade-guide). More problems and fixes: [Troubleshooting](problems.md).
-
-## Release packaging
-
-Run `npm publish` from the repository directory. Its prepublish checks run the production audit, release identity check, verification suite, and build, then pack the exact directory payload and verify a fresh consumer installation, dependency audit, and runtime import. Production dependencies are bundled using the hoisted dependency layout. For a new release version, use `npm publish --dry-run` to check this flow without publishing.
-
-On Linux, if npm reports `Exit handler never called!` when packaging an existing checkout with hard-linked dependencies, run `pnpm install --force --frozen-lockfile` once to recreate `node_modules`, then retry packaging.
-
-To generate a local tarball separately, run `pnpm pack:release --pack-destination dist`. That flow uses a temporary production install, includes platform bindings, and installs and audits the resulting tarball. You can also publish that artifact with `npm publish dist/dsh-code-2.1.0.tgz`.

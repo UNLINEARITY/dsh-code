@@ -7,7 +7,7 @@
 <p align="center"><img alt="Typing SVG" src="https://readme-typing-svg.herokuapp.com?font=JetBrains+Mono&amp;weight=500&amp;size=22&amp;duration=4000&amp;pause=700&amp;color=4176E6&amp;center=true&amp;vCenter=true&amp;width=680&amp;lines=DeepSeek+Harness+Code;DSH+%E5%86%85%E6%A0%B8%E7%9A%84%E7%BB%88%E7%AB%AF%E7%BC%96%E7%A0%81%E7%95%8C%E9%9D%A2"></p>
 <p align="center">
   <a href="https://github.com/deepseek-ai/deepseek-harness"><img alt="DeepSeek Harness" src="https://img.shields.io/badge/DeepSeek-Harness-4176E6?style=for-the-badge&amp;logo=deepseek&amp;logoColor=white&amp;labelColor=1c1917"></a>
-  <a href="https://www.npmjs.com/package/@deepseek-ai/dsh"><img alt="dsh version" src="https://img.shields.io/badge/dsh-0.2.2--rc.1-4176E6?style=for-the-badge&amp;logo=deepseek&amp;logoColor=white&amp;labelColor=1c1917"></a>
+  <a href="https://www.npmjs.com/package/@deepseek-ai/dsh"><img alt="dsh version" src="https://img.shields.io/badge/dsh-0.2.2--rc.5-4176E6?style=for-the-badge&amp;logo=deepseek&amp;logoColor=white&amp;labelColor=1c1917"></a>
   <a href="https://github.com/UNLINEARITY/dsh-code/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/UNLINEARITY/dsh-code?label=Stars&amp;style=for-the-badge&amp;logo=github&amp;logoColor=white&amp;color=4176E6&amp;labelColor=1c1917"></a>
   <a href="https://www.npmjs.com/package/dsh-code"><img alt="npm version" src="https://img.shields.io/npm/v/dsh-code?label=npm&amp;style=for-the-badge&amp;logo=npm&amp;color=cb3837&amp;labelColor=1c1917"></a>
   <a href="https://github.com/UNLINEARITY/dsh-code/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/github/license/UNLINEARITY/dsh-code?label=License&amp;style=for-the-badge&amp;logo=opensourceinitiative&amp;color=4176E6&amp;labelColor=1c1917"></a>
@@ -25,19 +25,19 @@ DeepSeek Harness 将模型、工具、存储、策略和界面作为插件，通
 
 ## 二、快速开始
 
-[2.1.0 更新说明](docs/releases/2.1.0_CN.md)
+[2.2.0 更新说明](docs/releases/2.2.0_CN.md)
 
 需要 Node `>=24.9.0` 和预览版 `dsh` CLI（当前版本线：`@deepseek-ai/dsh@0.2.2-rc.5`）。未配置模型时仍可进入 TUI、查看会话和使用非模型功能；在 `/model` 中按 Tab 进入供应商管理，配置 API key、OAuth 与设备码登录。
 
 ### 1. 安装与更新
 
-以下命令安装已发布的 `dsh-code@2.1.0` 及其匹配的 Harness 版本。当前源码对齐 Harness `0.2.2-rc.5`，请使用下方源码安装流程。安装或升级前，先关闭所有正在运行的 `dsh` / `deepseek` 会话。
+以下命令安装 `dsh-code@2.2.0` 及其匹配的 Harness 版本。安装或升级前，先关闭所有正在运行的 `dsh` / `deepseek` 会话。
 
 ```sh
-npm install -g --allow-scripts=@deepseek-ai/dsh-subprocess-local,koffi,node-pty,@google/genai,protobufjs @deepseek-ai/dsh@0.2.1-rc.4 pnpm
-npm install -g dsh-code@2.1.0
+npm install -g --allow-scripts=@deepseek-ai/dsh-subprocess-local,koffi,node-pty,@google/genai,protobufjs @deepseek-ai/dsh@0.2.2-rc.5 pnpm
+npm install -g dsh-code@2.2.0
 deepseek repair-deps
-dsh plugin --profile cli add dsh-code@2.1.0
+dsh plugin --profile cli add dsh-code@2.2.0
 ```
 
 后续使用 `/update` 或 `deepseek update --apply` 更新。版本对齐、依赖修复与迁移错误详见[安装、升级与排障](docs/installation_CN.md)。
@@ -79,9 +79,9 @@ DSH-Code 的重点是让 DSH 的 Agent、模型、工具和持久会话可以直
 - 每个会话可以选择独立的 Agent Preset，用于组合工具、提示词、技能、上下文压缩、plan mode 和 subagent 能力
 - 使用 `/mode` 选择 `standard`、`ptc`、`minimal`、`cordis` 或用户自定义 Preset（旧名称 `code` 自动映射到 `ptc`）
 - 使用 `/model` 切换模型，管理 provider、API key、OAuth/设备码登录、endpoint、可用模型和上下文窗口；`Tab` 进入 provider 管理（已配置供应商置顶分组），任意阶段 `Ctrl+C` 直接退出整个 /model 流程
-- 在 provider 列表中，Enter 进入统一配置页：同页填写 API key 与 endpoint（留空即官方默认）、编辑已添加模型的上下文/输出窗口，`Tab` 进入发现页拉取端点真实可用模型并勾选添加
+- 在 provider 列表中，Enter 进入统一配置页：同页填写 API key 与 endpoint（留空即官方默认）、编辑已添加模型的上下文/输出窗口。在 Key 模式下，按 `Tab` 可发现并添加模型
 - 在统一配置页的模型行上按 `e` 编辑推理档位声明（格式 `low:low high:high max:max`，`false` 禁用、留空恢复继承），按 `c` 从其他已声明模型逐字复制——例如 GLM 系列按官方三档写 `low:low high:high max:max`，新模型（如 gpt-6）可一键复制 gpt-5.6 的映射
-- 在 provider 列表中 `l` 发起登录，`o` 经确认后退出登录
+- 若配置页提供「订阅」选项，选中后按 `Tab` 登录。已登录时，按同一键进入退出登录确认
 - 自动加载 DSH 中可用的命令与技能；使用 `/help` 查看入口，使用 `/plugin` 检查扩展状态
 - 支持 plan、goal、todo、权限、sandbox、subagent 和运行中的补充指令
 
@@ -332,8 +332,6 @@ pnpm run gen:whale   # 从 vendored Logo 路径重新生成 src/whale-glyph.ts
 ```
 
 测试文件由 `tsconfig.test.json` 纳入类型检查：spec 里的假实现若与真实接口脱节，会在 `pnpm typecheck:tests` 直接报错，而不是留到运行时。
-
-发行打包流程见[打包指南](docs/installation_CN.md#发行打包)。
 
 鲸鱼字形由 `scripts/fish-logo.ts` 中 vendored 的 DeepSeek FishLogo 几何数据生成（来源：DeepSeek Harness，MIT）。
 

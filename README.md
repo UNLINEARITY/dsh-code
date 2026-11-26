@@ -7,7 +7,7 @@ English | [中文](README_CN.md)
 <p align="center"><img alt="Typing SVG" src="https://readme-typing-svg.herokuapp.com?font=JetBrains+Mono&amp;weight=500&amp;size=22&amp;duration=4000&amp;pause=700&amp;color=4176E6&amp;center=true&amp;vCenter=true&amp;width=680&amp;lines=DeepSeek+Harness+Code;Terminal+Coding+Interface+for+the+DSH+Core"></p>
 <p align="center">
   <a href="https://github.com/deepseek-ai/deepseek-harness"><img alt="DeepSeek Harness" src="https://img.shields.io/badge/DeepSeek-Harness-4176E6?style=for-the-badge&amp;logo=deepseek&amp;logoColor=white&amp;labelColor=1c1917"></a>
-  <a href="https://www.npmjs.com/package/@deepseek-ai/dsh"><img alt="dsh version" src="https://img.shields.io/badge/dsh-0.2.2--rc.1-4176E6?style=for-the-badge&amp;logo=deepseek&amp;logoColor=white&amp;labelColor=1c1917"></a>
+  <a href="https://www.npmjs.com/package/@deepseek-ai/dsh"><img alt="dsh version" src="https://img.shields.io/badge/dsh-0.2.2--rc.5-4176E6?style=for-the-badge&amp;logo=deepseek&amp;logoColor=white&amp;labelColor=1c1917"></a>
   <a href="https://github.com/UNLINEARITY/dsh-code/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/UNLINEARITY/dsh-code?label=Stars&amp;style=for-the-badge&amp;logo=github&amp;logoColor=white&amp;color=4176E6&amp;labelColor=1c1917"></a>
   <a href="https://www.npmjs.com/package/dsh-code"><img alt="npm version" src="https://img.shields.io/npm/v/dsh-code?label=npm&amp;style=for-the-badge&amp;logo=npm&amp;color=cb3837&amp;labelColor=1c1917"></a>
   <a href="https://github.com/UNLINEARITY/dsh-code/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/github/license/UNLINEARITY/dsh-code?label=License&amp;style=for-the-badge&amp;logo=opensourceinitiative&amp;color=4176E6&amp;labelColor=1c1917"></a>
@@ -23,19 +23,19 @@ DeepSeek Harness registers models, tools, storage, policies, and interfaces as p
 
 ## 2. Quick start
 
-[2.1.0 release notes](docs/releases/2.1.0.md)
+[2.2.0 release notes](docs/releases/2.2.0.md)
 
 Requires Node `>=24.9.0` and the preview `dsh` CLI (current release line: `@deepseek-ai/dsh@0.2.2-rc.5`). You can still enter the TUI, browse sessions, and use non-model features without configuring a model; press `Tab` in `/model` to manage API keys, OAuth, device-code sign-in, endpoints, and models.
 
 ### 1. Install and update
 
-The commands below install the published `dsh-code@2.1.0` with its matching Harness version. This checkout targets Harness `0.2.2-rc.5`; use the source installation below for this checkout. Close all running `dsh` / `deepseek` sessions before installing or upgrading.
+The commands below install `dsh-code@2.2.0` with its matching Harness version. Close all running `dsh` / `deepseek` sessions before installing or upgrading.
 
 ```sh
-npm install -g --allow-scripts=@deepseek-ai/dsh-subprocess-local,koffi,node-pty,@google/genai,protobufjs @deepseek-ai/dsh@0.2.1-rc.4 pnpm
-npm install -g dsh-code@2.1.0
+npm install -g --allow-scripts=@deepseek-ai/dsh-subprocess-local,koffi,node-pty,@google/genai,protobufjs @deepseek-ai/dsh@0.2.2-rc.5 pnpm
+npm install -g dsh-code@2.2.0
 deepseek repair-deps
-dsh plugin --profile cli add dsh-code@2.1.0
+dsh plugin --profile cli add dsh-code@2.2.0
 ```
 
 Use `/update` or `deepseek update --apply` for later updates. See [installation and upgrade troubleshooting](docs/installation.md) for version alignment, dependency repair, and migration errors.
@@ -77,7 +77,7 @@ DSH-Code brings DSH Agents, models, tools, and durable sessions directly into th
 - Select an independent Agent Preset for each session to compose tools, prompt sections, skills, context compaction, plan mode, and subagent capabilities
 - Use `/mode` to select `standard`, `ptc`, `minimal`, `cordis`, or a user-defined Preset (the legacy `code` id maps to `ptc`)
 - Use `/model` to switch models and manage providers, API keys, OAuth/device-code sign-in, endpoints, available models, and context windows
-- In the `/model` provider list, Enter manages a manual API key, `l` starts sign-in, and `o` logs out after confirmation
+- In the `/model` provider list, press `Enter` to configure the selected provider. In `Subscription` mode, press `Tab` to sign in or open the sign-out confirmation
 - Automatically load commands and skills available in DSH; use `/help` to find them and `/plugin` to inspect extension status
 - Use plans, goals, todos, permissions, sandboxes, subagents, and additional instructions while a task is running
 
@@ -326,8 +326,6 @@ pnpm run gen:whale   # regenerate src/whale-glyph.ts from the vendored logo path
 ```
 
 `tsconfig.test.json` puts the specs inside a TypeScript project, so a fixture that drifts from the interface it fakes fails `pnpm typecheck:tests` instead of surfacing (or not) at runtime.
-
-For release packaging, see the [packaging guide](docs/installation.md#release-packaging).
 
 The whale glyph is generated from the DeepSeek FishLogo geometry vendored in `scripts/fish-logo.ts` (source: DeepSeek Harness, MIT).
 

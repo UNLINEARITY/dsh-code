@@ -6,13 +6,13 @@
 
 ## 原生安装脚本
 
-npm 11.6+ 默认跳过未经批准的全局依赖安装脚本。`--allow-scripts` 批准 dsh 需要的几项：`node-pty`（终端）、`koffi`（会话持久化）、`@deepseek-ai/dsh-subprocess-local`（进程沙箱）、`@google/genai` 和 `protobufjs`。省略该参数时安装会提示 `npm warn install-scripts`，启动时原生模块可能加载失败；重新执行同一条命令即可修复。
+如果 npm 提示 `npm warn install-scripts`，或 dsh 启动时无法加载原生模块，请重新执行快速开始中的 npm 命令，并保留 `--allow-scripts` 参数。该参数允许终端、会话存储和进程沙箱所需的依赖，以及 `@google/genai` 和 `protobufjs` 执行安装脚本。
 
 ## 版本对齐
 
-dsh-code 面向 dsh `0.2.2-rc.5` 构建，全部 Harness 依赖均精确锁定为 `0.2.2-rc.5`。本地 `link:` 挂载请先 `git pull && pnpm install && pnpm build`，不要对开发挂载跑更新器。
+DSH-Code 2.2.0 需要 Node.js 24.9.0 或更高版本，宿主版本为 `@deepseek-ai/dsh@0.2.2-rc.5`。请同时升级 dsh、DSH-Code 和单独安装的 Harness profile 插件。若 profile 使用本地 `link:` 挂载，先更新宿主，再用 `pnpm install --frozen-lockfile && pnpm build` 重新构建源码。
 
-Harness 包与 `schemastery` 通过 optional peer 使用已安装的宿主副本。开发副本用于本地编译与测试，发行包只捆绑终端依赖。此版本线无需在 profile 中单独安装 `@deepseek-ai/dsh-tool-session-query`，可用 `dsh plugin --profile cli remove @deepseek-ai/dsh-tool-session-query` 移除重复依赖。
+宿主已提供会话查询工具。如果 `cli` profile 中单独安装了 `@deepseek-ai/dsh-tool-session-query`，可用 `dsh plugin --profile cli remove @deepseek-ai/dsh-tool-session-query` 移除重复安装。
 
 ## 会话迁移
 
@@ -39,7 +39,7 @@ deepseek doctor
 |---|---|---|
 | 出现 `npm warn install-scripts`，之后报 `Failed to load native module`（`pty.node`、`koffi`），或终端、会话持久化插件加载失败 | npm 11.6+ 默认跳过未经批准的全局依赖安装脚本 | 带上批准列表重装：`npm install -g --allow-scripts=@deepseek-ai/dsh-subprocess-local,koffi,node-pty,@google/genai,protobufjs @deepseek-ai/dsh@0.2.2-rc.5 pnpm` |
 | 升级过程中正在运行的会话以 `read EIO` 崩溃 | 全局安装替换了会话正在读取的文件 | 退出所有 `dsh` 会话，重新执行安装，再重新启动 |
-| `--dump-config` 输出 `skipping` 或 `disabling`，并提示 peer 版本不匹配 | 装进 profile 的包还停留在上一条 Harness 版本线 | 按对齐版本重装，例如 `dsh plugin --profile cli add @deepseek-ai/dsh-tool-session-query@0.2.2-rc.5`；`~/.dsh/profiles/cli/package.json` 中所有 `@deepseek-ai/dsh-*` 包必须是同一版本 |
+| `--dump-config` 输出 `skipping` 或 `disabling`，并提示 peer 版本不匹配 | profile 中有插件仍依赖较早的 Harness 版本 | 将提示中的插件重装为 `0.2.2-rc.5`。宿主已包含会话查询工具，可移除单独安装的 `@deepseek-ai/dsh-tool-session-query` |
 | `patch: entry "<id>" not found` | `~/.dsh/profiles/cli/cordis.patch.yml` 覆盖了新版本线已删除的行。0.2.1 删除了 `tool-ralph`、`skill-badge` 和 `*-invariant` 各行 | 从 profile patch 中删除该条目 |
 | `Cannot find module '@deepseek-ai/dsh-invariants'` 或 `.../invariant` | 0.2.1 删除了运行时 invariant 相关包 | 从 profile patch 中删除名为 `@deepseek-ai/dsh-invariants` 或以 `/invariant` 结尾的行 |
 | 每次模型请求都在发送前失败，报 `unknown prompt variable "{{cwd}}"` | 0.2.1 删除了 `{{cwd}}` 提示变量，会话目录改为以上下文形式提供给模型 | 删除 profile patch 中 `personaPrefix` / `suffix` 里含 `{{cwd}}` 的句子 |
@@ -50,11 +50,3 @@ deepseek doctor
 | `/hooks` 拒绝写入并给出安装命令 | 宿主不再捆绑钩子桥 | 执行提示的命令，例如 `dsh plugin --profile cli add @deepseek-ai/dsh-hooks-claude-code@0.2.2-rc.5 @deepseek-ai/dsh-hook-protocol@0.2.2-rc.5`，然后重启 |
 
 Harness 升级指南逐项列出了全部迁移步骤：[docs/upgrade-guide](https://github.com/deepseek-ai/deepseek-harness/tree/main/docs/upgrade-guide)。更多问题与处理：[常见问题与排障](problems.md)。
-
-## 发行打包
-
-在仓库目录直接运行 `npm publish`。发布前会自动执行生产依赖审计、版本检查、验证套件与构建，再对当前目录生成的安装包进行全新安装、依赖审计和运行时导入检查。生产依赖通过 hoisted 布局随包发布。准备新版本时，可用 `npm publish --dry-run` 预检发布流程。
-
-在 Linux 上，如果现有工作区仍使用硬链接安装依赖，且 npm 打包时报 `Exit handler never called!`，运行一次 `pnpm install --force --frozen-lockfile` 重建 `node_modules`，然后重新打包。
-
-如果只需要单独生成本地 tarball，运行 `pnpm pack:release --pack-destination dist`。该流程使用临时生产环境，包含平台绑定，并重新安装、审计生成的 tarball；也可以使用 `npm publish dist/dsh-code-2.1.0.tgz` 发布该产物。
